@@ -709,10 +709,14 @@ If you don't use MQTT, you can leave the MQTT settings empty in the web interfac
 
 1. Go to [GitHub.com](https://github.com) and log in
 2. Click the **+** icon top-right → **New repository**
-3. Choose a repository name (e.g. `unified-lvgl9-crypto-monitor`)
-4. Choose **Public** or **Private**
-5. **DO NOT** check "Initialize with README" (we already have a README)
-6. Click **Create repository**
+3. Choose a repository name (e.g. `ESP32-crypto-alert` or `unified-lvgl9-crypto-monitor`)
+4. Add a description (optional): "Unified LVGL9 Crypto Monitor for ESP32 with multi-platform support"
+5. Choose **Public** or **Private**
+6. **⚠️ IMPORTANT**: **DO NOT** check "Initialize with README" (we already have a README)
+7. **DO NOT** add a .gitignore or license (we already have these)
+8. Click **Create repository**
+
+**Note**: After creating the repository, GitHub will show you setup instructions. You can ignore those - we'll use the commands below.
 
 ### Step 2: Initialize Git and Push Code
 
@@ -740,6 +744,19 @@ git push -u origin main
 ```
 
 **Note**: If you use GitHub authentication, you may need to use a Personal Access Token instead of your password.
+
+**Creating a Personal Access Token**:
+1. Go to GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)
+2. Click "Generate new token" → "Generate new token (classic)"
+3. Give it a descriptive name (e.g., "ESP32 Crypto Monitor Upload")
+4. Set expiration (recommended: 90 days or custom)
+5. **Select the following permissions**:
+   - ✅ **repo** (Full control of private repositories)
+     - This includes: `repo:status`, `repo_deployment`, `public_repo`, `repo:invite`, `security_events`
+   - ✅ **workflow** (Update GitHub Action workflows) - Optional, only if you use GitHub Actions
+6. Click "Generate token"
+7. **Copy the token immediately** - you won't be able to see it again!
+8. Use this token as your password when pushing to GitHub
 
 ### Step 3: Update README (Optional)
 

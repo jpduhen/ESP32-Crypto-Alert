@@ -709,10 +709,14 @@ Als je MQTT niet gebruikt, kun je de MQTT instellingen leeg laten in de web inte
 
 1. Ga naar [GitHub.com](https://github.com) en log in
 2. Klik op het **+** icoon rechtsboven → **New repository**
-3. Kies een repository naam (bijv. `unified-lvgl9-crypto-monitor`)
-4. Kies **Public** of **Private**
-5. **NIET** "Initialize with README" aanvinken (we hebben al een README)
-6. Klik op **Create repository**
+3. Kies een repository naam (bijv. `ESP32-crypto-alert` of `unified-lvgl9-crypto-monitor`)
+4. Voeg een beschrijving toe (optioneel): "Unified LVGL9 Crypto Monitor for ESP32 with multi-platform support"
+5. Kies **Public** of **Private**
+6. **⚠️ BELANGRIJK**: **NIET** "Initialize with README" aanvinken (we hebben al een README)
+7. **NIET** een .gitignore of licentie toevoegen (we hebben deze al)
+8. Klik op **Create repository**
+
+**Let op**: Na het aanmaken van de repository toont GitHub setup instructies. Je kunt deze negeren - we gebruiken de commando's hieronder.
 
 ### Stap 2: Initialiseer Git en Push Code
 
@@ -740,6 +744,19 @@ git push -u origin main
 ```
 
 **Let op**: Als je GitHub authenticatie gebruikt, moet je mogelijk een Personal Access Token gebruiken in plaats van je wachtwoord.
+
+**Personal Access Token Aanmaken**:
+1. Ga naar GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)
+2. Klik op "Generate new token" → "Generate new token (classic)"
+3. Geef het een beschrijvende naam (bijv. "ESP32 Crypto Monitor Upload")
+4. Stel vervaldatum in (aanbevolen: 90 dagen of aangepast)
+5. **Selecteer de volgende permissions (rechten)**:
+   - ✅ **repo** (Full control of private repositories)
+     - Dit omvat: `repo:status`, `repo_deployment`, `public_repo`, `repo:invite`, `security_events`
+   - ✅ **workflow** (Update GitHub Action workflows) - Optioneel, alleen als je GitHub Actions gebruikt
+6. Klik op "Generate token"
+7. **Kopieer de token direct** - je kunt hem daarna niet meer zien!
+8. Gebruik deze token als wachtwoord bij het pushen naar GitHub
 
 ### Stap 3: Update README (Optioneel)
 
