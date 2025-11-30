@@ -238,9 +238,13 @@ The device supports two languages: **Dutch (Nederlands)** and **English**. All t
 
 #### NTFY Topic
 - **What it does**: The topic on which notifications are sent via NTFY.sh
-- **Default**: `crypto-monitor-alerts`
-- **Usage**: Choose a unique name for your device (e.g. `my-crypto-monitor` or `btc-alerts-kitchen`)
-- **Important**: This topic must be unique if you use multiple devices
+- **Default**: Automatically generated as `[ESP32-ID]-alert` (e.g. `a1b2c3-alert`)
+  - The ESP32-ID is unique per device (derived from MAC address, last 6 hex characters)
+  - The ESP32-ID is displayed on the device screen for easy reference
+- **Usage**: The default topic is already unique per device, but you can change it in the web interface if needed
+- **Important**: 
+  - Each device automatically gets a unique topic, preventing conflicts between multiple devices
+  - **This is the topic you need to subscribe to in the NTFY app to receive notifications on your mobile**
 
 #### MQTT Settings
 - **MQTT Host**: IP address of your MQTT broker (e.g. `192.168.1.100` or `mqtt.example.com`)
@@ -424,21 +428,29 @@ NTFY.sh is a free, open-source push notification service. It allows you to recei
 
 ### Set NTFY Topic
 
-1. **Choose a unique topic name**:
-   - Use only lowercase letters, numbers and dashes
-   - For example: `my-crypto-alerts` or `btc-monitor-kitchen`
-   - **Important**: Make it unique to avoid conflicts
+**Automatic Unique Topic Generation**:
+- By default, the device automatically generates a unique NTFY topic using your ESP32's unique ID
+- Format: `[ESP32-ID]-alert` (e.g. `a1b2c3-alert`)
+- The ESP32-ID is derived from the device's MAC address (last 6 hex characters)
+- This ensures each device has a unique topic, preventing conflicts between multiple devices
+- The ESP32-ID is displayed on the device screen (in the chart title area for CYD, or on line 2 for TTGO)
 
-2. **Configure in web interface**:
+**Manual Configuration**:
+1. **Via Web Interface** (Recommended):
    - Go to your device's web interface
-   - Enter your chosen topic name in "NTFY Topic"
+   - The default topic is already set with your unique ESP32 ID
+   - You can change it if needed in "NTFY Topic"
+   - **Important**: This is the NTFY topic you need to subscribe to in the NTFY app to receive notifications on your mobile
    - Save the settings
 
-3. **Subscribe to the topic in NTFY app**:
+2. **Subscribe to the topic in NTFY app**:
    - Open the NTFY app
    - Click "Subscribe to topic"
-   - Enter your topic name (e.g. `my-crypto-alerts`)
+   - Enter your topic name (shown on the device display or in web interface)
+   - Example: If your ESP32-ID is `a1b2c3`, subscribe to `a1b2c3-alert`
    - Click "Subscribe"
+
+**Note**: The ESP32-ID is displayed on the device screen, making it easy to identify which topic to subscribe to in the NTFY app.
 
 ### Notification Types
 
@@ -530,7 +542,9 @@ For extra security, you can secure your topic with a password:
 2. Create a secured topic with password
 3. In NTFY app: Add the password when subscribing
 
-**Note**: The default NTFY.sh service is public - anyone with your topic name can see your notifications. Use a unique name or secure your topic.
+**Note**: The default NTFY.sh service is public - anyone with your topic name can see your notifications. 
+- **Good news**: Each device automatically gets a unique topic based on its ESP32 ID (e.g. `a1b2c3-alert`), making conflicts very unlikely
+- For extra security, you can still secure your topic with a password (see above)
 
 ### Troubleshooting NTFY
 

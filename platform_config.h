@@ -10,7 +10,7 @@
 // Deze waarde wordt gebruikt als fallback als er nog geen taal is opgeslagen in Preferences
 // Je kunt de taal altijd wijzigen via de web interface
 #ifndef DEFAULT_LANGUAGE
-#define DEFAULT_LANGUAGE 0  // 0 = Nederlands, 1 = English
+#define DEFAULT_LANGUAGE 1  // 0 = Nederlands, 1 = English
 #endif
 
 // Platform-specifieke instellingen

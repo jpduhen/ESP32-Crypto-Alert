@@ -206,7 +206,9 @@ static unsigned long lastMinuteUpdate = 0;
 static float firstMinuteAverage = 0.0f; // Eerste minuut gemiddelde prijs als basis voor 30-min berekening
 
 // Notification settings - NTFY.sh
-#define NTFY_TOPIC_DEFAULT "crypto-monitor-alerts"   // Standaard Ntfy topic (gebruikers kunnen dit aanpassen)
+// Note: NTFY topic wordt dynamisch gegenereerd met ESP32 device ID
+// Format: [ESP32-ID]-alert (bijv. a1b2c3-alert)
+// Dit voorkomt conflicten tussen verschillende devices
 #define BINANCE_SYMBOL_DEFAULT "BTCEUR"              // Standaard Binance symbool
 
 // MQTT settings - defaults
@@ -242,7 +244,8 @@ static float firstMinuteAverage = 0.0f; // Eerste minuut gemiddelde prijs als ba
 static uint8_t language = DEFAULT_LANGUAGE;  // 0 = Nederlands, 1 = English
 
 // Instelbare grenswaarden (worden geladen uit Preferences)
-static char ntfyTopic[64] = NTFY_TOPIC_DEFAULT;  // NTFY topic (max 63 karakters)
+// Note: ntfyTopic wordt geïnitialiseerd in loadSettings() met unieke ESP32 ID
+static char ntfyTopic[64] = "";  // NTFY topic (max 63 karakters)
 static char binanceSymbol[16] = BINANCE_SYMBOL_DEFAULT;  // Binance symbool (max 15 karakters, bijv. BTCEUR, BTCUSDT)
 static float threshold1MinUp = THRESHOLD_1MIN_UP_DEFAULT;
 static float threshold1MinDown = THRESHOLD_1MIN_DOWN_DEFAULT;
@@ -357,6 +360,17 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
     else
         Serial_printf("[Notify] Ntfy fout bij versturen (code: %d)\n", code);
     return result;
+}
+
+// Get formatted timestamp string (dd-mm-yyyy hh:mm:ss)
+static void getFormattedTimestamp(char *buffer, size_t bufferSize) {
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+        strftime(buffer, bufferSize, "%d-%m-%Y %H:%M:%S", &timeinfo);
+    } else {
+        // Fallback als tijd niet beschikbaar is
+        snprintf(buffer, bufferSize, "??-??-???? ??:??:??");
+    }
 }
 
 // Send notification via NTFY
@@ -490,12 +504,14 @@ static void checkAnchorAlerts()
     
     // Check take profit
     if (!anchorTakeProfitSent && anchorPct >= anchorTakeProfit) {
+        char timestamp[32];
+        getFormattedTimestamp(timestamp, sizeof(timestamp));
         char title[64];
         char msg[256];
         snprintf(title, sizeof(title), "%s Take Profit", binanceSymbol);
         snprintf(msg, sizeof(msg), 
-                 "Take profit bereikt: +%.2f%%\nAnchor: %.2f EUR\nHuidige prijs: %.2f EUR\nWinst: +%.2f EUR",
-                 anchorPct, anchorPrice, prices[0], prices[0] - anchorPrice);
+                 "Take profit bereikt: +%.2f%%\nAnchor: %.2f EUR\nPrijs %s: %.2f EUR\nWinst: +%.2f EUR",
+                 anchorPct, anchorPrice, timestamp, prices[0], prices[0] - anchorPrice);
         sendNotification(title, msg, "green_square,💰");
         anchorTakeProfitSent = true;
         Serial_printf("[Anchor] Take profit notificatie verzonden: %.2f%% (anchor: %.2f, prijs: %.2f)\n", 
@@ -507,12 +523,14 @@ static void checkAnchorAlerts()
     
     // Check max loss
     if (!anchorMaxLossSent && anchorPct <= anchorMaxLoss) {
+        char timestamp[32];
+        getFormattedTimestamp(timestamp, sizeof(timestamp));
         char title[64];
         char msg[256];
         snprintf(title, sizeof(title), "%s Max Loss", binanceSymbol);
         snprintf(msg, sizeof(msg), 
-                 "Max loss bereikt: %.2f%%\nAnchor: %.2f EUR\nHuidige prijs: %.2f EUR\nVerlies: %.2f EUR",
-                 anchorPct, anchorPrice, prices[0], prices[0] - anchorPrice);
+                 "Max loss bereikt: %.2f%%\nAnchor: %.2f EUR\nPrijs %s: %.2f EUR\nVerlies: %.2f EUR",
+                 anchorPct, anchorPrice, timestamp, prices[0], prices[0] - anchorPrice);
         sendNotification(title, msg, "red_square,⚠️");
         anchorMaxLossSent = true;
         Serial_printf("[Anchor] Max loss notificatie verzonden: %.2f%% (anchor: %.2f, prijs: %.2f)\n", 
@@ -572,14 +590,16 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
             float minVal, maxVal;
             findMinMaxInSecondPrices(minVal, maxVal);
             
+            char timestamp[32];
+            getFormattedTimestamp(timestamp, sizeof(timestamp));
             char msg[256];
             snprintf(msg, sizeof(msg), 
-                     "1m UP spike: +%.2f%% (5m: +%.2f%%)\nPrijs nu: %.2f\nTop: %.2f Dal: %.2f", 
-                     ret_1m, ret_5m, prices[0], maxVal, minVal);
+                     "1m UP spike: +%.2f%% (5m: +%.2f%%)\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
+                     ret_1m, ret_5m, timestamp, prices[0], maxVal, minVal);
             if (ret_1m < 0) {
                 snprintf(msg, sizeof(msg), 
-                         "1m DOWN spike: %.2f%% (5m: %.2f%%)\nPrijs nu: %.2f\nTop: %.2f Dal: %.2f", 
-                         ret_1m, ret_5m, prices[0], maxVal, minVal);
+                         "1m DOWN spike: %.2f%% (5m: %.2f%%)\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
+                         ret_1m, ret_5m, timestamp, prices[0], maxVal, minVal);
             }
             // Notificatie wordt verstuurd (geen extra logging)
             
@@ -646,14 +666,16 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
             float minVal, maxVal;
             findMinMaxInLast30Minutes(minVal, maxVal);
             
+            char timestamp[32];
+            getFormattedTimestamp(timestamp, sizeof(timestamp));
             char msg[256];
             snprintf(msg, sizeof(msg), 
-                     "30m UP move: +%.2f%% (5m: +%.2f%%)\nPrijs nu: %.2f\nTop: %.2f Dal: %.2f", 
-                     ret_30m, ret_5m, prices[0], maxVal, minVal);
+                     "30m UP move: +%.2f%% (5m: +%.2f%%)\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
+                     ret_30m, ret_5m, timestamp, prices[0], maxVal, minVal);
             if (ret_30m < 0) {
                 snprintf(msg, sizeof(msg), 
-                         "30m DOWN move: %.2f%% (5m: %.2f%%)\nPrijs nu: %.2f\nTop: %.2f Dal: %.2f", 
-                         ret_30m, ret_5m, prices[0], maxVal, minVal);
+                         "30m DOWN move: %.2f%% (5m: %.2f%%)\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
+                         ret_30m, ret_5m, timestamp, prices[0], maxVal, minVal);
             }
             // Notificatie wordt verstuurd (geen extra logging)
             
@@ -720,14 +742,16 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                 }
             }
             
+            char timestamp[32];
+            getFormattedTimestamp(timestamp, sizeof(timestamp));
             char msg[256];
             snprintf(msg, sizeof(msg), 
-                     "5m UP move: +%.2f%%\nPrijs nu: %.2f\nTop: %.2f Dal: %.2f", 
-                     ret_5m, prices[0], maxVal, minVal);
+                     "5m UP move: +%.2f%%\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
+                     ret_5m, timestamp, prices[0], maxVal, minVal);
             if (ret_5m < 0) {
                 snprintf(msg, sizeof(msg), 
-                         "5m DOWN move: %.2f%%\nPrijs nu: %.2f\nTop: %.2f Dal: %.2f", 
-                         ret_5m, prices[0], maxVal, minVal);
+                         "5m DOWN move: %.2f%%\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
+                         ret_5m, timestamp, prices[0], maxVal, minVal);
             }
             
             // Bepaal kleur op basis van sterkte
@@ -776,11 +800,101 @@ static void getTrendWaitText(char* buffer, size_t bufferSize, uint8_t minutes) {
     }
 }
 
+// Generate unique ESP32 device ID (last 6 hex characters of MAC address)
+static String getESP32DeviceId() {
+    uint64_t chipid = ESP.getEfuseMac();
+    // Get last 6 hex characters (3 bytes = 24 bits)
+    uint32_t deviceId = (uint32_t)(chipid & 0xFFFFFF);
+    char idStr[7];
+    snprintf(idStr, sizeof(idStr), "%06x", deviceId);
+    return String(idStr);
+}
+
+// Generate default NTFY topic with ESP32 device ID
+// Format: [ESP32-ID]-alert
+// Example: a1b2c3-alert
+static String generateDefaultNtfyTopic() {
+    String deviceId = getESP32DeviceId();
+    return deviceId + "-alert";
+}
+
+// Extract ESP32 device ID from NTFY topic (everything before "-alert")
+// If topic format is [ESP32-ID]-alert, returns the ESP32-ID
+// Falls back to showing first part before any dash if format is different
+static String getDeviceIdFromTopic(const char* topic) {
+    // Look for "-alert" at the end
+    const char* alertPos = strstr(topic, "-alert");
+    if (alertPos != nullptr) {
+        // Extract everything before "-alert"
+        size_t len = alertPos - topic;
+        if (len > 0 && len < 16) {
+            char deviceId[16];
+            strncpy(deviceId, topic, len);
+            deviceId[len] = '\0';
+            return String(deviceId);
+        }
+    }
+    // Fallback: use first part before any dash (for backwards compatibility)
+    const char* dashPos = strchr(topic, '-');
+    if (dashPos != nullptr) {
+        size_t len = dashPos - topic;
+        if (len > 0 && len < 16) {
+            char deviceId[16];
+            strncpy(deviceId, topic, len);
+            deviceId[len] = '\0';
+            return String(deviceId);
+        }
+    }
+    // Last resort: use whole topic (limited)
+    return String(topic).substring(0, 15);
+}
+
 // Load settings from Preferences
 static void loadSettings()
 {
     preferences.begin("crypto", true); // read-only mode
-    String topic = preferences.getString("ntfyTopic", NTFY_TOPIC_DEFAULT);
+    
+    // Generate default NTFY topic with unique ESP32 device ID
+    String defaultTopic = generateDefaultNtfyTopic();
+    
+    // Load NTFY topic from Preferences, or use generated default
+    String topic = preferences.getString("ntfyTopic", defaultTopic);
+    
+    // If the loaded topic is the old default (without device ID), replace it with new format
+    // Also migrate old format with prefix (e.g. "crypt-xxxxxx-alert") to new format without prefix
+    bool needsMigration = false;
+    if (topic == "crypto-monitor-alerts") {
+        // Old default format
+        needsMigration = true;
+    } else if (topic.endsWith("-alert")) {
+        // Check if it has the old prefix format (e.g. "crypt-xxxxxx-alert")
+        // New format should be just "xxxxxx-alert" (no prefix before first dash)
+        int alertPos = topic.indexOf("-alert");
+        if (alertPos > 0) {
+            String beforeAlert = topic.substring(0, alertPos);
+            // Check if there's a dash in the part before "-alert" (indicating old prefix format)
+            int dashInBefore = beforeAlert.indexOf('-');
+            if (dashInBefore >= 0) {
+                // Has old format with prefix (e.g. "crypt-xxxxxx"), migrate to new format
+                needsMigration = true;
+            } else if (beforeAlert.length() != 6) {
+                // Not exactly 6 hex chars, might be old format or custom, migrate to be safe
+                needsMigration = true;
+            }
+        }
+    }
+    
+    if (needsMigration) {
+        // Migrate to new format without prefix
+        topic = defaultTopic;
+        // Save the new default topic
+        preferences.end();
+        preferences.begin("crypto", false);
+        preferences.putString("ntfyTopic", topic);
+        preferences.end();
+        preferences.begin("crypto", true);
+    }
+    
     topic.toCharArray(ntfyTopic, sizeof(ntfyTopic));
     String symbol = preferences.getString("binanceSymbol", BINANCE_SYMBOL_DEFAULT);
     symbol.toCharArray(binanceSymbol, sizeof(binanceSymbol));
@@ -975,8 +1089,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         if (msg == "PRESS" || msg == "press" || msg == "1" || msg == "ON" || msg == "on") {
             Serial_println("[MQTT] Reset/Anchor button pressed via MQTT");
             // Execute reset/anchor (thread-safe)
+            float currentPrice = 0.0f;
             if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
                 if (prices[0] > 0.0f) {
+                    currentPrice = prices[0];  // Sla prijs lokaal op
                     openPrices[0] = prices[0];
                     // Set anchor price
                     anchorPrice = prices[0];
@@ -991,7 +1107,21 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                 xSemaphoreGive(dataMutex);
                 
                 // Publiceer anchor event naar MQTT
-                publishMqttAnchorEvent(anchorPrice, "anchor_set");
+                if (currentPrice > 0.0f) {
+                    publishMqttAnchorEvent(anchorPrice, "anchor_set");
+                    
+                    // Stuur NTFY notificatie
+                    char timestamp[32];
+                    getFormattedTimestamp(timestamp, sizeof(timestamp));
+                    char title[64];
+                    char msg[256];
+                    snprintf(title, sizeof(title), "%s Anchor Set", binanceSymbol);
+                    snprintf(msg, sizeof(msg), 
+                             "%s\nAnchor prijs: %.2f EUR\nPrijs %s: %.2f EUR",
+                             getText("Anchor prijs vastgezet", "Anchor price set"),
+                             anchorPrice, timestamp, currentPrice);
+                    sendNotification(title, msg, "blue_square,📌");
+                }
                 
                 // Update UI (this will also take the mutex internally)
                 updateUI();
@@ -1242,7 +1372,7 @@ static String getSettingsHTML()
     html += "</select></label>";
     html += "<div class='info'>" + String(getText("Selecteer de taal voor het display en de web interface", "Select language for display and web interface")) + "</div>";
     html += "<label>NTFY Topic:<input type='text' name='ntfytopic' value='" + String(ntfyTopic) + "' maxlength='63'></label>";
-    html += "<div class='info'>" + String(getText("Je NTFY.sh topic naam (bijv. mijn-crypto-alerts)", "Your NTFY.sh topic name (e.g. my-crypto-alerts)")) + "</div>";
+    html += "<div class='info'>" + String(getText("Dit is de NTFY topic waarop je je moet abonneren in de NTFY app om notificaties te ontvangen op je mobiel. Standaard wordt automatisch een uniek topic gegenereerd met je ESP32 device ID (format: [ESP32-ID]-alert).", "This is the NTFY topic you need to subscribe to in the NTFY app to receive notifications on your mobile. By default, a unique topic is automatically generated with your ESP32 device ID (format: [ESP32-ID]-alert).")) + "</div>";
     html += "<label>" + String(getText("Binance Symbool:", "Binance Symbol:")) + "<input type='text' name='binancesymbol' value='" + String(binanceSymbol) + "' maxlength='15'></label>";
     html += "<div class='info'>" + String(getText("Binance trading pair (bijv. BTCEUR, BTCUSDT, ETHUSDT)", "Binance trading pair (e.g. BTCEUR, BTCUSDT, ETHUSDT)")) + "</div>";
     html += "<hr style='border:1px solid #444;margin:30px 0;'>";
@@ -2564,23 +2694,11 @@ void updateUI()
 
     lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, minRange, maxRange);
     
-    // Update chart title met beginletters uit ntfyTopic (alles voor het eerste '-')
+    // Update chart title met ESP32 device ID uit ntfyTopic
     if (chartTitle != nullptr)
     {
-        char beginLetters[16] = "";
-        char *dashPos = strchr(ntfyTopic, '-');
-        if (dashPos != nullptr) {
-            size_t len = dashPos - ntfyTopic;
-            if (len > 0 && len < sizeof(beginLetters)) {
-                strncpy(beginLetters, ntfyTopic, len);
-                beginLetters[len] = '\0';
-            }
-        } else {
-            // Geen '-' gevonden, gebruik hele topic (beperkt tot 15 chars)
-            strncpy(beginLetters, ntfyTopic, sizeof(beginLetters) - 1);
-            beginLetters[sizeof(beginLetters) - 1] = '\0';
-        }
-        lv_label_set_text(chartTitle, beginLetters);
+        String deviceId = getDeviceIdFromTopic(ntfyTopic);
+        lv_label_set_text(chartTitle, deviceId.c_str());
     }
     
     // Update datum label (elke seconde, synchroon met UI update)
@@ -2939,21 +3057,9 @@ static void buildUI()
     // Chart title met beginletters uit ntfyTopic (alles voor het eerste '-')
     chartTitle = lv_label_create(lv_scr_act());
     lv_obj_set_style_text_font(chartTitle, &lv_font_montserrat_18, 0);
-    // Extract beginletters uit ntfyTopic (alles voor het eerste '-')
-    char beginLetters[16] = "";
-    char *dashPos = strchr(ntfyTopic, '-');
-    if (dashPos != nullptr) {
-        size_t len = dashPos - ntfyTopic;
-        if (len > 0 && len < sizeof(beginLetters)) {
-            strncpy(beginLetters, ntfyTopic, len);
-            beginLetters[len] = '\0';
-        }
-    } else {
-        // Geen '-' gevonden, gebruik hele topic (beperkt tot 15 chars)
-        strncpy(beginLetters, ntfyTopic, sizeof(beginLetters) - 1);
-        beginLetters[sizeof(beginLetters) - 1] = '\0';
-    }
-    lv_label_set_text(chartTitle, beginLetters);
+    // Extract ESP32 device ID uit ntfyTopic
+    String deviceId = getDeviceIdFromTopic(ntfyTopic);
+    lv_label_set_text(chartTitle, deviceId.c_str());
     lv_obj_set_style_text_color(chartTitle,
                                 lv_palette_main(LV_PALETTE_CYAN), // bright cyan (#00BCD4)
                                 0);
@@ -2978,21 +3084,9 @@ static void buildUI()
     lv_obj_set_style_text_font(chartBeginLettersLabel, &lv_font_montserrat_18, 0); // 2 stappen groter dan 1m en 30m
     lv_obj_set_style_text_color(chartBeginLettersLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
     lv_obj_set_style_text_align(chartBeginLettersLabel, LV_TEXT_ALIGN_LEFT, 0);
-    // Extract beginletters uit ntfyTopic (alles voor het eerste '-')
-    char beginLetters[16] = "";
-    char *dashPos = strchr(ntfyTopic, '-');
-    if (dashPos != nullptr) {
-        size_t len = dashPos - ntfyTopic;
-        if (len > 0 && len < sizeof(beginLetters)) {
-            strncpy(beginLetters, ntfyTopic, len);
-            beginLetters[len] = '\0';
-        }
-    } else {
-        // Geen '-' gevonden, gebruik hele topic (beperkt tot 15 chars)
-        strncpy(beginLetters, ntfyTopic, sizeof(beginLetters) - 1);
-        beginLetters[sizeof(beginLetters) - 1] = '\0';
-    }
-    lv_label_set_text(chartBeginLettersLabel, beginLetters);
+    // Extract ESP32 device ID uit ntfyTopic
+    String deviceId = getDeviceIdFromTopic(ntfyTopic);
+    lv_label_set_text(chartBeginLettersLabel, deviceId.c_str());
     lv_obj_set_pos(chartBeginLettersLabel, 0, 2); // Links, tweede regel op pixel (0, 2) - 8px omhoog
     
     // Versienummer label (midden)
@@ -3003,7 +3097,7 @@ static void buildUI()
     lv_label_set_text_fmt(chartVersionLabel, "%s", VERSION_STRING);
     // Voor midden uitlijning: zet breedte op schermbreedte en gebruik center alignment
     lv_obj_set_width(chartVersionLabel, CHART_WIDTH);
-    lv_obj_set_pos(chartVersionLabel, 0, 10); // Midden, tweede regel op pixel (0, 10), tekst gecentreerd binnen 135px
+    lv_obj_set_pos(chartVersionLabel, 10, 10); // Midden, tweede regel op pixel (10, 10), tekst gecentreerd binnen 135px, 10px naar rechts
     
     // Tijd label (rechts, binnen schermbreedte)
     chartTimeLabel = lv_label_create(lv_scr_act());
@@ -3023,7 +3117,7 @@ static void buildUI()
     lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text_fmt(chartVersionLabel, "%s", VERSION_STRING);
     lv_obj_set_width(chartVersionLabel, 120);
-    lv_obj_set_pos(chartVersionLabel, 0, 4);
+    lv_obj_set_pos(chartVersionLabel, 10, 4); // 10px naar rechts
     
     // Datum label rechts uitgelijnd op 180px
     chartDateLabel = lv_label_create(lv_scr_act());
@@ -3235,8 +3329,10 @@ static void buildUI()
                 lv_event_code_t code = lv_event_get_code(e);
                 
                 if (code == LV_EVENT_CLICKED || code == LV_EVENT_SHORT_CLICKED) {
-                    if (prices[0] > 0.0f) {
-                        if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+                    float currentPrice = 0.0f;
+                    if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+                        if (prices[0] > 0.0f) {
+                            currentPrice = prices[0];  // Sla prijs lokaal op
                             openPrices[0] = prices[0];
                             // Set anchor price
                             anchorPrice = prices[0];
@@ -3247,14 +3343,28 @@ static void buildUI()
                             anchorTakeProfitSent = false;
                             anchorMaxLossSent = false;
                             Serial_printf("[UI] Anchor set via BTCEUR blok: anchorPrice = %.2f\n", anchorPrice);
-                            xSemaphoreGive(dataMutex);
-                            
-                            // Publiceer anchor event naar MQTT
+                        }
+                        xSemaphoreGive(dataMutex);
+                        
+                        // Publiceer anchor event naar MQTT en stuur notificatie
+                        if (currentPrice > 0.0f) {
                             publishMqttAnchorEvent(anchorPrice, "anchor_set");
                             
-                            // Update UI (this will also take the mutex internally)
-                            updateUI();
+                            // Stuur NTFY notificatie
+                            char timestamp[32];
+                            getFormattedTimestamp(timestamp, sizeof(timestamp));
+                            char title[64];
+                            char msg[256];
+                            snprintf(title, sizeof(title), "%s Anchor Set", binanceSymbol);
+                            snprintf(msg, sizeof(msg), 
+                                     "%s\nAnchor prijs: %.2f EUR\nPrijs %s: %.2f EUR",
+                                     getText("Anchor prijs vastgezet", "Anchor price set"),
+                                     anchorPrice, timestamp, currentPrice);
+                            sendNotification(title, msg, "blue_square,📌");
                         }
+                        
+                        // Update UI (this will also take the mutex internally)
+                        updateUI();
                     }
                 }
             }, LV_EVENT_ALL, NULL);
@@ -3333,8 +3443,10 @@ void checkButton() {
         Serial_println("[Button] Physical reset button pressed - setting anchor price");
         
         // Execute reset and set anchor (thread-safe, same as MQTT callback)
+        float currentPrice = 0.0f;
         if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
             if (prices[0] > 0.0f) {
+                currentPrice = prices[0];  // Sla prijs lokaal op
                 openPrices[0] = prices[0];
                 // Set anchor price
                 anchorPrice = prices[0];
@@ -3346,11 +3458,26 @@ void checkButton() {
                 anchorTakeProfitSent = false;
                 anchorMaxLossSent = false;
                 Serial_printf("[Button] Reset: openPrices[0] = %.2f, Anchor = %.2f\n", openPrices[0], anchorPrice);
-                
-                // Publiceer anchor event naar MQTT
-                publishMqttAnchorEvent(anchorPrice, "anchor_set");
             }
             xSemaphoreGive(dataMutex);
+            
+            // Publiceer anchor event naar MQTT en stuur notificatie
+            if (currentPrice > 0.0f) {
+                publishMqttAnchorEvent(anchorPrice, "anchor_set");
+                
+                // Stuur NTFY notificatie
+                char timestamp[32];
+                getFormattedTimestamp(timestamp, sizeof(timestamp));
+                char title[64];
+                char msg[256];
+                snprintf(title, sizeof(title), "%s Anchor Set", binanceSymbol);
+                snprintf(msg, sizeof(msg), 
+                         "%s\nAnchor prijs: %.2f EUR\nPrijs %s: %.2f EUR",
+                         getText("Anchor prijs vastgezet", "Anchor price set"),
+                         anchorPrice, timestamp, currentPrice);
+                sendNotification(title, msg, "blue_square,📌");
+            }
+            
             // Update UI (this will also take the mutex internally)
             updateUI();
         }

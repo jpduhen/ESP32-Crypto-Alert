@@ -238,9 +238,13 @@ Het device ondersteunt twee talen: **Nederlands** en **English**. Alle teksten z
 
 #### NTFY Topic
 - **Wat het doet**: Het topic waarop notificaties worden verzonden via NTFY.sh
-- **Standaard**: `crypto-monitor-alerts`
-- **Gebruik**: Kies een unieke naam voor jouw device (bijv. `mijn-crypto-monitor` of `btc-alerts-keuken`)
-- **Belangrijk**: Dit topic moet uniek zijn als je meerdere devices gebruikt
+- **Standaard**: Automatisch gegenereerd als `[ESP32-ID]-alert` (bijv. `a1b2c3-alert`)
+  - De ESP32-ID is uniek per device (afgeleid van MAC adres, laatste 6 hex karakters)
+  - De ESP32-ID wordt getoond op het device scherm voor eenvoudige referentie
+- **Gebruik**: Het standaard topic is al uniek per device, maar je kunt het indien nodig wijzigen in de web interface
+- **Belangrijk**: 
+  - Elk device krijgt automatisch een uniek topic, waardoor conflicten tussen meerdere devices worden voorkomen
+  - **Dit is de topic waarop je je moet abonneren in de NTFY app om notificaties te ontvangen op je mobiel**
 
 #### MQTT Settings
 - **MQTT Host**: IP-adres van je MQTT broker (bijv. `192.168.1.100` of `mqtt.example.com`)
@@ -424,21 +428,29 @@ NTFY.sh is een gratis, open-source push notification service. Het stelt je in st
 
 ### NTFY Topic Instellen
 
-1. **Kies een uniek topic naam**:
-   - Gebruik alleen kleine letters, cijfers en streepjes
-   - Bijvoorbeeld: `mijn-crypto-alerts` of `btc-monitor-keuken`
-   - **Belangrijk**: Maak het uniek om conflicten te voorkomen
+**Automatische Unieke Topic Generatie**:
+- Standaard genereert het device automatisch een uniek NTFY topic met je ESP32's unieke ID
+- Format: `[ESP32-ID]-alert` (bijv. `a1b2c3-alert`)
+- De ESP32-ID wordt afgeleid van het MAC adres van het device (laatste 6 hex karakters)
+- Dit zorgt ervoor dat elk device een uniek topic heeft, waardoor conflicten tussen meerdere devices worden voorkomen
+- De ESP32-ID wordt getoond op het device scherm (in het chart title gebied voor CYD, of op regel 2 voor TTGO)
 
-2. **Configureer in de web interface**:
+**Handmatige Configuratie**:
+1. **Via Web Interface** (Aanbevolen):
    - Ga naar de web interface van je device
-   - Voer je gekozen topic naam in bij "NTFY Topic"
+   - Het standaard topic is al ingesteld met je unieke ESP32 ID
+   - Je kunt het indien nodig wijzigen bij "NTFY Topic"
+   - **Belangrijk**: Dit is de NTFY topic waarop je je moet abonneren in de NTFY app om notificaties te ontvangen op je mobiel
    - Sla de instellingen op
 
-3. **Abonneer op het topic in de NTFY app**:
+2. **Abonneer op het topic in de NTFY app**:
    - Open de NTFY app
    - Klik op "Subscribe to topic"
-   - Voer je topic naam in (bijv. `mijn-crypto-alerts`)
+   - Voer je topic naam in (getoond op het device display of in web interface)
+   - Voorbeeld: Als je ESP32-ID `a1b2c3` is, abonneer je op `a1b2c3-alert`
    - Klik op "Subscribe"
+
+**Let op**: De ESP32-ID wordt getoond op het device scherm, waardoor het eenvoudig is om te zien op welk topic je je moet abonneren in de NTFY app.
 
 ### Notificatie Types
 
@@ -530,7 +542,9 @@ Voor extra beveiliging kun je je topic beveiligen met een wachtwoord:
 2. Maak een beveiligd topic met wachtwoord
 3. In de NTFY app: Voeg het wachtwoord toe bij het abonneren
 
-**Let op**: De standaard NTFY.sh service is publiek - iedereen met je topic naam kan je notificaties zien. Gebruik een unieke naam of beveilig je topic.
+**Let op**: De standaard NTFY.sh service is publiek - iedereen met je topic naam kan je notificaties zien.
+- **Goed nieuws**: Elk device krijgt automatisch een uniek topic op basis van zijn ESP32 ID (bijv. `a1b2c3-alert`), waardoor conflicten zeer onwaarschijnlijk zijn
+- Voor extra beveiliging kun je je topic nog steeds beveiligen met een wachtwoord (zie hierboven)
 
 ### Troubleshooting NTFY
 
