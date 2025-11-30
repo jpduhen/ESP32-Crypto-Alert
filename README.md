@@ -781,7 +781,7 @@ MIT License - See `LICENSE` file for details.
 
 ## Author
 
-[Add your name/information here]
+Jan Pieter Duhen
 
 ## Credits
 
