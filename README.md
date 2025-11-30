@@ -790,3 +790,4 @@ MIT License - See `LICENSE` file for details.
 - **Arduino_GFX** - Display drivers for ESP32
 - **WiFiManager** - WiFi configuration library
 - **PubSubClient3** - MQTT client library
+# ESP32-Crypto-Alert
