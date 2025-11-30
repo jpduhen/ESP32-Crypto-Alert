@@ -1,0 +1,19 @@
+# Arduino/ESP32 build files
+*.hex
+*.elf
+*.bin
+build/
+.vscode/
+.idea/
+
+# Log files
+*.log
+serial_output.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# User-specific settings (niet committen)
+# platform_config.h kan worden gecommit, maar gebruikers moeten hun eigen platform selecteren
+
