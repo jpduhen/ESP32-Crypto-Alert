@@ -1,5 +1,5 @@
 // Tutorial : https://youtu.be/JqQEG0eipic
-// Unified Crypto Monitor - Supports TTGO T-Display, CYD 2.4, and CYD 2.8
+// Unified Crypto Monitor - Supports TTGO T-Display and CYD 2.8
 // Select platform in platform_config.h
 
 #define LV_CONF_INCLUDE_SIMPLE // Use the lv_conf.h included in this project, to configure see https://docs.lvgl.io/master/get-started/platforms/arduino.html
@@ -35,8 +35,8 @@
 // Bij wijziging: verhoog VERSION_MINOR met 1 en update VERSION_STRING dienovereenkomstig
 // Voorbeeld: 1.00 -> 1.01 (VERSION_MINOR 0 -> 1, VERSION_STRING "1.00" -> "1.01")
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 14
-#define VERSION_STRING "3.14"
+#define VERSION_MINOR 21
+#define VERSION_STRING "3.21"
 
 // Debug logging control - zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
 #define DEBUG_BUTTON_ONLY 1
@@ -74,7 +74,7 @@ lv_display_t *disp;
 #define BINANCE_API "https://api.binance.com/api/v3/ticker/price?symbol=" // API call to binance
 static lv_obj_t *chart;
 static lv_chart_series_t *dataSeries;     // Blauwe serie voor alle punten
-static lv_obj_t *lblFooter; // Footer met IP-adres en hardware parameters (één regel)
+// lblFooter niet meer gebruikt - IP en versie zijn nu aparte labels in footer
 
 // One card per symbol
 static lv_obj_t *priceBox[SYMBOL_COUNT];
@@ -116,6 +116,8 @@ static float anchorMax = 0.0f;  // Hoogste prijs sinds anchor
 static float anchorMin = 0.0f;  // Laagste prijs sinds anchor
 static unsigned long anchorTime = 0;
 static bool anchorActive = false;
+static bool anchorSetPending = false;  // Flag voor pending anchor set (vanuit touchscreen)
+static bool anchorNotificationPending = false;  // Flag voor pending anchor set notificatie
 static float anchorTakeProfit = ANCHOR_TAKE_PROFIT_DEFAULT;  // Take profit threshold (%)
 static float anchorMaxLoss = ANCHOR_MAX_LOSS_DEFAULT;        // Max loss threshold (%)
 static bool anchorTakeProfitSent = false;  // Flag om te voorkomen dat take profit meerdere keren wordt verzonden
@@ -207,7 +209,8 @@ static float firstMinuteAverage = 0.0f; // Eerste minuut gemiddelde prijs als ba
 
 // Notification settings - NTFY.sh
 // Note: NTFY topic wordt dynamisch gegenereerd met ESP32 device ID
-// Format: [ESP32-ID]-alert (bijv. a1b2c3-alert)
+// Format: [ESP32-ID]-alert (bijv. 9MK28H3Q-alert)
+// ESP32-ID is 8 karakters (Crockford Base32 encoding) voor veilige, unieke identificatie
 // Dit voorkomt conflicten tussen verschillende devices
 #define BINANCE_SYMBOL_DEFAULT "BTCEUR"              // Standaard Binance symbool
 
@@ -316,6 +319,13 @@ static String httpGET(const char *url, uint32_t timeoutMs = 3000)
 // colorTag: "green_square" voor stijging, "red_square" voor daling, "blue_square" voor neutraal
 static bool sendNtfyNotification(const char *title, const char *message, const char *colorTag = nullptr)
 {
+    // Check WiFi verbinding eerst
+    if (WiFi.status() != WL_CONNECTED)
+    {
+        Serial_println("[Notify] WiFi niet verbonden, kan NTFY notificatie niet versturen");
+        return false;
+    }
+    
     if (strlen(ntfyTopic) == 0)
     {
         Serial_println("[Notify] Ntfy topic niet geconfigureerd");
@@ -374,9 +384,9 @@ static void getFormattedTimestamp(char *buffer, size_t bufferSize) {
 }
 
 // Send notification via NTFY
-static void sendNotification(const char *title, const char *message, const char *colorTag = nullptr)
+static bool sendNotification(const char *title, const char *message, const char *colorTag = nullptr)
 {
-    sendNtfyNotification(title, message, colorTag);
+    return sendNtfyNotification(title, message, colorTag);
 }
 
 // Check trend change en stuur notificatie indien nodig
@@ -606,15 +616,17 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
             // Bepaal kleur op basis van sterkte
             const char *colorTag;
             if (ret_1m > 0) {
-                // Stijging: blauw voor normale, paars voor sterke (>0.5%)
-                if (absRet1m >= 0.5f) {
+                // Stijging: blauw voor normale (🔼), paars voor 150% threshold (⏫️)
+                // 150% van 0.5% = 0.75%
+                if (absRet1m >= 0.75f) {
                     colorTag = "purple_square,⏫️";
                 } else {
-                    colorTag = "blue_square,⬆️";
+                    colorTag = "blue_square,🔼";
                 }
             } else {
-                // Daling: oranje voor normale, rood voor sterke (<-0.5%)
-                if (absRet1m >= 0.5f) {
+                // Daling: oranje voor normale (🔽), rood voor 150% threshold (⏬️)
+                // 150% van 0.5% = 0.75%
+                if (absRet1m <= -0.75f) {
                     colorTag = "red_square,⏬️";
                 } else {
                     colorTag = "orange_square,🔽";
@@ -682,18 +694,20 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
             // Bepaal kleur op basis van sterkte
             const char *colorTag;
             if (ret_30m > 0) {
-                // Stijging: blauw voor normale, paars voor sterke (>3%)
+                // Stijging: blauw voor normale (🔼), paars voor 150% threshold (⏫️)
+                // 150% van 2.0% = 3.0%
                 if (absRet30m >= 3.0f) {
-                    colorTag = "purple_square,📈";
+                    colorTag = "purple_square,⏫️";
                 } else {
-                    colorTag = "blue_square,📈";
+                    colorTag = "blue_square,🔼";
                 }
             } else {
-                // Daling: oranje voor normale, rood voor sterke (<-3%)
-                if (absRet30m >= 3.0f) {
+                // Daling: oranje voor normale (🔽), rood voor 150% threshold (⏬️)
+                // 150% van 2.0% = 3.0%
+                if (absRet30m <= -3.0f) {
                     colorTag = "red_square,⏬️";
                 } else {
-                    colorTag = "orange_square,⏬️";
+                    colorTag = "orange_square,🔽";
                 }
             }
             char title[64];
@@ -757,18 +771,20 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
             // Bepaal kleur op basis van sterkte
             const char *colorTag;
             if (ret_5m > 0) {
-                // Stijging: blauw voor normale, paars voor sterke (>1.5%)
+                // Stijging: blauw voor normale (🔼), paars voor 150% threshold (⏫️)
+                // 150% van 1.0% = 1.5%
                 if (absRet5m >= 1.5f) {
-                    colorTag = "purple_square,📈";
+                    colorTag = "purple_square,⏫️";
                 } else {
-                    colorTag = "blue_square,📈";
+                    colorTag = "blue_square,🔼";
                 }
             } else {
-                // Daling: oranje voor normale, rood voor sterke (<-1.5%)
-                if (absRet5m >= 1.5f) {
-                    colorTag = "red_square,📉";
+                // Daling: oranje voor normale (🔽), rood voor 150% threshold (⏬️)
+                // 150% van 1.0% = 1.5%
+                if (absRet5m <= -1.5f) {
+                    colorTag = "red_square,⏬️";
                 } else {
-                    colorTag = "orange_square,📉";
+                    colorTag = "orange_square,🔽";
                 }
             }
             char title[64];
@@ -800,19 +816,32 @@ static void getTrendWaitText(char* buffer, size_t bufferSize, uint8_t minutes) {
     }
 }
 
-// Generate unique ESP32 device ID (last 6 hex characters of MAC address)
+// Generate unique ESP32 device ID using Crockford Base32 encoding
+// Uses safe character set without confusing characters (no 0/O, 1/I/L, U)
+// Character set: 0123456789ABCDEFGHJKMNPQRSTVWXYZ (32 characters)
+// Uses 8 characters = 40 bits, giving 2^40 = 1.1 trillion possible combinations
+static const char* base32Alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
 static String getESP32DeviceId() {
-    uint64_t chipid = ESP.getEfuseMac();
-    // Get last 6 hex characters (3 bytes = 24 bits)
-    uint32_t deviceId = (uint32_t)(chipid & 0xFFFFFF);
-    char idStr[7];
-    snprintf(idStr, sizeof(idStr), "%06x", deviceId);
-    return String(idStr);
+    uint64_t chipid = ESP.getEfuseMac(); // 48-bit unique MAC address
+    String out = "";
+    
+    // Extract 40 bits (8 characters * 5 bits each) from the MAC address
+    // We use the lower 40 bits of the 48-bit MAC address
+    uint64_t value = chipid & 0xFFFFFFFFFF; // Mask to 40 bits
+    
+    for (int i = 0; i < 8; i++) {
+        uint8_t index = value & 0x1F;  // Get 5 bits (0-31)
+        out += base32Alphabet[index];
+        value >>= 5;  // Shift right by 5 bits for next character
+    }
+    
+    return out;
 }
 
 // Generate default NTFY topic with ESP32 device ID
 // Format: [ESP32-ID]-alert
-// Example: a1b2c3-alert
+// Example: 9MK28H3Q-alert (8 characters using Crockford Base32 encoding for safe, unique ID)
 static String generateDefaultNtfyTopic() {
     String deviceId = getESP32DeviceId();
     return deviceId + "-alert";
@@ -877,8 +906,8 @@ static void loadSettings()
             if (dashInBefore >= 0) {
                 // Has old format with prefix (e.g. "crypt-xxxxxx"), migrate to new format
                 needsMigration = true;
-            } else if (beforeAlert.length() != 6) {
-                // Not exactly 6 hex chars, might be old format or custom, migrate to be safe
+            } else if (beforeAlert.length() != 8) {
+                // Not exactly 8 chars (old format used 6 or 12), might be old format or custom, migrate to be safe
                 needsMigration = true;
             }
         }
@@ -1108,19 +1137,16 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                 
                 // Publiceer anchor event naar MQTT
                 if (currentPrice > 0.0f) {
-                    publishMqttAnchorEvent(anchorPrice, "anchor_set");
+                publishMqttAnchorEvent(anchorPrice, "anchor_set");
                     
                     // Stuur NTFY notificatie
                     char timestamp[32];
                     getFormattedTimestamp(timestamp, sizeof(timestamp));
                     char title[64];
-                    char msg[256];
+                    char msg[128];
                     snprintf(title, sizeof(title), "%s Anchor Set", binanceSymbol);
-                    snprintf(msg, sizeof(msg), 
-                             "%s\nAnchor prijs: %.2f EUR\nPrijs %s: %.2f EUR",
-                             getText("Anchor prijs vastgezet", "Anchor price set"),
-                             anchorPrice, timestamp, currentPrice);
-                    sendNotification(title, msg, "blue_square,📌");
+                    snprintf(msg, sizeof(msg), "%s: %.2f EUR", timestamp, currentPrice);
+                    sendNotification(title, msg, "white_check_mark");
                 }
                 
                 // Update UI (this will also take the mutex internally)
@@ -2577,6 +2603,54 @@ static void fetchPrice()
             // Check anchor take profit / max loss alerts
             checkAnchorAlerts();
             
+            // Check for pending anchor set from touchscreen click (binnen mutex lock)
+            // Dit voorkomt dat de UI task wordt geblokkeerd door mutex locks
+            // De prijs wordt hier gelezen (binnen mutex) omdat de event handler geen mutex kan nemen
+            if (anchorSetPending) {
+                float currentPrice = prices[0]; // Lees prijs binnen mutex lock
+                if (currentPrice > 0.0f) {
+                    openPrices[0] = currentPrice;
+                    anchorPrice = currentPrice;
+                    anchorMax = currentPrice;
+                    anchorMin = currentPrice;
+                    anchorTime = millis();
+                    anchorActive = true;
+                    anchorTakeProfitSent = false;
+                    anchorMaxLossSent = false;
+                    anchorNotificationPending = true; // Flag voor asynchrone notificatie
+                    Serial_printf("[API] Anchor set from pending (touchscreen): %.2f\n", anchorPrice);
+                } else {
+                    Serial_println("[API] Anchor set pending maar prijs nog niet beschikbaar, wacht op volgende update");
+                    // Blijf pending zodat we het opnieuw proberen bij volgende API call
+                }
+                if (currentPrice > 0.0f) {
+                    anchorSetPending = false; // Reset de vlag alleen als prijs beschikbaar was
+                }
+            }
+            
+            // Verstuur pending anchor set notificatie (als er een is)
+            // Dit gebeurt vanuit apiTask om te voorkomen dat HTTP calls de UI task blokkeren
+            if (anchorNotificationPending && anchorActive && anchorPrice > 0.0f) {
+                anchorNotificationPending = false; // Reset flag
+                xSemaphoreGive(dataMutex); // Geef mutex tijdelijk vrij voor HTTP calls
+                
+                // Publiceer anchor event naar MQTT
+                publishMqttAnchorEvent(anchorPrice, "anchor_set");
+                
+                // Stuur NTFY notificatie (zelfde formaat als fysieke knop)
+                char timestamp[32];
+                getFormattedTimestamp(timestamp, sizeof(timestamp));
+                char title[64];
+                char msg[128];
+                snprintf(title, sizeof(title), "%s Anchor Set", binanceSymbol);
+                // Gebruik anchorPrice voor de notificatie (is al gezet)
+                snprintf(msg, sizeof(msg), "%s: %.2f EUR", timestamp, anchorPrice);
+                sendNotification(title, msg, "white_check_mark");
+                
+                // Neem mutex weer terug (voor de rest van de functie)
+                xSemaphoreTake(dataMutex, pdMS_TO_TICKS(300));
+            }
+            
             // Publiceer waarden naar MQTT
             publishMqttValues(fetched, ret_1m, ret_5m, ret_30m);
             
@@ -2993,7 +3067,7 @@ void updateUI()
 
     // Update footer/IP label (platform-specifiek)
     #ifdef PLATFORM_TTGO
-    // TTGO: Alleen IP-adres
+    // TTGO: IP-adres links, versienummer rechts (versienummer blijft statisch)
     if (ipLabel != nullptr) {
         if (WiFi.status() == WL_CONNECTED) {
             String ip = WiFi.localIP().toString();
@@ -3003,15 +3077,14 @@ void updateUI()
         }
     }
     #else
-    // CYD: Footer met IP-adres, WiFi signaalsterkte en RAM (één regel)
-    String ipStr = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : "--.--.--.--";
-    int rssi = (WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : 0; // WiFi signaalsterkte
-    if (lblFooter != nullptr) {
-        lv_label_set_text_fmt(lblFooter,
-                              "IP: %s   %ddBm   RAM: %ukB",
-                              ipStr.c_str(),
-                              rssi,
-                              heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024);
+    // CYD: IP-adres links, versienummer rechts (versienummer blijft statisch)
+    if (ipLabel != nullptr) {
+        if (WiFi.status() == WL_CONNECTED) {
+            String ip = WiFi.localIP().toString();
+            lv_label_set_text(ipLabel, ip.c_str());
+        } else {
+            lv_label_set_text(ipLabel, "--.--.--.--");
+        }
     }
     #endif
 }
@@ -3020,6 +3093,14 @@ void updateUI()
 static void buildUI()
 {
     lv_obj_clean(lv_scr_act());
+    
+    // Schakel scroll uit voor hoofdscherm om scroll indicators te voorkomen
+    lv_obj_remove_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_remove_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    // Verberg scroll indicators volledig
+    lv_obj_set_style_bg_opa(lv_scr_act(), LV_OPA_TRANSP, LV_PART_SCROLLBAR);
+    lv_obj_set_style_width(lv_scr_act(), 0, LV_PART_SCROLLBAR);
 
     // Chart - gebruik platform-specifieke afmetingen
     chart = lv_chart_create(lv_scr_act());
@@ -3027,6 +3108,14 @@ static void buildUI()
     lv_obj_set_size(chart, CHART_WIDTH, CHART_HEIGHT);
     lv_obj_align(chart, LV_ALIGN_TOP_MID, 0, CHART_ALIGN_Y);
     lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
+    
+    // Schakel scroll uit voor chart om scroll indicators te voorkomen
+    lv_obj_remove_flag(chart, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(chart, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_remove_flag(chart, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    // Verberg scroll indicators volledig
+    lv_obj_set_style_bg_opa(chart, LV_OPA_TRANSP, LV_PART_SCROLLBAR);
+    lv_obj_set_style_width(chart, 0, LV_PART_SCROLLBAR);
     int32_t p = (int32_t)lroundf(openPrices[symbolIndexToChart] * 100.0f);
 
     maxRange = p + PRICE_RANGE;
@@ -3036,27 +3125,29 @@ static void buildUI()
     // Maak één blauwe serie aan voor alle punten
     dataSeries = lv_chart_add_series(chart, lv_palette_main(LV_PALETTE_BLUE), LV_CHART_AXIS_PRIMARY_Y);
 
-    // Trend/volatiliteit labels in de chart zelf (voor alle platformen)
+    // Trend/volatiliteit labels in de chart, links uitgelijnd binnen de chart (X=0 binnen chart)
     // Trend label (linksboven in de grafiek)
     trendLabel = lv_label_create(chart); // Maak label als child van chart
     lv_obj_set_style_text_font(trendLabel, FONT_SIZE_TREND_VOLATILITY, 0);
     lv_obj_set_style_text_color(trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
-    lv_obj_align(trendLabel, LV_ALIGN_TOP_LEFT, 2, 2); // Linksboven in de grafiek
+    lv_obj_set_style_text_align(trendLabel, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(trendLabel, LV_ALIGN_TOP_LEFT, -4, -6); // Links uitgelijnd binnen chart, 4px naar links (X=-4), 8px omhoog (2-8=-6)
     lv_label_set_text(trendLabel, "--");
     
     // Volatiliteit label (linksonder in de grafiek)
-    volatilityLabel = lv_label_create(chart); // Maak label als child van chart
+    volatilityLabel = lv_label_create(chart); // Maak label als child of chart
     lv_obj_set_style_text_font(volatilityLabel, FONT_SIZE_TREND_VOLATILITY, 0);
     lv_obj_set_style_text_color(volatilityLabel, lv_palette_main(LV_PALETTE_GREY), 0);
-    lv_obj_align(volatilityLabel, LV_ALIGN_BOTTOM_LEFT, 2, -2); // Linksonder in de grafiek
+    lv_obj_set_style_text_align(volatilityLabel, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(volatilityLabel, LV_ALIGN_BOTTOM_LEFT, -4, 6); // Links uitgelijnd binnen chart, 4px naar links (X=-4), 8px omlaag (-2+8=6)
     lv_label_set_text(volatilityLabel, "--");
     
     // Platform-specifieke layout voor chart title
     #ifndef PLATFORM_TTGO
     
-    // Chart title met beginletters uit ntfyTopic (alles voor het eerste '-')
+    // Chart title met ESP32 device ID uit ntfyTopic
     chartTitle = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(chartTitle, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(chartTitle, &lv_font_montserrat_16, 0);
     // Extract ESP32 device ID uit ntfyTopic
     String deviceId = getDeviceIdFromTopic(ntfyTopic);
     lv_label_set_text(chartTitle, deviceId.c_str());
@@ -3079,9 +3170,9 @@ static void buildUI()
     lv_obj_set_pos(chartDateLabel, 0, 0);
     
     // Regel 2: Beginletters links, versie midden, tijd rechts
-    // Beginletters label (links)
+    // ESP32 device ID label (links)
     chartBeginLettersLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(chartBeginLettersLabel, &lv_font_montserrat_18, 0); // 2 stappen groter dan 1m en 30m
+    lv_obj_set_style_text_font(chartBeginLettersLabel, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(chartBeginLettersLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
     lv_obj_set_style_text_align(chartBeginLettersLabel, LV_TEXT_ALIGN_LEFT, 0);
     // Extract ESP32 device ID uit ntfyTopic
@@ -3089,15 +3180,7 @@ static void buildUI()
     lv_label_set_text(chartBeginLettersLabel, deviceId.c_str());
     lv_obj_set_pos(chartBeginLettersLabel, 0, 2); // Links, tweede regel op pixel (0, 2) - 8px omhoog
     
-    // Versienummer label (midden)
-    chartVersionLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(chartVersionLabel, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text_fmt(chartVersionLabel, "%s", VERSION_STRING);
-    // Voor midden uitlijning: zet breedte op schermbreedte en gebruik center alignment
-    lv_obj_set_width(chartVersionLabel, CHART_WIDTH);
-    lv_obj_set_pos(chartVersionLabel, 10, 10); // Midden, tweede regel op pixel (10, 10), tekst gecentreerd binnen 135px, 10px naar rechts
+    // Versienummer verwijderd uit kopregel - nu in footer
     
     // Tijd label (rechts, binnen schermbreedte)
     chartTimeLabel = lv_label_create(lv_scr_act());
@@ -3109,15 +3192,8 @@ static void buildUI()
     lv_obj_set_width(chartTimeLabel, CHART_WIDTH);
     lv_obj_set_pos(chartTimeLabel, 0, 10); // Direct op pixel (0, 10), tekst rechts uitgelijnd binnen 135px breedte (even hoog als beginletters)
     #else
-    // CYD: Ruimere layout met versie/datum/tijd op verschillende posities
-    // Versienummer label rechts uitgelijnd op 120px
-    chartVersionLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(chartVersionLabel, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_GREY), 0);
-    lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_text_fmt(chartVersionLabel, "%s", VERSION_STRING);
-    lv_obj_set_width(chartVersionLabel, 120);
-    lv_obj_set_pos(chartVersionLabel, 10, 4); // 10px naar rechts
+    // CYD: Ruimere layout met datum/tijd op verschillende posities
+    // Versienummer verwijderd uit kopregel - nu in footer
     
     // Datum label rechts uitgelijnd op 180px
     chartDateLabel = lv_label_create(lv_scr_act());
@@ -3157,6 +3233,14 @@ static void buildUI()
 
         lv_obj_set_style_radius(priceBox[i], 6, 0);
         lv_obj_set_style_pad_all(priceBox[i], 4, 0);
+        
+        // Schakel scroll uit voor alle priceBox objecten om scroll indicators te voorkomen
+        lv_obj_remove_flag(priceBox[i], LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(priceBox[i], LV_OBJ_FLAG_SCROLL_ELASTIC);
+        lv_obj_remove_flag(priceBox[i], LV_OBJ_FLAG_SCROLL_MOMENTUM);
+        // Verberg scroll indicators volledig
+        lv_obj_set_style_bg_opa(priceBox[i], LV_OPA_TRANSP, LV_PART_SCROLLBAR);
+        lv_obj_set_style_width(priceBox[i], 0, LV_PART_SCROLLBAR);
 
         // Symbol caption
         priceTitle[i] = lv_label_create(priceBox[i]);
@@ -3194,26 +3278,26 @@ static void buildUI()
         if (i == 0) {
             // "Pak winst" label (rechts, groen, boven)
             anchorMaxLabel = lv_label_create(priceBox[i]);
-            lv_obj_set_style_text_font(anchorMaxLabel, FONT_SIZE_ANCHOR, 0);
+            lv_obj_set_style_text_font(anchorMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(anchorMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
             lv_obj_set_style_text_align(anchorMaxLabel, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_obj_align(anchorMaxLabel, LV_ALIGN_RIGHT_MID, -5, -14); // Rechts, verticaal gecentreerd, 14px omhoog
+            lv_obj_align(anchorMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14); // Rechts, exact op de rand, 14px omhoog
             lv_label_set_text(anchorMaxLabel, "");
             
             // Anchor prijs (rechts, oranje, midden)
             anchorLabel = lv_label_create(priceBox[i]);
-            lv_obj_set_style_text_font(anchorLabel, FONT_SIZE_ANCHOR, 0);
+            lv_obj_set_style_text_font(anchorLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(anchorLabel, lv_palette_main(LV_PALETTE_ORANGE), 0);
             lv_obj_set_style_text_align(anchorLabel, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_obj_align(anchorLabel, LV_ALIGN_RIGHT_MID, -5, 0); // Rechts, precies in het midden
+            lv_obj_align(anchorLabel, LV_ALIGN_RIGHT_MID, 0, 0); // Rechts, exact op de rand, precies in het midden
             lv_label_set_text(anchorLabel, "");
             
             // "Stop loss" label (rechts, rood, onder)
             anchorMinLabel = lv_label_create(priceBox[i]);
-            lv_obj_set_style_text_font(anchorMinLabel, FONT_SIZE_ANCHOR, 0);
+            lv_obj_set_style_text_font(anchorMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(anchorMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
             lv_obj_set_style_text_align(anchorMinLabel, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_obj_align(anchorMinLabel, LV_ALIGN_RIGHT_MID, -5, 14); // Rechts, verticaal gecentreerd, 14px omlaag
+            lv_obj_align(anchorMinLabel, LV_ALIGN_RIGHT_MID, 0, 14); // Rechts, exact op de rand, 14px omlaag
             lv_label_set_text(anchorMinLabel, "");
         }
         #else
@@ -3232,26 +3316,26 @@ static void buildUI()
         if (i == 0) {
             // Anchor prijs rechts midden (oranje, met percentage verschil)
             anchorLabel = lv_label_create(priceBox[i]);
-            lv_obj_set_style_text_font(anchorLabel, FONT_SIZE_ANCHOR, 0);
+            lv_obj_set_style_text_font(anchorLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(anchorLabel, lv_palette_main(LV_PALETTE_ORANGE), 0);
             lv_obj_set_style_text_align(anchorLabel, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_obj_align(anchorLabel, LV_ALIGN_RIGHT_MID, -5, 0); // Rechts, precies in het midden
+            lv_obj_align(anchorLabel, LV_ALIGN_RIGHT_MID, 0, 0); // Rechts, exact op de rand, precies in het midden
             lv_label_set_text(anchorLabel, "");
             
             // "Pak winst" label (rechts, groen, boven) - vervangt anchorMaxLabel
             anchorMaxLabel = lv_label_create(priceBox[i]);
-            lv_obj_set_style_text_font(anchorMaxLabel, FONT_SIZE_ANCHOR, 0);
+            lv_obj_set_style_text_font(anchorMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(anchorMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
             lv_obj_set_style_text_align(anchorMaxLabel, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_obj_align(anchorMaxLabel, LV_ALIGN_RIGHT_MID, -5, -14); // Rechts, verticaal gecentreerd, 14px omhoog
+            lv_obj_align(anchorMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14); // Rechts, exact op de rand, 14px omhoog
             lv_label_set_text(anchorMaxLabel, "");
             
             // "Stop loss" label (rechts, rood, onder) - vervangt anchorMinLabel
             anchorMinLabel = lv_label_create(priceBox[i]);
-            lv_obj_set_style_text_font(anchorMinLabel, FONT_SIZE_ANCHOR, 0);
+            lv_obj_set_style_text_font(anchorMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(anchorMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
             lv_obj_set_style_text_align(anchorMinLabel, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_obj_align(anchorMinLabel, LV_ALIGN_RIGHT_MID, -5, 14); // Rechts, verticaal gecentreerd, 14px omlaag
+            lv_obj_align(anchorMinLabel, LV_ALIGN_RIGHT_MID, 0, 14); // Rechts, exact op de rand, 14px omlaag
             lv_label_set_text(anchorMinLabel, "");
         }
         #endif
@@ -3319,53 +3403,38 @@ static void buildUI()
         if (i == 0)
         {
             // Zorg dat parent container touch events doorgeeft en clickable is
-            lv_obj_remove_flag(priceBox[0], LV_OBJ_FLAG_SCROLLABLE);
-            lv_obj_remove_flag(priceBox[0], LV_OBJ_FLAG_SCROLL_ELASTIC);
-            lv_obj_remove_flag(priceBox[0], LV_OBJ_FLAG_SCROLL_MOMENTUM);
+            // (Scroll flags zijn al verwijderd in de loop hierboven)
             lv_obj_add_flag(priceBox[0], LV_OBJ_FLAG_CLICKABLE);
             
             // Event handler voor hele BTCEUR blok - klik om anchor te zetten
+            // Gebruik PRESSED event voor snellere responsiviteit (direct bij indrukken, niet wachten op release)
             lv_obj_add_event_cb(priceBox[0], [](lv_event_t *e) {
                 lv_event_code_t code = lv_event_get_code(e);
                 
-                if (code == LV_EVENT_CLICKED || code == LV_EVENT_SHORT_CLICKED) {
-                    float currentPrice = 0.0f;
-                    if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
-                        if (prices[0] > 0.0f) {
-                            currentPrice = prices[0];  // Sla prijs lokaal op
-                            openPrices[0] = prices[0];
-                            // Set anchor price
-                            anchorPrice = prices[0];
-                            anchorMax = prices[0];  // Initialiseer max/min met huidige prijs
-                            anchorMin = prices[0];
-                            anchorTime = millis();
-                            anchorActive = true;
-                            anchorTakeProfitSent = false;
-                            anchorMaxLossSent = false;
-                            Serial_printf("[UI] Anchor set via BTCEUR blok: anchorPrice = %.2f\n", anchorPrice);
-                        }
-                        xSemaphoreGive(dataMutex);
-                        
-                        // Publiceer anchor event naar MQTT en stuur notificatie
-                        if (currentPrice > 0.0f) {
-                            publishMqttAnchorEvent(anchorPrice, "anchor_set");
-                            
-                            // Stuur NTFY notificatie
-                            char timestamp[32];
-                            getFormattedTimestamp(timestamp, sizeof(timestamp));
-                            char title[64];
-                            char msg[256];
-                            snprintf(title, sizeof(title), "%s Anchor Set", binanceSymbol);
-                            snprintf(msg, sizeof(msg), 
-                                     "%s\nAnchor prijs: %.2f EUR\nPrijs %s: %.2f EUR",
-                                     getText("Anchor prijs vastgezet", "Anchor price set"),
-                                     anchorPrice, timestamp, currentPrice);
-                            sendNotification(title, msg, "blue_square,📌");
-                        }
-                        
-                        // Update UI (this will also take the mutex internally)
-                        updateUI();
+                // Reageer op PRESSED voor snellere response (direct bij indrukken)
+                // CLICKED en SHORT_CLICKED blijven als fallback voor compatibiliteit
+                if (code == LV_EVENT_PRESSED || code == LV_EVENT_CLICKED || code == LV_EVENT_SHORT_CLICKED) {
+                    // Voorkom meerdere triggers tijdens hetzelfde indrukken
+                    static unsigned long lastPressTime = 0;
+                    unsigned long now = millis();
+                    if (now - lastPressTime < 200) { // Debounce: max 1x per 200ms
+                        return;
                     }
+                    lastPressTime = now;
+                    
+                    // KRITIEK: GEEN mutex lock in LVGL event handler!
+                    // LVGL event handlers worden aangeroepen vanuit lv_task_handler() binnen uiTask
+                    // Een mutex lock hier blokkeert de hele uiTask en voorkomt grafiek updates
+                    // 
+                    // Oplossing: alleen een flag zetten, prijs wordt later gelezen in apiTask
+                    // Dit is hetzelfde patroon als de fysieke knop, maar dan zonder mutex lock
+                    anchorSetPending = true;
+                    Serial_println("[UI] BTCEUR blok ingedrukt, anchor setting pending (prijs wordt later gelezen)");
+                    
+                    // Geen mutex lock hier - voorkomt blokkering van uiTask
+                    // Geen prijs lezen hier - gebeurt in apiTask
+                    // Geen anchor setting hier - gebeurt in apiTask
+                    // Geen HTTP calls hier - worden later verstuurd vanuit apiTask
                 }
             }, LV_EVENT_ALL, NULL);
         }
@@ -3374,12 +3443,21 @@ static void buildUI()
 
     // Platform-specifieke footer
     #ifdef PLATFORM_TTGO
-    // TTGO: Alleen IP-adres label (onderin, gecentreerd)
+    // TTGO: IP-adres links, versienummer rechts
+    // IP-adres label (links)
     ipLabel = lv_label_create(lv_scr_act());
     lv_obj_set_style_text_font(ipLabel, FONT_SIZE_FOOTER, 0);
     lv_obj_set_style_text_color(ipLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(ipLabel, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(ipLabel, LV_ALIGN_BOTTOM_MID, 0, -2);
+    lv_obj_set_style_text_align(ipLabel, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(ipLabel, LV_ALIGN_BOTTOM_LEFT, 0, -2);
+    
+    // Versienummer label (rechts)
+    chartVersionLabel = lv_label_create(lv_scr_act());
+    lv_obj_set_style_text_font(chartVersionLabel, FONT_SIZE_FOOTER, 0);
+    lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_text_fmt(chartVersionLabel, "%s", VERSION_STRING);
+    lv_obj_align(chartVersionLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
     
     // Stel de tekst in
     if (WiFi.status() == WL_CONNECTED) {
@@ -3389,13 +3467,29 @@ static void buildUI()
         lv_label_set_text(ipLabel, "--");
     }
     #else
-    // CYD: Footer met IP-adres, WiFi signaalsterkte en RAM (één regel in klein blauw font)
-    lblFooter = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(lblFooter, FONT_SIZE_FOOTER, 0); // Klein blauw font
-    // Footer echt onderaan het scherm uitgelijnd
-    lv_obj_align(lblFooter, LV_ALIGN_BOTTOM_MID, 0, -2);
-    lv_label_set_text_fmt(lblFooter, "IP:--.--.--.--   --dBm   RAM: --kB");
-    lv_obj_set_style_text_color(lblFooter, lv_palette_main(LV_PALETTE_CYAN), 0);
+    // CYD: IP-adres links, versienummer rechts
+    // IP-adres label (links)
+    ipLabel = lv_label_create(lv_scr_act());
+    lv_obj_set_style_text_font(ipLabel, FONT_SIZE_FOOTER, 0);
+    lv_obj_set_style_text_color(ipLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_align(ipLabel, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(ipLabel, LV_ALIGN_BOTTOM_LEFT, 0, -2);
+    
+    // Versienummer label (rechts)
+    chartVersionLabel = lv_label_create(lv_scr_act());
+    lv_obj_set_style_text_font(chartVersionLabel, FONT_SIZE_FOOTER, 0);
+    lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_text_fmt(chartVersionLabel, "%s", VERSION_STRING);
+    lv_obj_align(chartVersionLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
+    
+    // Stel de tekst in
+    if (WiFi.status() == WL_CONNECTED) {
+        String ip = WiFi.localIP().toString();
+        lv_label_set_text(ipLabel, ip.c_str());
+    } else {
+        lv_label_set_text(ipLabel, "--.--.--.--");
+    }
     #endif
 }
 
@@ -3427,8 +3521,9 @@ void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 // Get the Touchscreen data
 // Physical button check function (alleen voor TTGO)
 #if HAS_PHYSICAL_BUTTON
-// Button debouncing
+// Button debouncing - edge detection voor betere eerste-druk detectie
 static unsigned long lastButtonPress = 0;
+static int lastButtonState = HIGH; // Start met HIGH (niet ingedrukt)
 static const unsigned long BUTTON_DEBOUNCE_MS = 500; // 500ms debounce
 
 void checkButton() {
@@ -3437,13 +3532,33 @@ void checkButton() {
     // Read button state (LOW = pressed, HIGH = not pressed due to INPUT_PULLUP)
     int buttonState = digitalRead(BUTTON_PIN);
     
-    // Check if button is pressed (LOW) and debounce
-    if (buttonState == LOW && (now - lastButtonPress >= BUTTON_DEBOUNCE_MS)) {
+    // Edge detection: detect HIGH -> LOW transition (button pressed)
+    // Dit zorgt ervoor dat we alleen triggeren bij het indrukken, niet tijdens het ingedrukt houden
+    if (buttonState == LOW && lastButtonState == HIGH && (now - lastButtonPress >= BUTTON_DEBOUNCE_MS)) {
         lastButtonPress = now;
+        lastButtonState = buttonState; // Update state
         Serial_println("[Button] Physical reset button pressed - setting anchor price");
         
         // Execute reset and set anchor (thread-safe, same as MQTT callback)
         float currentPrice = 0.0f;
+        
+        // Als prices[0] nog 0 is, probeer eerst een prijs op te halen (alleen als WiFi verbonden is)
+        if (WiFi.status() == WL_CONNECTED) {
+            // Check of we al een prijs hebben, zo niet, haal er een op
+            if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+                if (prices[0] <= 0.0f) {
+                    Serial_println("[Button] Prijs nog niet beschikbaar, haal prijs op...");
+                    xSemaphoreGive(dataMutex);
+                    // Haal prijs op (buiten mutex om deadlock te voorkomen)
+                    fetchPrice();
+                    // Wacht even zodat de prijs kan worden opgeslagen
+                    vTaskDelay(pdMS_TO_TICKS(200));
+                } else {
+                    xSemaphoreGive(dataMutex);
+                }
+            }
+        }
+        
         if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
             if (prices[0] > 0.0f) {
                 currentPrice = prices[0];  // Sla prijs lokaal op
@@ -3458,9 +3573,11 @@ void checkButton() {
                 anchorTakeProfitSent = false;
                 anchorMaxLossSent = false;
                 Serial_printf("[Button] Reset: openPrices[0] = %.2f, Anchor = %.2f\n", openPrices[0], anchorPrice);
+            } else {
+                Serial_println("[Button] WARN: Prijs nog steeds niet beschikbaar na fetch");
             }
             xSemaphoreGive(dataMutex);
-            
+                
             // Publiceer anchor event naar MQTT en stuur notificatie
             if (currentPrice > 0.0f) {
                 publishMqttAnchorEvent(anchorPrice, "anchor_set");
@@ -3469,13 +3586,10 @@ void checkButton() {
                 char timestamp[32];
                 getFormattedTimestamp(timestamp, sizeof(timestamp));
                 char title[64];
-                char msg[256];
+                char msg[128];
                 snprintf(title, sizeof(title), "%s Anchor Set", binanceSymbol);
-                snprintf(msg, sizeof(msg), 
-                         "%s\nAnchor prijs: %.2f EUR\nPrijs %s: %.2f EUR",
-                         getText("Anchor prijs vastgezet", "Anchor price set"),
-                         anchorPrice, timestamp, currentPrice);
-                sendNotification(title, msg, "blue_square,📌");
+                snprintf(msg, sizeof(msg), "%s: %.2f EUR", timestamp, currentPrice);
+                sendNotification(title, msg, "white_check_mark");
             }
             
             // Update UI (this will also take the mutex internally)
@@ -3487,6 +3601,11 @@ void checkButton() {
             String topic = String(MQTT_TOPIC_PREFIX) + "/button/reset";
             mqttClient.publish(topic.c_str(), "PRESSED", false);
         }
+    }
+    
+    // Update lastButtonState voor volgende iteratie (ook als button wordt losgelaten)
+    if (buttonState == HIGH) {
+        lastButtonState = HIGH;
     }
 }
 #endif
@@ -3570,6 +3689,11 @@ void setup()
     #endif
     gfx->fillScreen(RGB565_BLACK);
     setDisplayBrigthness();
+    
+    // Geef display tijd om te stabiliseren na initialisatie (vooral belangrijk voor CYD displays)
+    #ifndef PLATFORM_TTGO
+    delay(100);
+    #endif
 
     // init LVGL
     lv_init();
@@ -3584,8 +3708,14 @@ void setup()
 
     uint32_t screenWidth = gfx->width();
     uint32_t screenHeight = gfx->height();
-    // Verkleind van 40 naar 30 regels om RAM te besparen (mogelijk oorzaak van hangende grafiek)
+    // Buffer grootte - platform-specifiek
+    #ifdef PLATFORM_TTGO
+    // TTGO: 30 regels voor RAM besparing
     uint32_t bufSize = screenWidth * 30;
+    #else
+    // CYD: 40 regels (zoals in originele CYD code)
+    uint32_t bufSize = screenWidth * 40;
+    #endif
 
     lv_color_t *disp_draw_buf = (lv_color_t *)heap_caps_malloc(bufSize * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!disp_draw_buf)
@@ -3661,11 +3791,11 @@ void setup()
     lv_indev_set_read_cb(indev, touchscreen_read);
     
     // Verhoog polling frequentie voor snellere touch responsiviteit
-    // Standaard is dit LV_DEF_REFR_PERIOD (meestal 30ms), verlaag naar 10ms voor snellere response
+    // Standaard is dit LV_DEF_REFR_PERIOD (meestal 30ms), verlaag naar 5ms voor snellere response
     lv_timer_t *read_timer = lv_indev_get_read_timer(indev);
     if (read_timer != nullptr) {
-        lv_timer_set_period(read_timer, 10); // 10ms polling in plaats van standaard 30ms
-        Serial.println("[Touch] LVGL input device created met 10ms polling");
+        lv_timer_set_period(read_timer, 5); // 5ms polling voor snellere touch response
+        Serial.println("[Touch] LVGL input device created met 5ms polling");
     } else {
         Serial.println("[Touch] LVGL input device created (standaard polling)");
     }
@@ -3733,11 +3863,19 @@ void showConnectionInfo()
     // Verwijder alle bestaande labels op het scherm
     lv_obj_clean(lv_scr_act());
     
-    // Maak spinner voor "Opening Binance Session" (exact midden)
+    // Schakel scroll uit voor hoofdscherm om scroll indicators te voorkomen
+    lv_obj_remove_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_remove_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    // Verberg scroll indicators volledig
+    lv_obj_set_style_bg_opa(lv_scr_act(), LV_OPA_TRANSP, LV_PART_SCROLLBAR);
+    lv_obj_set_style_width(lv_scr_act(), 0, LV_PART_SCROLLBAR);
+    
+    // Maak spinner voor "Opening Binance Session" (8px naar beneden vanaf midden)
     lv_obj_t *spinner = lv_spinner_create(lv_scr_act());
     lv_spinner_set_anim_params(spinner, 8000, 200);
     lv_obj_set_size(spinner, 80, 80);
-    lv_obj_align(spinner, LV_ALIGN_CENTER, 0, 0); // Exact midden
+    lv_obj_align(spinner, LV_ALIGN_CENTER, 0, 8); // 8px naar beneden vanaf midden
     // Maak spinner groen (goede verbinding) - indicator is het bewegende deel
     lv_obj_set_style_arc_color(spinner, lv_palette_main(LV_PALETTE_GREEN), LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(spinner, lv_palette_darken(LV_PALETTE_GREEN, 3), LV_PART_MAIN);
@@ -3804,6 +3942,14 @@ void wifiConnectionAndFetchPrice()
     static lv_obj_t *instructionLabel;
     static lv_obj_t *viaAPLabel;
     static lv_obj_t *webInterfaceLabel;
+    
+    // Schakel scroll uit voor hoofdscherm om scroll indicators te voorkomen
+    lv_obj_remove_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_remove_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    // Verberg scroll indicators volledig
+    lv_obj_set_style_bg_opa(lv_scr_act(), LV_OPA_TRANSP, LV_PART_SCROLLBAR);
+    lv_obj_set_style_width(lv_scr_act(), 0, LV_PART_SCROLLBAR);
     
     wifiSpinner = lv_spinner_create(lv_scr_act());
     lv_spinner_set_anim_params(wifiSpinner, 8000, 200);
@@ -4010,6 +4156,19 @@ void wifiConnectionAndFetchPrice()
         // Haal prijzen op - dit bepaalt hoe lang het scherm wordt getoond
         // fetchPrice() roept zelf lv_timer_handler() aan tijdens het ophalen
         fetchPrice();
+        
+        // Wacht tot de prijs succesvol is opgehaald (max 5 seconden)
+        int retries = 0;
+        while (retries < 50 && prices[0] <= 0.0f) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            lv_timer_handler();
+            retries++;
+        }
+        if (prices[0] > 0.0f) {
+            Serial_printf("[WiFi] Eerste prijs succesvol opgehaald: %.2f\n", prices[0]);
+        } else {
+            Serial.println("[WiFi] WARN: Eerste prijs niet opgehaald na 5 seconden");
+        }
     } else {
         // Direct verbonden met opgeslagen credentials
         // Toon verbindingsinfo (SSID en IP) en "Opening Binance Session"
@@ -4018,6 +4177,19 @@ void wifiConnectionAndFetchPrice()
         // Haal prijzen op - dit bepaalt hoe lang het scherm wordt getoond
         // fetchPrice() roept zelf lv_timer_handler() aan tijdens het ophalen
         fetchPrice();
+        
+        // Wacht tot de prijs succesvol is opgehaald (max 5 seconden)
+        int retries = 0;
+        while (retries < 50 && prices[0] <= 0.0f) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            lv_timer_handler();
+            retries++;
+        }
+        if (prices[0] > 0.0f) {
+            Serial_printf("[WiFi] Eerste prijs succesvol opgehaald: %.2f\n", prices[0]);
+        } else {
+            Serial.println("[WiFi] WARN: Eerste prijs niet opgehaald na 5 seconden");
+        }
     }
 
     Serial_printf("Verbonden! IP: %s\n", WiFi.localIP().toString().c_str());

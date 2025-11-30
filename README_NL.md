@@ -138,6 +138,28 @@ Bij eerste opstarten:
    - Configureer je WiFi credentials via de web interface
    - Configureer MQTT en NTFY settings (optioneel)
 
+## Schermafbeeldingen
+
+De volgende schermafbeeldingen tonen de verschillende schermen van de applicatie:
+
+### Startscherm
+![Startscherm](images/startup.png)
+
+### WiFi Instel Scherm
+![WiFi Instel Scherm](images/wifi_config.png)
+
+### WiFi Verbonden Scherm
+![WiFi Verbonden Scherm](images/wifi_connected.png)
+
+### Hoofdscherm
+![Hoofdscherm](images/main_screen.png)
+
+**Let op**: Om schermafbeeldingen toe te voegen aan je repository:
+1. Maak een `images` map aan in de root van het project
+2. Plaats je schermafbeeldingen in deze map met de namen zoals hierboven getoond
+3. Ondersteunde formaten: PNG, JPG, of GIF
+4. Aanbevolen grootte: 800-1200px breedte voor beste weergave op GitHub
+
 ## Configuratie
 
 ### Web Interface
@@ -238,8 +260,10 @@ Het device ondersteunt twee talen: **Nederlands** en **English**. Alle teksten z
 
 #### NTFY Topic
 - **Wat het doet**: Het topic waarop notificaties worden verzonden via NTFY.sh
-- **Standaard**: Automatisch gegenereerd als `[ESP32-ID]-alert` (bijv. `a1b2c3-alert`)
-  - De ESP32-ID is uniek per device (afgeleid van MAC adres, laatste 6 hex karakters)
+- **Standaard**: Automatisch gegenereerd als `[ESP32-ID]-alert` (bijv. `9MK28H3Q-alert`)
+  - De ESP32-ID is uniek per device (8 karakters met Crockford Base32 encoding)
+  - Gebruikt veilige karakterset zonder verwarrende tekens (geen 0/O, 1/I/L, U)
+  - Karakterset: `0123456789ABCDEFGHJKMNPQRSTVWXYZ`
   - De ESP32-ID wordt getoond op het device scherm voor eenvoudige referentie
 - **Gebruik**: Het standaard topic is al uniek per device, maar je kunt het indien nodig wijzigen in de web interface
 - **Belangrijk**: 
@@ -430,9 +454,10 @@ NTFY.sh is een gratis, open-source push notification service. Het stelt je in st
 
 **Automatische Unieke Topic Generatie**:
 - Standaard genereert het device automatisch een uniek NTFY topic met je ESP32's unieke ID
-- Format: `[ESP32-ID]-alert` (bijv. `a1b2c3-alert`)
-- De ESP32-ID wordt afgeleid van het MAC adres van het device (laatste 6 hex karakters)
-- Dit zorgt ervoor dat elk device een uniek topic heeft, waardoor conflicten tussen meerdere devices worden voorkomen
+- Format: `[ESP32-ID]-alert` (bijv. `9MK28H3Q-alert`)
+- De ESP32-ID wordt afgeleid van het MAC adres van het device met Crockford Base32 encoding (8 karakters)
+- Gebruikt veilige karakterset: `0123456789ABCDEFGHJKMNPQRSTVWXYZ` (geen verwarrende 0/O, 1/I/L, U)
+- Biedt 2^40 = 1,1 biljoen mogelijke combinaties, waardoor uniekheid gegarandeerd is
 - De ESP32-ID wordt getoond op het device scherm (in het chart title gebied voor CYD, of op regel 2 voor TTGO)
 
 **Handmatige Configuratie**:
@@ -447,7 +472,7 @@ NTFY.sh is een gratis, open-source push notification service. Het stelt je in st
    - Open de NTFY app
    - Klik op "Subscribe to topic"
    - Voer je topic naam in (getoond op het device display of in web interface)
-   - Voorbeeld: Als je ESP32-ID `a1b2c3` is, abonneer je op `a1b2c3-alert`
+   - Voorbeeld: Als je ESP32-ID `9MK28H3Q` is, abonneer je op `9MK28H3Q-alert`
    - Klik op "Subscribe"
 
 **Let op**: De ESP32-ID wordt getoond op het device scherm, waardoor het eenvoudig is om te zien op welk topic je je moet abonneren in de NTFY app.
@@ -716,78 +741,6 @@ MQTT is optioneel en kan ook gebruikt worden met andere systemen zoals:
 - **Custom scripts**: Python, Node.js, etc.
 
 Als je MQTT niet gebruikt, kun je de MQTT instellingen leeg laten in de web interface.
-
-## Publiceren naar GitHub
-
-### Stap 1: Maak een GitHub Repository
-
-1. Ga naar [GitHub.com](https://github.com) en log in
-2. Klik op het **+** icoon rechtsboven → **New repository**
-3. Kies een repository naam (bijv. `ESP32-crypto-alert` of `unified-lvgl9-crypto-monitor`)
-4. Voeg een beschrijving toe (optioneel): "Unified LVGL9 Crypto Monitor for ESP32 with multi-platform support"
-5. Kies **Public** of **Private**
-6. **⚠️ BELANGRIJK**: **NIET** "Initialize with README" aanvinken (we hebben al een README)
-7. **NIET** een .gitignore of licentie toevoegen (we hebben deze al)
-8. Klik op **Create repository**
-
-**Let op**: Na het aanmaken van de repository toont GitHub setup instructies. Je kunt deze negeren - we gebruiken de commando's hieronder.
-
-### Stap 2: Initialiseer Git en Push Code
-
-Open een terminal in de project directory en voer de volgende commando's uit:
-
-```bash
-# Navigeer naar de project directory
-cd /Users/janpieterduhen/MEGA/@HOKUSAI/Arduino_nieuw/UNIFIED-LVGL9-Crypto_Monitor
-
-# Initialiseer git repository (als nog niet gedaan)
-git init
-
-# Voeg alle bestanden toe
-git add .
-
-# Maak eerste commit
-git commit -m "Initial commit: Unified LVGL9 Crypto Monitor"
-
-# Voeg remote repository toe (vervang <jouw-username> en <repository-naam>)
-git remote add origin https://github.com/<jouw-username>/<repository-naam>.git
-
-# Push naar GitHub
-git branch -M main
-git push -u origin main
-```
-
-**Let op**: Als je GitHub authenticatie gebruikt, moet je mogelijk een Personal Access Token gebruiken in plaats van je wachtwoord.
-
-**Personal Access Token Aanmaken**:
-1. Ga naar GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)
-2. Klik op "Generate new token" → "Generate new token (classic)"
-3. Geef het een beschrijvende naam (bijv. "ESP32 Crypto Monitor Upload")
-4. Stel vervaldatum in (aanbevolen: 90 dagen of aangepast)
-5. **Selecteer de volgende permissions (rechten)**:
-   - ✅ **repo** (Full control of private repositories)
-     - Dit omvat: `repo:status`, `repo_deployment`, `public_repo`, `repo:invite`, `security_events`
-   - ✅ **workflow** (Update GitHub Action workflows) - Optioneel, alleen als je GitHub Actions gebruikt
-6. Klik op "Generate token"
-7. **Kopieer de token direct** - je kunt hem daarna niet meer zien!
-8. Gebruik deze token als wachtwoord bij het pushen naar GitHub
-
-### Stap 3: Update README (Optioneel)
-
-Vergeet niet om in de README de volgende regels aan te passen:
-- Regel 51: Vervang `<repository-url>` met je daadwerkelijke GitHub URL
-- Regel 133: Voeg je licentie toe (MIT licentie is al toegevoegd in `LICENSE` bestand)
-- Regel 137: Voeg je naam/informatie toe
-
-### Stap 4: Maak een Release (Optioneel)
-
-Voor belangrijke versies kun je een GitHub Release maken:
-
-1. Ga naar je repository op GitHub
-2. Klik op **Releases** → **Create a new release**
-3. Kies een tag (bijv. `v3.14`)
-4. Voeg release notes toe
-5. Klik op **Publish release**
 
 ## Licentie
 

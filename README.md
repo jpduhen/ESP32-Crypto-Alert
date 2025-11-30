@@ -138,6 +138,28 @@ On first boot:
    - Configure your WiFi credentials via the web interface
    - Configure MQTT and NTFY settings (optional)
 
+## Screenshots
+
+The following screenshots show the different screens of the application:
+
+### Startup Screen
+![Startup Screen](images/startup.png)
+
+### WiFi Configuration Screen
+![WiFi Configuration Screen](images/wifi_config.png)
+
+### WiFi Connected Screen
+![WiFi Connected Screen](images/wifi_connected.png)
+
+### Main Screen
+![Main Screen](images/main_screen.png)
+
+**Note**: To add screenshots to your repository:
+1. Create an `images` folder in the root of the project
+2. Place your screenshot images in this folder with the names shown above
+3. Supported formats: PNG, JPG, or GIF
+4. Recommended size: 800-1200px width for best display on GitHub
+
 ## Configuration
 
 ### Web Interface
@@ -238,8 +260,10 @@ The device supports two languages: **Dutch (Nederlands)** and **English**. All t
 
 #### NTFY Topic
 - **What it does**: The topic on which notifications are sent via NTFY.sh
-- **Default**: Automatically generated as `[ESP32-ID]-alert` (e.g. `a1b2c3-alert`)
-  - The ESP32-ID is unique per device (derived from MAC address, last 6 hex characters)
+- **Default**: Automatically generated as `[ESP32-ID]-alert` (e.g. `9MK28H3Q-alert`)
+  - The ESP32-ID is unique per device (8 characters using Crockford Base32 encoding)
+  - Uses safe character set without confusing characters (no 0/O, 1/I/L, U)
+  - Character set: `0123456789ABCDEFGHJKMNPQRSTVWXYZ`
   - The ESP32-ID is displayed on the device screen for easy reference
 - **Usage**: The default topic is already unique per device, but you can change it in the web interface if needed
 - **Important**: 
@@ -430,9 +454,10 @@ NTFY.sh is a free, open-source push notification service. It allows you to recei
 
 **Automatic Unique Topic Generation**:
 - By default, the device automatically generates a unique NTFY topic using your ESP32's unique ID
-- Format: `[ESP32-ID]-alert` (e.g. `a1b2c3-alert`)
-- The ESP32-ID is derived from the device's MAC address (last 6 hex characters)
-- This ensures each device has a unique topic, preventing conflicts between multiple devices
+- Format: `[ESP32-ID]-alert` (e.g. `9MK28H3Q-alert`)
+- The ESP32-ID is derived from the device's MAC address using Crockford Base32 encoding (8 characters)
+- Uses safe character set: `0123456789ABCDEFGHJKMNPQRSTVWXYZ` (no confusing 0/O, 1/I/L, U)
+- Provides 2^40 = 1.1 trillion possible combinations, ensuring uniqueness
 - The ESP32-ID is displayed on the device screen (in the chart title area for CYD, or on line 2 for TTGO)
 
 **Manual Configuration**:
@@ -447,7 +472,7 @@ NTFY.sh is a free, open-source push notification service. It allows you to recei
    - Open the NTFY app
    - Click "Subscribe to topic"
    - Enter your topic name (shown on the device display or in web interface)
-   - Example: If your ESP32-ID is `a1b2c3`, subscribe to `a1b2c3-alert`
+   - Example: If your ESP32-ID is `9MK28H3Q`, subscribe to `9MK28H3Q-alert`
    - Click "Subscribe"
 
 **Note**: The ESP32-ID is displayed on the device screen, making it easy to identify which topic to subscribe to in the NTFY app.
@@ -716,78 +741,6 @@ MQTT is optional and can also be used with other systems such as:
 - **Custom scripts**: Python, Node.js, etc.
 
 If you don't use MQTT, you can leave the MQTT settings empty in the web interface.
-
-## Publishing to GitHub
-
-### Step 1: Create a GitHub Repository
-
-1. Go to [GitHub.com](https://github.com) and log in
-2. Click the **+** icon top-right → **New repository**
-3. Choose a repository name (e.g. `ESP32-crypto-alert` or `unified-lvgl9-crypto-monitor`)
-4. Add a description (optional): "Unified LVGL9 Crypto Monitor for ESP32 with multi-platform support"
-5. Choose **Public** or **Private**
-6. **⚠️ IMPORTANT**: **DO NOT** check "Initialize with README" (we already have a README)
-7. **DO NOT** add a .gitignore or license (we already have these)
-8. Click **Create repository**
-
-**Note**: After creating the repository, GitHub will show you setup instructions. You can ignore those - we'll use the commands below.
-
-### Step 2: Initialize Git and Push Code
-
-Open a terminal in the project directory and run the following commands:
-
-```bash
-# Navigate to the project directory
-cd /Users/janpieterduhen/MEGA/@HOKUSAI/Arduino_nieuw/UNIFIED-LVGL9-Crypto_Monitor
-
-# Initialize git repository (if not already done)
-git init
-
-# Add all files
-git add .
-
-# Make first commit
-git commit -m "Initial commit: Unified LVGL9 Crypto Monitor"
-
-# Add remote repository (replace <your-username> and <repository-name>)
-git remote add origin https://github.com/<your-username>/<repository-name>.git
-
-# Push to GitHub
-git branch -M main
-git push -u origin main
-```
-
-**Note**: If you use GitHub authentication, you may need to use a Personal Access Token instead of your password.
-
-**Creating a Personal Access Token**:
-1. Go to GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)
-2. Click "Generate new token" → "Generate new token (classic)"
-3. Give it a descriptive name (e.g., "ESP32 Crypto Monitor Upload")
-4. Set expiration (recommended: 90 days or custom)
-5. **Select the following permissions**:
-   - ✅ **repo** (Full control of private repositories)
-     - This includes: `repo:status`, `repo_deployment`, `public_repo`, `repo:invite`, `security_events`
-   - ✅ **workflow** (Update GitHub Action workflows) - Optional, only if you use GitHub Actions
-6. Click "Generate token"
-7. **Copy the token immediately** - you won't be able to see it again!
-8. Use this token as your password when pushing to GitHub
-
-### Step 3: Update README (Optional)
-
-Don't forget to update the following lines in the README:
-- Line 51: Replace `<repository-url>` with your actual GitHub URL
-- Line 133: Add your license (MIT license is already added in `LICENSE` file)
-- Line 137: Add your name/information
-
-### Step 4: Create a Release (Optional)
-
-For important versions you can create a GitHub Release:
-
-1. Go to your repository on GitHub
-2. Click **Releases** → **Create a new release**
-3. Choose a tag (e.g. `v3.14`)
-4. Add release notes
-5. Click **Publish release**
 
 ## License
 
