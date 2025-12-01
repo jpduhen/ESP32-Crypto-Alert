@@ -436,8 +436,8 @@ Both layouts show the same information, but the TTGO version is optimized for th
 
 ### CYD 2.4" / 2.8"
 - Spacious layout with more details
-- Touchscreen interaction
-- Footer with IP, WiFi signal strength and RAM usage
+- Touchscreen interaction via dedicated "Klik Vast" button
+- Two-line footer: WiFi signal/RAM (line 1), IP/version (line 2)
 
 ## NTFY.sh Setup and Usage
 
@@ -741,6 +741,25 @@ MQTT is optional and can also be used with other systems such as:
 - **Custom scripts**: Python, Node.js, etc.
 
 If you don't use MQTT, you can leave the MQTT settings empty in the web interface.
+
+## Version History
+
+### Version 3.22
+- **CYD Footer Redesign**: Two-line footer layout
+  - Line 1: WiFi signal strength (dBm) left, RAM (kB) right
+  - Line 2: IP address left, version number right
+- **Anchor Button**: Blue "Klik Vast" button below 30min box (80px wide, 0.66x of original)
+- **BTCEUR Box**: Touch functionality removed (now handled by dedicated button)
+- **Performance Improvements for CYD**:
+  - Increased UI task mutex timeout (50ms → 100ms) for better chart updates
+  - Increased LVGL handler frequency (5ms → 3ms) for smoother rendering
+  - Decreased API task mutex timeout (300ms → 200ms) for faster UI updates
+  - Reduces chart stuttering/hanging issues on CYD devices
+
+### Version 3.21
+- Touchscreen responsiveness improvements (5ms polling, PRESSED event support)
+- Touchscreen notification format aligned with physical button
+- LVGL deprecated define fix (LV_FS_DEFAULT_DRIVER_LETTER)
 
 ## License
 

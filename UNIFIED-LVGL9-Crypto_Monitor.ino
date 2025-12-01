@@ -35,8 +35,8 @@
 // Bij wijziging: verhoog VERSION_MINOR met 1 en update VERSION_STRING dienovereenkomstig
 // Voorbeeld: 1.00 -> 1.01 (VERSION_MINOR 0 -> 1, VERSION_STRING "1.00" -> "1.01")
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 21
-#define VERSION_STRING "3.21"
+#define VERSION_MINOR 22
+#define VERSION_STRING "3.22"
 
 // Debug logging control - zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
 #define DEBUG_BUTTON_ONLY 1
@@ -74,7 +74,9 @@ lv_display_t *disp;
 #define BINANCE_API "https://api.binance.com/api/v3/ticker/price?symbol=" // API call to binance
 static lv_obj_t *chart;
 static lv_chart_series_t *dataSeries;     // Blauwe serie voor alle punten
-// lblFooter niet meer gebruikt - IP en versie zijn nu aparte labels in footer
+static lv_obj_t *lblFooterLine1; // Footer regel 1 (alleen voor CYD: dBm links, RAM rechts)
+static lv_obj_t *lblFooterLine2; // Footer regel 2 (alleen voor CYD: IP links, versie rechts)
+static lv_obj_t *ramLabel; // RAM label rechts op regel 1 (alleen voor CYD)
 
 // One card per symbol
 static lv_obj_t *priceBox[SYMBOL_COUNT];
@@ -166,6 +168,8 @@ static lv_obj_t *price1MinDiffLabel; // Label voor verschil tussen max en min in
 static lv_obj_t *price30MinMaxLabel; // Label voor max waarde in 30 min buffer
 static lv_obj_t *price30MinMinLabel; // Label voor min waarde in 30 min buffer
 static lv_obj_t *price30MinDiffLabel; // Label voor verschil tussen max en min in 30 min buffer
+static lv_obj_t *anchorButton; // Blauwe knop voor anchor setting (alleen voor touchscreen)
+static lv_obj_t *anchorButtonLabel; // Label voor anchor button tekst
 static lv_obj_t *anchorLabel; // Label voor anchor price info (rechts midden, met percentage verschil)
 static lv_obj_t *anchorMaxLabel; // Label voor "Pak winst" (rechts, groen, boven)
 static lv_obj_t *anchorMinLabel; // Label voor "Stop loss" (rechts, rood, onder)
@@ -2527,8 +2531,15 @@ static void fetchPrice()
             Serial.printf("[API] OK -> %s %.2f (tijd: %lu ms)\n", binanceSymbol, fetched, fetchTime);
         }
         
-        // Neem mutex voor data updates (timeout verhoogd om conflicten met UI task te voorkomen)
-        if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(300)) == pdTRUE)
+        // Neem mutex voor data updates (timeout aangepast per platform)
+        // CYD heeft meer rendering overhead, dus iets kortere timeout om UI task meer kans te geven
+        #ifdef PLATFORM_TTGO
+        const TickType_t apiMutexTimeout = pdMS_TO_TICKS(300); // TTGO: 300ms
+        #else
+        const TickType_t apiMutexTimeout = pdMS_TO_TICKS(200); // CYD: 200ms voor snellere UI updates
+        #endif
+        
+        if (xSemaphoreTake(dataMutex, apiMutexTimeout) == pdTRUE)
         {
             if (openPrices[0] == 0)
                 openPrices[0] = fetched; // capture session open once
@@ -3070,22 +3081,45 @@ void updateUI()
     // TTGO: IP-adres links, versienummer rechts (versienummer blijft statisch)
     if (ipLabel != nullptr) {
         if (WiFi.status() == WL_CONNECTED) {
-            String ip = WiFi.localIP().toString();
-            lv_label_set_text(ipLabel, ip.c_str());
+        String ip = WiFi.localIP().toString();
+        lv_label_set_text(ipLabel, ip.c_str());
         } else {
-            lv_label_set_text(ipLabel, "--");
-        }
+        lv_label_set_text(ipLabel, "--");
+    }
     }
     #else
-    // CYD: IP-adres links, versienummer rechts (versienummer blijft statisch)
-    if (ipLabel != nullptr) {
+    // CYD: Footer met 2 regels
+    // Regel 1: dBm links, RAM rechts
+    if (lblFooterLine1 != nullptr) {
+        int rssi = 0;
+        uint32_t freeRAM = 0;
+        
         if (WiFi.status() == WL_CONNECTED) {
-            String ip = WiFi.localIP().toString();
-            lv_label_set_text(ipLabel, ip.c_str());
-        } else {
-            lv_label_set_text(ipLabel, "--.--.--.--");
+            rssi = WiFi.RSSI();
+        }
+        
+        freeRAM = heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024; // RAM in kB
+        
+        lv_label_set_text_fmt(lblFooterLine1, "%ddBm", rssi);
+        
+        // RAM rechts uitgelijnd op regel 1
+        if (ramLabel != nullptr) {
+            lv_label_set_text_fmt(ramLabel, "%ukB", freeRAM);
         }
     }
+    
+    // Regel 2: IP-adres links, versienummer rechts
+    if (lblFooterLine2 != nullptr) {
+        String ipStr = "--.--.--.--";
+        
+        if (WiFi.status() == WL_CONNECTED) {
+            ipStr = WiFi.localIP().toString();
+        }
+        
+        lv_label_set_text(lblFooterLine2, ipStr.c_str());
+    }
+    
+    // Versienummer wordt al geüpdatet door chartVersionLabel (statisch, blijft VERSION_STRING)
     #endif
 }
 
@@ -3093,7 +3127,7 @@ void updateUI()
 static void buildUI()
 {
     lv_obj_clean(lv_scr_act());
-    
+
     // Schakel scroll uit voor hoofdscherm om scroll indicators te voorkomen
     lv_obj_remove_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLL_ELASTIC);
@@ -3398,48 +3432,62 @@ static void buildUI()
             lv_obj_align(price30MinMinLabel, LV_ALIGN_RIGHT_MID, 0, 14); // Rechts, exact op de rand, 14px omlaag
         }
         
-        // Anchor functionaliteit op hele BTCEUR blok (alleen voor touchscreen)
-        #if HAS_TOUCHSCREEN
-        if (i == 0)
-        {
-            // Zorg dat parent container touch events doorgeeft en clickable is
-            // (Scroll flags zijn al verwijderd in de loop hierboven)
-            lv_obj_add_flag(priceBox[0], LV_OBJ_FLAG_CLICKABLE);
-            
-            // Event handler voor hele BTCEUR blok - klik om anchor te zetten
-            // Gebruik PRESSED event voor snellere responsiviteit (direct bij indrukken, niet wachten op release)
-            lv_obj_add_event_cb(priceBox[0], [](lv_event_t *e) {
+        // BTCEUR box heeft geen touch-functionaliteit meer - dat doet de blauwe knop onderin
+    }
+
+    // Blauwe "Klik Vast" knop onder de 30 min box (alleen voor touchscreen)
+    #if HAS_TOUCHSCREEN
+    anchorButton = lv_btn_create(lv_scr_act());
+    lv_obj_set_size(anchorButton, 80, 30); // Breedte 80px (0.66x van 120px), hoogte 30px
+    lv_obj_set_style_bg_color(anchorButton, lv_palette_main(LV_PALETTE_BLUE), 0);
+    lv_obj_set_style_radius(anchorButton, 5, 0);
+    // Plaats onder de 30 min box (priceBox[2]), gecentreerd in het midden
+    lv_obj_align_to(anchorButton, priceBox[2], LV_ALIGN_OUT_BOTTOM_MID, 0, 5);
+    
+    // Label voor de knop
+    anchorButtonLabel = lv_label_create(anchorButton);
+    lv_label_set_text(anchorButtonLabel, "Klik Vast");
+    lv_obj_set_style_text_font(anchorButtonLabel, FONT_SIZE_FOOTER, 0);
+    lv_obj_set_style_text_color(anchorButtonLabel, lv_color_white(), 0);
+    lv_obj_center(anchorButtonLabel);
+    
+    // Event handler voor anchor button
+    lv_obj_add_event_cb(anchorButton, [](lv_event_t *e) {
                 lv_event_code_t code = lv_event_get_code(e);
                 
-                // Reageer op PRESSED voor snellere response (direct bij indrukken)
-                // CLICKED en SHORT_CLICKED blijven als fallback voor compatibiliteit
-                if (code == LV_EVENT_PRESSED || code == LV_EVENT_CLICKED || code == LV_EVENT_SHORT_CLICKED) {
-                    // Voorkom meerdere triggers tijdens hetzelfde indrukken
-                    static unsigned long lastPressTime = 0;
-                    unsigned long now = millis();
-                    if (now - lastPressTime < 200) { // Debounce: max 1x per 200ms
-                        return;
-                    }
-                    lastPressTime = now;
-                    
-                    // KRITIEK: GEEN mutex lock in LVGL event handler!
-                    // LVGL event handlers worden aangeroepen vanuit lv_task_handler() binnen uiTask
-                    // Een mutex lock hier blokkeert de hele uiTask en voorkomt grafiek updates
-                    // 
-                    // Oplossing: alleen een flag zetten, prijs wordt later gelezen in apiTask
-                    // Dit is hetzelfde patroon als de fysieke knop, maar dan zonder mutex lock
-                    anchorSetPending = true;
-                    Serial_println("[UI] BTCEUR blok ingedrukt, anchor setting pending (prijs wordt later gelezen)");
-                    
-                    // Geen mutex lock hier - voorkomt blokkering van uiTask
-                    // Geen prijs lezen hier - gebeurt in apiTask
-                    // Geen anchor setting hier - gebeurt in apiTask
-                    // Geen HTTP calls hier - worden later verstuurd vanuit apiTask
+        // Reageer op PRESSED voor snellere response (direct bij indrukken)
+        // CLICKED en SHORT_CLICKED blijven als fallback voor compatibiliteit
+        if (code == LV_EVENT_PRESSED || code == LV_EVENT_CLICKED || code == LV_EVENT_SHORT_CLICKED) {
+            // Voorkom meerdere triggers tijdens hetzelfde indrukken
+            static unsigned long lastPressTime = 0;
+            unsigned long now = millis();
+            if (now - lastPressTime < 200) { // Debounce: max 1x per 200ms
+                return;
+            }
+            lastPressTime = now;
+            
+            // Visual feedback: donkerder blauw bij indrukken
+            if (code == LV_EVENT_PRESSED) {
+                lv_obj_set_style_bg_color(anchorButton, lv_palette_darken(LV_PALETTE_BLUE, 2), 0);
+            } else {
+                lv_obj_set_style_bg_color(anchorButton, lv_palette_main(LV_PALETTE_BLUE), 0);
+            }
+            
+            // KRITIEK: GEEN mutex lock in LVGL event handler!
+            // LVGL event handlers worden aangeroepen vanuit lv_task_handler() binnen uiTask
+            // Een mutex lock hier blokkeert de hele uiTask en voorkomt grafiek updates
+            // 
+            // Oplossing: alleen een flag zetten, prijs wordt later gelezen in apiTask
+            anchorSetPending = true;
+            Serial_println("[UI] Klik Vast knop ingedrukt, anchor setting pending (prijs wordt later gelezen)");
+            
+            // Geen mutex lock hier - voorkomt blokkering van uiTask
+            // Geen prijs lezen hier - gebeurt in apiTask
+            // Geen anchor setting hier - gebeurt in apiTask
+            // Geen HTTP calls hier - worden later verstuurd vanuit apiTask
                 }
             }, LV_EVENT_ALL, NULL);
-        }
-        #endif // HAS_TOUCHSCREEN
-    }
+    #endif // HAS_TOUCHSCREEN
 
     // Platform-specifieke footer
     #ifdef PLATFORM_TTGO
@@ -3467,29 +3515,38 @@ static void buildUI()
         lv_label_set_text(ipLabel, "--");
     }
     #else
-    // CYD: IP-adres links, versienummer rechts
-    // IP-adres label (links)
-    ipLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(ipLabel, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(ipLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(ipLabel, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(ipLabel, LV_ALIGN_BOTTOM_LEFT, 0, -2);
+    // CYD: Footer met 2 regels
+    // Regel 1: dBm links, RAM rechts
+    lblFooterLine1 = lv_label_create(lv_scr_act());
+    lv_obj_set_style_text_font(lblFooterLine1, FONT_SIZE_FOOTER, 0);
+    lv_obj_set_style_text_color(lblFooterLine1, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_align(lblFooterLine1, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(lblFooterLine1, LV_ALIGN_BOTTOM_LEFT, 0, -18); // 18px boven onderkant (voor 2 regels)
+    lv_label_set_text(lblFooterLine1, "--dBm");
     
-    // Versienummer label (rechts)
+    // RAM label rechts op regel 1
+    ramLabel = lv_label_create(lv_scr_act());
+    lv_obj_set_style_text_font(ramLabel, FONT_SIZE_FOOTER, 0);
+    lv_obj_set_style_text_color(ramLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_align(ramLabel, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(ramLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -18); // Rechts, op regel 1
+    lv_label_set_text(ramLabel, "--kB");
+    
+    // Regel 2: IP-adres links, versienummer rechts
+    lblFooterLine2 = lv_label_create(lv_scr_act());
+    lv_obj_set_style_text_font(lblFooterLine2, FONT_SIZE_FOOTER, 0);
+    lv_obj_set_style_text_color(lblFooterLine2, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_align(lblFooterLine2, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(lblFooterLine2, LV_ALIGN_BOTTOM_LEFT, 0, -2); // Onderste regel
+    lv_label_set_text(lblFooterLine2, "--.--.--.--");
+    
+    // Versienummer label (rechts, op regel 2)
     chartVersionLabel = lv_label_create(lv_scr_act());
     lv_obj_set_style_text_font(chartVersionLabel, FONT_SIZE_FOOTER, 0);
     lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
     lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text_fmt(chartVersionLabel, "%s", VERSION_STRING);
-    lv_obj_align(chartVersionLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
-    
-    // Stel de tekst in
-    if (WiFi.status() == WL_CONNECTED) {
-        String ip = WiFi.localIP().toString();
-        lv_label_set_text(ipLabel, ip.c_str());
-    } else {
-        lv_label_set_text(ipLabel, "--.--.--.--");
-    }
+    lv_obj_align(chartVersionLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -2); // Rechts, op regel 2
     #endif
 }
 
@@ -4278,7 +4335,12 @@ void uiTask(void *parameter)
 {
     TickType_t lastWakeTime = xTaskGetTickCount();
     const TickType_t frequency = pdMS_TO_TICKS(UPDATE_UI_INTERVAL);
-    const TickType_t lvglFrequency = pdMS_TO_TICKS(5); // LVGL handler elke 5ms
+    // LVGL handler frequentie - CYD heeft meer rendering overhead, dus iets vaker aanroepen
+    #ifdef PLATFORM_TTGO
+    const TickType_t lvglFrequency = pdMS_TO_TICKS(5); // TTGO: elke 5ms
+    #else
+    const TickType_t lvglFrequency = pdMS_TO_TICKS(3); // CYD: elke 3ms voor vloeiendere rendering
+    #endif
     TickType_t lastLvglTime = xTaskGetTickCount();
     
     Serial.println("[UI Task] Gestart op Core 0");
@@ -4300,9 +4362,15 @@ void uiTask(void *parameter)
             lastLvglTime = currentTime;
         }
         
-        // Neem mutex voor data lezen (korte lock voor UI update)
-        // Korte timeout voor snelle verwerking
-        if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(50)) == pdTRUE)
+        // Neem mutex voor data lezen (timeout verhoogd voor CYD om haperingen te voorkomen)
+        // CYD heeft grotere buffer en meer rendering overhead, dus iets langere timeout
+        #ifdef PLATFORM_TTGO
+        const TickType_t mutexTimeout = pdMS_TO_TICKS(50); // TTGO: korte timeout
+        #else
+        const TickType_t mutexTimeout = pdMS_TO_TICKS(100); // CYD: langere timeout voor betere grafiek updates
+        #endif
+        
+        if (xSemaphoreTake(dataMutex, mutexTimeout) == pdTRUE)
         {
             updateUI();
             xSemaphoreGive(dataMutex);

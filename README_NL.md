@@ -436,8 +436,8 @@ Beide layouts tonen dezelfde informatie, maar de TTGO versie is geoptimaliseerd 
 
 ### CYD 2.4" / 2.8"
 - Ruimere layout met meer details
-- Touchscreen interactie
-- Footer met IP, WiFi signaalsterkte en RAM gebruik
+- Touchscreen interactie via dedicated "Klik Vast" knop
+- Twee-regel footer: WiFi signaal/RAM (regel 1), IP/versie (regel 2)
 
 ## NTFY.sh Setup en Gebruik
 
