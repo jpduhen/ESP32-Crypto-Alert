@@ -742,13 +742,32 @@ MQTT is optioneel en kan ook gebruikt worden met andere systemen zoals:
 
 Als je MQTT niet gebruikt, kun je de MQTT instellingen leeg laten in de web interface.
 
+## Versie Geschiedenis
+
+### Versie 3.22
+- **CYD Footer Redesign**: Twee-regel footer layout
+  - Regel 1: WiFi signaalsterkte (dBm) links, RAM (kB) rechts
+  - Regel 2: IP-adres links, versienummer rechts
+- **Anchor Knop**: Blauwe "Klik Vast" knop onder 30min box (80px breed, 0.66x van origineel)
+- **BTCEUR Box**: Touch-functionaliteit verwijderd (nu via dedicated knop)
+- **Prestatie Verbeteringen voor CYD**:
+  - Verhoogde UI task mutex timeout (50ms → 100ms) voor betere grafiek updates
+  - Verhoogde LVGL handler frequentie (5ms → 3ms) voor vloeiendere rendering
+  - Verlaagde API task mutex timeout (300ms → 200ms) voor snellere UI updates
+  - Vermindert grafiek haperingen op CYD devices
+
+### Versie 3.21
+- Touchscreen responsiviteit verbeteringen (5ms polling, PRESSED event support)
+- Touchscreen notificatie formaat gelijkgetrokken met fysieke knop
+- LVGL deprecated define fix (LV_FS_DEFAULT_DRIVER_LETTER)
+
 ## Licentie
 
 MIT License - Zie `LICENSE` bestand voor details.
 
 ## Auteur
 
-[Voeg hier je naam/informatie toe]
+Jan Pieter Duhen
 
 ## Credits
 
