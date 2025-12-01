@@ -744,6 +744,18 @@ Als je MQTT niet gebruikt, kun je de MQTT instellingen leeg laten in de web inte
 
 ## Versie Geschiedenis
 
+### Versie 3.24
+- **TTGO Partition Scheme Fix**: Flash size detectie probleem opgelost voor TTGO T-Display
+  - TTGO gebruikt nu `huge_app` partition scheme met expliciete `FlashSize=4M` instelling
+  - Oplost "Detected size(4096k) smaller than the size in the binary image header(16384k)" fout
+  - Upload script configureert nu correct partition scheme per platform
+
+### Versie 3.23
+- **SPI Frequentie Configuratie**: Expliciet SPI frequenties ingesteld in platform-specifieke header bestanden
+  - TTGO T-Display: 27 MHz (PINS_TTGO_T_Display.h)
+  - CYD 2.8": 55 MHz (PINS_CYD-ESP32-2432S028-2USB.h)
+  - CYD 2.4": 40 MHz (PINS_CYD-ESP32-2432S024.h)
+
 ### Versie 3.22
 - **CYD Footer Redesign**: Twee-regel footer layout
   - Regel 1: WiFi signaalsterkte (dBm) links, RAM (kB) rechts

@@ -35,8 +35,8 @@
 // Bij wijziging: verhoog VERSION_MINOR met 1 en update VERSION_STRING dienovereenkomstig
 // Voorbeeld: 1.00 -> 1.01 (VERSION_MINOR 0 -> 1, VERSION_STRING "1.00" -> "1.01")
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 22
-#define VERSION_STRING "3.22"
+#define VERSION_MINOR 24
+#define VERSION_STRING "3.24"
 
 // Debug logging control - zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
 #define DEBUG_BUTTON_ONLY 1

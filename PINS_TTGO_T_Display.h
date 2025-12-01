@@ -22,6 +22,9 @@
 #define GFX_WIDTH 135
 #define GFX_HEIGHT 240
 
+// SPI frequency for ST7789 display (27 MHz - safe for ST7789, based on Setup900_TTGO_T_Display.h)
+#define GFX_SPEED 27000000UL
+
 // Create SPI bus instance using VSPI
 Arduino_DataBus *bus = new Arduino_ESP32SPI(TFT_DC, TFT_CS, TFT_SCLK, TFT_MOSI, TFT_MISO, VSPI /* spi_num */);
 

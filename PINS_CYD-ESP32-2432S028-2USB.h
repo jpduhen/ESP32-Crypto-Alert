@@ -22,6 +22,9 @@
 #define GFX_WIDTH 240
 #define GFX_HEIGHT 320
 
+// SPI frequency for ILI9341 display (55 MHz - based on Setup902_CYD28R_2USB.h)
+#define GFX_SPEED 55000000UL
+
 // Create SPI bus instance using HSPI (as defined in Setup902_CYD28R_2USB.h)
 Arduino_DataBus *bus = new Arduino_ESP32SPI(TFT_DC, TFT_CS, TFT_SCLK, TFT_MOSI, TFT_MISO, HSPI /* spi_num */);
 
