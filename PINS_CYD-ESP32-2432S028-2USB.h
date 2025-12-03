@@ -13,6 +13,7 @@
 #define TFT_RST -1             // Reset (TFT_RST = -1 means no reset pin)
 #define GFX_BL 21              // Backlight pin (TFT_BL)
 
+
 // SPI pins
 #define TFT_MOSI 13            // MOSI (TFT_MOSI)
 #define TFT_MISO 12            // MISO (TFT_MISO)

@@ -181,21 +181,29 @@ The web interface provides a clear, dark interface with all settings grouped in 
 - **Binance Symbol**: The trading pair you want to monitor (e.g. BTCEUR, BTCUSDT, ETHUSDT)
 
 #### Spike & Move Alerts
-Configure when you want to receive alerts for rapid price movements:
+Configure when you want to receive alerts for rapid price movements (defaults optimized based on measurements):
 
-- **1m Spike - ret_1m threshold (%)**: Threshold for 1-minute spike alerts (default: 0.30%)
-- **1m Spike - ret_5m filter (%)**: Filter to prevent false alerts (default: 0.60%)
+- **1m Spike - ret_1m threshold (%)**: Threshold for 1-minute spike alerts (default: 0.28%)
+  - *Optimized*: Based on noise maxima to prevent too many alerts
+- **5m Spike Filter - ret_5m filter (%)**: Filter to prevent false alerts (default: 0.65%)
+  - *Optimized*: Matches current volatility patterns
   - *Explanation*: Both conditions must be true for an alert
-- **30m Move - ret_30m threshold (%)**: Threshold for 30-minute move alerts (default: 2.0%)
-- **30m Move - ret_5m filter (%)**: Filter for 30-minute moves (default: 0.5%)
-- **5m Move Alert - threshold (%)**: Threshold for 5-minute move alerts (default: 1.0%)
+- **30m Move - ret_30m threshold (%)**: Threshold for 30-minute move alerts (default: 1.3%)
+  - *Optimized*: 0.8% was too sensitive on quiet days
+- **5m Move Filter - ret_5m filter (%)**: Filter for 5-minute moves (default: 0.40%)
+  - *Optimized*: More sensitive to momentum build-up
+- **5m Move Alert - threshold (%)**: Threshold for 5-minute move alerts (default: 0.8%)
+  - *Optimized*: Historically often occurs at trend start
 
 #### Cooldowns
-Time between notifications to prevent spam:
+Time between notifications to prevent spam (defaults optimized based on measurements):
 
-- **1-minute spike cooldown (seconds)**: Time between 1m spike alerts (default: 600 = 10 minutes)
-- **30-minute move cooldown (seconds)**: Time between 30m move alerts (default: 600 = 10 minutes)
-- **5-minute move cooldown (seconds)**: Time between 5m move alerts (default: 600 = 10 minutes)
+- **1-minute spike cooldown (seconds)**: Time between 1m spike alerts (default: 90 = 1.5 minutes)
+  - *Optimized*: Less spam during fast pumps
+- **30-minute move cooldown (seconds)**: Time between 30m move alerts (default: 900 = 15 minutes)
+  - *Optimized*: Large moves need longer rest periods
+- **5-minute move cooldown (seconds)**: Time between 5m move alerts (default: 420 = 7 minutes)
+  - *Optimized*: Faster second signal on breakouts
 
 #### MQTT Settings
 Configure your MQTT broker for integration with Home Assistant or other systems:
@@ -208,10 +216,13 @@ Configure your MQTT broker for integration with Home Assistant or other systems:
 **Note**: Leave user and password empty if your MQTT broker doesn't require authentication.
 
 #### Trend & Volatility Settings
-- **Trend Threshold (%)**: Percentage difference for trend detection (default: 1.0%)
+- **Trend Threshold (%)**: Percentage difference for trend detection (default: 1.2%)
+  - *Optimized*: Reduces false trend switches
   - Above this value = UP, below = DOWN, otherwise = SIDEWAYS
-- **Volatility Low Threshold (%)**: Below this value market is CALM (default: 0.06%)
-- **Volatility High Threshold (%)**: Above this value market is VOLATILE (default: 0.12%)
+- **Volatility Low Threshold (%)**: Below this value market is CALM (default: 0.05%)
+  - *Optimized*: Better detection of quiet night hours
+- **Volatility High Threshold (%)**: Above this value market is VOLATILE (default: 0.15%)
+  - *Optimized*: Good detection during peak activity
 
 #### Anchor Settings
 - **Anchor Take Profit (%)**: Percentage above anchor for profit notification (default: 5.0%)
@@ -301,14 +312,17 @@ Settings for the anchor price functionality:
 - **Max Loss**: Percentage below anchor price for loss notification (default: `-3.0%`)
   - *Example*: If you set anchor at €50,000 and max loss at -3%, you get a notification at €48,500
 
-- **Trend Threshold**: Percentage difference for trend detection (default: `1.0%`)
+- **Trend Threshold**: Percentage difference for trend detection (default: `1.2%`)
+  - *Optimized*: Reduces false trend switches
   - Determines when a trend is considered "UP" or "DOWN" (vs "SIDEWAYS")
 
 #### Volatility Thresholds
-Determine when the market is considered calm, medium or volatile:
+Determine when the market is considered calm, medium or volatile (defaults optimized based on measurements):
 
-- **Low Threshold**: Below this value the market is "CALM" (default: `0.06%`)
-- **High Threshold**: Above this value the market is "VOLATILE" (default: `0.12%`)
+- **Low Threshold**: Below this value the market is "CALM" (default: `0.05%`)
+  - *Optimized*: Better detection of quiet night hours
+- **High Threshold**: Above this value the market is "VOLATILE" (default: `0.15%`)
+  - *Optimized*: Good detection during peak activity
 - Between these values the market is "MEDIUM"
 
 ## Display Overview
@@ -328,14 +342,14 @@ The display shows real-time cryptocurrency information in a clear layout:
   - Blue line shows price movement
   - Automatic scale adjustment
 - **Trend Indicator**: Top-left in the chart
-  - 🟢 **UP** (green): Rising trend (>1% over 2 hours)
-  - 🔴 **DOWN** (red): Falling trend (<-1% over 2 hours)
+  - 🟢 **UP** (green): Rising trend (>1.2% over 2 hours)
+  - 🔴 **DOWN** (red): Falling trend (<-1.2% over 2 hours)
   - ⚪ **SIDEWAYS** (gray): No clear trend
   - Shows "Wait Xm" if there's not enough data yet (minimum 2 hours needed)
 - **Volatility Indicator**: Bottom-left in the chart
-  - 🟢 **CALM** (green): <0.06% average movement
-  - 🟠 **MEDIUM** (orange): 0.06% - 0.12% average movement
-  - 🔴 **VOLATILE** (red): >0.12% average movement
+  - 🟢 **CALM** (green): <0.05% average movement
+  - 🟠 **MEDIUM** (orange): 0.05% - 0.15% average movement
+  - 🔴 **VOLATILE** (red): >0.15% average movement
   - Available immediately from first minute
 
 #### Price Cards (3 blocks)

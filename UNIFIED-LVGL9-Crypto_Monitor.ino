@@ -31,8 +31,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 35
-#define VERSION_STRING "3.35"
+#define VERSION_MINOR 43
+#define VERSION_STRING "3.43"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -58,7 +58,8 @@
 // --- API Configuration ---
 #define BINANCE_API "https://api.binance.com/api/v3/ticker/price?symbol="  // Binance API endpoint
 #define BINANCE_SYMBOL_DEFAULT "BTCEUR"  // Default Binance symbol
-#define HTTP_TIMEOUT_MS 2000  // HTTP timeout (genoeg voor langzame calls, maar niet te lang)
+#define HTTP_TIMEOUT_MS 3000  // HTTP timeout (verhoogd voor betere stabiliteit bij langzame netwerken)
+#define HTTP_CONNECT_TIMEOUT_MS 2000  // Connect timeout (sneller falen bij connect problemen)
 
 // --- Chart Configuration ---
 #define PRICE_RANGE 200         // The range of price for the chart, adjust as needed
@@ -66,7 +67,7 @@
 
 // --- Timing Configuration ---
 #define UPDATE_UI_INTERVAL 1100   // UI update in ms (iets verschoven van API voor minder conflicten)
-#define UPDATE_API_INTERVAL 1200   // API update in ms (1200ms geeft ruimte voor langzame calls tot ~1100ms)
+#define UPDATE_API_INTERVAL 1500   // API update in ms (verhoogd naar 1500ms voor betere stabiliteit bij langzame netwerken)
 #define UPDATE_WEB_INTERVAL 5000  // Web interface update in ms (elke 5 seconden)
 #define RECONNECT_INTERVAL 60000  // WiFi reconnect interval (60 seconden tussen reconnect pogingen)
 #define MQTT_RECONNECT_INTERVAL 5000  // MQTT reconnect interval (5 seconden)
@@ -76,12 +77,12 @@
 #define ANCHOR_MAX_LOSS_DEFAULT -3.0f      // Max loss: -3% onder anchor price
 
 // --- Trend Detection Configuration ---
-#define TREND_THRESHOLD_DEFAULT 1.0f       // Trend threshold: ±1.0% voor 2h trend
+#define TREND_THRESHOLD_DEFAULT 1.2f       // Trend threshold: ±1.2% voor 2h trend (geoptimaliseerd op basis van metingen)
 #define TREND_CHANGE_COOLDOWN_MS 600000UL  // 10 minuten cooldown voor trend change notificaties
 
 // --- Volatility Configuration ---
-#define VOLATILITY_LOW_THRESHOLD_DEFAULT 0.06f   // Volatiliteit laag: < 0.06%
-#define VOLATILITY_HIGH_THRESHOLD_DEFAULT 0.12f  // Volatiliteit hoog: >= 0.12%
+#define VOLATILITY_LOW_THRESHOLD_DEFAULT 0.05f   // Volatiliteit laag: < 0.05% (geoptimaliseerd voor rustige nachturen)
+#define VOLATILITY_HIGH_THRESHOLD_DEFAULT 0.15f  // Volatiliteit hoog: >= 0.15% (geoptimaliseerd voor piekactiviteit)
 #define VOLATILITY_LOOKBACK_MINUTES 60  // Bewaar laatste 60 minuten aan absolute 1m returns
 
 // --- Notification Configuration ---
@@ -91,17 +92,17 @@
 #define THRESHOLD_30MIN_UP_DEFAULT 2.0f   // Notificatie bij stijgende trend > 2% per uur
 #define THRESHOLD_30MIN_DOWN_DEFAULT -2.0f // Notificatie bij dalende trend < -2% per uur
 
-// Spike/Move alert thresholds
-#define SPIKE_1M_THRESHOLD_DEFAULT 0.30f   // 1m spike: |ret_1m| >= deze waarde
-#define SPIKE_5M_THRESHOLD_DEFAULT 0.60f    // 1m spike: |ret_5m| >= deze waarde (filter)
-#define MOVE_30M_THRESHOLD_DEFAULT 2.0f     // 30m move: |ret_30m| >= deze waarde
-#define MOVE_5M_THRESHOLD_DEFAULT 0.5f      // 30m move: |ret_5m| >= deze waarde (filter)
-#define MOVE_5M_ALERT_THRESHOLD_DEFAULT 1.0f  // 5m move alert: |ret_5m| >= deze waarde
+// Spike/Move alert thresholds (geoptimaliseerd op basis van metingen)
+#define SPIKE_1M_THRESHOLD_DEFAULT 0.28f   // 1m spike: |ret_1m| >= 0.28% (op basis van ruis-maxima)
+#define SPIKE_5M_THRESHOLD_DEFAULT 0.65f   // 5m spike filter: |ret_5m| >= 0.65% (past bij actuele volatiliteit)
+#define MOVE_30M_THRESHOLD_DEFAULT 1.3f    // 30m move: |ret_30m| >= 1.3% (0.8% was te gevoelig)
+#define MOVE_5M_THRESHOLD_DEFAULT 0.40f    // 5m move filter: |ret_5m| >= 0.40% (gevoeliger op momentum-opbouw)
+#define MOVE_5M_ALERT_THRESHOLD_DEFAULT 0.8f  // 5m move alert: |ret_5m| >= 0.8% (historisch vaak bij trend start)
 
-// Cooldown tijden (in milliseconden) om spam te voorkomen
-#define NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT 600000   // 10 minuten tussen 1-minuut spike notificaties
-#define NOTIFICATION_COOLDOWN_30MIN_MS_DEFAULT 600000 // 10 minuten tussen 30-minuten move notificaties
-#define NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT 600000  // 10 minuten tussen 5-minuten move notificaties
+// Cooldown tijden (in milliseconden) om spam te voorkomen (geoptimaliseerd op basis van metingen)
+#define NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT 90000    // 90 seconden tussen 1-minuut spike notificaties (minder spam in snelle pumps)
+#define NOTIFICATION_COOLDOWN_30MIN_MS_DEFAULT 900000  // 15 minuten tussen 30-minuten move notificaties (grote moves → langere rust)
+#define NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT 420000   // 7 minuten tussen 5-minuten move notificaties (sneller tweede signaal bij doorbraak)
 
 // Max alerts per uur
 #define MAX_1M_ALERTS_PER_HOUR 3
@@ -126,6 +127,7 @@
 
 // --- CPU Measurement Configuration ---
 #define CPU_MEASUREMENT_SAMPLES 20  // Meet over 20 loops voor gemiddelde
+
 
 // ============================================================================
 // Global Variables
@@ -185,9 +187,9 @@ static float trendThreshold = TREND_THRESHOLD_DEFAULT;  // Trend threshold (%)
 
 // Volatiliteit detection
 enum VolatilityState {
-    VOLATILITY_LOW,      // Rustig: < 0.06%
-    VOLATILITY_MEDIUM,  // Gemiddeld: 0.06% - 0.12%
-    VOLATILITY_HIGH     // Volatiel: >= 0.12%
+    VOLATILITY_LOW,      // Rustig: < 0.05%
+    VOLATILITY_MEDIUM,  // Gemiddeld: 0.05% - 0.15%
+    VOLATILITY_HIGH     // Volatiel: >= 0.15%
 };
 static float abs1mReturns[VOLATILITY_LOOKBACK_MINUTES];  // Array voor absolute 1m returns
 static uint8_t volatilityIndex = 0;  // Index voor circulaire buffer
@@ -313,37 +315,60 @@ static bool wifiInitialized = false;
 static uint8_t reconnectAttemptCount = 0;
 static const uint8_t MAX_RECONNECT_ATTEMPTS = 5; // Max aantal reconnect pogingen voordat we wachten
 
+
 // ============================================================================
 // HTTP and API Functions
 // ============================================================================
 
 // Simple HTTP GET – returns body as String or empty on fail
-// Geoptimaliseerd: betere error handling en resource cleanup
-static String httpGET(const char *url, uint32_t timeoutMs = 3000)
+// Geoptimaliseerd: betere error handling, timeouts en resource cleanup
+static String httpGET(const char *url, uint32_t timeoutMs = HTTP_TIMEOUT_MS)
 {
     HTTPClient http;
     http.setTimeout(timeoutMs);
+    http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS); // Sneller falen bij connect problemen
     http.setReuse(false); // Voorkom connection reuse problemen
+    
+    unsigned long requestStart = millis();
     
     if (!http.begin(url))
     {
         http.end();
+        Serial_printf("[HTTP] http.begin() gefaald voor: %s\n", url);
         return String();
     }
     
     int code = http.GET();
+    unsigned long requestTime = millis() - requestStart;
     String payload;
     
     if (code == 200)
     {
         payload = http.getString();
+        // Log alleen bij langzame calls (> 1500ms) voor debugging
+        if (requestTime > 1500) {
+            Serial_printf("[HTTP] Langzame response: %lu ms\n", requestTime);
+        }
     }
     else
     {
         // Log alleen bij echte fouten (niet bij 200)
         if (code > 0)
         {
-            Serial_printf("[HTTP] GET gefaald met code: %d\n", code);
+            Serial_printf("[HTTP] GET gefaald: code=%d, tijd=%lu ms\n", code, requestTime);
+        }
+        else if (code == HTTPC_ERROR_CONNECTION_REFUSED || code == HTTPC_ERROR_CONNECTION_LOST)
+        {
+            Serial_printf("[HTTP] Connectie probleem: code=%d, tijd=%lu ms\n", code, requestTime);
+        }
+        else if (code == HTTPC_ERROR_READ_TIMEOUT)
+        {
+            Serial_printf("[HTTP] Read timeout na %lu ms\n", requestTime);
+        }
+        else if (code < 0)
+        {
+            // Andere HTTPClient error codes (negatieve waarden zijn error codes)
+            Serial_printf("[HTTP] Error code=%d, tijd=%lu ms\n", code, requestTime);
         }
     }
     
@@ -459,6 +484,11 @@ static void getFormattedTimestamp(char *buffer, size_t bufferSize) {
         // Fallback als tijd niet beschikbaar is
         snprintf(buffer, bufferSize, "?\\?-?\\?-???? ??:??:??");
     }
+}
+
+// Format IP address to string (geoptimaliseerd: gebruik char array i.p.v. String)
+static void formatIPAddress(IPAddress ip, char *buffer, size_t bufferSize) {
+    snprintf(buffer, bufferSize, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
 }
 
 // ============================================================================
@@ -582,8 +612,10 @@ void publishMqttAnchorEvent(float anchor_price, const char* event_type) {
              "{\"time\":\"%s\",\"price\":%.2f,\"event\":\"%s\"}",
              timeStr, anchor_price, event_type);
     
-    String topic = String(MQTT_TOPIC_PREFIX) + "/anchor/event";
-    mqttClient.publish(topic.c_str(), payload, false);
+    // Geoptimaliseerd: gebruik char array i.p.v. String
+    char topic[128];
+    snprintf(topic, sizeof(topic), "%s/anchor/event", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topic, payload, false);
     Serial_printf("[MQTT] Anchor event gepubliceerd: %s (prijs: %.2f, event: %s)\n", 
                  timeStr, anchor_price, event_type);
 }
@@ -908,29 +940,36 @@ static void getTrendWaitText(char* buffer, size_t bufferSize, uint8_t minutes) {
 // Uses 8 characters = 40 bits, giving 2^40 = 1.1 trillion possible combinations
 static const char* base32Alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
-static String getESP32DeviceId() {
+// Geoptimaliseerd: gebruik char array i.p.v. String om geheugenfragmentatie te voorkomen
+static void getESP32DeviceId(char* buffer, size_t bufferSize) {
     uint64_t chipid = ESP.getEfuseMac(); // 48-bit unique MAC address
-    String out = "";
     
     // Extract 40 bits (8 characters * 5 bits each) from the MAC address
     // We use the lower 40 bits of the 48-bit MAC address
     uint64_t value = chipid & 0xFFFFFFFFFF; // Mask to 40 bits
     
-    for (int i = 0; i < 8; i++) {
-        uint8_t index = value & 0x1F;  // Get 5 bits (0-31)
-        out += base32Alphabet[index];
-        value >>= 5;  // Shift right by 5 bits for next character
+    // Valideer buffer size (minimaal 9 bytes nodig: 8 chars + null terminator)
+    if (bufferSize < 9) {
+        buffer[0] = '\0';
+        return;
     }
     
-    return out;
+    for (int i = 0; i < 8; i++) {
+        uint8_t index = value & 0x1F;  // Get 5 bits (0-31)
+        buffer[i] = base32Alphabet[index];
+        value >>= 5;  // Shift right by 5 bits for next character
+    }
+    buffer[8] = '\0'; // Null terminator
 }
 
 // Generate default NTFY topic with ESP32 device ID
 // Format: [ESP32-ID]-alert
 // Example: 9MK28H3Q-alert (8 characters using Crockford Base32 encoding for safe, unique ID)
-static String generateDefaultNtfyTopic() {
-    String deviceId = getESP32DeviceId();
-    return deviceId + "-alert";
+// Geoptimaliseerd: gebruik char array i.p.v. String
+static void generateDefaultNtfyTopic(char* buffer, size_t bufferSize) {
+    char deviceId[9];
+    getESP32DeviceId(deviceId, sizeof(deviceId));
+    snprintf(buffer, bufferSize, "%s-alert", deviceId);
 }
 
 // Extract ESP32 device ID from NTFY topic (everything before "-alert")
@@ -974,7 +1013,9 @@ static void loadSettings()
     preferences.begin("crypto", true); // read-only mode
     
     // Generate default NTFY topic with unique ESP32 device ID
-    String defaultTopic = generateDefaultNtfyTopic();
+    // Geoptimaliseerd: gebruik char array i.p.v. String
+    char defaultTopic[64];
+    generateDefaultNtfyTopic(defaultTopic, sizeof(defaultTopic));
     
     // Load NTFY topic from Preferences, or use generated default
     String topic = preferences.getString("ntfyTopic", defaultTopic);
@@ -1103,109 +1144,196 @@ static void saveSettings()
 
 // MQTT callback: verwerk instellingen van Home Assistant
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-    String t = String(topic);
-    String msg;
-    for (unsigned int i = 0; i < length; i++) {
-        msg += (char)payload[i];
+    // Geoptimaliseerd: gebruik char arrays i.p.v. String om geheugenfragmentatie te voorkomen
+    char topicBuffer[128];
+    char msgBuffer[128];
+    char prefixBuffer[64];
+    
+    // Kopieer topic naar buffer (max 127 chars)
+    size_t topicLen = strlen(topic);
+    if (topicLen >= sizeof(topicBuffer)) topicLen = sizeof(topicBuffer) - 1;
+    strncpy(topicBuffer, topic, topicLen);
+    topicBuffer[topicLen] = '\0';
+    
+    // Kopieer payload naar buffer
+    size_t msgLen = (length < sizeof(msgBuffer) - 1) ? length : sizeof(msgBuffer) - 1;
+    for (size_t i = 0; i < msgLen; i++) {
+        msgBuffer[i] = (char)payload[i];
     }
-    msg.trim();
+    msgBuffer[msgLen] = '\0';
     
-    Serial_printf("[MQTT] Message: %s => %s\n", t.c_str(), msg.c_str());
+    // Trim whitespace van msg
+    while (msgLen > 0 && (msgBuffer[msgLen-1] == ' ' || msgBuffer[msgLen-1] == '\t' || msgBuffer[msgLen-1] == '\n' || msgBuffer[msgLen-1] == '\r')) {
+        msgLen--;
+        msgBuffer[msgLen] = '\0';
+    }
     
-    // Helper: maak MQTT topic string
-    String prefix = String(MQTT_TOPIC_PREFIX);
+    Serial_printf("[MQTT] Message: %s => %s\n", topicBuffer, msgBuffer);
+    
+    // Helper: maak MQTT topic prefix
+    snprintf(prefixBuffer, sizeof(prefixBuffer), "%s", MQTT_TOPIC_PREFIX);
     
     bool settingChanged = false;
+    char topicBufferFull[192]; // Voor volledige topic strings
+    char valueBuffer[32]; // Voor numerieke waarden
     
-    if (t == prefix + "/config/spike1m/set") {
-        spike1mThreshold = msg.toFloat();
-        mqttClient.publish((prefix + "/config/spike1m").c_str(), msg.c_str(), true);
+    // Helper functie voor topic vergelijking
+    #define CHECK_TOPIC(suffix) (strcmp(topicBuffer, suffix) == 0)
+    
+    // Bouw volledige topic strings voor vergelijking
+    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/spike1m/set", prefixBuffer);
+    if (strcmp(topicBuffer, topicBufferFull) == 0) {
+        spike1mThreshold = atof(msgBuffer);
+        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/spike1m", prefixBuffer);
+        mqttClient.publish(topicBufferFull, msgBuffer, true);
         settingChanged = true;
-    } else if (t == prefix + "/config/spike5m/set") {
-        spike5mThreshold = msg.toFloat();
-        mqttClient.publish((prefix + "/config/spike5m").c_str(), msg.c_str(), true);
-        settingChanged = true;
-    } else if (t == prefix + "/config/move30m/set") {
-        move30mThreshold = msg.toFloat();
-        mqttClient.publish((prefix + "/config/move30m").c_str(), msg.c_str(), true);
-        settingChanged = true;
-    } else if (t == prefix + "/config/move5m/set") {
-        move5mThreshold = msg.toFloat();
-        mqttClient.publish((prefix + "/config/move5m").c_str(), msg.c_str(), true);
-        settingChanged = true;
-    } else if (t == prefix + "/config/move5mAlert/set") {
-        move5mAlertThreshold = msg.toFloat();
-        mqttClient.publish((prefix + "/config/move5mAlert").c_str(), msg.c_str(), true);
-        settingChanged = true;
-    } else if (t == prefix + "/config/cooldown1min/set") {
-        notificationCooldown1MinMs = msg.toInt() * 1000UL;
-        mqttClient.publish((prefix + "/config/cooldown1min").c_str(), String(notificationCooldown1MinMs / 1000).c_str(), true);
-        settingChanged = true;
-    } else if (t == prefix + "/config/cooldown30min/set") {
-        notificationCooldown30MinMs = msg.toInt() * 1000UL;
-        mqttClient.publish((prefix + "/config/cooldown30min").c_str(), String(notificationCooldown30MinMs / 1000).c_str(), true);
-        settingChanged = true;
-    } else if (t == prefix + "/config/cooldown5min/set") {
-        notificationCooldown5MinMs = msg.toInt() * 1000UL;
-        mqttClient.publish((prefix + "/config/cooldown5min").c_str(), String(notificationCooldown5MinMs / 1000).c_str(), true);
-        settingChanged = true;
-    } else if (t == prefix + "/config/binanceSymbol/set") {
-        String symbol = msg;
-        symbol.trim();
-        symbol.toUpperCase();
-        if (symbol.length() > 0 && symbol.length() < sizeof(binanceSymbol)) {
-            symbol.toCharArray(binanceSymbol, sizeof(binanceSymbol));
-            strncpy(symbolsArray[0], binanceSymbol, sizeof(symbolsArray[0]) - 1);
-            symbolsArray[0][sizeof(symbolsArray[0]) - 1] = '\0';
-            mqttClient.publish((prefix + "/config/binanceSymbol").c_str(), binanceSymbol, true);
+    } else {
+        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/spike5m/set", prefixBuffer);
+        if (strcmp(topicBuffer, topicBufferFull) == 0) {
+            spike5mThreshold = atof(msgBuffer);
+            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/spike5m", prefixBuffer);
+            mqttClient.publish(topicBufferFull, msgBuffer, true);
             settingChanged = true;
-        }
-    } else if (t == prefix + "/config/ntfyTopic/set") {
-        String topic = msg;
-        topic.trim();
-        if (topic.length() > 0 && topic.length() < sizeof(ntfyTopic)) {
-            topic.toCharArray(ntfyTopic, sizeof(ntfyTopic));
-            mqttClient.publish((prefix + "/config/ntfyTopic").c_str(), ntfyTopic, true);
-            settingChanged = true;
-        }
-    } else if (t == prefix + "/config/anchorTakeProfit/set") {
-        float val = msg.toFloat();
-        if (val >= 0.1f && val <= 100.0f) {
-            anchorTakeProfit = val;
-            mqttClient.publish((prefix + "/config/anchorTakeProfit").c_str(), msg.c_str(), true);
-            settingChanged = true;
-        }
-    } else if (t == prefix + "/config/anchorMaxLoss/set") {
-        float val = msg.toFloat();
-        if (val >= -100.0f && val <= -0.1f) {
-            anchorMaxLoss = val;
-            mqttClient.publish((prefix + "/config/anchorMaxLoss").c_str(), msg.c_str(), true);
-            settingChanged = true;
-        }
-    } else if (t == prefix + "/config/trendThreshold/set") {
-        float val = msg.toFloat();
-        if (val >= 0.1f && val <= 10.0f) {
-            trendThreshold = val;
-            mqttClient.publish((prefix + "/config/trendThreshold").c_str(), msg.c_str(), true);
-            settingChanged = true;
-        }
-    } else if (t == prefix + "/config/volatilityLowThreshold/set") {
-        float val = msg.toFloat();
-        if (val >= 0.01f && val <= 1.0f) {
-            volatilityLowThreshold = val;
-            mqttClient.publish((prefix + "/config/volatilityLowThreshold").c_str(), msg.c_str(), true);
-            settingChanged = true;
-        }
-    } else if (t == prefix + "/config/volatilityHighThreshold/set") {
-        float val = msg.toFloat();
-        if (val >= 0.01f && val <= 1.0f && val > volatilityLowThreshold) {
-            volatilityHighThreshold = val;
-            mqttClient.publish((prefix + "/config/volatilityHighThreshold").c_str(), msg.c_str(), true);
-            settingChanged = true;
-        }
-    } else if (t == prefix + "/button/reset/set") {
-        // Reset button pressed via MQTT - gebruik als anchor
-        if (msg == "PRESS" || msg == "press" || msg == "1" || msg == "ON" || msg == "on") {
+        } else {
+            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/move30m/set", prefixBuffer);
+            if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                move30mThreshold = atof(msgBuffer);
+                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/move30m", prefixBuffer);
+                mqttClient.publish(topicBufferFull, msgBuffer, true);
+                settingChanged = true;
+            } else {
+                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/move5m/set", prefixBuffer);
+                if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                    move5mThreshold = atof(msgBuffer);
+                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/move5m", prefixBuffer);
+                    mqttClient.publish(topicBufferFull, msgBuffer, true);
+                    settingChanged = true;
+                } else {
+                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/move5mAlert/set", prefixBuffer);
+                    if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                        move5mAlertThreshold = atof(msgBuffer);
+                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/move5mAlert", prefixBuffer);
+                        mqttClient.publish(topicBufferFull, msgBuffer, true);
+                        settingChanged = true;
+                    } else {
+                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/cooldown1min/set", prefixBuffer);
+                        if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                            notificationCooldown1MinMs = atoi(msgBuffer) * 1000UL;
+                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/cooldown1min", prefixBuffer);
+                            snprintf(valueBuffer, sizeof(valueBuffer), "%lu", notificationCooldown1MinMs / 1000);
+                            mqttClient.publish(topicBufferFull, valueBuffer, true);
+                            settingChanged = true;
+                        } else {
+                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/cooldown30min/set", prefixBuffer);
+                            if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                                notificationCooldown30MinMs = atoi(msgBuffer) * 1000UL;
+                                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/cooldown30min", prefixBuffer);
+                                snprintf(valueBuffer, sizeof(valueBuffer), "%lu", notificationCooldown30MinMs / 1000);
+                                mqttClient.publish(topicBufferFull, valueBuffer, true);
+                                settingChanged = true;
+                            } else {
+                                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/cooldown5min/set", prefixBuffer);
+                                if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                                    notificationCooldown5MinMs = atoi(msgBuffer) * 1000UL;
+                                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/cooldown5min", prefixBuffer);
+                                    snprintf(valueBuffer, sizeof(valueBuffer), "%lu", notificationCooldown5MinMs / 1000);
+                                    mqttClient.publish(topicBufferFull, valueBuffer, true);
+                                    settingChanged = true;
+                                } else {
+                                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/binanceSymbol/set", prefixBuffer);
+                                    if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                                        // Trim en uppercase symbol
+                                        char symbol[16];
+                                        size_t symLen = 0;
+                                        while (symLen < msgLen && msgBuffer[symLen] != '\0' && symLen < sizeof(symbol) - 1) {
+                                            char c = msgBuffer[symLen];
+                                            if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
+                                                symbol[symLen] = (c >= 'a' && c <= 'z') ? (c - 32) : c; // Uppercase
+                                                symLen++;
+                                            }
+                                        }
+                                        symbol[symLen] = '\0';
+                                        if (symLen > 0 && symLen < sizeof(binanceSymbol)) {
+                                            strncpy(binanceSymbol, symbol, sizeof(binanceSymbol) - 1);
+                                            binanceSymbol[sizeof(binanceSymbol) - 1] = '\0';
+                                            strncpy(symbolsArray[0], binanceSymbol, sizeof(symbolsArray[0]) - 1);
+                                            symbolsArray[0][sizeof(symbolsArray[0]) - 1] = '\0';
+                                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/binanceSymbol", prefixBuffer);
+                                            mqttClient.publish(topicBufferFull, binanceSymbol, true);
+                                            settingChanged = true;
+                                        }
+                                    } else {
+                                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/ntfyTopic/set", prefixBuffer);
+                                        if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                                            // Trim topic
+                                            size_t topicLenTrimmed = msgLen;
+                                            while (topicLenTrimmed > 0 && (msgBuffer[topicLenTrimmed-1] == ' ' || msgBuffer[topicLenTrimmed-1] == '\t')) {
+                                                topicLenTrimmed--;
+                                            }
+                                            if (topicLenTrimmed > 0 && topicLenTrimmed < sizeof(ntfyTopic)) {
+                                                strncpy(ntfyTopic, msgBuffer, topicLenTrimmed);
+                                                ntfyTopic[topicLenTrimmed] = '\0';
+                                                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/ntfyTopic", prefixBuffer);
+                                                mqttClient.publish(topicBufferFull, ntfyTopic, true);
+                                                settingChanged = true;
+                                            }
+                                        } else {
+                                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorTakeProfit/set", prefixBuffer);
+                                            if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                                                float val = atof(msgBuffer);
+                                                if (val >= 0.1f && val <= 100.0f) {
+                                                    anchorTakeProfit = val;
+                                                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorTakeProfit", prefixBuffer);
+                                                    mqttClient.publish(topicBufferFull, msgBuffer, true);
+                                                    settingChanged = true;
+                                                }
+                                            } else {
+                                                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorMaxLoss/set", prefixBuffer);
+                                                if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                                                    float val = atof(msgBuffer);
+                                                    if (val >= -100.0f && val <= -0.1f) {
+                                                        anchorMaxLoss = val;
+                                                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorMaxLoss", prefixBuffer);
+                                                        mqttClient.publish(topicBufferFull, msgBuffer, true);
+                                                        settingChanged = true;
+                                                    }
+                                                } else {
+                                                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/trendThreshold/set", prefixBuffer);
+                                                    if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                                                        float val = atof(msgBuffer);
+                                                        if (val >= 0.1f && val <= 10.0f) {
+                                                            trendThreshold = val;
+                                                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/trendThreshold", prefixBuffer);
+                                                            mqttClient.publish(topicBufferFull, msgBuffer, true);
+                                                            settingChanged = true;
+                                                        }
+                                                    } else {
+                                                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/volatilityLowThreshold/set", prefixBuffer);
+                                                        if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                                                            float val = atof(msgBuffer);
+                                                            if (val >= 0.01f && val <= 1.0f) {
+                                                                volatilityLowThreshold = val;
+                                                                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/volatilityLowThreshold", prefixBuffer);
+                                                                mqttClient.publish(topicBufferFull, msgBuffer, true);
+                                                                settingChanged = true;
+                                                            }
+                                                        } else {
+                                                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/volatilityHighThreshold/set", prefixBuffer);
+                                                            if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                                                                float val = atof(msgBuffer);
+                                                                if (val >= 0.01f && val <= 1.0f && val > volatilityLowThreshold) {
+                                                                    volatilityHighThreshold = val;
+                                                                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/volatilityHighThreshold", prefixBuffer);
+                                                                    mqttClient.publish(topicBufferFull, msgBuffer, true);
+                                                                    settingChanged = true;
+                                                                }
+                                                            } else {
+                                                                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/button/reset/set", prefixBuffer);
+                                                                if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                                                                    // Reset button pressed via MQTT - gebruik als anchor
+                                                                    if (strcmp(msgBuffer, "PRESS") == 0 || strcmp(msgBuffer, "press") == 0 || 
+                                                                        strcmp(msgBuffer, "1") == 0 || strcmp(msgBuffer, "ON") == 0 || 
+                                                                        strcmp(msgBuffer, "on") == 0) {
             Serial_println("[MQTT] Reset/Anchor button pressed via MQTT");
             // Execute reset/anchor (thread-safe)
             float currentPrice = 0.0f;
@@ -1243,7 +1371,23 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                 updateUI();
             }
             // Publish state back (button entities don't need state, but we can acknowledge)
-            mqttClient.publish((prefix + "/button/reset").c_str(), "PRESSED", false);
+            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/button/reset", prefixBuffer);
+            mqttClient.publish(topicBufferFull, "PRESSED", false);
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     
@@ -1254,57 +1398,107 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 }
 
 // Publiceer huidige instellingen naar MQTT
+// Geoptimaliseerd: gebruik char arrays i.p.v. String om geheugenfragmentatie te voorkomen
 void publishMqttSettings() {
     if (!mqttConnected) return;
     
-    String prefix = String(MQTT_TOPIC_PREFIX);
+    char topicBuffer[128];
     char buffer[32];
+    
     dtostrf(spike1mThreshold, 0, 2, buffer);
-    mqttClient.publish((prefix + "/config/spike1m").c_str(), buffer, true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/spike1m", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, true);
+    
     dtostrf(spike5mThreshold, 0, 2, buffer);
-    mqttClient.publish((prefix + "/config/spike5m").c_str(), buffer, true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/spike5m", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, true);
+    
     dtostrf(move30mThreshold, 0, 2, buffer);
-    mqttClient.publish((prefix + "/config/move30m").c_str(), buffer, true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/move30m", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, true);
+    
     dtostrf(move5mThreshold, 0, 2, buffer);
-    mqttClient.publish((prefix + "/config/move5m").c_str(), buffer, true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/move5m", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, true);
+    
     dtostrf(move5mAlertThreshold, 0, 2, buffer);
-    mqttClient.publish((prefix + "/config/move5mAlert").c_str(), buffer, true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/move5mAlert", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, true);
+    
     snprintf(buffer, sizeof(buffer), "%lu", notificationCooldown1MinMs / 1000);
-    mqttClient.publish((prefix + "/config/cooldown1min").c_str(), buffer, true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/cooldown1min", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, true);
+    
     snprintf(buffer, sizeof(buffer), "%lu", notificationCooldown30MinMs / 1000);
-    mqttClient.publish((prefix + "/config/cooldown30min").c_str(), buffer, true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/cooldown30min", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, true);
+    
     snprintf(buffer, sizeof(buffer), "%lu", notificationCooldown5MinMs / 1000);
-    mqttClient.publish((prefix + "/config/cooldown5min").c_str(), buffer, true);
-    mqttClient.publish((prefix + "/config/binanceSymbol").c_str(), binanceSymbol, true);
-    mqttClient.publish((prefix + "/config/ntfyTopic").c_str(), ntfyTopic, true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/cooldown5min", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, true);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/binanceSymbol", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, binanceSymbol, true);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/ntfyTopic", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, ntfyTopic, true);
+    
     dtostrf(anchorTakeProfit, 0, 2, buffer);
-    mqttClient.publish((prefix + "/config/anchorTakeProfit").c_str(), buffer, true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/anchorTakeProfit", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, true);
+    
     dtostrf(anchorMaxLoss, 0, 2, buffer);
-    mqttClient.publish((prefix + "/config/anchorMaxLoss").c_str(), buffer, true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/anchorMaxLoss", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, true);
+    
     dtostrf(trendThreshold, 0, 2, buffer);
-    mqttClient.publish((prefix + "/config/trendThreshold").c_str(), buffer, true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/trendThreshold", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, true);
+    
     dtostrf(volatilityLowThreshold, 0, 2, buffer);
-    mqttClient.publish((prefix + "/config/volatilityLowThreshold").c_str(), buffer, true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/volatilityLowThreshold", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, true);
+    
     dtostrf(volatilityHighThreshold, 0, 2, buffer);
-    mqttClient.publish((prefix + "/config/volatilityHighThreshold").c_str(), buffer, true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/volatilityHighThreshold", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, true);
 }
 
 // Publiceer waarden naar MQTT (prijzen, percentages, etc.)
+// Geoptimaliseerd: gebruik char arrays i.p.v. String om geheugenfragmentatie te voorkomen
 void publishMqttValues(float price, float ret_1m, float ret_5m, float ret_30m) {
     if (!mqttConnected) return;
     
-    String prefix = String(MQTT_TOPIC_PREFIX);
+    char topicBuffer[128];
     char buffer[32];
+    
     dtostrf(price, 0, 2, buffer);
-    mqttClient.publish((prefix + "/values/price").c_str(), buffer, false);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/price", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, false);
+    
     dtostrf(ret_1m, 0, 2, buffer);
-    mqttClient.publish((prefix + "/values/return_1m").c_str(), buffer, false);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/return_1m", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, false);
+    
     dtostrf(ret_5m, 0, 2, buffer);
-    mqttClient.publish((prefix + "/values/return_5m").c_str(), buffer, false);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/return_5m", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, false);
+    
     dtostrf(ret_30m, 0, 2, buffer);
-    mqttClient.publish((prefix + "/values/return_30m").c_str(), buffer, false);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/return_30m", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, false);
+    
     snprintf(buffer, sizeof(buffer), "%lu", millis());
-    mqttClient.publish((prefix + "/values/timestamp").c_str(), buffer, false);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/timestamp", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, false);
+    
+    // Publiceer IP-adres (alleen als WiFi verbonden is)
+    if (WiFi.status() == WL_CONNECTED) {
+        char ipBuffer[16];
+        formatIPAddress(WiFi.localIP(), ipBuffer, sizeof(ipBuffer));
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/ip_address", MQTT_TOPIC_PREFIX);
+        mqttClient.publish(topicBuffer, ipBuffer, false);
+    }
 }
 
 // Publiceer MQTT Discovery berichten voor Home Assistant
@@ -1428,6 +1622,12 @@ void publishMqttDiscovery() {
     String discTopic19 = "homeassistant/number/" + deviceId + "_volatilityHighThreshold/config";
     String payload19 = "{\"name\":\"Volatility High Threshold\",\"unique_id\":\"" + deviceId + "_volatilityHighThreshold\",\"state_topic\":\"" + prefix + "/config/volatilityHighThreshold\",\"command_topic\":\"" + prefix + "/config/volatilityHighThreshold/set\",\"min\":0.01,\"max\":1.0,\"step\":0.01,\"unit_of_measurement\":\"%\",\"icon\":\"mdi:chart-timeline-variant-shimmer\",\"mode\":\"box\"," + deviceJson + "}";
     mqttClient.publish(discTopic19.c_str(), payload19.c_str(), true);
+    delay(50);
+    
+    // IP Address sensor
+    String discTopic20 = "homeassistant/sensor/" + deviceId + "_ip_address/config";
+    String payload20 = "{\"name\":\"IP Address\",\"unique_id\":\"" + deviceId + "_ip_address\",\"state_topic\":\"" + prefix + "/values/ip_address\",\"icon\":\"mdi:ip-network\"," + deviceJson + "}";
+    mqttClient.publish(discTopic20.c_str(), payload20.c_str(), true);
     delay(50);
     
     Serial_println("[MQTT] Discovery messages published");
@@ -1713,7 +1913,10 @@ static void setupWebServer()
     Serial.println("[WebServer] 404 handler geregistreerd");
     server.begin();
     Serial.println("[WebServer] Server gestart");
-    Serial.println("[WebServer] Gestart op http://" + WiFi.localIP().toString());
+    // Geoptimaliseerd: gebruik char array i.p.v. String
+    char ipBuffer[16];
+    formatIPAddress(WiFi.localIP(), ipBuffer, sizeof(ipBuffer));
+    Serial.printf("[WebServer] Gestart op http://%s\n", ipBuffer);
 }
 
 // Parse Binance JSON – very small, avoid ArduinoJson for flash size
@@ -2541,17 +2744,18 @@ static float calculateAverageAbs1mReturn()
 // Bepaal volatiliteit state op basis van gemiddelde absolute 1m return
 static VolatilityState determineVolatilityState(float avg_abs_1m)
 {
+    // Volatiliteit bepaling (geoptimaliseerd: LOW < 0.05%, HIGH >= 0.15%)
     if (avg_abs_1m < volatilityLowThreshold)
     {
-        return VOLATILITY_LOW;  // Rustig
+        return VOLATILITY_LOW;  // Rustig: < 0.05%
     }
     else if (avg_abs_1m < volatilityHighThreshold)
     {
-        return VOLATILITY_MEDIUM;  // Gemiddeld
+        return VOLATILITY_MEDIUM;  // Gemiddeld: 0.05% - 0.15%
     }
     else
     {
-        return VOLATILITY_HIGH;  // Volatiel
+        return VOLATILITY_HIGH;  // Volatiel: >= 0.15%
     }
 }
 
@@ -2696,14 +2900,15 @@ static void fetchPrice()
     unsigned long fetchTime = millis() - fetchStart;
     
     if (body.isEmpty()) {
-        // Leeg response - log dit zodat we kunnen zien of dit het probleem is
-        Serial.printf("[API] WARN -> %s leeg response (tijd: %lu ms)\n", binanceSymbol, fetchTime);
+        // Leeg response - kan komen door timeout of netwerkproblemen
+        Serial.printf("[API] WARN -> %s leeg response (tijd: %lu ms) - mogelijk timeout of netwerkprobleem\n", binanceSymbol, fetchTime);
+        // Gebruik laatste bekende prijs als fallback (al ingesteld als fetched = prices[0])
     } else if (!parsePrice(body, fetched)) {
         Serial.printf("[API] ERR -> %s parse gefaald\n", binanceSymbol);
     } else {
-        // Succesvol opgehaald (alleen loggen bij langzame calls > 800ms)
-        if (fetchTime > 800) {
-            Serial.printf("[API] OK -> %s %.2f (tijd: %lu ms)\n", binanceSymbol, fetched, fetchTime);
+        // Succesvol opgehaald (alleen loggen bij langzame calls > 1200ms)
+        if (fetchTime > 1200) {
+            Serial.printf("[API] OK -> %s %.2f (tijd: %lu ms) - langzaam\n", binanceSymbol, fetched, fetchTime);
         }
         
         // Neem mutex voor data updates (timeout aangepast per platform)
@@ -2825,6 +3030,12 @@ static void fetchPrice()
 // Update UI - Refactored to use helper functions
 void updateUI()
 {
+    // Veiligheid: controleer of chart en dataSeries bestaan voordat we ze gebruiken
+    if (chart == nullptr || dataSeries == nullptr) {
+        Serial_println("[UI] WARN: Chart of dataSeries is null, skip update");
+        return;
+    }
+    
     // Data wordt al beschermd door mutex in uiTask
     int32_t p = (int32_t)lroundf(prices[symbolIndexToChart] * 100.0f);
     
@@ -2866,6 +3077,7 @@ void updateUI()
     // Update trend en volatiliteit labels
     updateTrendLabel();
     updateVolatilityLabel();
+    
 
     // Update price cards
     for (uint8_t i = 0; i < SYMBOL_COUNT; ++i)
@@ -3069,6 +3281,11 @@ static void updateVolatilityLabel()
     lv_obj_set_style_text_color(volatilityLabel, volColor, 0);
 }
 
+// ============================================================================
+// RGB LED Functions (alleen voor CYD platforms)
+// ============================================================================
+
+
 // Helper functie om BTCEUR card bij te werken
 static void updateBTCEURCard()
 {
@@ -3243,8 +3460,10 @@ static void updateFooter()
     #ifdef PLATFORM_TTGO
     if (ipLabel != nullptr) {
         if (WiFi.status() == WL_CONNECTED) {
-            String ip = WiFi.localIP().toString();
-            lv_label_set_text(ipLabel, ip.c_str());
+            // Geoptimaliseerd: gebruik char array i.p.v. String
+            static char ipBuffer[16];
+            formatIPAddress(WiFi.localIP(), ipBuffer, sizeof(ipBuffer));
+            lv_label_set_text(ipLabel, ipBuffer);
         } else {
             lv_label_set_text(ipLabel, "--");
         }
@@ -3268,13 +3487,17 @@ static void updateFooter()
     }
     
     if (lblFooterLine2 != nullptr) {
-        String ipStr = "--.--.--.--";
+        // Geoptimaliseerd: gebruik char array i.p.v. String
+        static char ipStr[16] = "--.--.--.--";
         
         if (WiFi.status() == WL_CONNECTED) {
-            ipStr = WiFi.localIP().toString();
+            formatIPAddress(WiFi.localIP(), ipStr, sizeof(ipStr));
+        } else {
+            strncpy(ipStr, "--.--.--.--", sizeof(ipStr) - 1);
+            ipStr[sizeof(ipStr) - 1] = '\0';
         }
         
-        lv_label_set_text(lblFooterLine2, ipStr.c_str());
+        lv_label_set_text(lblFooterLine2, ipStr);
     }
     #endif
 }
@@ -3563,8 +3786,10 @@ static void createFooter()
     lv_obj_align(chartVersionLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
     
     if (WiFi.status() == WL_CONNECTED) {
-        String ip = WiFi.localIP().toString();
-        lv_label_set_text(ipLabel, ip.c_str());
+        // Geoptimaliseerd: gebruik char array i.p.v. String
+        static char ipBuffer[16];
+        formatIPAddress(WiFi.localIP(), ipBuffer, sizeof(ipBuffer));
+        lv_label_set_text(ipLabel, ipBuffer);
     } else {
         lv_label_set_text(ipLabel, "--");
     }
@@ -3741,6 +3966,7 @@ void setup()
     Serial.begin(115200);
     DEV_DEVICE_INIT();
     
+    
     // Initialiseer fysieke reset button (voor TTGO en CYD platforms)
     #if HAS_PHYSICAL_BUTTON
     pinMode(BUTTON_PIN, INPUT_PULLUP);
@@ -3856,7 +4082,20 @@ void setup()
                 Serial.println("[WiFi] Verbonden met AP");
                 break;
             case ARDUINO_EVENT_WIFI_STA_GOT_IP:
-                Serial.printf("[WiFi] IP verkregen: %s\n", IPAddress(info.got_ip.ip_info.ip.addr).toString().c_str());
+                // Geoptimaliseerd: gebruik char array i.p.v. String
+                {
+                    char ipBuffer[16];
+                    IPAddress ip(info.got_ip.ip_info.ip.addr);
+                    formatIPAddress(ip, ipBuffer, sizeof(ipBuffer));
+                    Serial.printf("[WiFi] IP verkregen: %s\n", ipBuffer);
+                    
+                    // Publiceer IP-adres naar MQTT (als MQTT verbonden is)
+                    if (mqttConnected) {
+                        char topicBuffer[128];
+                        snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/ip_address", MQTT_TOPIC_PREFIX);
+                        mqttClient.publish(topicBuffer, ipBuffer, false);
+                    }
+                }
                 wifiReconnectEnabled = false;
                 wifiInitialized = true;
                 reconnectAttemptCount = 0; // Reset reconnect counter bij succesvolle verbinding
@@ -3888,7 +4127,15 @@ void setup()
     
     // Force LVGL to render immediately after UI creation (CYD 2.4 work-around)
     #ifdef PLATFORM_CYD24
-    lv_refr_now(disp);
+    if (disp != NULL) {
+        lv_refr_now(disp);
+    }
+    #else
+    // Voor andere platforms, roep timer handler aan om scherm te renderen
+    for (int i = 0; i < 10; i++) {
+        lv_timer_handler();
+        delay(10);
+    }
     #endif
 
     // FreeRTOS Tasks voor multi-core processing
@@ -4106,7 +4353,9 @@ static bool setupWiFiConnection()
         
         delay(500);
         
-        String apIP = WiFi.softAPIP().toString();
+        // Geoptimaliseerd: gebruik char array i.p.v. String
+        char apIP[16];
+        formatIPAddress(WiFi.softAPIP(), apIP, sizeof(apIP));
         
         webInterfaceLabel = lv_label_create(lv_scr_act());
         lv_obj_set_style_text_font(webInterfaceLabel, &lv_font_montserrat_16, 0);
@@ -4123,7 +4372,7 @@ static bool setupWiFiConnection()
         lv_obj_set_width(apPasswordLabel, 200);
         lv_label_set_long_mode(apPasswordLabel, LV_LABEL_LONG_WRAP);
         lv_obj_set_style_text_align(apPasswordLabel, LV_TEXT_ALIGN_CENTER, 0);
-        lv_label_set_text(apPasswordLabel, apIP.c_str());
+        lv_label_set_text(apPasswordLabel, apIP);
         lv_obj_align_to(apPasswordLabel, webInterfaceLabel, LV_ALIGN_OUT_BOTTOM_MID, 0, 15);
         
         lv_timer_handler();
@@ -4210,7 +4459,10 @@ void showConnectionInfo()
     lv_obj_set_width(ipLabel, 150);
     lv_label_set_long_mode(ipLabel, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(ipLabel, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(ipLabel, WiFi.localIP().toString().c_str());
+    // Geoptimaliseerd: gebruik char array i.p.v. String
+    char ipBuffer[16];
+    formatIPAddress(WiFi.localIP(), ipBuffer, sizeof(ipBuffer));
+    lv_label_set_text(ipLabel, ipBuffer);
     lv_obj_align_to(ipLabel, ipTitleLabel, LV_ALIGN_OUT_BOTTOM_MID, 0, 2);
     
     // "Opening Binance Session" label (onder de spinner)
@@ -4241,7 +4493,10 @@ void wifiConnectionAndFetchPrice()
         fetchInitialPrice();
     }
 
-    Serial_printf("Verbonden! IP: %s\n", WiFi.localIP().toString().c_str());
+    // Geoptimaliseerd: gebruik char array i.p.v. String
+    char ipBuffer[16];
+    formatIPAddress(WiFi.localIP(), ipBuffer, sizeof(ipBuffer));
+    Serial_printf("Verbonden! IP: %s\n", ipBuffer);
     
     wifiInitialized = true;
     wifiReconnectEnabled = false;
