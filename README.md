@@ -758,6 +758,48 @@ If you don't use MQTT, you can leave the MQTT settings empty in the web interfac
 
 ## Version History
 
+### Version 3.43
+- **Optimized Default Thresholds**: All default thresholds and cooldowns optimized based on measurements
+  - 1m Spike Threshold: 0.30% → 0.28% (based on noise maxima)
+  - 1m Cooldown: 600s → 90s (less spam in fast pumps)
+  - 5m Move Alert: 1.0% → 0.8% (historically often at trend start)
+  - 5m Move Filter: 0.5% → 0.40% (more sensitive to momentum)
+  - 5m Spike Filter: 0.60% → 0.65% (matches current volatility)
+  - 5m Cooldown: 600s → 420s (faster second signal on breakouts)
+  - 30m Move Threshold: 2.0% → 1.3% (0.8% was too sensitive)
+  - 30m Cooldown: 600s → 900s (large moves need longer rest)
+  - Trend Threshold: 1.0% → 1.2% (reduces false switches)
+  - Volatility High: 0.12% → 0.15% (good for peak activity)
+  - Volatility Low: 0.06% → 0.05% (better quiet night detection)
+
+### Version 3.42
+- **HTTP Client Optimizations**: Improved API call reliability
+  - Increased HTTP timeout: 2000ms → 3000ms
+  - Added connect timeout: 2000ms (faster failure on connection problems)
+  - Increased API interval: 1200ms → 1500ms (more room for slow networks)
+  - Better error handling and logging for timeouts and connection issues
+
+### Version 3.41
+- **RGB LED Support Removed**: Reverted to version 3.39 (RGB LED caused display issues)
+
+### Version 3.40
+- **RGB LED Support**: Added RGB LED trend indication for CYD platforms
+  - Green for UP trend, Red for DOWN trend, Yellow for SIDEWAYS
+  - Only activates after 120 minutes of data for reliable trends
+  - Configurable brightness (default: 50%)
+
+### Version 3.39
+- **IP Address via MQTT**: IP address now published to Home Assistant
+  - New sensor: `sensor.{device_id}_ip_address`
+  - Automatically updates when IP changes
+  - Published with each value update
+
+### Version 3.38
+- **String Optimizations**: Replaced remaining String usage with char arrays
+  - WiFi IP address formatting (all `WiFi.localIP().toString()` calls)
+  - MQTT settings and values publishing
+  - Reduced memory fragmentation
+
 ### Version 3.24
 - **TTGO Partition Scheme Fix**: Fixed flash size detection issue for TTGO T-Display
   - TTGO now uses `huge_app` partition scheme with explicit `FlashSize=4M` setting

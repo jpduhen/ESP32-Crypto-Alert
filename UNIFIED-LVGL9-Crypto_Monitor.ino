@@ -31,8 +31,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 43
-#define VERSION_STRING "3.43"
+#define VERSION_MINOR 44
+#define VERSION_STRING "3.44"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -180,6 +180,13 @@ enum TrendState {
     TREND_DOWN,
     TREND_SIDEWAYS
 };
+
+// Dynamische anchor configuratie op basis van trend
+struct AnchorConfigEffective {
+    float maxLossPct;      // Effectieve max loss percentage (negatief)
+    float takeProfitPct;   // Effectieve take profit percentage (positief)
+};
+
 static float ret_2h = 0.0f;  // 2-hour return percentage
 static TrendState trendState = TREND_SIDEWAYS;  // Current trend state
 static TrendState previousTrendState = TREND_SIDEWAYS;  // Previous trend state (voor change detection)
@@ -591,6 +598,45 @@ static void checkTrendChange(float ret_30m_value)
 // Anchor Price Functions
 // ============================================================================
 
+// Bereken effectieve anchor-waarden op basis van trend
+// Basiswaarden worden aangepast:
+// - TREND_UP: meer ruimte voor verlies (1.25x), meer winst (1.10x)
+// - TREND_DOWN: strakker stop-loss (0.75x), sneller winst (0.70x)
+// - TREND_SIDEWAYS: basiswaarden
+static AnchorConfigEffective calcEffectiveAnchor(float baseMaxLoss, float baseTakeProfit, TrendState trend)
+{
+    AnchorConfigEffective eff;
+    
+    switch (trend) {
+        case TREND_UP:
+            // Bullish: meer ruimte voor verlies, meer winst laten lopen
+            eff.maxLossPct = baseMaxLoss * 1.25f;      // -3.0% → -3.75% (afgerond -3.8%)
+            eff.takeProfitPct = baseTakeProfit * 1.10f; // +5.0% → +5.5%
+            break;
+            
+        case TREND_DOWN:
+            // Bearish: strakker stop-loss, sneller winst nemen
+            eff.maxLossPct = baseMaxLoss * 0.75f;      // -3.0% → -2.25% (afgerond -2.2%)
+            eff.takeProfitPct = baseTakeProfit * 0.70f; // +5.0% → +3.5%
+            break;
+            
+        case TREND_SIDEWAYS:
+        default:
+            // Basiswaarden
+            eff.maxLossPct = baseMaxLoss;
+            eff.takeProfitPct = baseTakeProfit;
+            break;
+    }
+    
+    // Clamp waarden om extreme situaties te voorkomen
+    if (eff.maxLossPct < -6.0f) eff.maxLossPct = -6.0f;
+    if (eff.maxLossPct > -1.0f) eff.maxLossPct = -1.0f;
+    if (eff.takeProfitPct < 2.0f) eff.takeProfitPct = 2.0f;
+    if (eff.takeProfitPct > 10.0f) eff.takeProfitPct = 10.0f;
+    
+    return eff;
+}
+
 // Publiceer anchor event naar MQTT
 void publishMqttAnchorEvent(float anchor_price, const char* event_type) {
     if (!mqttConnected) return;
@@ -627,42 +673,48 @@ static void checkAnchorAlerts()
         return; // Geen actieve anchor of geen prijs data
     }
     
+    // Bereken dynamische anchor-waarden op basis van trend
+    // Gebruik ret_30m en ret_2h die al beschikbaar zijn in de scope
+    AnchorConfigEffective effAnchor = calcEffectiveAnchor(anchorMaxLoss, anchorTakeProfit, trendState);
+    
     // Bereken percentage verandering t.o.v. anchor
     float anchorPct = ((prices[0] - anchorPrice) / anchorPrice) * 100.0f;
     
-    // Check take profit
-    if (!anchorTakeProfitSent && anchorPct >= anchorTakeProfit) {
+    // Check take profit met dynamische waarde
+    if (!anchorTakeProfitSent && anchorPct >= effAnchor.takeProfitPct) {
         char timestamp[32];
         getFormattedTimestamp(timestamp, sizeof(timestamp));
         char title[64];
         char msg[256];
         snprintf(title, sizeof(title), "%s Take Profit", binanceSymbol);
+        // Toon zowel basis als effectieve waarde in notificatie
         snprintf(msg, sizeof(msg), 
-                 "Take profit bereikt: +%.2f%%\nAnchor: %.2f EUR\nPrijs %s: %.2f EUR\nWinst: +%.2f EUR",
-                 anchorPct, anchorPrice, timestamp, prices[0], prices[0] - anchorPrice);
+                 "Take profit bereikt: +%.2f%%\nThreshold: %.2f%% (basis: %.2f%%)\nAnchor: %.2f EUR\nPrijs %s: %.2f EUR\nWinst: +%.2f EUR",
+                 anchorPct, effAnchor.takeProfitPct, anchorTakeProfit, anchorPrice, timestamp, prices[0], prices[0] - anchorPrice);
         sendNotification(title, msg, "green_square,💰");
         anchorTakeProfitSent = true;
-        Serial_printf("[Anchor] Take profit notificatie verzonden: %.2f%% (anchor: %.2f, prijs: %.2f)\n", 
-                     anchorPct, anchorPrice, prices[0]);
+        Serial_printf("[Anchor] Take profit notificatie verzonden: %.2f%% (threshold: %.2f%%, basis: %.2f%%, anchor: %.2f, prijs: %.2f)\n", 
+                     anchorPct, effAnchor.takeProfitPct, anchorTakeProfit, anchorPrice, prices[0]);
         
         // Publiceer take profit event naar MQTT
         publishMqttAnchorEvent(anchorPrice, "take_profit");
     }
     
-    // Check max loss
-    if (!anchorMaxLossSent && anchorPct <= anchorMaxLoss) {
+    // Check max loss met dynamische waarde
+    if (!anchorMaxLossSent && anchorPct <= effAnchor.maxLossPct) {
         char timestamp[32];
         getFormattedTimestamp(timestamp, sizeof(timestamp));
         char title[64];
         char msg[256];
         snprintf(title, sizeof(title), "%s Max Loss", binanceSymbol);
+        // Toon zowel basis als effectieve waarde in notificatie
         snprintf(msg, sizeof(msg), 
-                 "Max loss bereikt: %.2f%%\nAnchor: %.2f EUR\nPrijs %s: %.2f EUR\nVerlies: %.2f EUR",
-                 anchorPct, anchorPrice, timestamp, prices[0], prices[0] - anchorPrice);
+                 "Max loss bereikt: %.2f%%\nThreshold: %.2f%% (basis: %.2f%%)\nAnchor: %.2f EUR\nPrijs %s: %.2f EUR\nVerlies: %.2f EUR",
+                 anchorPct, effAnchor.maxLossPct, anchorMaxLoss, anchorPrice, timestamp, prices[0], prices[0] - anchorPrice);
         sendNotification(title, msg, "red_square,⚠️");
         anchorMaxLossSent = true;
-        Serial_printf("[Anchor] Max loss notificatie verzonden: %.2f%% (anchor: %.2f, prijs: %.2f)\n", 
-                     anchorPct, anchorPrice, prices[0]);
+        Serial_printf("[Anchor] Max loss notificatie verzonden: %.2f%% (threshold: %.2f%%, basis: %.2f%%, anchor: %.2f, prijs: %.2f)\n", 
+                     anchorPct, effAnchor.maxLossPct, anchorMaxLoss, anchorPrice, prices[0]);
         
         // Publiceer max loss event naar MQTT
         publishMqttAnchorEvent(anchorPrice, "max_loss");
@@ -2676,13 +2728,17 @@ static float calculateReturn2Hours()
 // ============================================================================
 
 // Bepaal trend state op basis van 2h return en optioneel 30m return
+// Bepaal trend state op basis van 2h return en 30m return
+// TREND_UP: 2h >= +trendThreshold EN 30m >= 0 (beide voorwaarden moeten waar zijn)
+// TREND_DOWN: 2h <= -trendThreshold EN 30m <= 0 (beide voorwaarden moeten waar zijn)
+// TREND_SIDEWAYS: anders
 static TrendState determineTrendState(float ret_2h_value, float ret_30m_value)
 {
-    if (ret_2h_value > trendThreshold)
+    if (ret_2h_value >= trendThreshold && ret_30m_value >= 0.0f)
     {
         return TREND_UP;
     }
-    else if (ret_2h_value < -trendThreshold)
+    else if (ret_2h_value <= -trendThreshold && ret_30m_value <= 0.0f)
     {
         return TREND_DOWN;
     }
@@ -3295,10 +3351,17 @@ static void updateBTCEURCard()
     
     lv_label_set_text_fmt(priceLbl[0], "%.2f", prices[0]);
     
+    // Bereken dynamische anchor-waarden op basis van trend voor UI weergave
+    AnchorConfigEffective effAnchorUI;
+    if (anchorActive && anchorPrice > 0.0f) {
+        effAnchorUI = calcEffectiveAnchor(anchorMaxLoss, anchorTakeProfit, trendState);
+    }
+    
     #ifdef PLATFORM_TTGO
     if (anchorMaxLabel != nullptr) {
         if (anchorActive && anchorPrice > 0.0f) {
-            float takeProfitPrice = anchorPrice * (1.0f + anchorTakeProfit / 100.0f);
+            // Gebruik dynamische take profit waarde
+            float takeProfitPrice = anchorPrice * (1.0f + effAnchorUI.takeProfitPct / 100.0f);
             lv_label_set_text_fmt(anchorMaxLabel, "%.2f", takeProfitPrice);
         } else {
             lv_label_set_text(anchorMaxLabel, "");
@@ -3315,7 +3378,8 @@ static void updateBTCEURCard()
     
     if (anchorMinLabel != nullptr) {
         if (anchorActive && anchorPrice > 0.0f) {
-            float stopLossPrice = anchorPrice * (1.0f + anchorMaxLoss / 100.0f);
+            // Gebruik dynamische max loss waarde
+            float stopLossPrice = anchorPrice * (1.0f + effAnchorUI.maxLossPct / 100.0f);
             lv_label_set_text_fmt(anchorMinLabel, "%.2f", stopLossPrice);
         } else {
             lv_label_set_text(anchorMinLabel, "");
@@ -3324,8 +3388,9 @@ static void updateBTCEURCard()
     #else
     if (anchorMaxLabel != nullptr) {
         if (anchorActive && anchorPrice > 0.0f) {
-            float takeProfitPrice = anchorPrice * (1.0f + anchorTakeProfit / 100.0f);
-            lv_label_set_text_fmt(anchorMaxLabel, "+%.2f%% %.2f", anchorTakeProfit, takeProfitPrice);
+            // Toon dynamische take profit waarde (effectief percentage)
+            float takeProfitPrice = anchorPrice * (1.0f + effAnchorUI.takeProfitPct / 100.0f);
+            lv_label_set_text_fmt(anchorMaxLabel, "+%.2f%% %.2f", effAnchorUI.takeProfitPct, takeProfitPrice);
         } else {
             lv_label_set_text(anchorMaxLabel, "");
         }
@@ -3345,8 +3410,9 @@ static void updateBTCEURCard()
     
     if (anchorMinLabel != nullptr) {
         if (anchorActive && anchorPrice > 0.0f) {
-            float stopLossPrice = anchorPrice * (1.0f + anchorMaxLoss / 100.0f);
-            lv_label_set_text_fmt(anchorMinLabel, "%.2f%% %.2f", anchorMaxLoss, stopLossPrice);
+            // Toon dynamische max loss waarde (effectief percentage)
+            float stopLossPrice = anchorPrice * (1.0f + effAnchorUI.maxLossPct / 100.0f);
+            lv_label_set_text_fmt(anchorMinLabel, "%.2f%% %.2f", effAnchorUI.maxLossPct, stopLossPrice);
         } else {
             lv_label_set_text(anchorMinLabel, "");
         }
