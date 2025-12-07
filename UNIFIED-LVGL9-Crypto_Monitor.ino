@@ -31,8 +31,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 44
-#define VERSION_STRING "3.44"
+#define VERSION_MINOR 47
+#define VERSION_STRING "3.47"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -494,6 +494,38 @@ static void getFormattedTimestamp(char *buffer, size_t bufferSize) {
 }
 
 // Format IP address to string (geoptimaliseerd: gebruik char array i.p.v. String)
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+// Helper: Validate if price is valid (not NaN, Inf, or <= 0)
+static bool isValidPrice(float price)
+{
+    return !isnan(price) && !isinf(price) && price > 0.0f;
+}
+
+// Helper: Validate if two prices are valid
+static bool areValidPrices(float price1, float price2)
+{
+    return isValidPrice(price1) && isValidPrice(price2);
+}
+
+// Helper: Safe string copy with guaranteed null termination
+static void safeStrncpy(char *dest, const char *src, size_t destSize)
+{
+    if (destSize == 0) return;
+    strncpy(dest, src, destSize - 1);
+    dest[destSize - 1] = '\0';
+}
+
+// Forward declarations
+static void findMinMaxInSecondPrices(float &minVal, float &maxVal);
+static void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
+
+// ============================================================================
+// Utility Functions
+// ============================================================================
+
 static void formatIPAddress(IPAddress ip, char *buffer, size_t bufferSize) {
     snprintf(buffer, bufferSize, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
 }
@@ -669,7 +701,7 @@ void publishMqttAnchorEvent(float anchor_price, const char* event_type) {
 // Check anchor take profit / max loss alerts
 static void checkAnchorAlerts()
 {
-    if (!anchorActive || anchorPrice <= 0.0f || prices[0] <= 0.0f) {
+    if (!anchorActive || !isValidPrice(anchorPrice) || !isValidPrice(prices[0])) {
         return; // Geen actieve anchor of geen prijs data
     }
     
@@ -1074,6 +1106,7 @@ static void loadSettings()
     
     // If the loaded topic is the old default (without device ID), replace it with new format
     // Also migrate old format with prefix (e.g. "crypt-xxxxxx-alert") to new format without prefix
+    // BUT: Don't migrate custom topics that users have set manually
     bool needsMigration = false;
     if (topic == "crypto-monitor-alerts") {
         // Old default format
@@ -1089,10 +1122,9 @@ static void loadSettings()
             if (dashInBefore >= 0) {
                 // Has old format with prefix (e.g. "crypt-xxxxxx"), migrate to new format
                 needsMigration = true;
-            } else if (beforeAlert.length() != 8) {
-                // Not exactly 8 chars (old format used 6 or 12), might be old format or custom, migrate to be safe
-                needsMigration = true;
             }
+            // Note: We no longer migrate topics that don't have exactly 8 chars,
+            // as users might have set custom topics with different lengths
         }
     }
     
@@ -1111,8 +1143,7 @@ static void loadSettings()
     String symbol = preferences.getString("binanceSymbol", BINANCE_SYMBOL_DEFAULT);
     symbol.toCharArray(binanceSymbol, sizeof(binanceSymbol));
     // Update symbols array with the loaded binance symbol
-    strncpy(symbolsArray[0], binanceSymbol, sizeof(symbolsArray[0]) - 1);
-    symbolsArray[0][sizeof(symbolsArray[0]) - 1] = '\0';
+    safeStrncpy(symbolsArray[0], binanceSymbol, sizeof(symbolsArray[0]));
     threshold1MinUp = preferences.getFloat("th1Up", THRESHOLD_1MIN_UP_DEFAULT);
     threshold1MinDown = preferences.getFloat("th1Down", THRESHOLD_1MIN_DOWN_DEFAULT);
     threshold30MinUp = preferences.getFloat("th30Up", THRESHOLD_30MIN_UP_DEFAULT);
@@ -1306,10 +1337,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                                         }
                                         symbol[symLen] = '\0';
                                         if (symLen > 0 && symLen < sizeof(binanceSymbol)) {
-                                            strncpy(binanceSymbol, symbol, sizeof(binanceSymbol) - 1);
-                                            binanceSymbol[sizeof(binanceSymbol) - 1] = '\0';
-                                            strncpy(symbolsArray[0], binanceSymbol, sizeof(symbolsArray[0]) - 1);
-                                            symbolsArray[0][sizeof(symbolsArray[0]) - 1] = '\0';
+                                            safeStrncpy(binanceSymbol, symbol, sizeof(binanceSymbol));
+                                            safeStrncpy(symbolsArray[0], binanceSymbol, sizeof(symbolsArray[0]));
                                             snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/binanceSymbol", prefixBuffer);
                                             mqttClient.publish(topicBufferFull, binanceSymbol, true);
                                             settingChanged = true;
@@ -1323,8 +1352,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                                                 topicLenTrimmed--;
                                             }
                                             if (topicLenTrimmed > 0 && topicLenTrimmed < sizeof(ntfyTopic)) {
-                                                strncpy(ntfyTopic, msgBuffer, topicLenTrimmed);
-                                                ntfyTopic[topicLenTrimmed] = '\0';
+                                                safeStrncpy(ntfyTopic, msgBuffer, topicLenTrimmed + 1);
                                                 snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/ntfyTopic", prefixBuffer);
                                                 mqttClient.publish(topicBufferFull, ntfyTopic, true);
                                                 settingChanged = true;
@@ -1380,51 +1408,64 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                                                                     settingChanged = true;
                                                                 }
                                                             } else {
-                                                                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/button/reset/set", prefixBuffer);
+                                                                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/language/set", prefixBuffer);
                                                                 if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                                                                    // Reset button pressed via MQTT - gebruik als anchor
-                                                                    if (strcmp(msgBuffer, "PRESS") == 0 || strcmp(msgBuffer, "press") == 0 || 
-                                                                        strcmp(msgBuffer, "1") == 0 || strcmp(msgBuffer, "ON") == 0 || 
-                                                                        strcmp(msgBuffer, "on") == 0) {
-            Serial_println("[MQTT] Reset/Anchor button pressed via MQTT");
-            // Execute reset/anchor (thread-safe)
-            float currentPrice = 0.0f;
-            if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
-                if (prices[0] > 0.0f) {
-                    currentPrice = prices[0];  // Sla prijs lokaal op
-                    openPrices[0] = prices[0];
-                    // Set anchor price
-                    anchorPrice = prices[0];
-                    anchorMax = prices[0];  // Initialiseer max/min met huidige prijs
-                    anchorMin = prices[0];
-                    anchorTime = millis();
-                    anchorActive = true;
-                    anchorTakeProfitSent = false;
-                    anchorMaxLossSent = false;
-                    Serial_printf("[MQTT] Anchor set: anchorPrice = %.2f\n", anchorPrice);
-                }
-                xSemaphoreGive(dataMutex);
-                
-                // Publiceer anchor event naar MQTT
-                if (currentPrice > 0.0f) {
-                publishMqttAnchorEvent(anchorPrice, "anchor_set");
-                    
-                    // Stuur NTFY notificatie
-                    char timestamp[32];
-                    getFormattedTimestamp(timestamp, sizeof(timestamp));
-                    char title[64];
-                    char msg[128];
-                    snprintf(title, sizeof(title), "%s Anchor Set", binanceSymbol);
-                    snprintf(msg, sizeof(msg), "%s: %.2f EUR", timestamp, currentPrice);
-                    sendNotification(title, msg, "white_check_mark");
-                }
-                
-                // Update UI (this will also take the mutex internally)
-                updateUI();
-            }
-            // Publish state back (button entities don't need state, but we can acknowledge)
-            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/button/reset", prefixBuffer);
-            mqttClient.publish(topicBufferFull, "PRESSED", false);
+                                                                    uint8_t newLanguage = atoi(msgBuffer);
+                                                                    if (newLanguage == 0 || newLanguage == 1) {
+                                                                        language = newLanguage;
+                                                                        saveSettings(); // Save language to Preferences
+                                                                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/language", prefixBuffer);
+                                                                        snprintf(valueBuffer, sizeof(valueBuffer), "%u", language);
+                                                                        mqttClient.publish(topicBufferFull, valueBuffer, true);
+                                                                        settingChanged = true;
+                                                                    }
+                                                                } else {
+                                                                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/button/reset/set", prefixBuffer);
+                                                                    if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                                                                        // Reset button pressed via MQTT - gebruik als anchor
+                                                                        if (strcmp(msgBuffer, "PRESS") == 0 || strcmp(msgBuffer, "press") == 0 || 
+                                                                            strcmp(msgBuffer, "1") == 0 || strcmp(msgBuffer, "ON") == 0 || 
+                                                                            strcmp(msgBuffer, "on") == 0) {
+                                                                            Serial_println("[MQTT] Reset/Anchor button pressed via MQTT");
+                                                                            // Execute reset/anchor (thread-safe)
+                                                                            float currentPrice = 0.0f;
+                                                                            if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+                                                                                if (isValidPrice(prices[0])) {
+                                                                                    currentPrice = prices[0];  // Sla prijs lokaal op
+                                                                                    openPrices[0] = prices[0];
+                                                                                    // Set anchor price
+                                                                                    anchorPrice = prices[0];
+                                                                                    anchorMax = prices[0];  // Initialiseer max/min met huidige prijs
+                                                                                    anchorMin = prices[0];
+                                                                                    anchorTime = millis();
+                                                                                    anchorActive = true;
+                                                                                    anchorTakeProfitSent = false;
+                                                                                    anchorMaxLossSent = false;
+                                                                                    Serial_printf("[MQTT] Anchor set: anchorPrice = %.2f\n", anchorPrice);
+                                                                                }
+                                                                                xSemaphoreGive(dataMutex);
+                                                                                
+                                                                                // Publiceer anchor event naar MQTT
+                                                                                if (isValidPrice(currentPrice)) {
+                                                                                    publishMqttAnchorEvent(anchorPrice, "anchor_set");
+                                                                                    
+                                                                                    // Stuur NTFY notificatie
+                                                                                    char timestamp[32];
+                                                                                    getFormattedTimestamp(timestamp, sizeof(timestamp));
+                                                                                    char title[64];
+                                                                                    char msg[128];
+                                                                                    snprintf(title, sizeof(title), "%s Anchor Set", binanceSymbol);
+                                                                                    snprintf(msg, sizeof(msg), "%s: %.2f EUR", timestamp, currentPrice);
+                                                                                    sendNotification(title, msg, "white_check_mark");
+                                                                                }
+                                                                                
+                                                                                // Update UI (this will also take the mutex internally)
+                                                                                updateUI();
+                                                                            }
+                                                                            // Publish state back (button entities don't need state, but we can acknowledge)
+                                                                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/button/reset", prefixBuffer);
+                                                                            mqttClient.publish(topicBufferFull, "PRESSED", false);
+                                                                        }
                                                                     }
                                                                 }
                                                             }
@@ -1513,6 +1554,10 @@ void publishMqttSettings() {
     
     dtostrf(volatilityHighThreshold, 0, 2, buffer);
     snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/volatilityHighThreshold", MQTT_TOPIC_PREFIX);
+    mqttClient.publish(topicBuffer, buffer, true);
+    
+    snprintf(buffer, sizeof(buffer), "%u", language);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/language", MQTT_TOPIC_PREFIX);
     mqttClient.publish(topicBuffer, buffer, true);
 }
 
@@ -1682,6 +1727,12 @@ void publishMqttDiscovery() {
     mqttClient.publish(discTopic20.c_str(), payload20.c_str(), true);
     delay(50);
     
+    // Language select
+    String discTopic21 = "homeassistant/select/" + deviceId + "_language/config";
+    String payload21 = "{\"name\":\"Language\",\"unique_id\":\"" + deviceId + "_language\",\"state_topic\":\"" + prefix + "/config/language\",\"command_topic\":\"" + prefix + "/config/language/set\",\"options\":[\"0\",\"1\"],\"icon\":\"mdi:translate\"," + deviceJson + "}";
+    mqttClient.publish(discTopic21.c_str(), payload21.c_str(), true);
+    delay(50);
+    
     Serial_println("[MQTT] Discovery messages published");
 }
 
@@ -1711,6 +1762,7 @@ void connectMQTT() {
         mqttClient.subscribe((prefix + "/button/reset/set").c_str());
         mqttClient.subscribe((prefix + "/config/anchorTakeProfit/set").c_str());
         mqttClient.subscribe((prefix + "/config/anchorMaxLoss/set").c_str());
+        mqttClient.subscribe((prefix + "/config/language/set").c_str());
         
         publishMqttSettings();
         publishMqttDiscovery();
@@ -1815,8 +1867,14 @@ static void handleSave()
     if (server.hasArg("ntfytopic")) {
         String topic = server.arg("ntfytopic");
         topic.trim();
-        if (topic.length() > 0 && topic.length() < sizeof(ntfyTopic)) {
-            topic.toCharArray(ntfyTopic, sizeof(ntfyTopic));
+        // Allow empty topic (will use default) or valid length topic
+        if (topic.length() == 0 || (topic.length() > 0 && topic.length() < sizeof(ntfyTopic))) {
+            if (topic.length() == 0) {
+                // Generate default topic if empty
+                generateDefaultNtfyTopic(ntfyTopic, sizeof(ntfyTopic));
+            } else {
+                topic.toCharArray(ntfyTopic, sizeof(ntfyTopic));
+            }
         }
     }
     if (server.hasArg("binancesymbol")) {
@@ -1826,8 +1884,7 @@ static void handleSave()
         if (symbol.length() > 0 && symbol.length() < sizeof(binanceSymbol)) {
             symbol.toCharArray(binanceSymbol, sizeof(binanceSymbol));
             // Update symbols array
-            strncpy(symbolsArray[0], binanceSymbol, sizeof(symbolsArray[0]) - 1);
-            symbolsArray[0][sizeof(symbolsArray[0]) - 1] = '\0';
+            safeStrncpy(symbolsArray[0], binanceSymbol, sizeof(symbolsArray[0]));
         }
     }
     if (server.hasArg("spike1m")) spike1mThreshold = server.arg("spike1m").toFloat();
@@ -1903,6 +1960,9 @@ static void handleSave()
     }
     
     saveSettings();
+    
+    // Update UI om wijzigingen direct te tonen (bijv. NTFY-topic op scherm)
+    updateUI();
     
     // Herconnect MQTT als instellingen zijn gewijzigd
     if (mqttConnected) {
@@ -1993,49 +2053,51 @@ static bool parsePrice(const String &body, float &out)
     
     out = body.substring(idx, end).toFloat();
     
-    // Valideer dat we een geldige float hebben gekregen
-    if (out <= 0.0f || isnan(out) || isinf(out))
+    // Validate that we got a valid float
+    if (!isValidPrice(out))
         return false;
     
     return true;
 }
 
-// Calculate average of array
+// Calculate average of array (optimized: single loop)
 static float calculateAverage(float *array, uint8_t size, bool filled)
 {
     float sum = 0.0f;
-    uint8_t count = filled ? size : 0;
+    uint8_t count = 0;
     
-    if (!filled)
+    for (uint8_t i = 0; i < size; i++)
     {
-        // Count non-zero values
-        for (uint8_t i = 0; i < size; i++)
-        {
-            if (array[i] != 0.0f)
-            {
-                sum += array[i];
-                count++;
-            }
-        }
-    }
-    else
-    {
-        // Sum all values
-        for (uint8_t i = 0; i < size; i++)
+        if (filled || array[i] != 0.0f)
         {
             sum += array[i];
+            count++;
         }
     }
     
-    if (count == 0)
-        return 0.0f;
-    
-    return sum / count;
+    return (count == 0) ? 0.0f : (sum / count);
 }
 
 // ============================================================================
 // Price History Management Functions
 // ============================================================================
+
+// Helper: Calculate ringbuffer index N positions ago from current write position
+// Returns safe index in range [0, size) or -1 if invalid
+static int32_t getRingBufferIndexAgo(uint32_t currentIndex, uint32_t positionsAgo, uint32_t bufferSize)
+{
+    if (positionsAgo >= bufferSize) return -1;
+    // Safe modulo calculation: (currentIndex - positionsAgo + bufferSize * 2) % bufferSize
+    int32_t idx = ((int32_t)currentIndex - (int32_t)positionsAgo + (int32_t)bufferSize * 2) % (int32_t)bufferSize;
+    if (idx < 0 || idx >= (int32_t)bufferSize) return -1;
+    return idx;
+}
+
+// Helper: Get last written index in ringbuffer (currentIndex points to next write position)
+static uint32_t getLastWrittenIndex(uint32_t currentIndex, uint32_t bufferSize)
+{
+    return (currentIndex == 0) ? (bufferSize - 1) : (currentIndex - 1);
+}
 
 // Find min and max values in secondPrices array
 static void findMinMaxInSecondPrices(float &minVal, float &maxVal)
@@ -2055,7 +2117,7 @@ static void findMinMaxInSecondPrices(float &minVal, float &maxVal)
     
     for (uint8_t i = 1; i < count; i++)
     {
-        if (secondPrices[i] > 0.0f)
+        if (isValidPrice(secondPrices[i]))
         {
             if (secondPrices[i] < minVal) minVal = secondPrices[i];
             if (secondPrices[i] > maxVal) maxVal = secondPrices[i];
@@ -2067,209 +2129,135 @@ static void findMinMaxInSecondPrices(float &minVal, float &maxVal)
 // Price Calculation Functions
 // ============================================================================
 
-// NIEUWE METHODE: Bereken percentage verandering tussen tijdstippen
-// ret_1m: prijs nu vs 60 seconden geleden
+// Calculate 1-minute return: price now vs 60 seconds ago
 static float calculateReturn1Minute()
 {
-    // We hebben minimaal 60 seconden geschiedenis nodig (huidige + 60 seconden geleden)
-    // Omdat de array een ringbuffer is van 60 posities, moeten we wachten tot de array gevuld is
-    // (secondArrayFilled == true) voordat we kunnen berekenen
+    // Need at least 60 seconds of history (ringbuffer must be filled)
     if (!secondArrayFilled)
     {
-        // Array nog niet rond, we moeten wachten tot de array gevuld is
-        // Zodra secondIndex = 60 wordt, wordt het gereset naar 0 en wordt secondArrayFilled = true
         averagePrices[1] = 0.0f;
-        // Debug: log wanneer we nog niet genoeg data hebben
         static uint32_t lastLogTime = 0;
         uint32_t now = millis();
-        if (now - lastLogTime > 10000) { // Log elke 10 seconden
-            Serial_printf("[Ret1m] Wachten op data: secondIndex=%u (nodig: array gevuld, arrayFilled=%d)\n", secondIndex, secondArrayFilled);
+        if (now - lastLogTime > 10000) {
+            Serial_printf("[Ret1m] Wachten op data: secondIndex=%u (nodig: array gevuld)\n", secondIndex);
             lastLogTime = now;
         }
-        return 0.0f; // Nog niet genoeg data - wacht tot array gevuld is
+        return 0.0f;
     }
     
-    // Array is gevuld (ringbuffer), we kunnen altijd berekenen
-    // secondIndex wijst naar volgende schrijfpositie
-    // Laatste geschreven waarde staat op (secondIndex - 1 + SECONDS_PER_MINUTE) % SECONDS_PER_MINUTE
-    // 60 seconden geleden: we gaan 60 posities terug in de ringbuffer
-    // Voorbeeld: als secondIndex = 5, dan laatste op 4, en 60 sec geleden op (4 - 60 + 60) % 60 = 4
-    // Maar we willen echt 60 seconden terug: (secondIndex - 1 - 60 + SECONDS_PER_MINUTE) % SECONDS_PER_MINUTE
-    // Vereenvoudigd: (secondIndex - 61 + SECONDS_PER_MINUTE) % SECONDS_PER_MINUTE
-    
-    // Gebruik de prijs die net is toegevoegd aan de buffer (laatste geschreven waarde)
-    // Dit is betrouwbaarder dan prices[0] omdat het exact de prijs is die in de buffer staat
-    // Laatste geschreven positie: (secondIndex - 1 + SECONDS_PER_MINUTE) % SECONDS_PER_MINUTE
-    uint8_t lastWrittenIdx = (secondIndex == 0) ? (SECONDS_PER_MINUTE - 1) : (secondIndex - 1);
+    // Get current price (last written value in ringbuffer)
+    uint8_t lastWrittenIdx = getLastWrittenIndex(secondIndex, SECONDS_PER_MINUTE);
     float priceNow = secondPrices[lastWrittenIdx];
     
-    // 60 seconden geleden: bereken index 60 posities terug in de ringbuffer
-    // secondIndex wijst naar de volgende schrijfpositie
-    // De laatste geschreven waarde staat op (secondIndex - 1 + SECONDS_PER_MINUTE) % SECONDS_PER_MINUTE
-    // Voor 60 seconden geleden: als secondIndex = 0, dan laatste op 59, en 60 sec geleden op (59 - 60 + 60) % 60 = 59
-    // Maar dat is verkeerd - we moeten de waarde gebruiken die 60 posities terug staat
-    // Als secondIndex = 0, dan hebben we net geschreven op 59, en 60 sec geleden staat op (0 - 60 + 60) % 60 = 0
-    // Wacht, dat klopt ook niet...
-    
-    // Correcte berekening: als secondIndex = 0, dan laatste op 59
-    // 60 seconden geleden: toen was secondIndex ook 0 (of 60, wat gereset werd naar 0)
-    // Dus de waarde 60 seconden geleden staat op dezelfde positie als waar we net hebben geschreven
-    // Maar dat betekent dat we de waarde moeten gebruiken die 60 seconden geleden op die positie stond
-    
-    // Eigenlijk: als secondIndex = 0, dan hebben we net geschreven op positie 59
-    // 60 seconden geleden stond er een andere waarde op positie 59 (toen secondIndex ook 0 was, of 60)
-    // Maar omdat de array een ringbuffer is, staat de waarde van 60 seconden geleden op positie (secondIndex - 60 + SECONDS_PER_MINUTE) % SECONDS_PER_MINUTE
-    
-    // Correcte berekening voor ringbuffer:
-    // secondIndex wijst naar de volgende schrijfpositie
-    // Laatste geschreven positie is (secondIndex - 1 + SECONDS_PER_MINUTE) % SECONDS_PER_MINUTE
-    // 60 seconden geleden: we moeten 60 posities terug in de ringbuffer
-    // Als secondIndex = 0, dan laatste op 59, en 60 sec geleden op (0 - 60 + 60) % 60 = 0
-    // Maar dat is verkeerd! Als secondIndex = 0, dan hebben we net geschreven op 59
-    // 60 seconden geleden stond er een andere waarde op positie 59 (toen secondIndex = 59, wat nu 0 is geworden)
-    // Dus: 60 seconden geleden staat op (secondIndex - 60 + SECONDS_PER_MINUTE) % SECONDS_PER_MINUTE
-    
-    // Veilige modulo berekening
-    int32_t idx1mAgo = ((int32_t)secondIndex - 60 + SECONDS_PER_MINUTE * 2) % SECONDS_PER_MINUTE;
-    
-    // Extra veiligheidscheck
-    if (idx1mAgo < 0 || idx1mAgo >= SECONDS_PER_MINUTE) {
-        Serial_printf("[Ret1m] FATAL: idx1mAgo=%ld buiten bereik [0,%u], secondIndex=%u\n", idx1mAgo, SECONDS_PER_MINUTE, secondIndex);
+    // Get price 60 seconds ago using helper function
+    int32_t idx1mAgo = getRingBufferIndexAgo(secondIndex, 60, SECONDS_PER_MINUTE);
+    if (idx1mAgo < 0) {
+        Serial_printf("[Ret1m] FATAL: idx1mAgo invalid, secondIndex=%u\n", secondIndex);
         return 0.0f;
     }
     
-    uint8_t idx1mAgo_u = (uint8_t)idx1mAgo;
-    float price1mAgo = secondPrices[idx1mAgo_u];
+    float price1mAgo = secondPrices[idx1mAgo];
     
-    if (price1mAgo <= 0.0f || priceNow <= 0.0f)
+    // Validate prices
+    if (!areValidPrices(priceNow, price1mAgo))
     {
         averagePrices[1] = 0.0f;
-        Serial_printf("[Ret1m] ERROR: secondIndex=%u (filled), priceNow=%.2f, price1mAgo=%.2f (idx=%u) - invalid!\n",
-                     secondIndex, priceNow, price1mAgo, idx1mAgo_u);
+        Serial_printf("[Ret1m] ERROR: priceNow=%.2f, price1mAgo=%.2f - invalid!\n", priceNow, price1mAgo);
         return 0.0f;
     }
     
-    // Bereken gemiddelde voor weergave
-    float currentAvg = calculateAverage(secondPrices, SECONDS_PER_MINUTE, secondArrayFilled);
-    averagePrices[1] = currentAvg;
+    // Calculate average for display
+    averagePrices[1] = calculateAverage(secondPrices, SECONDS_PER_MINUTE, secondArrayFilled);
     
-    // Return als percentage: (nu - 1m geleden) / 1m geleden * 100
-    float ret = ((priceNow - price1mAgo) / price1mAgo) * 100.0f;
-    
-    return ret;
+    // Return percentage: (now - 1m ago) / 1m ago * 100
+    return ((priceNow - price1mAgo) / price1mAgo) * 100.0f;
 }
 
-// ret_5m: prijs nu vs 300 seconden geleden
+// Calculate 5-minute return: price now vs 300 seconds ago
 static float calculateReturn5Minutes()
 {
-    // We hebben minimaal 300 seconden nodig (300 seconden geleden)
+    // Need at least 300 seconds of history
     if (!fiveMinuteArrayFilled && fiveMinuteIndex < 300)
     {
-        // Debug: log wanneer we nog niet genoeg data hebben
         static uint32_t lastLogTime = 0;
         uint32_t now = millis();
-        if (now - lastLogTime > 30000) { // Log elke 30 seconden
-            Serial_printf("[Ret5m] Wachten op data: fiveMinuteIndex=%u (nodig: 300, arrayFilled=%d)\n", fiveMinuteIndex, fiveMinuteArrayFilled);
+        if (now - lastLogTime > 30000) {
+            Serial_printf("[Ret5m] Wachten op data: fiveMinuteIndex=%u (nodig: 300)\n", fiveMinuteIndex);
             lastLogTime = now;
         }
-        return 0.0f; // Nog niet genoeg data
+        return 0.0f;
     }
     
-    // Gebruik de prijs die net is toegevoegd aan de buffer (laatste geschreven waarde)
+    // Get current price
     float priceNow;
     if (fiveMinuteArrayFilled) {
-        uint16_t lastWrittenIdx = (fiveMinuteIndex == 0) ? (SECONDS_PER_5MINUTES - 1) : (fiveMinuteIndex - 1);
+        uint16_t lastWrittenIdx = getLastWrittenIndex(fiveMinuteIndex, SECONDS_PER_5MINUTES);
         priceNow = fiveMinutePrices[lastWrittenIdx];
     } else {
-        // Array nog niet gevuld, gebruik laatste geschreven positie
-        if (fiveMinuteIndex == 0) {
-            priceNow = 0.0f; // Nog geen data
-        } else {
-            priceNow = fiveMinutePrices[fiveMinuteIndex - 1];
-        }
+        if (fiveMinuteIndex == 0) return 0.0f;
+        priceNow = fiveMinutePrices[fiveMinuteIndex - 1];
     }
-    float price5mAgo;
     
+    // Get price 300 seconds ago
+    float price5mAgo;
     if (fiveMinuteArrayFilled)
     {
-        // Array is gevuld (ringbuffer), fiveMinuteIndex wijst naar volgende schrijfpositie
-        // 300 seconden geleden: gebruik dezelfde logica als calculateReturn1Minute
-        // Correcte berekening: (fiveMinuteIndex - 300 + SECONDS_PER_5MINUTES * 2) % SECONDS_PER_5MINUTES
-        int32_t idx5mAgo = ((int32_t)fiveMinuteIndex - 300 + SECONDS_PER_5MINUTES * 2) % SECONDS_PER_5MINUTES;
-        
-        // Extra veiligheidscheck
-        if (idx5mAgo < 0 || idx5mAgo >= SECONDS_PER_5MINUTES) {
-            Serial_printf("[Ret5m] FATAL: idx5mAgo=%ld buiten bereik [0,%u], fiveMinuteIndex=%u\n", idx5mAgo, SECONDS_PER_5MINUTES, fiveMinuteIndex);
+        int32_t idx5mAgo = getRingBufferIndexAgo(fiveMinuteIndex, 300, SECONDS_PER_5MINUTES);
+        if (idx5mAgo < 0) {
+            Serial_printf("[Ret5m] FATAL: idx5mAgo invalid, fiveMinuteIndex=%u\n", fiveMinuteIndex);
             return 0.0f;
         }
-        
-        price5mAgo = fiveMinutePrices[(uint16_t)idx5mAgo];
+        price5mAgo = fiveMinutePrices[idx5mAgo];
     }
     else
     {
-        // Array nog niet gevuld, fiveMinuteIndex = aantal geschreven waarden
-        // 300 seconden geleden staat op fiveMinuteIndex - 300
         if (fiveMinuteIndex < 300) return 0.0f;
         price5mAgo = fiveMinutePrices[fiveMinuteIndex - 300];
     }
     
-    if (price5mAgo <= 0.0f || priceNow <= 0.0f)
+    // Validate prices
+    if (!areValidPrices(priceNow, price5mAgo))
     {
-        Serial_printf("[Ret5m] ERROR: fiveMinuteIndex=%u (filled=%d), priceNow=%.2f, price5mAgo=%.2f - invalid!\n",
-                     fiveMinuteIndex, fiveMinuteArrayFilled, priceNow, price5mAgo);
+        Serial_printf("[Ret5m] ERROR: priceNow=%.2f, price5mAgo=%.2f - invalid!\n", priceNow, price5mAgo);
         return 0.0f;
     }
     
-    // Return als percentage: (nu - 5m geleden) / 5m geleden * 100
-    float ret = ((priceNow - price5mAgo) / price5mAgo) * 100.0f;
-    
-    return ret;
+    // Return percentage: (now - 5m ago) / 5m ago * 100
+    return ((priceNow - price5mAgo) / price5mAgo) * 100.0f;
 }
 
-// ret_30m: prijs nu vs 30 minuten geleden (gebruik minuteAverages)
+// Calculate 30-minute return: price now vs 30 minutes ago (using minute averages)
 static float calculateReturn30Minutes()
 {
-    // We hebben minimaal 30 minuten nodig
-    uint8_t availableMinutes = 0;
-    if (!minuteArrayFilled)
-    {
-        availableMinutes = minuteIndex;
-    }
-    else
-    {
-        availableMinutes = MINUTES_FOR_30MIN_CALC;
-    }
-    
+    // Need at least 30 minutes of history
+    uint8_t availableMinutes = minuteArrayFilled ? MINUTES_FOR_30MIN_CALC : minuteIndex;
     if (availableMinutes < 30)
     {
-        // Debug: log wanneer we nog niet genoeg data hebben
         static uint32_t lastLogTime = 0;
         uint32_t now = millis();
-        if (now - lastLogTime > 60000) { // Log elke minuut
-            Serial_printf("[Ret30m] Wachten op data: minuteIndex=%u (nodig: 30, available=%u, arrayFilled=%d)\n", 
-                         minuteIndex, availableMinutes, minuteArrayFilled);
+        if (now - lastLogTime > 60000) {
+            Serial_printf("[Ret30m] Wachten op data: minuteIndex=%u (nodig: 30, available=%u)\n", 
+                         minuteIndex, availableMinutes);
             lastLogTime = now;
         }
         averagePrices[2] = 0.0f;
         return 0.0f;
     }
     
-    // Gebruik het laatste minuut-gemiddelde als priceNow (consistent met price30mAgo die ook een minuut-gemiddelde is)
-    // minuteIndex wijst naar de volgende schrijfpositie, dus laatste geschreven positie is minuteIndex - 1
+    // Get current price (last minute average)
     uint8_t lastMinuteIdx;
     if (!minuteArrayFilled)
     {
-        if (minuteIndex == 0) return 0.0f; // Nog geen minuut-gemiddelden
+        if (minuteIndex == 0) return 0.0f;
         lastMinuteIdx = minuteIndex - 1;
     }
     else
     {
-        // Array is rond, laatste geschreven positie is (minuteIndex - 1 + MINUTES_FOR_30MIN_CALC) % MINUTES_FOR_30MIN_CALC
-        lastMinuteIdx = (minuteIndex == 0) ? (MINUTES_FOR_30MIN_CALC - 1) : (minuteIndex - 1);
+        lastMinuteIdx = getLastWrittenIndex(minuteIndex, MINUTES_FOR_30MIN_CALC);
     }
     float priceNow = minuteAverages[lastMinuteIdx];
     
-    // Haal prijs van 30 minuten geleden op uit minuteAverages
+    // Get price 30 minutes ago
     uint8_t idx30mAgo;
     if (!minuteArrayFilled)
     {
@@ -2278,32 +2266,25 @@ static float calculateReturn30Minutes()
     }
     else
     {
-        // Array is rond, bereken index 30 minuten geleden
-        // minuteIndex wijst naar volgende schrijfpositie
-        // 30 minuten geleden: gebruik dezelfde logica als calculateReturn1Minute
-        // Correcte berekening: (minuteIndex - 30 + MINUTES_FOR_30MIN_CALC * 2) % MINUTES_FOR_30MIN_CALC
-        int32_t idx30mAgo_temp = ((int32_t)minuteIndex - 30 + MINUTES_FOR_30MIN_CALC * 2) % MINUTES_FOR_30MIN_CALC;
-        
-        // Extra veiligheidscheck
-        if (idx30mAgo_temp < 0 || idx30mAgo_temp >= MINUTES_FOR_30MIN_CALC) {
-            Serial_printf("[Ret30m] FATAL: idx30mAgo=%ld buiten bereik [0,%u], minuteIndex=%u\n", idx30mAgo_temp, MINUTES_FOR_30MIN_CALC, minuteIndex);
+        int32_t idx30mAgo_temp = getRingBufferIndexAgo(minuteIndex, 30, MINUTES_FOR_30MIN_CALC);
+        if (idx30mAgo_temp < 0) {
+            Serial_printf("[Ret30m] FATAL: idx30mAgo invalid, minuteIndex=%u\n", minuteIndex);
             return 0.0f;
         }
-        
         idx30mAgo = (uint8_t)idx30mAgo_temp;
     }
     
     float price30mAgo = minuteAverages[idx30mAgo];
     
-    if (price30mAgo <= 0.0f || priceNow <= 0.0f)
+    // Validate prices
+    if (!areValidPrices(priceNow, price30mAgo))
     {
-        Serial_printf("[Ret30m] ERROR: minuteIndex=%u (filled=%d), priceNow=%.2f, price30mAgo=%.2f (idx=%u) - invalid!\n",
-                     minuteIndex, minuteArrayFilled, priceNow, price30mAgo, idx30mAgo);
+        Serial_printf("[Ret30m] ERROR: priceNow=%.2f, price30mAgo=%.2f - invalid!\n", priceNow, price30mAgo);
         averagePrices[2] = 0.0f;
         return 0.0f;
     }
     
-    // Bereken gemiddelde van laatste 30 minuten voor weergave
+    // Calculate average of last 30 minutes for display
     float last30Sum = 0.0f;
     uint8_t last30Count = 0;
     for (uint8_t i = 0; i < 30; i++)
@@ -2316,14 +2297,11 @@ static float calculateReturn30Minutes()
         }
         else
         {
-            // Veilige modulo berekening
-            int32_t idx_temp = ((int32_t)minuteIndex - 1 - i + MINUTES_FOR_30MIN_CALC * 2) % MINUTES_FOR_30MIN_CALC;
-            if (idx_temp < 0 || idx_temp >= MINUTES_FOR_30MIN_CALC) {
-                break; // Buiten bereik, stop loop
-            }
+            int32_t idx_temp = getRingBufferIndexAgo(minuteIndex, i + 1, MINUTES_FOR_30MIN_CALC);
+            if (idx_temp < 0) break;
             idx = (uint8_t)idx_temp;
         }
-        if (minuteAverages[idx] > 0.0f)
+        if (isValidPrice(minuteAverages[idx]))
         {
             last30Sum += minuteAverages[idx];
             last30Count++;
@@ -2666,24 +2644,16 @@ static float calculate30MinutePct()
 }
 
 // ret_2h: prijs nu vs 120 minuten (2 uur) geleden (gebruik minuteAverages)
+// Calculate 2-hour return: price now vs 120 minutes ago
 static float calculateReturn2Hours()
 {
-    uint8_t availableMinutes = 0;
-    if (!minuteArrayFilled)
-    {
-        availableMinutes = minuteIndex;
-    }
-    else
-    {
-        availableMinutes = MINUTES_FOR_30MIN_CALC;  // 120 minuten
-    }
-    
+    uint8_t availableMinutes = minuteArrayFilled ? MINUTES_FOR_30MIN_CALC : minuteIndex;
     if (availableMinutes < 120)
     {
         return 0.0f;
     }
     
-    // Gebruik het laatste minuut-gemiddelde als priceNow
+    // Get current price (last minute average)
     uint8_t lastMinuteIdx;
     if (!minuteArrayFilled)
     {
@@ -2692,11 +2662,11 @@ static float calculateReturn2Hours()
     }
     else
     {
-        lastMinuteIdx = (minuteIndex == 0) ? (MINUTES_FOR_30MIN_CALC - 1) : (minuteIndex - 1);
+        lastMinuteIdx = getLastWrittenIndex(minuteIndex, MINUTES_FOR_30MIN_CALC);
     }
     float priceNow = minuteAverages[lastMinuteIdx];
     
-    // Prijs 120 minuten geleden
+    // Get price 120 minutes ago
     uint8_t idx120mAgo;
     if (!minuteArrayFilled)
     {
@@ -2705,22 +2675,21 @@ static float calculateReturn2Hours()
     }
     else
     {
-        int32_t idx120mAgo_temp = ((int32_t)minuteIndex - 120 + MINUTES_FOR_30MIN_CALC * 2) % MINUTES_FOR_30MIN_CALC;
-        if (idx120mAgo_temp < 0 || idx120mAgo_temp >= MINUTES_FOR_30MIN_CALC) {
-            return 0.0f;
-        }
+        int32_t idx120mAgo_temp = getRingBufferIndexAgo(minuteIndex, 120, MINUTES_FOR_30MIN_CALC);
+        if (idx120mAgo_temp < 0) return 0.0f;
         idx120mAgo = (uint8_t)idx120mAgo_temp;
     }
     
     float price120mAgo = minuteAverages[idx120mAgo];
     
+    // Validate prices
     if (price120mAgo <= 0.0f || priceNow <= 0.0f)
     {
         return 0.0f;
     }
     
-    float ret = ((priceNow - price120mAgo) / price120mAgo) * 100.0f;
-    return ret;
+    // Return percentage: (now - 120m ago) / 120m ago * 100
+    return ((priceNow - price120mAgo) / price120mAgo) * 100.0f;
 }
 
 // ============================================================================
@@ -2841,7 +2810,7 @@ static void findMinMaxInLast30Minutes(float &minVal, float &maxVal)
     for (uint8_t i = 1; i <= count; i++)
     {
         uint8_t idx = (minuteIndex - i + MINUTES_FOR_30MIN_CALC) % MINUTES_FOR_30MIN_CALC;
-        if (minuteAverages[idx] > 0.0f)
+        if (isValidPrice(minuteAverages[idx]))
         {
             if (!firstValid)
             {
@@ -2862,8 +2831,8 @@ static void findMinMaxInLast30Minutes(float &minVal, float &maxVal)
 // Geoptimaliseerd: bounds checking toegevoegd voor robuustheid
 static void addPriceToSecondArray(float price)
 {
-    // Valideer input
-    if (isnan(price) || isinf(price) || price <= 0.0f)
+    // Validate input
+    if (!isValidPrice(price))
     {
         Serial_printf("[Array] WARN: Ongeldige prijs in addPriceToSecondArray: %.2f\n", price);
         return;
@@ -3095,37 +3064,57 @@ void updateUI()
     // Data wordt al beschermd door mutex in uiTask
     int32_t p = (int32_t)lroundf(prices[symbolIndexToChart] * 100.0f);
     
-    // Voeg het nieuwe punt alleen toe als er nieuwe data is
-    if (newPriceDataAvailable && prices[symbolIndexToChart] > 0.0f) {
+    // Bepaal of er nieuwe data is op basis van timestamp (betrouwbaarder dan flag)
+    // Data is "nieuw" als de laatste API call minder dan 2.5 seconden geleden was
+    // (API interval is 1500ms, dus 2.5s geeft wat marge voor timing variaties)
+    unsigned long currentTime = millis();
+    bool hasNewPriceData = false;
+    if (lastApiMs > 0) {
+        unsigned long timeSinceLastApi = (currentTime >= lastApiMs) ? (currentTime - lastApiMs) : (ULONG_MAX - lastApiMs + currentTime);
+        hasNewPriceData = (timeSinceLastApi < 2500);
+    }
+    
+    // Voeg altijd een punt toe aan de grafiek als er geldige data is
+    // Dit voorkomt dat de grafiek blijft hangen als de API call te laat is
+    // of als de mutex niet beschikbaar was tijdens de laatste API call
+    if (prices[symbolIndexToChart] > 0.0f) {
         lv_chart_set_next_value(chart, dataSeries, p);
+        // Forceer refresh van de chart om te zorgen dat nieuwe punten worden getekend
+        lv_obj_invalidate(chart);
+        // Reset flag na gebruik (ook als deze niet gezet was, maakt niet uit)
         newPriceDataAvailable = false;
     }
 
     // Update chart range
     updateChartRange(p);
     
-    // Update chart title
+    // Update chart title (CYD displays)
     // Geoptimaliseerd: gebruik char array i.p.v. String om geheugen te besparen
     if (chartTitle != nullptr) {
-        static char deviceIdBuffer[16] = {0}; // Static buffer om geheugenfragmentatie te voorkomen
+        char deviceIdBuffer[16] = {0}; // Buffer om device ID te extraheren
         // Extract device ID direct uit topic zonder String gebruik
         const char* alertPos = strstr(ntfyTopic, "-alert");
         if (alertPos != nullptr) {
             size_t len = alertPos - ntfyTopic;
             if (len > 0 && len < sizeof(deviceIdBuffer)) {
-                strncpy(deviceIdBuffer, ntfyTopic, len);
-                deviceIdBuffer[len] = '\0';
+                safeStrncpy(deviceIdBuffer, ntfyTopic, len + 1);
             } else {
-                strncpy(deviceIdBuffer, ntfyTopic, sizeof(deviceIdBuffer) - 1);
-                deviceIdBuffer[sizeof(deviceIdBuffer) - 1] = '\0';
+                safeStrncpy(deviceIdBuffer, ntfyTopic, sizeof(deviceIdBuffer));
             }
         } else {
-            // Fallback: gebruik eerste deel van topic
-            strncpy(deviceIdBuffer, ntfyTopic, sizeof(deviceIdBuffer) - 1);
-            deviceIdBuffer[sizeof(deviceIdBuffer) - 1] = '\0';
+            // Fallback: gebruik eerste deel van topic (max 15 karakters)
+            safeStrncpy(deviceIdBuffer, ntfyTopic, sizeof(deviceIdBuffer));
         }
         lv_label_set_text(chartTitle, deviceIdBuffer);
     }
+    
+    // Update chart begin letters label (TTGO displays)
+    #ifdef PLATFORM_TTGO
+    if (chartBeginLettersLabel != nullptr) {
+        String deviceId = getDeviceIdFromTopic(ntfyTopic);
+        lv_label_set_text(chartBeginLettersLabel, deviceId.c_str());
+    }
+    #endif
     
     // Update datum/tijd labels
     updateDateTimeLabels();
@@ -3142,8 +3131,8 @@ void updateUI()
         
         if (i == 0)
         {
-            // BTCEUR card
-            updateBTCEURCard();
+            // BTCEUR card - geef flag door voor kleur update
+            updateBTCEURCard(hasNewPriceData);
             pct = 0.0f; // BTCEUR heeft geen percentage voor kleur
         }
         else
@@ -3343,13 +3332,24 @@ static void updateVolatilityLabel()
 
 
 // Helper functie om BTCEUR card bij te werken
-static void updateBTCEURCard()
+static void updateBTCEURCard(bool hasNewData)
 {
     if (priceTitle[0] != nullptr) {
         lv_label_set_text(priceTitle[0], "BTCEUR");
     }
     
     lv_label_set_text_fmt(priceLbl[0], "%.2f", prices[0]);
+    
+    // Stel tekstkleur in op basis van nieuwe data: blauw bij nieuwe data, grijs bij oude data
+    if (priceLbl[0] != nullptr) {
+        if (hasNewData && prices[0] > 0.0f) {
+            // Nieuwe data: blauw
+            lv_obj_set_style_text_color(priceLbl[0], lv_palette_main(LV_PALETTE_BLUE), 0);
+        } else {
+            // Oude data: grijs
+            lv_obj_set_style_text_color(priceLbl[0], lv_palette_main(LV_PALETTE_GREY), 0);
+        }
+    }
     
     // Bereken dynamische anchor-waarden op basis van trend voor UI weergave
     AnchorConfigEffective effAnchorUI;
@@ -3559,8 +3559,7 @@ static void updateFooter()
         if (WiFi.status() == WL_CONNECTED) {
             formatIPAddress(WiFi.localIP(), ipStr, sizeof(ipStr));
         } else {
-            strncpy(ipStr, "--.--.--.--", sizeof(ipStr) - 1);
-            ipStr[sizeof(ipStr) - 1] = '\0';
+            safeStrncpy(ipStr, "--.--.--.--", sizeof(ipStr));
         }
         
         lv_label_set_text(lblFooterLine2, ipStr);

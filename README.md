@@ -43,6 +43,7 @@ A unified Crypto Monitor for different ESP32 display platforms: TTGO T-Display, 
 - WiFiManager library
 - PubSubClient3 library
 - XPT2046_Touchscreen library (only for CYD variants)
+- **atomic.h** (included in project) - Wrapper for stdatomic.h for thread-safe operations
 
 ## Installation
 
@@ -324,6 +325,31 @@ Determine when the market is considered calm, medium or volatile (defaults optim
 - **High Threshold**: Above this value the market is "VOLATILE" (default: `0.15%`)
   - *Optimized*: Good detection during peak activity
 - Between these values the market is "MEDIUM"
+
+### Advanced Configuration (Code Level)
+
+For developers who want to modify the code, there are several configuration options available in `UNIFIED-LVGL9-Crypto_Monitor.ino`:
+
+#### Debug Configuration
+- **`DEBUG_BUTTON_ONLY`** (line ~38): Controls Serial output
+  - Set to `1` (default): Only button actions are logged to Serial
+  - Set to `0`: All debug messages are logged (useful for troubleshooting)
+  - **Note**: Reducing Serial output improves performance and reduces memory usage
+
+#### Atomic Operations
+- **`atomic.h`**: Included wrapper for thread-safe operations
+  - Provides atomic operations for ESP32 dual-core systems
+  - Prevents race conditions when accessing shared variables between cores/tasks
+  - Automatically included in the project
+
+#### Other Configuration Options
+- **`SCREEN_BRIGHTNESS`**: Display brightness (0-255, default: 255)
+- **`SYMBOL_COUNT`**: Number of symbols to track (default: 3)
+- **`HTTP_TIMEOUT_MS`**: HTTP request timeout (default: 3000ms)
+- **`UPDATE_API_INTERVAL`**: API update frequency (default: 1500ms)
+- **`UPDATE_UI_INTERVAL`**: UI update frequency (default: 1100ms)
+
+**Note**: After modifying these settings, you need to recompile and upload the code to the ESP32.
 
 ## Display Overview
 
@@ -632,6 +658,7 @@ These topics can be read (current value) and written (to change):
 - `{prefix}/config/trendThreshold` - Trend threshold % (float)
 - `{prefix}/config/volatilityLowThreshold` - Volatility low threshold % (float)
 - `{prefix}/config/volatilityHighThreshold` - Volatility high threshold % (float)
+- `{prefix}/config/language` - Language setting (string: "0" = Nederlands, "1" = English)
 
 **To change a setting**: Publish the new value to `{prefix}/config/{setting}/set`
 
@@ -685,6 +712,9 @@ After detection you get the following entities:
 **Text (Read/Write)**:
 - `text.{device_id}_binanceSymbol` - Binance symbol
 - `text.{device_id}_ntfyTopic` - NTFY topic
+
+**Select (Read/Write)**:
+- `select.{device_id}_language` - Language selection (0 = Nederlands, 1 = English)
 
 **Button**:
 - `button.{device_id}_reset` - Reset anchor price (click to set anchor)
@@ -757,6 +787,21 @@ MQTT is optional and can also be used with other systems such as:
 If you don't use MQTT, you can leave the MQTT settings empty in the web interface.
 
 ## Version History
+
+### Version 3.46
+- **Current Version**: Latest stable release
+- **MQTT Language Support**: Language setting (Nederlands/English) is now configurable via MQTT
+  - New MQTT topic: `{prefix}/config/language/set` (accepts "0" for Nederlands or "1" for English)
+  - Home Assistant auto-discovery: `select.{device_id}_language` entity
+  - Language changes are saved to Preferences and persist after reboot
+
+### Version 3.45
+- **Atomic Operations Support**: Added `atomic.h` wrapper for thread-safe operations on ESP32 dual-core
+- **Debug Configuration**: Added `DEBUG_BUTTON_ONLY` option to reduce Serial output (only button actions logged when enabled)
+- **Code Improvements**: Enhanced stability and performance optimizations
+
+### Version 3.44
+- (Version information to be documented)
 
 ### Version 3.43
 - **Optimized Default Thresholds**: All default thresholds and cooldowns optimized based on measurements
