@@ -31,8 +31,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 47
-#define VERSION_STRING "3.47"
+#define VERSION_MINOR 48
+#define VERSION_STRING "3.48"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -66,7 +66,7 @@
 #define POINTS_TO_CHART 60      // Number of points on the chart (60 = 1 minute of data)
 
 // --- Timing Configuration ---
-#define UPDATE_UI_INTERVAL 1100   // UI update in ms (iets verschoven van API voor minder conflicten)
+#define UPDATE_UI_INTERVAL 1000   // UI update in ms (elke seconde)
 #define UPDATE_API_INTERVAL 1500   // API update in ms (verhoogd naar 1500ms voor betere stabiliteit bij langzame netwerken)
 #define UPDATE_WEB_INTERVAL 5000  // Web interface update in ms (elke 5 seconden)
 #define RECONNECT_INTERVAL 60000  // WiFi reconnect interval (60 seconden tussen reconnect pogingen)
@@ -236,7 +236,7 @@ static uint32_t lastApiMs = 0; // Time of last api call
 static float cpuUsagePercent = 0.0f;
 static unsigned long loopTimeSum = 0;
 static uint16_t loopCount = 0;
-static const unsigned long LOOP_PERIOD_MS = UPDATE_UI_INTERVAL; // 1100ms
+static const unsigned long LOOP_PERIOD_MS = UPDATE_UI_INTERVAL; // 1000ms
 
 // Price history for calculating returns and moving averages
 // Array van 60 posities voor laatste 60 seconden (1 minuut)
