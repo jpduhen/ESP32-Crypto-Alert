@@ -788,6 +788,16 @@ If you don't use MQTT, you can leave the MQTT settings empty in the web interfac
 
 ## Version History
 
+### Version 3.50
+- **Code Quality & Reliability Improvements (Sprint 1)**:
+  - **Input Validation**: Added `safeAtof()` helper function with NaN/Inf validation for all float conversions (20 locations updated)
+  - **Range Checks**: Added range validation for all numeric MQTT and web inputs (spike/move thresholds, cooldowns)
+  - **Memory Optimization**: Refactored `httpGET()` and `parsePrice()` to use char arrays instead of String objects, reducing memory fragmentation
+  - **Code Simplification**: Refactored MQTT callback from nested if-else chain to lookup table structure (~140 lines → ~80 lines, much more readable)
+  - **HTTP Retry Logic**: Added automatic retry mechanism (max 2 retries) for temporary HTTP failures (timeouts, connection issues)
+  - Improved error handling and logging throughout
+  - Better reliability and robustness for network operations
+
 ### Version 3.49
 - **Current Version**: Latest stable release
 - **Fixed 1m and 5m Return Calculations**: Fixed issue where 1m and 5m returns stayed at 0.00%

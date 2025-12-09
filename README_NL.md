@@ -744,6 +744,16 @@ Als je MQTT niet gebruikt, kun je de MQTT instellingen leeg laten in de web inte
 
 ## Versie Geschiedenis
 
+### Versie 3.50
+- **Code Kwaliteit & Betrouwbaarheid Verbeteringen (Sprint 1)**:
+  - **Input Validatie**: Toegevoegd `safeAtof()` helper functie met NaN/Inf validatie voor alle float conversies (20 locaties geüpdatet)
+  - **Range Checks**: Toegevoegd range validatie voor alle numerieke MQTT en web inputs (spike/move thresholds, cooldowns)
+  - **Memory Optimalisatie**: Refactored `httpGET()` en `parsePrice()` om char arrays te gebruiken i.p.v. String objecten, vermindert geheugenfragmentatie
+  - **Code Vereenvoudiging**: Refactored MQTT callback van geneste if-else chain naar lookup table structuur (~140 regels → ~80 regels, veel leesbaarder)
+  - **HTTP Retry Logic**: Toegevoegd automatisch retry mechanisme (max 2 retries) voor tijdelijke HTTP failures (timeouts, connectie problemen)
+  - Verbeterde error handling en logging door de hele codebase
+  - Betere betrouwbaarheid en robuustheid voor network operaties
+
 ### Versie 3.49
 - **Huidige Versie**: Laatste stabiele release
 - **1m en 5m Return Berekeningen Opgelost**: Probleem opgelost waarbij 1m en 5m returns op 0.00% bleven

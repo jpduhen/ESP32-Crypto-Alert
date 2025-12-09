@@ -31,8 +31,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 49
-#define VERSION_STRING "3.49"
+#define VERSION_MINOR 57
+#define VERSION_STRING "3.57"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -71,6 +71,13 @@
 #define UPDATE_WEB_INTERVAL 5000  // Web interface update in ms (elke 5 seconden)
 #define RECONNECT_INTERVAL 60000  // WiFi reconnect interval (60 seconden tussen reconnect pogingen)
 #define MQTT_RECONNECT_INTERVAL 5000  // MQTT reconnect interval (5 seconden)
+
+// --- Delay Constants (Magic Numbers Elimination) ---
+#define DELAY_WIFI_CONNECT_LOOP_MS 100    // Delay in WiFi connect loops
+#define DELAY_LVGL_RENDER_MS 10           // Delay for LVGL rendering loops
+#define DELAY_RECONNECT_MS 500           // Delay for reconnection attempts
+#define DELAY_DISPLAY_UPDATE_MS 50       // Delay for display updates
+#define DELAY_DEBUG_RECONNECT_MS 2000     // Delay for debugging reconnection
 
 // --- Anchor Price Configuration ---
 #define ANCHOR_TAKE_PROFIT_DEFAULT 5.0f    // Take profit: +5% boven anchor price
@@ -277,22 +284,63 @@ static float firstMinuteAverage = 0.0f; // Eerste minuut gemiddelde prijs als ba
 // DEFAULT_LANGUAGE wordt gedefinieerd in platform_config.h (fallback als er nog geen waarde in Preferences staat)
 static uint8_t language = DEFAULT_LANGUAGE;  // 0 = Nederlands, 1 = English
 
+// Settings structs voor betere organisatie
+struct AlertThresholds {
+    float spike1m;
+    float spike5m;
+    float move30m;
+    float move5m;
+    float move5mAlert;
+    float threshold1MinUp;
+    float threshold1MinDown;
+    float threshold30MinUp;
+    float threshold30MinDown;
+};
+
+struct NotificationCooldowns {
+    unsigned long cooldown1MinMs;
+    unsigned long cooldown30MinMs;
+    unsigned long cooldown5MinMs;
+};
+
 // Instelbare grenswaarden (worden geladen uit Preferences)
 // Note: ntfyTopic wordt geïnitialiseerd in loadSettings() met unieke ESP32 ID
 static char ntfyTopic[64] = "";  // NTFY topic (max 63 karakters)
 static char binanceSymbol[16] = BINANCE_SYMBOL_DEFAULT;  // Binance symbool (max 15 karakters, bijv. BTCEUR, BTCUSDT)
-static float threshold1MinUp = THRESHOLD_1MIN_UP_DEFAULT;
-static float threshold1MinDown = THRESHOLD_1MIN_DOWN_DEFAULT;
-static float threshold30MinUp = THRESHOLD_30MIN_UP_DEFAULT;
-static float threshold30MinDown = THRESHOLD_30MIN_DOWN_DEFAULT;
-static float spike1mThreshold = SPIKE_1M_THRESHOLD_DEFAULT;
-static float spike5mThreshold = SPIKE_5M_THRESHOLD_DEFAULT;
-static float move30mThreshold = MOVE_30M_THRESHOLD_DEFAULT;
-static float move5mThreshold = MOVE_5M_THRESHOLD_DEFAULT;
-static float move5mAlertThreshold = MOVE_5M_ALERT_THRESHOLD_DEFAULT;  // 5m move alert threshold
-static unsigned long notificationCooldown1MinMs = NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT;
-static unsigned long notificationCooldown30MinMs = NOTIFICATION_COOLDOWN_30MIN_MS_DEFAULT;
-static unsigned long notificationCooldown5MinMs = NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT;
+
+// Alert thresholds in struct voor betere organisatie
+static AlertThresholds alertThresholds = {
+    .spike1m = SPIKE_1M_THRESHOLD_DEFAULT,
+    .spike5m = SPIKE_5M_THRESHOLD_DEFAULT,
+    .move30m = MOVE_30M_THRESHOLD_DEFAULT,
+    .move5m = MOVE_5M_THRESHOLD_DEFAULT,
+    .move5mAlert = MOVE_5M_ALERT_THRESHOLD_DEFAULT,
+    .threshold1MinUp = THRESHOLD_1MIN_UP_DEFAULT,
+    .threshold1MinDown = THRESHOLD_1MIN_DOWN_DEFAULT,
+    .threshold30MinUp = THRESHOLD_30MIN_UP_DEFAULT,
+    .threshold30MinDown = THRESHOLD_30MIN_DOWN_DEFAULT
+};
+
+// Notification cooldowns in struct voor betere organisatie
+static NotificationCooldowns notificationCooldowns = {
+    .cooldown1MinMs = NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT,
+    .cooldown30MinMs = NOTIFICATION_COOLDOWN_30MIN_MS_DEFAULT,
+    .cooldown5MinMs = NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT
+};
+
+// Backward compatibility: legacy variabelen (verwijzen naar struct)
+#define spike1mThreshold alertThresholds.spike1m
+#define spike5mThreshold alertThresholds.spike5m
+#define move30mThreshold alertThresholds.move30m
+#define move5mThreshold alertThresholds.move5m
+#define move5mAlertThreshold alertThresholds.move5mAlert
+#define threshold1MinUp alertThresholds.threshold1MinUp
+#define threshold1MinDown alertThresholds.threshold1MinDown
+#define threshold30MinUp alertThresholds.threshold30MinUp
+#define threshold30MinDown alertThresholds.threshold30MinDown
+#define notificationCooldown1MinMs notificationCooldowns.cooldown1MinMs
+#define notificationCooldown30MinMs notificationCooldowns.cooldown30MinMs
+#define notificationCooldown5MinMs notificationCooldowns.cooldown5MinMs
 
 static unsigned long lastNotification1Min = 0;
 static unsigned long lastNotification30Min = 0;
@@ -321,73 +369,157 @@ PubSubClient mqttClient(espClient);
 bool mqttConnected = false;
 unsigned long lastMqttReconnectAttempt = 0;
 
+// MQTT Message Queue - voorkomt message loss bij disconnect
+#define MQTT_QUEUE_SIZE 10  // Max aantal berichten in queue
+struct MqttMessage {
+    char topic[128];
+    char payload[128];
+    bool retained;
+    bool valid;
+};
+
+static MqttMessage mqttQueue[MQTT_QUEUE_SIZE];
+static uint8_t mqttQueueHead = 0;
+static uint8_t mqttQueueTail = 0;
+static uint8_t mqttQueueCount = 0;
+
 // WiFi reconnect controle
-// Geoptimaliseerd: betere reconnect logica met retry counter
+// Geoptimaliseerd: betere reconnect logica met retry counter en exponential backoff
 static bool wifiReconnectEnabled = false;
 static unsigned long lastReconnectAttempt = 0;
 static bool wifiInitialized = false;
 static uint8_t reconnectAttemptCount = 0;
-static const uint8_t MAX_RECONNECT_ATTEMPTS = 5; // Max aantal reconnect pogingen voordat we wachten
+static const uint8_t MAX_RECONNECT_ATTEMPTS = 5; // Max aantal reconnect pogingen voordat we exponential backoff starten
+
+// MQTT reconnect controle met exponential backoff
+static uint8_t mqttReconnectAttemptCount = 0;
+static const uint8_t MAX_MQTT_RECONNECT_ATTEMPTS = 3; // Max aantal reconnect pogingen voordat we exponential backoff starten
 
 
 // ============================================================================
 // HTTP and API Functions
 // ============================================================================
 
-// Simple HTTP GET – returns body as String or empty on fail
-// Geoptimaliseerd: betere error handling, timeouts en resource cleanup
-static String httpGET(const char *url, uint32_t timeoutMs = HTTP_TIMEOUT_MS)
+// Simple HTTP GET – returns body in buffer, returns true on success
+// Geoptimaliseerd: gebruik char array i.p.v. String om geheugenfragmentatie te voorkomen
+// bufferSize moet groot genoeg zijn voor de response (minimaal 256 bytes aanbevolen)
+// Retry logic: probeer opnieuw bij tijdelijke fouten (timeout, connection refused/lost)
+static bool httpGET(const char *url, char *buffer, size_t bufferSize, uint32_t timeoutMs = HTTP_TIMEOUT_MS)
 {
-    HTTPClient http;
-    http.setTimeout(timeoutMs);
-    http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS); // Sneller falen bij connect problemen
-    http.setReuse(false); // Voorkom connection reuse problemen
-    
-    unsigned long requestStart = millis();
-    
-    if (!http.begin(url))
-    {
-        http.end();
-        Serial_printf("[HTTP] http.begin() gefaald voor: %s\n", url);
-        return String();
+    if (buffer == nullptr || bufferSize == 0) {
+        Serial_printf("[HTTP] Invalid buffer parameters\n");
+        return false;
     }
     
-    int code = http.GET();
-    unsigned long requestTime = millis() - requestStart;
-    String payload;
+    buffer[0] = '\0'; // Initialize buffer
     
-    if (code == 200)
-    {
-        payload = http.getString();
-        // Log alleen bij langzame calls (> 1500ms) voor debugging
-        if (requestTime > 1500) {
-            Serial_printf("[HTTP] Langzame response: %lu ms\n", requestTime);
+    const uint8_t MAX_RETRIES = 2; // Max 2 retries (3 pogingen totaal)
+    const uint32_t RETRY_DELAY_MS = 500; // 500ms delay tussen retries
+    
+    for (uint8_t attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        HTTPClient http;
+        http.setTimeout(timeoutMs);
+        http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS); // Sneller falen bij connect problemen
+        http.setReuse(false); // Voorkom connection reuse problemen
+        
+        unsigned long requestStart = millis();
+        
+        if (!http.begin(url))
+        {
+            http.end();
+            if (attempt == MAX_RETRIES) {
+                Serial_printf("[HTTP] http.begin() gefaald na %d pogingen voor: %s\n", attempt + 1, url);
+                return false;
+            }
+            // Retry bij begin failure
+            delay(RETRY_DELAY_MS);
+            continue;
+        }
+        
+        int code = http.GET();
+        unsigned long requestTime = millis() - requestStart;
+        
+        if (code == 200)
+        {
+            // Get response size first
+            int contentLength = http.getSize();
+            if (contentLength > 0 && (size_t)contentLength >= bufferSize) {
+                Serial_printf("[HTTP] Response te groot: %d bytes (buffer: %zu bytes)\n", contentLength, bufferSize);
+                http.end();
+                return false;
+            }
+            
+            // Read response into buffer
+            WiFiClient *stream = http.getStreamPtr();
+            if (stream != nullptr) {
+                size_t bytesRead = 0;
+                while (stream->available() && bytesRead < bufferSize - 1) {
+                    int c = stream->read();
+                    if (c < 0) break;
+                    buffer[bytesRead++] = (char)c;
+                }
+                buffer[bytesRead] = '\0';
+                
+                // Log alleen bij langzame calls (> 1500ms) voor debugging
+                if (requestTime > 1500) {
+                    Serial_printf("[HTTP] Langzame response: %lu ms (poging %d)\n", requestTime, attempt + 1);
+                }
+            } else {
+                // Fallback: gebruik getString() als stream niet beschikbaar is
+                String payload = http.getString();
+                size_t len = payload.length();
+                if (len >= bufferSize) {
+                    Serial_printf("[HTTP] Response te groot: %zu bytes (buffer: %zu bytes)\n", len, bufferSize);
+                    http.end();
+                    return false;
+                }
+                strncpy(buffer, payload.c_str(), bufferSize - 1);
+                buffer[bufferSize - 1] = '\0';
+            }
+            
+            http.end();
+            if (attempt > 0) {
+                Serial_printf("[HTTP] Succes na retry (poging %d/%d)\n", attempt + 1, MAX_RETRIES + 1);
+            }
+            return true;
+        }
+        else
+        {
+            // Check of dit een retry-waardige fout is
+            bool shouldRetry = false;
+            if (code == HTTPC_ERROR_CONNECTION_REFUSED || code == HTTPC_ERROR_CONNECTION_LOST) {
+                shouldRetry = true;
+                Serial_printf("[HTTP] Connectie probleem: code=%d, tijd=%lu ms (poging %d/%d)\n", code, requestTime, attempt + 1, MAX_RETRIES + 1);
+            } else if (code == HTTPC_ERROR_READ_TIMEOUT) {
+                shouldRetry = true;
+                Serial_printf("[HTTP] Read timeout na %lu ms (poging %d/%d)\n", requestTime, attempt + 1, MAX_RETRIES + 1);
+            } else if (code < 0) {
+                // Andere HTTPClient error codes - retry alleen bij network errors
+                shouldRetry = (code == HTTPC_ERROR_CONNECTION_REFUSED || code == HTTPC_ERROR_CONNECTION_LOST || code == HTTPC_ERROR_READ_TIMEOUT);
+                if (!shouldRetry) {
+                    Serial_printf("[HTTP] Error code=%d, tijd=%lu ms (geen retry)\n", code, requestTime);
+                } else {
+                    Serial_printf("[HTTP] Error code=%d, tijd=%lu ms (poging %d/%d)\n", code, requestTime, attempt + 1, MAX_RETRIES + 1);
+                }
+            } else {
+                // HTTP error codes (4xx, 5xx) - geen retry
+                Serial_printf("[HTTP] GET gefaald: code=%d, tijd=%lu ms (geen retry)\n", code, requestTime);
+            }
+            
+            http.end();
+            
+            // Retry bij tijdelijke fouten
+            if (shouldRetry && attempt < MAX_RETRIES) {
+                delay(RETRY_DELAY_MS);
+                continue;
+            }
+            
+            // Geen retry meer mogelijk of niet-retry-waardige fout
+            return false;
         }
     }
-    else
-    {
-        // Log alleen bij echte fouten (niet bij 200)
-        if (code > 0)
-        {
-            Serial_printf("[HTTP] GET gefaald: code=%d, tijd=%lu ms\n", code, requestTime);
-        }
-        else if (code == HTTPC_ERROR_CONNECTION_REFUSED || code == HTTPC_ERROR_CONNECTION_LOST)
-        {
-            Serial_printf("[HTTP] Connectie probleem: code=%d, tijd=%lu ms\n", code, requestTime);
-        }
-        else if (code == HTTPC_ERROR_READ_TIMEOUT)
-        {
-            Serial_printf("[HTTP] Read timeout na %lu ms\n", requestTime);
-        }
-        else if (code < 0)
-        {
-            // Andere HTTPClient error codes (negatieve waarden zijn error codes)
-            Serial_printf("[HTTP] Error code=%d, tijd=%lu ms\n", code, requestTime);
-        }
-    }
     
-    http.end();
-    return payload;
+    return false;
 }
 
 // Send notification via Ntfy.sh
@@ -517,12 +649,98 @@ static bool areValidPrices(float price1, float price2)
     return isValidPrice(price1) && isValidPrice(price2);
 }
 
+// Helper: Safe atof() with NaN/Inf validation
+// Returns true if conversion successful and value is valid, false otherwise
+// Output parameter 'out' is only set if conversion is successful
+static bool safeAtof(const char* str, float& out)
+{
+    if (str == nullptr || strlen(str) == 0) {
+        return false;
+    }
+    
+    float val = atof(str);
+    
+    // Check for NaN or Inf
+    if (isnan(val) || isinf(val)) {
+        Serial_printf("[Validation] Invalid float value (NaN/Inf): %s\n", str);
+        return false;
+    }
+    
+    out = val;
+    return true;
+}
+
 // Helper: Safe string copy with guaranteed null termination
 static void safeStrncpy(char *dest, const char *src, size_t destSize)
 {
     if (destSize == 0) return;
     strncpy(dest, src, destSize - 1);
     dest[destSize - 1] = '\0';
+}
+
+// Deadlock detection: Track mutex hold times
+static unsigned long mutexTakeTime = 0;
+static const char* mutexHolderContext = nullptr;
+static const unsigned long MAX_MUTEX_HOLD_TIME_MS = 2000; // Max 2 seconden hold time (deadlock threshold)
+
+// Helper: Safe mutex take with deadlock detection
+// Returns true on success, false on failure
+static bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const char* context)
+{
+    if (mutex == nullptr) {
+        Serial_printf("[Mutex] ERROR: Attempt to take nullptr mutex in %s\n", context);
+        return false;
+    }
+    
+    // Check if mutex is already held for too long (potential deadlock)
+    if (mutexHolderContext != nullptr && mutexTakeTime > 0) {
+        unsigned long holdTime = millis() - mutexTakeTime;
+        if (holdTime > MAX_MUTEX_HOLD_TIME_MS) {
+            Serial_printf("[Mutex] WARNING: Potential deadlock detected! Mutex held for %lu ms by %s\n", 
+                         holdTime, mutexHolderContext);
+        }
+    }
+    
+    BaseType_t result = xSemaphoreTake(mutex, timeout);
+    if (result == pdTRUE) {
+        mutexTakeTime = millis();
+        mutexHolderContext = context;
+        return true;
+    }
+    
+    return false;
+}
+
+// Helper: Safe mutex give with error handling and deadlock detection
+// Returns true on success, false on failure
+static bool safeMutexGive(SemaphoreHandle_t mutex, const char* context)
+{
+    if (mutex == nullptr) {
+        Serial_printf("[Mutex] ERROR: Attempt to give nullptr mutex in %s\n", context);
+        return false;
+    }
+    
+    // Check if mutex was held for too long (potential deadlock)
+    if (mutexTakeTime > 0) {
+        unsigned long holdTime = millis() - mutexTakeTime;
+        if (holdTime > MAX_MUTEX_HOLD_TIME_MS) {
+            Serial_printf("[Mutex] WARNING: Mutex held for %lu ms by %s (potential deadlock)\n", 
+                         holdTime, mutexHolderContext ? mutexHolderContext : "unknown");
+        }
+    }
+    
+    BaseType_t result = xSemaphoreGive(mutex);
+    if (result != pdTRUE) {
+        Serial_printf("[Mutex] ERROR: xSemaphoreGive failed in %s (result=%d)\n", context, result);
+        // Note: This could indicate a mutex leak or double-release
+        return false;
+    }
+    
+    // Reset tracking
+    mutexTakeTime = 0;
+    mutexHolderContext = nullptr;
+    
+    return true;
 }
 
 // Forward declarations
@@ -700,9 +918,17 @@ void publishMqttAnchorEvent(float anchor_price, const char* event_type) {
     // Geoptimaliseerd: gebruik char array i.p.v. String
     char topic[128];
     snprintf(topic, sizeof(topic), "%s/anchor/event", MQTT_TOPIC_PREFIX);
-    mqttClient.publish(topic, payload, false);
-    Serial_printf("[MQTT] Anchor event gepubliceerd: %s (prijs: %.2f, event: %s)\n", 
-                 timeStr, anchor_price, event_type);
+    
+    // Try direct publish, queue if failed
+    if (mqttConnected && mqttClient.publish(topic, payload, false)) {
+        Serial_printf("[MQTT] Anchor event gepubliceerd: %s (prijs: %.2f, event: %s)\n", 
+                     timeStr, anchor_price, event_type);
+    } else {
+        // Queue message if not connected or publish failed
+        enqueueMqttMessage(topic, payload, false);
+        Serial_printf("[MQTT] Anchor event in queue: %s (prijs: %.2f, event: %s)\n", 
+                     timeStr, anchor_price, event_type);
+    }
 }
 
 // Check anchor take profit / max loss alerts
@@ -764,6 +990,79 @@ static void checkAnchorAlerts()
 // ret_1m: percentage verandering laatste 1 minuut
 // ret_5m: percentage verandering laatste 5 minuten (voor filtering)
 // ret_30m: percentage verandering laatste 30 minuten
+// Helper: Check if cooldown has passed and hourly limit is OK
+static bool checkAlertConditions(unsigned long now, unsigned long& lastNotification, unsigned long cooldownMs, 
+                                  uint8_t& alertsThisHour, uint8_t maxAlertsPerHour, const char* alertType)
+{
+    bool cooldownPassed = (lastNotification == 0 || (now - lastNotification >= cooldownMs));
+    bool hourlyLimitOk = (alertsThisHour < maxAlertsPerHour);
+    
+    if (!hourlyLimitOk) {
+        Serial_printf("[Notify] %s gedetecteerd maar max alerts per uur bereikt (%d/%d)\n", 
+                     alertType, alertsThisHour, maxAlertsPerHour);
+    }
+    
+    return cooldownPassed && hourlyLimitOk;
+}
+
+// Helper: Determine color tag based on return value and threshold
+static const char* determineColorTag(float ret, float threshold, float strongThreshold)
+{
+    float absRet = fabsf(ret);
+    if (ret > 0) {
+        // Stijging: blauw voor normale (🔼), paars voor strong threshold (⏫️)
+        return (absRet >= strongThreshold) ? "purple_square,⏫️" : "blue_square,🔼";
+    } else {
+        // Daling: oranje voor normale (🔽), rood voor strong threshold (⏬️)
+        return (absRet >= strongThreshold) ? "red_square,⏬️" : "orange_square,🔽";
+    }
+}
+
+// Helper: Format notification message with timestamp, price, and min/max
+static void formatNotificationMessage(char* msg, size_t msgSize, float ret, const char* direction, 
+                                       float minVal, float maxVal)
+{
+    char timestamp[32];
+    getFormattedTimestamp(timestamp, sizeof(timestamp));
+    
+    if (ret >= 0) {
+        snprintf(msg, msgSize, 
+                "%s UP %s: +%.2f%%\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
+                direction, direction, ret, timestamp, prices[0], maxVal, minVal);
+    } else {
+        snprintf(msg, msgSize, 
+                "%s DOWN %s: %.2f%%\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
+                direction, direction, ret, timestamp, prices[0], maxVal, minVal);
+    }
+}
+
+// Helper: Send alert notification with all checks
+static bool sendAlertNotification(float ret, float threshold, float strongThreshold, 
+                                   unsigned long now, unsigned long& lastNotification, 
+                                   unsigned long cooldownMs, uint8_t& alertsThisHour, 
+                                   uint8_t maxAlertsPerHour, const char* alertType, 
+                                   const char* direction, float minVal, float maxVal)
+{
+    if (!checkAlertConditions(now, lastNotification, cooldownMs, alertsThisHour, maxAlertsPerHour, alertType)) {
+        return false;
+    }
+    
+    char msg[256];
+    formatNotificationMessage(msg, sizeof(msg), ret, direction, minVal, maxVal);
+    
+    const char* colorTag = determineColorTag(ret, threshold, strongThreshold);
+    
+    char title[64];
+    snprintf(title, sizeof(title), "%s %s Alert", binanceSymbol, alertType);
+    
+    sendNotification(title, msg, colorTag);
+    lastNotification = now;
+    alertsThisHour++;
+    Serial_printf("[Notify] %s notificatie verstuurd (%d/%d dit uur)\n", alertType, alertsThisHour, maxAlertsPerHour);
+    
+    return true;
+}
+
 static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
 {
     unsigned long now = millis();
@@ -772,12 +1071,13 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
     if (hourStartTime == 0 || (now - hourStartTime >= 3600000UL)) { // 1 uur = 3600000 ms
         alerts1MinThisHour = 0;
         alerts30MinThisHour = 0;
+        alerts5MinThisHour = 0;
         hourStartTime = now;
         Serial_printf("[Notify] Uur-tellers gereset\n");
     }
     
     // ===== 1-MINUUT SPIKE ALERT =====
-    // Voorwaarde: |ret_1m| >= 0.30% EN |ret_5m| >= 0.60% in dezelfde richting
+    // Voorwaarde: |ret_1m| >= spike1mThreshold EN |ret_5m| >= spike5mThreshold in dezelfde richting
     if (ret_1m != 0.0f && ret_5m != 0.0f)
     {
         float absRet1m = fabsf(ret_1m);
@@ -787,75 +1087,46 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         bool sameDirection = ((ret_1m > 0 && ret_5m > 0) || (ret_1m < 0 && ret_5m < 0));
         
         // Threshold check: ret_1m >= spike1mThreshold EN ret_5m >= spike5mThreshold
-        bool threshold1mMet = (absRet1m >= spike1mThreshold);
-        bool threshold5mMet = (absRet5m >= spike5mThreshold);
-        bool spikeDetected = threshold1mMet && threshold5mMet && sameDirection;
+        bool spikeDetected = (absRet1m >= spike1mThreshold) && (absRet5m >= spike5mThreshold) && sameDirection;
         
-        // Cooldown: 10-15 minuten (we gebruiken 10 minuten = 600000 ms)
-        bool cooldownPassed = (lastNotification1Min == 0 || (now - lastNotification1Min >= 600000UL));
-        
-        // Check max alerts per uur limiet
-        bool hourlyLimitOk = (alerts1MinThisHour < MAX_1M_ALERTS_PER_HOUR);
-        
-        // Debug logging alleen bij spike detectie (niet elke keer)
+        // Debug logging alleen bij spike detectie
         if (spikeDetected) {
-            Serial_printf("[Notify] 1m spike: ret_1m=%.2f%%, ret_5m=%.2f%%, cooldown=%d, hourlyLimit=%d/%d\n",
-                         ret_1m, ret_5m, cooldownPassed, alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR);
-        }
-        
-        if (spikeDetected && cooldownPassed && hourlyLimitOk)
-        {
+            Serial_printf("[Notify] 1m spike: ret_1m=%.2f%%, ret_5m=%.2f%%\n", ret_1m, ret_5m);
+            
             // Bereken min en max uit secondPrices buffer
             float minVal, maxVal;
             findMinMaxInSecondPrices(minVal, maxVal);
             
+            // Format message with 5m info
             char timestamp[32];
             getFormattedTimestamp(timestamp, sizeof(timestamp));
             char msg[256];
-            snprintf(msg, sizeof(msg), 
-                     "1m UP spike: +%.2f%% (5m: +%.2f%%)\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
-                     ret_1m, ret_5m, timestamp, prices[0], maxVal, minVal);
-            if (ret_1m < 0) {
+            if (ret_1m >= 0) {
+                snprintf(msg, sizeof(msg), 
+                         "1m UP spike: +%.2f%% (5m: +%.2f%%)\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
+                         ret_1m, ret_5m, timestamp, prices[0], maxVal, minVal);
+            } else {
                 snprintf(msg, sizeof(msg), 
                          "1m DOWN spike: %.2f%% (5m: %.2f%%)\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
                          ret_1m, ret_5m, timestamp, prices[0], maxVal, minVal);
             }
-            // Notificatie wordt verstuurd (geen extra logging)
             
-            // Bepaal kleur op basis van sterkte
-            const char *colorTag;
-            if (ret_1m > 0) {
-                // Stijging: blauw voor normale (🔼), paars voor 150% threshold (⏫️)
-                // 150% van 0.5% = 0.75%
-                if (absRet1m >= 0.75f) {
-                    colorTag = "purple_square,⏫️";
-                } else {
-                    colorTag = "blue_square,🔼";
-                }
-            } else {
-                // Daling: oranje voor normale (🔽), rood voor 150% threshold (⏬️)
-                // 150% van 0.5% = 0.75%
-                if (absRet1m <= -0.75f) {
-                    colorTag = "red_square,⏬️";
-                } else {
-                    colorTag = "orange_square,🔽";
-                }
-            }
+            const char* colorTag = determineColorTag(ret_1m, spike1mThreshold, spike1mThreshold * 1.5f);
             char title[64];
             snprintf(title, sizeof(title), "%s 1m Spike Alert", binanceSymbol);
-            sendNotification(title, msg, colorTag);
-            lastNotification1Min = now;
-            alerts1MinThisHour++;
-            Serial_printf("[Notify] 1m spike notificatie verstuurd (%d/%d dit uur)\n", alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR);
-        }
-        else if (spikeDetected && !hourlyLimitOk)
-        {
-            Serial_printf("[Notify] 1m spike gedetecteerd maar max alerts per uur bereikt (%d/%d)\n", alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR);
+            
+            if (checkAlertConditions(now, lastNotification1Min, notificationCooldown1MinMs, 
+                                     alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR, "1m spike")) {
+                sendNotification(title, msg, colorTag);
+                lastNotification1Min = now;
+                alerts1MinThisHour++;
+                Serial_printf("[Notify] 1m spike notificatie verstuurd (%d/%d dit uur)\n", alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR);
+            }
         }
     }
     
     // ===== 30-MINUTEN TREND MOVE ALERT =====
-    // Voorwaarde: |ret_30m| >= 2% EN |ret_5m| >= 0.5% in dezelfde richting
+    // Voorwaarde: |ret_30m| >= move30mThreshold EN |ret_5m| >= move5mThreshold in dezelfde richting
     if (ret_30m != 0.0f && ret_5m != 0.0f)
     {
         float absRet30m = fabsf(ret_30m);
@@ -865,70 +1136,41 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         bool sameDirection = ((ret_30m > 0 && ret_5m > 0) || (ret_30m < 0 && ret_5m < 0));
         
         // Threshold check: ret_30m >= move30mThreshold EN ret_5m >= move5mThreshold
-        bool threshold30mMet = (absRet30m >= move30mThreshold);
-        bool threshold5mMet = (absRet5m >= move5mThreshold);
-        bool moveDetected = threshold30mMet && threshold5mMet && sameDirection;
+        bool moveDetected = (absRet30m >= move30mThreshold) && (absRet5m >= move5mThreshold) && sameDirection;
         
-        // Cooldown: gebruik bestaande cooldown (10 minuten)
-        bool cooldownPassed = (lastNotification30Min == 0 || (now - lastNotification30Min >= notificationCooldown30MinMs));
-        
-        // Check max alerts per uur limiet
-        bool hourlyLimitOk = (alerts30MinThisHour < MAX_30M_ALERTS_PER_HOUR);
-        
-        // Debug logging alleen bij move detectie (niet elke keer)
+        // Debug logging alleen bij move detectie
         if (moveDetected) {
-            Serial_printf("[Notify] 30m move: ret_30m=%.2f%%, ret_5m=%.2f%%, cooldown=%d, hourlyLimit=%d/%d\n",
-                         ret_30m, ret_5m, cooldownPassed, alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR);
-        }
-        
-        if (moveDetected && cooldownPassed && hourlyLimitOk)
-        {
+            Serial_printf("[Notify] 30m move: ret_30m=%.2f%%, ret_5m=%.2f%%\n", ret_30m, ret_5m);
+            
             // Bereken min en max uit laatste 30 minuten van minuteAverages buffer
             float minVal, maxVal;
             findMinMaxInLast30Minutes(minVal, maxVal);
             
+            // Format message with 5m info
             char timestamp[32];
             getFormattedTimestamp(timestamp, sizeof(timestamp));
             char msg[256];
-            snprintf(msg, sizeof(msg), 
-                     "30m UP move: +%.2f%% (5m: +%.2f%%)\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
-                     ret_30m, ret_5m, timestamp, prices[0], maxVal, minVal);
-            if (ret_30m < 0) {
+            if (ret_30m >= 0) {
+                snprintf(msg, sizeof(msg), 
+                         "30m UP move: +%.2f%% (5m: +%.2f%%)\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
+                         ret_30m, ret_5m, timestamp, prices[0], maxVal, minVal);
+            } else {
                 snprintf(msg, sizeof(msg), 
                          "30m DOWN move: %.2f%% (5m: %.2f%%)\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
                          ret_30m, ret_5m, timestamp, prices[0], maxVal, minVal);
             }
-            // Notificatie wordt verstuurd (geen extra logging)
             
-            // Bepaal kleur op basis van sterkte
-            const char *colorTag;
-            if (ret_30m > 0) {
-                // Stijging: blauw voor normale (🔼), paars voor 150% threshold (⏫️)
-                // 150% van 2.0% = 3.0%
-                if (absRet30m >= 3.0f) {
-                    colorTag = "purple_square,⏫️";
-                } else {
-                    colorTag = "blue_square,🔼";
-                }
-            } else {
-                // Daling: oranje voor normale (🔽), rood voor 150% threshold (⏬️)
-                // 150% van 2.0% = 3.0%
-                if (absRet30m <= -3.0f) {
-                    colorTag = "red_square,⏬️";
-                } else {
-                    colorTag = "orange_square,🔽";
-                }
-            }
+            const char* colorTag = determineColorTag(ret_30m, move30mThreshold, move30mThreshold * 1.5f);
             char title[64];
             snprintf(title, sizeof(title), "%s 30m Move Alert", binanceSymbol);
-            sendNotification(title, msg, colorTag);
-            lastNotification30Min = now;
-            alerts30MinThisHour++;
-            Serial_printf("[Notify] 30m move notificatie verstuurd (%d/%d dit uur)\n", alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR);
-        }
-        else if (moveDetected && !hourlyLimitOk)
-        {
-            Serial_printf("[Notify] 30m move gedetecteerd maar max alerts per uur bereikt (%d/%d)\n", alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR);
+            
+            if (checkAlertConditions(now, lastNotification30Min, notificationCooldown30MinMs, 
+                                     alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR, "30m move")) {
+                sendNotification(title, msg, colorTag);
+                lastNotification30Min = now;
+                alerts30MinThisHour++;
+                Serial_printf("[Notify] 30m move notificatie verstuurd (%d/%d dit uur)\n", alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR);
+            }
         }
     }
     
@@ -941,20 +1183,10 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         // Threshold check: ret_5m >= move5mAlertThreshold
         bool move5mDetected = (absRet5m >= move5mAlertThreshold);
         
-        // Cooldown: 10 minuten
-        bool cooldownPassed = (lastNotification5Min == 0 || (now - lastNotification5Min >= notificationCooldown5MinMs));
-        
-        // Check max alerts per uur limiet
-        bool hourlyLimitOk = (alerts5MinThisHour < MAX_5M_ALERTS_PER_HOUR);
-        
-        // Debug logging alleen bij move detectie (niet elke keer)
+        // Debug logging alleen bij move detectie
         if (move5mDetected) {
-            Serial_printf("[Notify] 5m move: ret_5m=%.2f%%, cooldown=%d, hourlyLimit=%d/%d\n",
-                         ret_5m, cooldownPassed, alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR);
-        }
-        
-        if (move5mDetected && cooldownPassed && hourlyLimitOk)
-        {
+            Serial_printf("[Notify] 5m move: ret_5m=%.2f%%\n", ret_5m);
+            
             // Bereken min en max uit fiveMinutePrices buffer
             float minVal = fiveMinutePrices[0];
             float maxVal = fiveMinutePrices[0];
@@ -965,47 +1197,31 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                 }
             }
             
+            // Format message
             char timestamp[32];
             getFormattedTimestamp(timestamp, sizeof(timestamp));
             char msg[256];
-            snprintf(msg, sizeof(msg), 
-                     "5m UP move: +%.2f%%\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
-                     ret_5m, timestamp, prices[0], maxVal, minVal);
-            if (ret_5m < 0) {
+            if (ret_5m >= 0) {
+                snprintf(msg, sizeof(msg), 
+                         "5m UP move: +%.2f%%\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
+                         ret_5m, timestamp, prices[0], maxVal, minVal);
+            } else {
                 snprintf(msg, sizeof(msg), 
                          "5m DOWN move: %.2f%%\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
                          ret_5m, timestamp, prices[0], maxVal, minVal);
             }
             
-            // Bepaal kleur op basis van sterkte
-            const char *colorTag;
-            if (ret_5m > 0) {
-                // Stijging: blauw voor normale (🔼), paars voor 150% threshold (⏫️)
-                // 150% van 1.0% = 1.5%
-                if (absRet5m >= 1.5f) {
-                    colorTag = "purple_square,⏫️";
-                } else {
-                    colorTag = "blue_square,🔼";
-                }
-            } else {
-                // Daling: oranje voor normale (🔽), rood voor 150% threshold (⏬️)
-                // 150% van 1.0% = 1.5%
-                if (absRet5m <= -1.5f) {
-                    colorTag = "red_square,⏬️";
-                } else {
-                    colorTag = "orange_square,🔽";
-                }
-            }
+            const char* colorTag = determineColorTag(ret_5m, move5mAlertThreshold, move5mAlertThreshold * 1.5f);
             char title[64];
             snprintf(title, sizeof(title), "%s 5m Move Alert", binanceSymbol);
-            sendNotification(title, msg, colorTag);
-            lastNotification5Min = now;
-            alerts5MinThisHour++;
-            Serial_printf("[Notify] 5m move notificatie verstuurd (%d/%d dit uur)\n", alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR);
-        }
-        else if (move5mDetected && !hourlyLimitOk)
-        {
-            Serial_printf("[Notify] 5m move gedetecteerd maar max alerts per uur bereikt (%d/%d)\n", alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR);
+            
+            if (checkAlertConditions(now, lastNotification5Min, notificationCooldown5MinMs, 
+                                     alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR, "5m move")) {
+                sendNotification(title, msg, colorTag);
+                lastNotification5Min = now;
+                alerts5MinThisHour++;
+                Serial_printf("[Notify] 5m move notificatie verstuurd (%d/%d dit uur)\n", alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR);
+            }
         }
     }
 }
@@ -1232,7 +1448,114 @@ static void saveSettings()
     Serial_println("[Settings] Saved");
 }
 
+// Handler functies voor verschillende setting types
+static bool handleMqttFloatSetting(const char* value, float* target, float minVal, float maxVal, const char* stateTopic, const char* prefix) {
+    float val;
+    if (safeAtof(value, val) && val >= minVal && val <= maxVal) {
+        *target = val;
+        if (stateTopic != nullptr) {
+            char topicBuffer[192];
+            snprintf(topicBuffer, sizeof(topicBuffer), "%s%s", prefix, stateTopic);
+            mqttClient.publish(topicBuffer, value, true);
+        }
+        return true;
+    }
+    return false;
+}
+
+// Helper: Convert seconds to milliseconds with overflow check
+// Returns true on success, false on overflow or invalid input
+static bool safeSecondsToMs(int seconds, uint32_t& resultMs)
+{
+    // Check range first (1-3600 seconds)
+    if (seconds < 1 || seconds > 3600) {
+        return false;
+    }
+    
+    // Check for overflow: max uint32_t is 4,294,967,295 ms
+    // Max safe value: 4,294,967 seconds (4294967 * 1000 = 4,294,967,000 ms)
+    // Our max is 3600 seconds, so overflow is not possible, but check anyway for safety
+    if (seconds > 4294967) {
+        Serial_printf("[Overflow] Seconds value too large: %d (max: 4294967)\n", seconds);
+        return false;
+    }
+    
+    // Safe multiplication: seconds * 1000UL
+    resultMs = (uint32_t)seconds * 1000UL;
+    
+    // Verify result is reasonable (should be >= 1000 and <= 3,600,000 for our use case)
+    if (resultMs < 1000UL || resultMs > 3600000UL) {
+        Serial_printf("[Overflow] Invalid result: %lu ms (expected 1000-3600000)\n", resultMs);
+        return false;
+    }
+    
+    return true;
+}
+
+static bool handleMqttIntSetting(const char* value, uint32_t* targetMs, int minVal, int maxVal, const char* stateTopic, const char* prefix) {
+    int seconds = atoi(value);
+    if (seconds >= minVal && seconds <= maxVal) {
+        uint32_t resultMs;
+        if (!safeSecondsToMs(seconds, resultMs)) {
+            Serial_printf("[MQTT] Overflow check failed for cooldown: %d seconds\n", seconds);
+            return false;
+        }
+        *targetMs = resultMs;
+        if (stateTopic != nullptr) {
+            char topicBuffer[192];
+            char valueBuffer[32];
+            snprintf(topicBuffer, sizeof(topicBuffer), "%s%s", prefix, stateTopic);
+            snprintf(valueBuffer, sizeof(valueBuffer), "%lu", *targetMs / 1000);
+            mqttClient.publish(topicBuffer, valueBuffer, true);
+        }
+        return true;
+    }
+    return false;
+}
+
+static bool handleMqttStringSetting(const char* value, size_t valueLen, char* target, size_t targetSize, bool uppercase, const char* stateTopic, const char* prefix) {
+    if (valueLen > 0 && valueLen < targetSize) {
+        if (uppercase) {
+            // Trim en uppercase
+            char processed[64];
+            size_t processedLen = 0;
+            for (size_t i = 0; i < valueLen && i < sizeof(processed) - 1; i++) {
+                char c = value[i];
+                if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
+                    processed[processedLen++] = (c >= 'a' && c <= 'z') ? (c - 32) : c;
+                }
+            }
+            processed[processedLen] = '\0';
+            if (processedLen > 0) {
+                safeStrncpy(target, processed, targetSize);
+            } else {
+                return false;
+            }
+        } else {
+            // Trim alleen
+            size_t trimmedLen = valueLen;
+            while (trimmedLen > 0 && (value[trimmedLen-1] == ' ' || value[trimmedLen-1] == '\t')) {
+                trimmedLen--;
+            }
+            if (trimmedLen > 0) {
+                safeStrncpy(target, value, trimmedLen + 1);
+            } else {
+                return false;
+            }
+        }
+        
+        if (stateTopic != nullptr) {
+            char topicBuffer[192];
+            snprintf(topicBuffer, sizeof(topicBuffer), "%s%s", prefix, stateTopic);
+            mqttClient.publish(topicBuffer, target, true);
+        }
+        return true;
+    }
+    return false;
+}
+
 // MQTT callback: verwerk instellingen van Home Assistant
+// Geoptimaliseerd: gebruik lookup table i.p.v. geneste if-else chain
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
     // Geoptimaliseerd: gebruik char arrays i.p.v. String om geheugenfragmentatie te voorkomen
     char topicBuffer[128];
@@ -1267,223 +1590,171 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     char topicBufferFull[192]; // Voor volledige topic strings
     char valueBuffer[32]; // Voor numerieke waarden
     
-    // Helper functie voor topic vergelijking
-    #define CHECK_TOPIC(suffix) (strcmp(topicBuffer, suffix) == 0)
+    // Lookup table voor MQTT settings - gebruik loop i.p.v. geneste if-else
+    // Dit maakt de code veel leesbaarder en makkelijker uitbreidbaar
+    struct MqttSetting {
+        const char* suffix;
+        bool isFloat;
+        float minVal;
+        float maxVal;
+        void* targetVar;
+        const char* stateSuffix;
+    };
     
-    // Bouw volledige topic strings voor vergelijking
-    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/spike1m/set", prefixBuffer);
-    if (strcmp(topicBuffer, topicBufferFull) == 0) {
-        spike1mThreshold = atof(msgBuffer);
-        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/spike1m", prefixBuffer);
-        mqttClient.publish(topicBufferFull, msgBuffer, true);
-        settingChanged = true;
-    } else {
-        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/spike5m/set", prefixBuffer);
+    static const MqttSetting floatSettings[] = {
+        {"/config/spike1m/set", true, 0.01f, 10.0f, &alertThresholds.spike1m, "/config/spike1m"},
+        {"/config/spike5m/set", true, 0.01f, 10.0f, &alertThresholds.spike5m, "/config/spike5m"},
+        {"/config/move30m/set", true, 0.01f, 20.0f, &alertThresholds.move30m, "/config/move30m"},
+        {"/config/move5m/set", true, 0.01f, 10.0f, &alertThresholds.move5m, "/config/move5m"},
+        {"/config/move5mAlert/set", true, 0.01f, 10.0f, &alertThresholds.move5mAlert, "/config/move5mAlert"},
+        {"/config/anchorTakeProfit/set", true, 0.1f, 100.0f, &anchorTakeProfit, "/config/anchorTakeProfit"},
+        {"/config/anchorMaxLoss/set", true, -100.0f, -0.1f, &anchorMaxLoss, "/config/anchorMaxLoss"},
+        {"/config/trendThreshold/set", true, 0.1f, 10.0f, &trendThreshold, "/config/trendThreshold"},
+        {"/config/volatilityLowThreshold/set", true, 0.01f, 1.0f, &volatilityLowThreshold, "/config/volatilityLowThreshold"},
+        {"/config/volatilityHighThreshold/set", true, 0.01f, 1.0f, &volatilityHighThreshold, "/config/volatilityHighThreshold"}
+    };
+    
+    static const struct {
+        const char* suffix;
+        uint32_t* targetMs;
+        const char* stateSuffix;
+    } cooldownSettings[] = {
+        {"/config/cooldown1min/set", &notificationCooldowns.cooldown1MinMs, "/config/cooldown1min"},
+        {"/config/cooldown30min/set", &notificationCooldowns.cooldown30MinMs, "/config/cooldown30min"},
+        {"/config/cooldown5min/set", &notificationCooldowns.cooldown5MinMs, "/config/cooldown5min"}
+    };
+    
+    // Process float settings
+    bool handled = false;
+    for (size_t i = 0; i < sizeof(floatSettings) / sizeof(floatSettings[0]); i++) {
+        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s%s", prefixBuffer, floatSettings[i].suffix);
         if (strcmp(topicBuffer, topicBufferFull) == 0) {
-            spike5mThreshold = atof(msgBuffer);
-            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/spike5m", prefixBuffer);
-            mqttClient.publish(topicBufferFull, msgBuffer, true);
-            settingChanged = true;
-        } else {
-            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/move30m/set", prefixBuffer);
-            if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                move30mThreshold = atof(msgBuffer);
-                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/move30m", prefixBuffer);
+            float val;
+            bool valid = false;
+            
+            // Special check voor volatilityHighThreshold (moet > volatilityLowThreshold)
+            if (strstr(floatSettings[i].suffix, "volatilityHighThreshold") != nullptr) {
+                valid = safeAtof(msgBuffer, val) && val >= floatSettings[i].minVal && 
+                        val <= floatSettings[i].maxVal && val > volatilityLowThreshold;
+            } else {
+                valid = safeAtof(msgBuffer, val) && val >= floatSettings[i].minVal && val <= floatSettings[i].maxVal;
+            }
+            
+            if (valid) {
+                *((float*)floatSettings[i].targetVar) = val;
+                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s%s", prefixBuffer, floatSettings[i].stateSuffix);
                 mqttClient.publish(topicBufferFull, msgBuffer, true);
                 settingChanged = true;
+                handled = true;
             } else {
-                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/move5m/set", prefixBuffer);
-                if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                    move5mThreshold = atof(msgBuffer);
-                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/move5m", prefixBuffer);
-                    mqttClient.publish(topicBufferFull, msgBuffer, true);
-                    settingChanged = true;
-                } else {
-                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/move5mAlert/set", prefixBuffer);
-                    if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                        move5mAlertThreshold = atof(msgBuffer);
-                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/move5mAlert", prefixBuffer);
-                        mqttClient.publish(topicBufferFull, msgBuffer, true);
-                        settingChanged = true;
-                    } else {
-                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/cooldown1min/set", prefixBuffer);
-                        if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                            notificationCooldown1MinMs = atoi(msgBuffer) * 1000UL;
-                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/cooldown1min", prefixBuffer);
-                            snprintf(valueBuffer, sizeof(valueBuffer), "%lu", notificationCooldown1MinMs / 1000);
-                            mqttClient.publish(topicBufferFull, valueBuffer, true);
-                            settingChanged = true;
-                        } else {
-                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/cooldown30min/set", prefixBuffer);
-                            if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                                notificationCooldown30MinMs = atoi(msgBuffer) * 1000UL;
-                                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/cooldown30min", prefixBuffer);
-                                snprintf(valueBuffer, sizeof(valueBuffer), "%lu", notificationCooldown30MinMs / 1000);
-                                mqttClient.publish(topicBufferFull, valueBuffer, true);
-                                settingChanged = true;
-                            } else {
-                                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/cooldown5min/set", prefixBuffer);
-                                if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                                    notificationCooldown5MinMs = atoi(msgBuffer) * 1000UL;
-                                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/cooldown5min", prefixBuffer);
-                                    snprintf(valueBuffer, sizeof(valueBuffer), "%lu", notificationCooldown5MinMs / 1000);
-                                    mqttClient.publish(topicBufferFull, valueBuffer, true);
-                                    settingChanged = true;
-                                } else {
-                                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/binanceSymbol/set", prefixBuffer);
-                                    if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                                        // Trim en uppercase symbol
-                                        char symbol[16];
-                                        size_t symLen = 0;
-                                        while (symLen < msgLen && msgBuffer[symLen] != '\0' && symLen < sizeof(symbol) - 1) {
-                                            char c = msgBuffer[symLen];
-                                            if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
-                                                symbol[symLen] = (c >= 'a' && c <= 'z') ? (c - 32) : c; // Uppercase
-                                                symLen++;
-                                            }
-                                        }
-                                        symbol[symLen] = '\0';
-                                        if (symLen > 0 && symLen < sizeof(binanceSymbol)) {
-                                            safeStrncpy(binanceSymbol, symbol, sizeof(binanceSymbol));
-                                            safeStrncpy(symbolsArray[0], binanceSymbol, sizeof(symbolsArray[0]));
-                                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/binanceSymbol", prefixBuffer);
-                                            mqttClient.publish(topicBufferFull, binanceSymbol, true);
-                                            settingChanged = true;
-                                        }
-                                    } else {
-                                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/ntfyTopic/set", prefixBuffer);
-                                        if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                                            // Trim topic
-                                            size_t topicLenTrimmed = msgLen;
-                                            while (topicLenTrimmed > 0 && (msgBuffer[topicLenTrimmed-1] == ' ' || msgBuffer[topicLenTrimmed-1] == '\t')) {
-                                                topicLenTrimmed--;
-                                            }
-                                            if (topicLenTrimmed > 0 && topicLenTrimmed < sizeof(ntfyTopic)) {
-                                                safeStrncpy(ntfyTopic, msgBuffer, topicLenTrimmed + 1);
-                                                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/ntfyTopic", prefixBuffer);
-                                                mqttClient.publish(topicBufferFull, ntfyTopic, true);
-                                                settingChanged = true;
-                                            }
-                                        } else {
-                                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorTakeProfit/set", prefixBuffer);
-                                            if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                                                float val = atof(msgBuffer);
-                                                if (val >= 0.1f && val <= 100.0f) {
-                                                    anchorTakeProfit = val;
-                                                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorTakeProfit", prefixBuffer);
-                                                    mqttClient.publish(topicBufferFull, msgBuffer, true);
-                                                    settingChanged = true;
-                                                }
-                                            } else {
-                                                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorMaxLoss/set", prefixBuffer);
-                                                if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                                                    float val = atof(msgBuffer);
-                                                    if (val >= -100.0f && val <= -0.1f) {
-                                                        anchorMaxLoss = val;
-                                                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorMaxLoss", prefixBuffer);
-                                                        mqttClient.publish(topicBufferFull, msgBuffer, true);
-                                                        settingChanged = true;
-                                                    }
-                                                } else {
-                                                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/trendThreshold/set", prefixBuffer);
-                                                    if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                                                        float val = atof(msgBuffer);
-                                                        if (val >= 0.1f && val <= 10.0f) {
-                                                            trendThreshold = val;
-                                                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/trendThreshold", prefixBuffer);
-                                                            mqttClient.publish(topicBufferFull, msgBuffer, true);
-                                                            settingChanged = true;
-                                                        }
-                                                    } else {
-                                                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/volatilityLowThreshold/set", prefixBuffer);
-                                                        if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                                                            float val = atof(msgBuffer);
-                                                            if (val >= 0.01f && val <= 1.0f) {
-                                                                volatilityLowThreshold = val;
-                                                                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/volatilityLowThreshold", prefixBuffer);
-                                                                mqttClient.publish(topicBufferFull, msgBuffer, true);
-                                                                settingChanged = true;
-                                                            }
-                                                        } else {
-                                                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/volatilityHighThreshold/set", prefixBuffer);
-                                                            if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                                                                float val = atof(msgBuffer);
-                                                                if (val >= 0.01f && val <= 1.0f && val > volatilityLowThreshold) {
-                                                                    volatilityHighThreshold = val;
-                                                                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/volatilityHighThreshold", prefixBuffer);
-                                                                    mqttClient.publish(topicBufferFull, msgBuffer, true);
-                                                                    settingChanged = true;
-                                                                }
-                                                            } else {
-                                                                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/language/set", prefixBuffer);
-                                                                if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                                                                    uint8_t newLanguage = atoi(msgBuffer);
-                                                                    if (newLanguage == 0 || newLanguage == 1) {
-                                                                        language = newLanguage;
-                                                                        saveSettings(); // Save language to Preferences
-                                                                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/language", prefixBuffer);
-                                                                        snprintf(valueBuffer, sizeof(valueBuffer), "%u", language);
-                                                                        mqttClient.publish(topicBufferFull, valueBuffer, true);
-                                                                        settingChanged = true;
-                                                                    }
-                                                                } else {
-                                                                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/button/reset/set", prefixBuffer);
-                                                                    if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                                                                        // Reset button pressed via MQTT - gebruik als anchor
-                                                                        if (strcmp(msgBuffer, "PRESS") == 0 || strcmp(msgBuffer, "press") == 0 || 
-                                                                            strcmp(msgBuffer, "1") == 0 || strcmp(msgBuffer, "ON") == 0 || 
-                                                                            strcmp(msgBuffer, "on") == 0) {
-                                                                            Serial_println("[MQTT] Reset/Anchor button pressed via MQTT");
-                                                                            // Execute reset/anchor (thread-safe)
-                                                                            float currentPrice = 0.0f;
-                                                                            if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
-                                                                                if (isValidPrice(prices[0])) {
-                                                                                    currentPrice = prices[0];  // Sla prijs lokaal op
-                                                                                    openPrices[0] = prices[0];
-                                                                                    // Set anchor price
-                                                                                    anchorPrice = prices[0];
-                                                                                    anchorMax = prices[0];  // Initialiseer max/min met huidige prijs
-                                                                                    anchorMin = prices[0];
-                                                                                    anchorTime = millis();
-                                                                                    anchorActive = true;
-                                                                                    anchorTakeProfitSent = false;
-                                                                                    anchorMaxLossSent = false;
-                                                                                    Serial_printf("[MQTT] Anchor set: anchorPrice = %.2f\n", anchorPrice);
-                                                                                }
-                                                                                xSemaphoreGive(dataMutex);
-                                                                                
-                                                                                // Publiceer anchor event naar MQTT
-                                                                                if (isValidPrice(currentPrice)) {
-                                                                                    publishMqttAnchorEvent(anchorPrice, "anchor_set");
-                                                                                    
-                                                                                    // Stuur NTFY notificatie
-                                                                                    char timestamp[32];
-                                                                                    getFormattedTimestamp(timestamp, sizeof(timestamp));
-                                                                                    char title[64];
-                                                                                    char msg[128];
-                                                                                    snprintf(title, sizeof(title), "%s Anchor Set", binanceSymbol);
-                                                                                    snprintf(msg, sizeof(msg), "%s: %.2f EUR", timestamp, currentPrice);
-                                                                                    sendNotification(title, msg, "white_check_mark");
-                                                                                }
-                                                                                
-                                                                                // Update UI (this will also take the mutex internally)
-                                                                                updateUI();
-                                                                            }
-                                                                            // Publish state back (button entities don't need state, but we can acknowledge)
-                                                                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/button/reset", prefixBuffer);
-                                                                            mqttClient.publish(topicBufferFull, "PRESSED", false);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
+                Serial_printf("[MQTT] Invalid value for %s: %s\n", floatSettings[i].suffix, msgBuffer);
+            }
+            break;
+        }
+    }
+    
+    // Process cooldown settings (int -> ms conversion)
+    if (!handled) {
+        for (size_t i = 0; i < sizeof(cooldownSettings) / sizeof(cooldownSettings[0]); i++) {
+            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s%s", prefixBuffer, cooldownSettings[i].suffix);
+            if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                                int seconds = atoi(msgBuffer);
+                                if (seconds >= 1 && seconds <= 3600) {
+                                    uint32_t resultMs;
+                                    if (!safeSecondsToMs(seconds, resultMs)) {
+                                        Serial_printf("[MQTT] Overflow check failed for cooldown: %d seconds\n", seconds);
+                                        break;
                                     }
+                                    *cooldownSettings[i].targetMs = resultMs;
+                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s%s", prefixBuffer, cooldownSettings[i].stateSuffix);
+                    snprintf(valueBuffer, sizeof(valueBuffer), "%lu", *cooldownSettings[i].targetMs / 1000);
+                    mqttClient.publish(topicBufferFull, valueBuffer, true);
+                    settingChanged = true;
+                    handled = true;
+                } else {
+                    Serial_printf("[MQTT] Invalid cooldown value (range: 1-3600 seconds): %s\n", msgBuffer);
+                }
+                break;
+            }
+        }
+    }
+    
+    // Special cases (niet in lookup table vanwege complexe logica)
+    if (!handled) {
+        // binanceSymbol - speciale logica (uppercase + symbolsArray update)
+        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/binanceSymbol/set", prefixBuffer);
+        if (strcmp(topicBuffer, topicBufferFull) == 0) {
+            if (handleMqttStringSetting(msgBuffer, msgLen, binanceSymbol, sizeof(binanceSymbol), true, "/config/binanceSymbol", prefixBuffer)) {
+                safeStrncpy(symbolsArray[0], binanceSymbol, sizeof(symbolsArray[0]));
+                settingChanged = true;
+            }
+        } else {
+            // ntfyTopic - speciale logica (trim)
+            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/ntfyTopic/set", prefixBuffer);
+            if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                if (handleMqttStringSetting(msgBuffer, msgLen, ntfyTopic, sizeof(ntfyTopic), false, "/config/ntfyTopic", prefixBuffer)) {
+                    settingChanged = true;
+                }
+            } else {
+                // language - speciale logica (saveSettings call)
+                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/language/set", prefixBuffer);
+                if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                    uint8_t newLanguage = atoi(msgBuffer);
+                    if (newLanguage == 0 || newLanguage == 1) {
+                        language = newLanguage;
+                        saveSettings(); // Save language to Preferences
+                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/language", prefixBuffer);
+                        snprintf(valueBuffer, sizeof(valueBuffer), "%u", language);
+                        mqttClient.publish(topicBufferFull, valueBuffer, true);
+                        settingChanged = true;
+                    }
+                } else {
+                    // button/reset - speciale logica (mutex + anchor set)
+                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/button/reset/set", prefixBuffer);
+                    if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                        // Reset button pressed via MQTT - gebruik als anchor
+                        if (strcmp(msgBuffer, "PRESS") == 0 || strcmp(msgBuffer, "press") == 0 || 
+                            strcmp(msgBuffer, "1") == 0 || strcmp(msgBuffer, "ON") == 0 || 
+                            strcmp(msgBuffer, "on") == 0) {
+                            Serial_println("[MQTT] Reset/Anchor button pressed via MQTT");
+                            // Execute reset/anchor (thread-safe)
+                            float currentPrice = 0.0f;
+                            if (safeMutexTake(dataMutex, pdMS_TO_TICKS(500), "mqttCallback button/reset")) {
+                                if (isValidPrice(prices[0])) {
+                                    currentPrice = prices[0];  // Sla prijs lokaal op
+                                    openPrices[0] = prices[0];
+                                    // Set anchor price
+                                    anchorPrice = prices[0];
+                                    anchorMax = prices[0];  // Initialiseer max/min met huidige prijs
+                                    anchorMin = prices[0];
+                                    anchorTime = millis();
+                                    anchorActive = true;
+                                    anchorTakeProfitSent = false;
+                                    anchorMaxLossSent = false;
+                                    Serial_printf("[MQTT] Anchor set: anchorPrice = %.2f\n", anchorPrice);
                                 }
+                                safeMutexGive(dataMutex, "mqttCallback button/reset");
+                                
+                                // Publiceer anchor event naar MQTT
+                                if (isValidPrice(currentPrice)) {
+                                    publishMqttAnchorEvent(anchorPrice, "anchor_set");
+                                    
+                                    // Stuur NTFY notificatie
+                                    char timestamp[32];
+                                    getFormattedTimestamp(timestamp, sizeof(timestamp));
+                                    char title[64];
+                                    char msg[128];
+                                    snprintf(title, sizeof(title), "%s Anchor Set", binanceSymbol);
+                                    snprintf(msg, sizeof(msg), "%s: %.2f EUR", timestamp, currentPrice);
+                                    sendNotification(title, msg, "white_check_mark");
+                                }
+                                
+                                // Update UI (this will also take the mutex internally)
+                                updateUI();
                             }
+                            // Publish state back (button entities don't need state, but we can acknowledge)
+                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/button/reset", prefixBuffer);
+                            mqttClient.publish(topicBufferFull, "PRESSED", false);
                         }
                     }
                 }
@@ -1499,73 +1770,124 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
 // Publiceer huidige instellingen naar MQTT
 // Geoptimaliseerd: gebruik char arrays i.p.v. String om geheugenfragmentatie te voorkomen
-void publishMqttSettings() {
-    if (!mqttConnected) return;
+// MQTT Message Queue functions
+static bool enqueueMqttMessage(const char* topic, const char* payload, bool retained) {
+    if (mqttQueueCount >= MQTT_QUEUE_SIZE) {
+        Serial_printf("[MQTT Queue] Queue vol, bericht verloren: %s\n", topic);
+        return false; // Queue vol
+    }
     
+    MqttMessage* msg = &mqttQueue[mqttQueueTail];
+    strncpy(msg->topic, topic, sizeof(msg->topic) - 1);
+    msg->topic[sizeof(msg->topic) - 1] = '\0';
+    strncpy(msg->payload, payload, sizeof(msg->payload) - 1);
+    msg->payload[sizeof(msg->payload) - 1] = '\0';
+    msg->retained = retained;
+    msg->valid = true;
+    
+    mqttQueueTail = (mqttQueueTail + 1) % MQTT_QUEUE_SIZE;
+    mqttQueueCount++;
+    
+    return true;
+}
+
+static void processMqttQueue() {
+    if (!mqttConnected || mqttQueueCount == 0) {
+        return;
+    }
+    
+    // Process max 3 messages per call om niet te lang te blokkeren
+    uint8_t processed = 0;
+    while (mqttQueueCount > 0 && processed < 3) {
+        MqttMessage* msg = &mqttQueue[mqttQueueHead];
+        if (!msg->valid) {
+            mqttQueueHead = (mqttQueueHead + 1) % MQTT_QUEUE_SIZE;
+            mqttQueueCount--;
+            continue;
+        }
+        
+        bool success = mqttClient.publish(msg->topic, msg->payload, msg->retained);
+        if (success) {
+            msg->valid = false;
+            mqttQueueHead = (mqttQueueHead + 1) % MQTT_QUEUE_SIZE;
+            mqttQueueCount--;
+            processed++;
+        } else {
+            // Publish failed, stop processing (will retry next time)
+            break;
+        }
+    }
+}
+
+// Helper functies voor MQTT publishing - reduceert code duplicatie
+// Gebruikt queue om message loss te voorkomen
+static void publishMqttFloat(const char* topicSuffix, float value) {
     char topicBuffer[128];
     char buffer[32];
+    dtostrf(value, 0, 2, buffer);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/%s", MQTT_TOPIC_PREFIX, topicSuffix);
     
-    dtostrf(spike1mThreshold, 0, 2, buffer);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/spike1m", MQTT_TOPIC_PREFIX);
-    mqttClient.publish(topicBuffer, buffer, true);
+    if (mqttConnected && mqttClient.publish(topicBuffer, buffer, true)) {
+        // Direct publish succeeded
+        return;
+    }
     
-    dtostrf(spike5mThreshold, 0, 2, buffer);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/spike5m", MQTT_TOPIC_PREFIX);
-    mqttClient.publish(topicBuffer, buffer, true);
+    // Queue message if not connected or publish failed
+    enqueueMqttMessage(topicBuffer, buffer, true);
+}
+
+static void publishMqttUint(const char* topicSuffix, unsigned long value) {
+    char topicBuffer[128];
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%lu", value);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/%s", MQTT_TOPIC_PREFIX, topicSuffix);
     
-    dtostrf(move30mThreshold, 0, 2, buffer);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/move30m", MQTT_TOPIC_PREFIX);
-    mqttClient.publish(topicBuffer, buffer, true);
+    if (mqttConnected && mqttClient.publish(topicBuffer, buffer, true)) {
+        // Direct publish succeeded
+        return;
+    }
     
-    dtostrf(move5mThreshold, 0, 2, buffer);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/move5m", MQTT_TOPIC_PREFIX);
-    mqttClient.publish(topicBuffer, buffer, true);
+    // Queue message if not connected or publish failed
+    enqueueMqttMessage(topicBuffer, buffer, true);
+}
+
+static void publishMqttString(const char* topicSuffix, const char* value) {
+    char topicBuffer[128];
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/%s", MQTT_TOPIC_PREFIX, topicSuffix);
     
-    dtostrf(move5mAlertThreshold, 0, 2, buffer);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/move5mAlert", MQTT_TOPIC_PREFIX);
-    mqttClient.publish(topicBuffer, buffer, true);
+    if (mqttConnected && mqttClient.publish(topicBuffer, value, true)) {
+        // Direct publish succeeded
+        return;
+    }
     
-    snprintf(buffer, sizeof(buffer), "%lu", notificationCooldown1MinMs / 1000);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/cooldown1min", MQTT_TOPIC_PREFIX);
-    mqttClient.publish(topicBuffer, buffer, true);
+    // Queue message if not connected or publish failed
+    enqueueMqttMessage(topicBuffer, value, true);
+}
+
+void publishMqttSettings() {
+    // Queue messages even if not connected - they will be sent when connection is restored
     
-    snprintf(buffer, sizeof(buffer), "%lu", notificationCooldown30MinMs / 1000);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/cooldown30min", MQTT_TOPIC_PREFIX);
-    mqttClient.publish(topicBuffer, buffer, true);
+    // Float settings
+    publishMqttFloat("spike1m", spike1mThreshold);
+    publishMqttFloat("spike5m", spike5mThreshold);
+    publishMqttFloat("move30m", move30mThreshold);
+    publishMqttFloat("move5m", move5mThreshold);
+    publishMqttFloat("move5mAlert", move5mAlertThreshold);
+    publishMqttFloat("anchorTakeProfit", anchorTakeProfit);
+    publishMqttFloat("anchorMaxLoss", anchorMaxLoss);
+    publishMqttFloat("trendThreshold", trendThreshold);
+    publishMqttFloat("volatilityLowThreshold", volatilityLowThreshold);
+    publishMqttFloat("volatilityHighThreshold", volatilityHighThreshold);
     
-    snprintf(buffer, sizeof(buffer), "%lu", notificationCooldown5MinMs / 1000);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/cooldown5min", MQTT_TOPIC_PREFIX);
-    mqttClient.publish(topicBuffer, buffer, true);
+    // Unsigned int settings (cooldowns in seconds)
+    publishMqttUint("cooldown1min", notificationCooldown1MinMs / 1000);
+    publishMqttUint("cooldown30min", notificationCooldown30MinMs / 1000);
+    publishMqttUint("cooldown5min", notificationCooldown5MinMs / 1000);
+    publishMqttUint("language", language);
     
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/binanceSymbol", MQTT_TOPIC_PREFIX);
-    mqttClient.publish(topicBuffer, binanceSymbol, true);
-    
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/ntfyTopic", MQTT_TOPIC_PREFIX);
-    mqttClient.publish(topicBuffer, ntfyTopic, true);
-    
-    dtostrf(anchorTakeProfit, 0, 2, buffer);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/anchorTakeProfit", MQTT_TOPIC_PREFIX);
-    mqttClient.publish(topicBuffer, buffer, true);
-    
-    dtostrf(anchorMaxLoss, 0, 2, buffer);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/anchorMaxLoss", MQTT_TOPIC_PREFIX);
-    mqttClient.publish(topicBuffer, buffer, true);
-    
-    dtostrf(trendThreshold, 0, 2, buffer);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/trendThreshold", MQTT_TOPIC_PREFIX);
-    mqttClient.publish(topicBuffer, buffer, true);
-    
-    dtostrf(volatilityLowThreshold, 0, 2, buffer);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/volatilityLowThreshold", MQTT_TOPIC_PREFIX);
-    mqttClient.publish(topicBuffer, buffer, true);
-    
-    dtostrf(volatilityHighThreshold, 0, 2, buffer);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/volatilityHighThreshold", MQTT_TOPIC_PREFIX);
-    mqttClient.publish(topicBuffer, buffer, true);
-    
-    snprintf(buffer, sizeof(buffer), "%u", language);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/language", MQTT_TOPIC_PREFIX);
-    mqttClient.publish(topicBuffer, buffer, true);
+    // String settings
+    publishMqttString("binanceSymbol", binanceSymbol);
+    publishMqttString("ntfyTopic", ntfyTopic);
 }
 
 // Publiceer waarden naar MQTT (prijzen, percentages, etc.)
@@ -1756,6 +2078,7 @@ void connectMQTT() {
     if (mqttClient.connect(clientId.c_str(), mqttUser, mqttPass)) {
         Serial_println("[MQTT] Connected!");
         mqttConnected = true;
+        mqttReconnectAttemptCount = 0; // Reset counter bij succesvolle verbinding
         
         String prefix = String(MQTT_TOPIC_PREFIX);
         mqttClient.subscribe((prefix + "/config/spike1m/set").c_str());
@@ -1774,8 +2097,11 @@ void connectMQTT() {
         publishMqttSettings();
         publishMqttDiscovery();
         
+        // Process queued messages after reconnection
+        processMqttQueue();
+        
     } else {
-        Serial_printf("[MQTT] Connect failed, rc=%d\n", mqttClient.state());
+        Serial_printf("[MQTT] Connect failed, rc=%d (poging %u)\n", mqttClient.state(), mqttReconnectAttemptCount);
         mqttConnected = false;
     }
 }
@@ -1894,14 +2220,57 @@ static void handleSave()
             safeStrncpy(symbolsArray[0], binanceSymbol, sizeof(symbolsArray[0]));
         }
     }
-    if (server.hasArg("spike1m")) spike1mThreshold = server.arg("spike1m").toFloat();
-    if (server.hasArg("spike5m")) spike5mThreshold = server.arg("spike5m").toFloat();
-    if (server.hasArg("move30m")) move30mThreshold = server.arg("move30m").toFloat();
-    if (server.hasArg("move5m")) move5mThreshold = server.arg("move5m").toFloat();
-    if (server.hasArg("move5mAlert")) move5mAlertThreshold = server.arg("move5mAlert").toFloat();
-    if (server.hasArg("cd1min")) notificationCooldown1MinMs = server.arg("cd1min").toInt() * 1000UL;
-    if (server.hasArg("cd30min")) notificationCooldown30MinMs = server.arg("cd30min").toInt() * 1000UL;
-    if (server.hasArg("cd5min")) notificationCooldown5MinMs = server.arg("cd5min").toInt() * 1000UL;
+    if (server.hasArg("spike1m")) {
+        float val;
+        if (safeAtof(server.arg("spike1m").c_str(), val) && val >= 0.01f && val <= 10.0f) {
+            spike1mThreshold = val;
+        }
+    }
+    if (server.hasArg("spike5m")) {
+        float val;
+        if (safeAtof(server.arg("spike5m").c_str(), val) && val >= 0.01f && val <= 10.0f) {
+            spike5mThreshold = val;
+        }
+    }
+    if (server.hasArg("move30m")) {
+        float val;
+        if (safeAtof(server.arg("move30m").c_str(), val) && val >= 0.01f && val <= 20.0f) {
+            move30mThreshold = val;
+        }
+    }
+    if (server.hasArg("move5m")) {
+        float val;
+        if (safeAtof(server.arg("move5m").c_str(), val) && val >= 0.01f && val <= 10.0f) {
+            move5mThreshold = val;
+        }
+    }
+    if (server.hasArg("move5mAlert")) {
+        float val;
+        if (safeAtof(server.arg("move5mAlert").c_str(), val) && val >= 0.01f && val <= 10.0f) {
+            move5mAlertThreshold = val;
+        }
+    }
+    if (server.hasArg("cd1min")) {
+        int seconds = server.arg("cd1min").toInt();
+        uint32_t resultMs;
+        if (safeSecondsToMs(seconds, resultMs)) {
+            notificationCooldown1MinMs = resultMs;
+        }
+    }
+    if (server.hasArg("cd30min")) {
+        int seconds = server.arg("cd30min").toInt();
+        uint32_t resultMs;
+        if (safeSecondsToMs(seconds, resultMs)) {
+            notificationCooldown30MinMs = resultMs;
+        }
+    }
+    if (server.hasArg("cd5min")) {
+        int seconds = server.arg("cd5min").toInt();
+        uint32_t resultMs;
+        if (safeSecondsToMs(seconds, resultMs)) {
+            notificationCooldown5MinMs = resultMs;
+        }
+    }
     
     // MQTT settings
     if (server.hasArg("mqtthost")) {
@@ -1934,34 +2303,34 @@ static void handleSave()
     
     // Trend and volatility settings
     if (server.hasArg("trendTh")) {
-        float val = server.arg("trendTh").toFloat();
-        if (val >= 0.1f && val <= 10.0f) {
+        float val;
+        if (safeAtof(server.arg("trendTh").c_str(), val) && val >= 0.1f && val <= 10.0f) {
             trendThreshold = val;
         }
     }
     if (server.hasArg("volLow")) {
-        float val = server.arg("volLow").toFloat();
-        if (val >= 0.01f && val <= 1.0f) {
+        float val;
+        if (safeAtof(server.arg("volLow").c_str(), val) && val >= 0.01f && val <= 1.0f) {
             volatilityLowThreshold = val;
         }
     }
     if (server.hasArg("volHigh")) {
-        float val = server.arg("volHigh").toFloat();
-        if (val >= 0.01f && val <= 1.0f && val > volatilityLowThreshold) {
+        float val;
+        if (safeAtof(server.arg("volHigh").c_str(), val) && val >= 0.01f && val <= 1.0f && val > volatilityLowThreshold) {
             volatilityHighThreshold = val;
         }
     }
     
     // Anchor settings
     if (server.hasArg("anchorTP")) {
-        float val = server.arg("anchorTP").toFloat();
-        if (val >= 0.1f && val <= 100.0f) {
+        float val;
+        if (safeAtof(server.arg("anchorTP").c_str(), val) && val >= 0.1f && val <= 100.0f) {
             anchorTakeProfit = val;
         }
     }
     if (server.hasArg("anchorML")) {
-        float val = server.arg("anchorML").toFloat();
-        if (val >= -100.0f && val <= -0.1f) {
+        float val;
+        if (safeAtof(server.arg("anchorML").c_str(), val) && val >= -100.0f && val <= -0.1f) {
             anchorMaxLoss = val;
         }
     }
@@ -1976,6 +2345,7 @@ static void handleSave()
         mqttClient.disconnect();
         mqttConnected = false;
         lastMqttReconnectAttempt = 0;
+        mqttReconnectAttemptCount = 0; // Reset counter bij disconnect
     }
     
     // Bouw HTML string op zonder vreemde tekens
@@ -2040,30 +2410,46 @@ static void setupWebServer()
 
 // Parse Binance JSON – very small, avoid ArduinoJson for flash size
 // Geoptimaliseerd: gebruik const char* i.p.v. String om geheugen te besparen
-static bool parsePrice(const String &body, float &out)
+static bool parsePrice(const char *body, float &out)
 {
     // Check of body niet leeg is
-    if (body.length() == 0)
+    if (body == nullptr || strlen(body) == 0)
         return false;
     
-    int idx = body.indexOf("\"price\":\"");
-    if (idx < 0)
-        return false;
-    idx += 9; // skip to first digit
-    int end = body.indexOf('"', idx);
-    if (end < 0)
+    const char *priceStart = strstr(body, "\"price\":\"");
+    if (priceStart == nullptr)
         return false;
     
-    // Gebruik substring alleen als nodig, en valideer lengte
-    if (end - idx > 20) // Max 20 karakters voor prijs (veiligheidscheck)
+    priceStart += 9; // skip to first digit after "price":""
+    
+    const char *priceEnd = strchr(priceStart, '"');
+    if (priceEnd == nullptr)
         return false;
     
-    out = body.substring(idx, end).toFloat();
-    
-    // Validate that we got a valid float
-    if (!isValidPrice(out))
+    // Valideer lengte
+    size_t priceLen = priceEnd - priceStart;
+    if (priceLen == 0 || priceLen > 20) // Max 20 karakters voor prijs (veiligheidscheck)
         return false;
     
+    // Extract price string
+    char priceStr[32];
+    if (priceLen >= sizeof(priceStr)) {
+        return false;
+    }
+    strncpy(priceStr, priceStart, priceLen);
+    priceStr[priceLen] = '\0';
+    
+    // Convert to float
+    float val;
+    if (!safeAtof(priceStr, val)) {
+        return false;
+    }
+    
+    // Validate that we got a valid price
+    if (!isValidPrice(val))
+        return false;
+    
+    out = val;
     return true;
 }
 
@@ -2137,114 +2523,117 @@ static void findMinMaxInSecondPrices(float &minVal, float &maxVal)
 // ============================================================================
 
 // Calculate 1-minute return: price now vs 60 seconds ago
-static float calculateReturn1Minute()
+// Generic return calculation function
+// Calculates percentage return: (priceNow - priceXAgo) / priceXAgo * 100
+// Supports different array types (uint8_t, uint16_t indices) and optional average calculation
+static float calculateReturnGeneric(
+    const float* priceArray,           // Price array
+    uint16_t arraySize,                // Size of the array
+    uint16_t currentIndex,             // Current index in the array
+    bool arrayFilled,                  // Whether array is filled (ring buffer)
+    uint16_t positionsAgo,             // How many positions ago to compare
+    const char* logPrefix,             // Log prefix for debugging (e.g., "[Ret1m]")
+    uint32_t logIntervalMs,            // Log interval in ms (0 = no logging)
+    uint8_t averagePriceIndex = 255    // Index in averagePrices[] to update (255 = don't update)
+)
 {
-    // Need at least VALUES_FOR_1MIN_RETURN waarden (40 met 1500ms interval)
-    if (!secondArrayFilled && secondIndex < VALUES_FOR_1MIN_RETURN)
+    // Check if we have enough data
+    if (!arrayFilled && currentIndex < positionsAgo)
     {
-        averagePrices[1] = 0.0f;
-        static uint32_t lastLogTime = 0;
-        uint32_t now = millis();
-        if (now - lastLogTime > 10000) {
-            Serial_printf("[Ret1m] Wachten op data: secondIndex=%u (nodig: %u)\n", secondIndex, VALUES_FOR_1MIN_RETURN);
-            lastLogTime = now;
+        if (averagePriceIndex < 3) {
+            averagePrices[averagePriceIndex] = 0.0f;
+        }
+        if (logIntervalMs > 0) {
+            static uint32_t lastLogTime = 0;
+            uint32_t now = millis();
+            if (now - lastLogTime > logIntervalMs) {
+                Serial_printf("%s Wachten op data: index=%u (nodig: %u)\n", logPrefix, currentIndex, positionsAgo);
+                lastLogTime = now;
+            }
         }
         return 0.0f;
     }
     
     // Get current price
     float priceNow;
-    if (secondArrayFilled) {
-        uint8_t lastWrittenIdx = getLastWrittenIndex(secondIndex, SECONDS_PER_MINUTE);
-        priceNow = secondPrices[lastWrittenIdx];
+    if (arrayFilled) {
+        uint16_t lastWrittenIdx = getLastWrittenIndex(currentIndex, arraySize);
+        priceNow = priceArray[lastWrittenIdx];
     } else {
-        if (secondIndex == 0) return 0.0f;
-        priceNow = secondPrices[secondIndex - 1];
+        if (currentIndex == 0) return 0.0f;
+        priceNow = priceArray[currentIndex - 1];
     }
     
-    // Get price VALUES_FOR_1MIN_RETURN posities geleden (1 minuut geleden)
-    float price1mAgo;
-    if (secondArrayFilled)
+    // Get price X positions ago
+    float priceXAgo;
+    if (arrayFilled)
     {
-        int32_t idx1mAgo = getRingBufferIndexAgo(secondIndex, VALUES_FOR_1MIN_RETURN, SECONDS_PER_MINUTE);
-        if (idx1mAgo < 0) {
-            Serial_printf("[Ret1m] FATAL: idx1mAgo invalid, secondIndex=%u\n", secondIndex);
+        int32_t idxXAgo = getRingBufferIndexAgo(currentIndex, positionsAgo, arraySize);
+        if (idxXAgo < 0) {
+            Serial_printf("%s FATAL: idxXAgo invalid, currentIndex=%u\n", logPrefix, currentIndex);
             return 0.0f;
         }
-        price1mAgo = secondPrices[idx1mAgo];
+        priceXAgo = priceArray[idxXAgo];
     }
     else
     {
-        if (secondIndex < VALUES_FOR_1MIN_RETURN) return 0.0f;
-        price1mAgo = secondPrices[secondIndex - VALUES_FOR_1MIN_RETURN];
+        if (currentIndex < positionsAgo) return 0.0f;
+        priceXAgo = priceArray[currentIndex - positionsAgo];
     }
     
     // Validate prices
-    if (!areValidPrices(priceNow, price1mAgo))
+    if (!areValidPrices(priceNow, priceXAgo))
     {
-        averagePrices[1] = 0.0f;
-        Serial_printf("[Ret1m] ERROR: priceNow=%.2f, price1mAgo=%.2f - invalid!\n", priceNow, price1mAgo);
+        if (averagePriceIndex < 3) {
+            averagePrices[averagePriceIndex] = 0.0f;
+        }
+        Serial_printf("%s ERROR: priceNow=%.2f, priceXAgo=%.2f - invalid!\n", logPrefix, priceNow, priceXAgo);
         return 0.0f;
     }
     
-    // Calculate average for display
-    averagePrices[1] = calculateAverage(secondPrices, SECONDS_PER_MINUTE, secondArrayFilled);
+    // Calculate average for display (if requested)
+    if (averagePriceIndex < 3) {
+        if (averagePriceIndex == 1) {
+            // For 1m: use calculateAverage helper
+            averagePrices[1] = calculateAverage(secondPrices, SECONDS_PER_MINUTE, secondArrayFilled);
+        } else if (averagePriceIndex == 2) {
+            // For 30m: calculate average of last 30 minutes (handled separately in calculateReturn30Minutes)
+            // This is a placeholder - actual calculation is done in the wrapper function
+        }
+    }
     
-    // Return percentage: (now - 1m ago) / 1m ago * 100
-    return ((priceNow - price1mAgo) / price1mAgo) * 100.0f;
+    // Return percentage: (now - X ago) / X ago * 100
+    return ((priceNow - priceXAgo) / priceXAgo) * 100.0f;
+}
+
+static float calculateReturn1Minute()
+{
+    float ret = calculateReturnGeneric(
+        secondPrices,
+        SECONDS_PER_MINUTE,
+        secondIndex,
+        secondArrayFilled,
+        VALUES_FOR_1MIN_RETURN,
+        "[Ret1m]",
+        10000,  // Log every 10 seconds
+        1       // Update averagePrices[1]
+    );
+    return ret;
 }
 
 // Calculate 5-minute return: price now vs 5 minutes ago
 static float calculateReturn5Minutes()
 {
-    // Need at least VALUES_FOR_5MIN_RETURN waarden (200 met 1500ms interval)
-    if (!fiveMinuteArrayFilled && fiveMinuteIndex < VALUES_FOR_5MIN_RETURN)
-    {
-        static uint32_t lastLogTime = 0;
-        uint32_t now = millis();
-        if (now - lastLogTime > 30000) {
-            Serial_printf("[Ret5m] Wachten op data: fiveMinuteIndex=%u (nodig: %u)\n", fiveMinuteIndex, VALUES_FOR_5MIN_RETURN);
-            lastLogTime = now;
-        }
-        return 0.0f;
-    }
-    
-    // Get current price
-    float priceNow;
-    if (fiveMinuteArrayFilled) {
-        uint16_t lastWrittenIdx = getLastWrittenIndex(fiveMinuteIndex, SECONDS_PER_5MINUTES);
-        priceNow = fiveMinutePrices[lastWrittenIdx];
-    } else {
-        if (fiveMinuteIndex == 0) return 0.0f;
-        priceNow = fiveMinutePrices[fiveMinuteIndex - 1];
-    }
-    
-    // Get price VALUES_FOR_5MIN_RETURN posities geleden (5 minuten geleden)
-    float price5mAgo;
-    if (fiveMinuteArrayFilled)
-    {
-        int32_t idx5mAgo = getRingBufferIndexAgo(fiveMinuteIndex, VALUES_FOR_5MIN_RETURN, SECONDS_PER_5MINUTES);
-        if (idx5mAgo < 0) {
-            Serial_printf("[Ret5m] FATAL: idx5mAgo invalid, fiveMinuteIndex=%u\n", fiveMinuteIndex);
-            return 0.0f;
-        }
-        price5mAgo = fiveMinutePrices[idx5mAgo];
-    }
-    else
-    {
-        if (fiveMinuteIndex < VALUES_FOR_5MIN_RETURN) return 0.0f;
-        price5mAgo = fiveMinutePrices[fiveMinuteIndex - VALUES_FOR_5MIN_RETURN];
-    }
-    
-    // Validate prices
-    if (!areValidPrices(priceNow, price5mAgo))
-    {
-        Serial_printf("[Ret5m] ERROR: priceNow=%.2f, price5mAgo=%.2f - invalid!\n", priceNow, price5mAgo);
-        return 0.0f;
-    }
-    
-    // Return percentage: (now - 5m ago) / 5m ago * 100
-    return ((priceNow - price5mAgo) / price5mAgo) * 100.0f;
+    return calculateReturnGeneric(
+        fiveMinutePrices,
+        SECONDS_PER_5MINUTES,
+        fiveMinuteIndex,
+        fiveMinuteArrayFilled,
+        VALUES_FOR_5MIN_RETURN,
+        "[Ret5m]",
+        30000,  // Log every 30 seconds
+        255     // Don't update averagePrices
+    );
 }
 
 // Calculate 30-minute return: price now vs 30 minutes ago (using minute averages)
@@ -2265,47 +2654,19 @@ static float calculateReturn30Minutes()
         return 0.0f;
     }
     
-    // Get current price (last minute average)
-    uint8_t lastMinuteIdx;
-    if (!minuteArrayFilled)
-    {
-        if (minuteIndex == 0) return 0.0f;
-        lastMinuteIdx = minuteIndex - 1;
-    }
-    else
-    {
-        lastMinuteIdx = getLastWrittenIndex(minuteIndex, MINUTES_FOR_30MIN_CALC);
-    }
-    float priceNow = minuteAverages[lastMinuteIdx];
+    // Use generic function for return calculation
+    float ret = calculateReturnGeneric(
+        minuteAverages,
+        MINUTES_FOR_30MIN_CALC,
+        minuteIndex,
+        minuteArrayFilled,
+        30,  // 30 minutes ago
+        "[Ret30m]",
+        60000,  // Log every 60 seconds
+        255     // Don't update averagePrices here (we do it manually below)
+    );
     
-    // Get price 30 minutes ago
-    uint8_t idx30mAgo;
-    if (!minuteArrayFilled)
-    {
-        if (minuteIndex < 30) return 0.0f;
-        idx30mAgo = minuteIndex - 30;
-    }
-    else
-    {
-        int32_t idx30mAgo_temp = getRingBufferIndexAgo(minuteIndex, 30, MINUTES_FOR_30MIN_CALC);
-        if (idx30mAgo_temp < 0) {
-            Serial_printf("[Ret30m] FATAL: idx30mAgo invalid, minuteIndex=%u\n", minuteIndex);
-            return 0.0f;
-        }
-        idx30mAgo = (uint8_t)idx30mAgo_temp;
-    }
-    
-    float price30mAgo = minuteAverages[idx30mAgo];
-    
-    // Validate prices
-    if (!areValidPrices(priceNow, price30mAgo))
-    {
-        Serial_printf("[Ret30m] ERROR: priceNow=%.2f, price30mAgo=%.2f - invalid!\n", priceNow, price30mAgo);
-        averagePrices[2] = 0.0f;
-        return 0.0f;
-    }
-    
-    // Calculate average of last 30 minutes for display
+    // Calculate average of last 30 minutes for display (specific to 30m calculation)
     float last30Sum = 0.0f;
     uint8_t last30Count = 0;
     for (uint8_t i = 0; i < 30; i++)
@@ -2336,9 +2697,6 @@ static float calculateReturn30Minutes()
     {
         averagePrices[2] = 0.0f;
     }
-    
-    // Return als percentage: (nu - 30m geleden) / 30m geleden * 100
-    float ret = ((priceNow - price30mAgo) / price30mAgo) * 100.0f;
     
     return ret;
 }
@@ -2941,15 +3299,17 @@ static void fetchPrice()
 
     // Geoptimaliseerd: gebruik char array i.p.v. String concatenatie om geheugenfragmentatie te voorkomen
     char url[128];
+    char responseBuffer[512]; // Buffer voor API response (Binance responses zijn klein, ~100 bytes)
     snprintf(url, sizeof(url), "%s%s", BINANCE_API, binanceSymbol);
-    String body = httpGET(url, HTTP_TIMEOUT_MS);
+    
+    bool httpSuccess = httpGET(url, responseBuffer, sizeof(responseBuffer), HTTP_TIMEOUT_MS);
     unsigned long fetchTime = millis() - fetchStart;
     
-    if (body.isEmpty()) {
+    if (!httpSuccess || strlen(responseBuffer) == 0) {
         // Leeg response - kan komen door timeout of netwerkproblemen
         Serial.printf("[API] WARN -> %s leeg response (tijd: %lu ms) - mogelijk timeout of netwerkprobleem\n", binanceSymbol, fetchTime);
         // Gebruik laatste bekende prijs als fallback (al ingesteld als fetched = prices[0])
-    } else if (!parsePrice(body, fetched)) {
+    } else if (!parsePrice(responseBuffer, fetched)) {
         Serial.printf("[API] ERR -> %s parse gefaald\n", binanceSymbol);
     } else {
         // Succesvol opgehaald (alleen loggen bij langzame calls > 1200ms)
@@ -2967,7 +3327,7 @@ static void fetchPrice()
         
         // Geoptimaliseerd: betere mutex timeout handling met retry logica
         static uint32_t mutexTimeoutCount = 0;
-        if (xSemaphoreTake(dataMutex, apiMutexTimeout) == pdTRUE)
+        if (safeMutexTake(dataMutex, apiMutexTimeout, "apiTask fetchPrice"))
         {
             // Reset timeout counter bij succes
             if (mutexTimeoutCount > 0) {
@@ -3055,7 +3415,7 @@ static void fetchPrice()
             // Zet flag voor nieuwe data (voor grafiek update)
             newPriceDataAvailable = true;
             
-            xSemaphoreGive(dataMutex);
+            safeMutexGive(dataMutex, "fetchPrice");
             ok = true;
         } else {
             // Geoptimaliseerd: log alleen bij meerdere opeenvolgende timeouts
@@ -3074,46 +3434,32 @@ static void fetchPrice()
 
 // Update the UI (wordt aangeroepen vanuit uiTask met mutex)
 // Update UI - Refactored to use helper functions
-void updateUI()
-{
-    // Veiligheid: controleer of chart en dataSeries bestaan voordat we ze gebruiken
-    if (chart == nullptr || dataSeries == nullptr) {
-        Serial_println("[UI] WARN: Chart of dataSeries is null, skip update");
-        return;
-    }
-    
-    // Data wordt al beschermd door mutex in uiTask
-    int32_t p = (int32_t)lroundf(prices[symbolIndexToChart] * 100.0f);
-    
-    // Bepaal of er nieuwe data is op basis van timestamp (betrouwbaarder dan flag)
-    // Data is "nieuw" als de laatste API call minder dan 2.5 seconden geleden was
-    // (API interval is 1500ms, dus 2.5s geeft wat marge voor timing variaties)
-    unsigned long currentTime = millis();
-    bool hasNewPriceData = false;
-    if (lastApiMs > 0) {
-        unsigned long timeSinceLastApi = (currentTime >= lastApiMs) ? (currentTime - lastApiMs) : (ULONG_MAX - lastApiMs + currentTime);
-        hasNewPriceData = (timeSinceLastApi < 2500);
-    }
-    
-    // Voeg altijd een punt toe aan de grafiek als er geldige data is
-    // Dit voorkomt dat de grafiek blijft hangen als de API call te laat is
-    // of als de mutex niet beschikbaar was tijdens de laatste API call
+// UI Update Helper Functions - Split from updateUI() for better organization
+static void updateChartSection(int32_t currentPrice, bool hasNewPriceData) {
+    // Voeg een punt toe aan de grafiek als er geldige data is
     if (prices[symbolIndexToChart] > 0.0f) {
-        lv_chart_set_next_value(chart, dataSeries, p);
-        // Forceer refresh van de chart om te zorgen dat nieuwe punten worden getekend
-        lv_obj_invalidate(chart);
-        // Reset flag na gebruik (ook als deze niet gezet was, maakt niet uit)
+        // Track laatste chart waarde om conditional invalidate te doen
+        static int32_t lastChartValue = 0;
+        bool valueChanged = (currentPrice != lastChartValue);
+        
+        lv_chart_set_next_value(chart, dataSeries, currentPrice);
+        
+        // Conditional invalidate: alleen als waarde is veranderd of er nieuwe data is
+        if (valueChanged || hasNewPriceData || newPriceDataAvailable) {
+            lv_obj_invalidate(chart);
+            lastChartValue = currentPrice;
+        }
+        
+        // Reset flag na gebruik
         newPriceDataAvailable = false;
     }
-
+    
     // Update chart range
-    updateChartRange(p);
+    updateChartRange(currentPrice);
     
     // Update chart title (CYD displays)
-    // Geoptimaliseerd: gebruik char array i.p.v. String om geheugen te besparen
     if (chartTitle != nullptr) {
-        char deviceIdBuffer[16] = {0}; // Buffer om device ID te extraheren
-        // Extract device ID direct uit topic zonder String gebruik
+        char deviceIdBuffer[16] = {0};
         const char* alertPos = strstr(ntfyTopic, "-alert");
         if (alertPos != nullptr) {
             size_t len = alertPos - ntfyTopic;
@@ -3123,7 +3469,6 @@ void updateUI()
                 safeStrncpy(deviceIdBuffer, ntfyTopic, sizeof(deviceIdBuffer));
             }
         } else {
-            // Fallback: gebruik eerste deel van topic (max 15 karakters)
             safeStrncpy(deviceIdBuffer, ntfyTopic, sizeof(deviceIdBuffer));
         }
         lv_label_set_text(chartTitle, deviceIdBuffer);
@@ -3136,38 +3481,60 @@ void updateUI()
         lv_label_set_text(chartBeginLettersLabel, deviceId.c_str());
     }
     #endif
-    
+}
+
+static void updateHeaderSection() {
     // Update datum/tijd labels
     updateDateTimeLabels();
     
     // Update trend en volatiliteit labels
     updateTrendLabel();
     updateVolatilityLabel();
-    
+}
 
+static void updatePriceCardsSection(bool hasNewPriceData) {
     // Update price cards
-    for (uint8_t i = 0; i < SYMBOL_COUNT; ++i)
-    {
+    for (uint8_t i = 0; i < SYMBOL_COUNT; ++i) {
         float pct = 0.0f;
         
-        if (i == 0)
-        {
-            // BTCEUR card - geef flag door voor kleur update
+        if (i == 0) {
+            // BTCEUR card
             updateBTCEURCard(hasNewPriceData);
             pct = 0.0f; // BTCEUR heeft geen percentage voor kleur
-        }
-        else
-        {
+        } else {
             // 1min/30min cards
             pct = prices[i];
             updateAveragePriceCard(i);
         }
-
+        
         // Update kleuren
         updatePriceCardColor(i, pct);
     }
+}
 
-    // Update footer
+void updateUI()
+{
+    // Veiligheid: controleer of chart en dataSeries bestaan
+    if (chart == nullptr || dataSeries == nullptr) {
+        Serial_println("[UI] WARN: Chart of dataSeries is null, skip update");
+        return;
+    }
+    
+    // Data wordt al beschermd door mutex in uiTask
+    int32_t p = (int32_t)lroundf(prices[symbolIndexToChart] * 100.0f);
+    
+    // Bepaal of er nieuwe data is op basis van timestamp
+    unsigned long currentTime = millis();
+    bool hasNewPriceData = false;
+    if (lastApiMs > 0) {
+        unsigned long timeSinceLastApi = (currentTime >= lastApiMs) ? (currentTime - lastApiMs) : (ULONG_MAX - lastApiMs + currentTime);
+        hasNewPriceData = (timeSinceLastApi < 2500);
+    }
+    
+    // Update UI sections
+    updateChartSection(p, hasNewPriceData);
+    updateHeaderSection();
+    updatePriceCardsSection(hasNewPriceData);
     updateFooter();
 }
 
@@ -3978,16 +4345,16 @@ void checkButton() {
         // Als prices[0] nog 0 is, probeer eerst een prijs op te halen (alleen als WiFi verbonden is)
         if (WiFi.status() == WL_CONNECTED) {
             // Check of we al een prijs hebben, zo niet, haal er een op
-            if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+            if (safeMutexTake(dataMutex, pdMS_TO_TICKS(500), "checkButton price check")) {
                 if (prices[0] <= 0.0f) {
                     Serial_println("[Button] Prijs nog niet beschikbaar, haal prijs op...");
-                    xSemaphoreGive(dataMutex);
+                    safeMutexGive(dataMutex, "checkButton price check");
                     // Haal prijs op (buiten mutex om deadlock te voorkomen)
                     fetchPrice();
                     // Wacht even zodat de prijs kan worden opgeslagen
                     vTaskDelay(pdMS_TO_TICKS(200));
                 } else {
-                    xSemaphoreGive(dataMutex);
+                    safeMutexGive(dataMutex, "checkButton price available");
                 }
             }
         }
@@ -4009,7 +4376,7 @@ void checkButton() {
             } else {
                 Serial_println("[Button] WARN: Prijs nog steeds niet beschikbaar na fetch");
             }
-            xSemaphoreGive(dataMutex);
+            safeMutexGive(dataMutex, "checkButton anchor set");
                 
             // Publiceer anchor event naar MQTT en stuur notificatie
             if (currentPrice > 0.0f) {
@@ -4045,13 +4412,13 @@ void checkButton() {
 
 // touchscreen_read functie verwijderd - niet meer nodig zonder touchscreen
 
-void setup()
+// Setup helper functions - split setup() into logical sections
+static void setupSerialAndDevice()
 {
     // Load settings from Preferences
     loadSettings();
     Serial.begin(115200);
     DEV_DEVICE_INIT();
-    
     
     // Initialiseer fysieke reset button (voor TTGO en CYD platforms)
     #if HAS_PHYSICAL_BUTTON
@@ -4062,7 +4429,10 @@ void setup()
     Serial_println("Arduino_GFX LVGL_Arduino_v9 example ");
     String LVGL_Arduino = String('V') + lv_version_major() + "." + lv_version_minor() + "." + lv_version_patch();
     Serial_println(LVGL_Arduino);
+}
 
+static void setupDisplay()
+{
     // Init Display
     if (!gfx->begin())
     {
@@ -4085,7 +4455,10 @@ void setup()
     #ifndef PLATFORM_TTGO
     delay(100);
     #endif
+}
 
+static void setupLVGL()
+{
     // init LVGL
     lv_init();
 
@@ -4126,9 +4499,10 @@ void setup()
     disp = lv_display_create(screenWidth, screenHeight);
     lv_display_set_flush_cb(disp, my_disp_flush);
     lv_display_set_buffers(disp, disp_draw_buf, NULL, bufSize * 2, LV_DISPLAY_RENDER_MODE_PARTIAL);
+}
 
-    // Touchscreen initialisatie verwijderd - gebruik nu fysieke boot knop (GPIO 0)
-    
+static void setupWatchdog()
+{
     // Watchdog configuratie - platform-specifiek
     #ifdef PLATFORM_CYD24
     // Schakel task watchdog UIT voor Core 0 (UI task met LVGL)
@@ -4151,7 +4525,10 @@ void setup()
     };
     esp_task_wdt_init(&wdt_config);
     #endif
-    
+}
+
+static void setupWiFiEventHandlers()
+{
     // WiFi event handlers voor reconnect controle
     WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
         Serial.printf("[WiFi] Event: %d\n", event);
@@ -4194,9 +4571,10 @@ void setup()
                 break;
         }
     });
-    
-    // Touchscreen LVGL input device verwijderd - gebruik nu fysieke boot knop (GPIO 0)
+}
 
+static void setupMutex()
+{
     // Maak mutex VOOR we het gebruiken (moet eerst aangemaakt worden)
     dataMutex = xSemaphoreCreateMutex();
     if (dataMutex == NULL) {
@@ -4204,26 +4582,10 @@ void setup()
     } else {
         Serial.println("[FreeRTOS] Mutex aangemaakt");
     }
+}
 
-    wifiConnectionAndFetchPrice();
-
-    Serial_println("Setup done");
-    fetchPrice();
-    buildUI();
-    
-    // Force LVGL to render immediately after UI creation (CYD 2.4 work-around)
-    #ifdef PLATFORM_CYD24
-    if (disp != NULL) {
-        lv_refr_now(disp);
-    }
-    #else
-    // Voor andere platforms, roep timer handler aan om scherm te renderen
-    for (int i = 0; i < 10; i++) {
-        lv_timer_handler();
-        delay(10);
-    }
-    #endif
-
+static void startFreeRTOSTasks()
+{
     // FreeRTOS Tasks voor multi-core processing
     // Core 1: API calls (elke seconde)
     xTaskCreatePinnedToCore(
@@ -4259,6 +4621,42 @@ void setup()
     );
 
     Serial.println("[FreeRTOS] Tasks gestart op Core 1 (API) en Core 0 (UI/Web)");
+}
+
+void setup()
+{
+    // Setup in logical sections for better readability and maintainability
+    setupSerialAndDevice();
+    setupDisplay();
+    setupLVGL();
+    setupWatchdog();
+    setupWiFiEventHandlers();
+    setupMutex();  // Mutex moet vroeg aangemaakt worden, maar tasks starten later
+    
+    // WiFi connection and initial data fetch (maakt tijdelijk UI aan)
+    wifiConnectionAndFetchPrice();
+    
+    Serial_println("Setup done");
+    fetchPrice();
+    
+    // Build main UI (verwijdert WiFi UI en bouwt hoofd UI)
+    buildUI();
+    
+    // Force LVGL to render immediately after UI creation (CYD 2.4 work-around)
+    #ifdef PLATFORM_CYD24
+    if (disp != NULL) {
+        lv_refr_now(disp);
+    }
+    #else
+    // Voor andere platforms, roep timer handler aan om scherm te renderen
+    for (int i = 0; i < 10; i++) {
+        lv_timer_handler();
+        delay(DELAY_LVGL_RENDER_MS);
+    }
+    #endif
+    
+    // Start FreeRTOS tasks NA buildUI() zodat UI elementen bestaan
+    startFreeRTOSTasks();
 }
 
 // Toon verbindingsinfo (SSID en IP-adres) en "Opening Binance Session" op het scherm
@@ -4354,13 +4752,13 @@ static bool setupWiFiConnection()
         lv_timer_handler();
         
         WiFi.disconnect(false);
-        delay(500);
+        delay(DELAY_RECONNECT_MS);
         
         WiFi.begin();
         
         while (WiFi.status() != WL_CONNECTED && (millis() - connectStart) < connectTimeout) {
             lv_timer_handler();
-            delay(100);
+            delay(DELAY_WIFI_CONNECT_LOOP_MS);
         }
         
         if (WiFi.status() == WL_CONNECTED) {
@@ -4437,7 +4835,7 @@ static bool setupWiFiConnection()
             WiFi.softAP(apSSID.c_str());
         }
         
-        delay(500);
+        delay(DELAY_RECONNECT_MS);
         
         // Geoptimaliseerd: gebruik char array i.p.v. String
         char apIP[16];
@@ -4717,7 +5115,7 @@ void uiTask(void *parameter)
         #endif
         
         static uint32_t uiMutexTimeoutCount = 0;
-        if (xSemaphoreTake(dataMutex, mutexTimeout) == pdTRUE)
+        if (safeMutexTake(dataMutex, mutexTimeout, "uiTask updateUI"))
         {
             // Reset timeout counter bij succes
             if (uiMutexTimeoutCount > 0) {
@@ -4725,7 +5123,7 @@ void uiTask(void *parameter)
             }
             
             updateUI();
-            xSemaphoreGive(dataMutex);
+            safeMutexGive(dataMutex, "uiTask updateUI");
         }
         else
         {
@@ -4813,12 +5211,27 @@ void loop()
             // Verbinding verloren, probeer reconnect
             mqttConnected = false;
             lastMqttReconnectAttempt = 0;
+            // mqttReconnectAttemptCount wordt NIET gereset, zodat exponential backoff blijft werken
+        } else {
+            // Process queued messages when connected
+            processMqttQueue();
         }
     } else if (WiFi.status() == WL_CONNECTED) {
-        // Probeer MQTT reconnect als WiFi verbonden is
+        // Probeer MQTT reconnect als WiFi verbonden is (met exponential backoff)
         unsigned long now = millis();
-        if (lastMqttReconnectAttempt == 0 || (now - lastMqttReconnectAttempt >= MQTT_RECONNECT_INTERVAL)) {
+        
+        // Bereken reconnect interval met exponential backoff
+        unsigned long reconnectInterval = MQTT_RECONNECT_INTERVAL;
+        if (mqttReconnectAttemptCount >= MAX_MQTT_RECONNECT_ATTEMPTS) {
+            // Exponential backoff: interval verdubbelt bij elke mislukte poging
+            // Max backoff: 8x het basis interval (3 extra pogingen = 2^3 = 8x)
+            uint8_t backoffMultiplier = 1 << min((mqttReconnectAttemptCount - MAX_MQTT_RECONNECT_ATTEMPTS), 3);
+            reconnectInterval = MQTT_RECONNECT_INTERVAL * backoffMultiplier;
+        }
+        
+        if (lastMqttReconnectAttempt == 0 || (now - lastMqttReconnectAttempt >= reconnectInterval)) {
             lastMqttReconnectAttempt = now;
+            mqttReconnectAttemptCount++;
             connectMQTT();
         }
     }
@@ -4831,10 +5244,12 @@ void loop()
         // Check of we moeten reconnecten (interval verstreken of eerste poging)
         bool shouldReconnect = (lastReconnectAttempt == 0 || (now - lastReconnectAttempt >= RECONNECT_INTERVAL));
         
-        // Als we te veel pogingen hebben gedaan, wacht langer tussen pogingen
+        // Als we te veel pogingen hebben gedaan, gebruik exponential backoff
         if (reconnectAttemptCount >= MAX_RECONNECT_ATTEMPTS) {
-            // Verhoog interval na meerdere mislukte pogingen (exponentiële backoff)
-            unsigned long extendedInterval = RECONNECT_INTERVAL * (1 + (reconnectAttemptCount - MAX_RECONNECT_ATTEMPTS));
+            // Echte exponential backoff: interval verdubbelt bij elke mislukte poging
+            // Max backoff: 16x het basis interval (4 extra pogingen = 2^4 = 16x)
+            uint8_t backoffMultiplier = 1 << min((reconnectAttemptCount - MAX_RECONNECT_ATTEMPTS), 4);
+            unsigned long extendedInterval = RECONNECT_INTERVAL * backoffMultiplier;
             shouldReconnect = (now - lastReconnectAttempt >= extendedInterval);
         }
         
@@ -4844,7 +5259,7 @@ void loop()
             
             // Non-blocking disconnect en reconnect
             WiFi.disconnect(false);
-            delay(500); // Kortere delay voor snellere reconnect
+            delay(DELAY_RECONNECT_MS); // Kortere delay voor snellere reconnect
             WiFi.begin();
             lastReconnectAttempt = now;
             
