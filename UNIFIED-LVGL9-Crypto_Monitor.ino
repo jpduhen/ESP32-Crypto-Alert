@@ -31,8 +31,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 48
-#define VERSION_STRING "3.48"
+#define VERSION_MINOR 49
+#define VERSION_STRING "3.49"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -124,6 +124,13 @@
 #define SECONDS_PER_MINUTE 60
 #define SECONDS_PER_5MINUTES 300
 #define MINUTES_FOR_30MIN_CALC 120
+
+// --- Return Calculation Configuration ---
+// Aantal waarden nodig voor return berekeningen gebaseerd op UPDATE_API_INTERVAL (1500ms)
+// 1 minuut = 60000ms / 1500ms = 40 waarden
+// 5 minuten = 300000ms / 1500ms = 200 waarden
+#define VALUES_FOR_1MIN_RETURN ((60000UL) / (UPDATE_API_INTERVAL))
+#define VALUES_FOR_5MIN_RETURN ((300000UL) / (UPDATE_API_INTERVAL))
 
 // --- CPU Measurement Configuration ---
 #define CPU_MEASUREMENT_SAMPLES 20  // Meet over 20 loops voor gemiddelde
@@ -2132,31 +2139,45 @@ static void findMinMaxInSecondPrices(float &minVal, float &maxVal)
 // Calculate 1-minute return: price now vs 60 seconds ago
 static float calculateReturn1Minute()
 {
-    // Need at least 60 seconds of history (ringbuffer must be filled)
-    if (!secondArrayFilled)
+    // Need at least VALUES_FOR_1MIN_RETURN waarden (40 met 1500ms interval)
+    if (!secondArrayFilled && secondIndex < VALUES_FOR_1MIN_RETURN)
     {
         averagePrices[1] = 0.0f;
         static uint32_t lastLogTime = 0;
         uint32_t now = millis();
         if (now - lastLogTime > 10000) {
-            Serial_printf("[Ret1m] Wachten op data: secondIndex=%u (nodig: array gevuld)\n", secondIndex);
+            Serial_printf("[Ret1m] Wachten op data: secondIndex=%u (nodig: %u)\n", secondIndex, VALUES_FOR_1MIN_RETURN);
             lastLogTime = now;
         }
         return 0.0f;
     }
     
-    // Get current price (last written value in ringbuffer)
-    uint8_t lastWrittenIdx = getLastWrittenIndex(secondIndex, SECONDS_PER_MINUTE);
-    float priceNow = secondPrices[lastWrittenIdx];
-    
-    // Get price 60 seconds ago using helper function
-    int32_t idx1mAgo = getRingBufferIndexAgo(secondIndex, 60, SECONDS_PER_MINUTE);
-    if (idx1mAgo < 0) {
-        Serial_printf("[Ret1m] FATAL: idx1mAgo invalid, secondIndex=%u\n", secondIndex);
-        return 0.0f;
+    // Get current price
+    float priceNow;
+    if (secondArrayFilled) {
+        uint8_t lastWrittenIdx = getLastWrittenIndex(secondIndex, SECONDS_PER_MINUTE);
+        priceNow = secondPrices[lastWrittenIdx];
+    } else {
+        if (secondIndex == 0) return 0.0f;
+        priceNow = secondPrices[secondIndex - 1];
     }
     
-    float price1mAgo = secondPrices[idx1mAgo];
+    // Get price VALUES_FOR_1MIN_RETURN posities geleden (1 minuut geleden)
+    float price1mAgo;
+    if (secondArrayFilled)
+    {
+        int32_t idx1mAgo = getRingBufferIndexAgo(secondIndex, VALUES_FOR_1MIN_RETURN, SECONDS_PER_MINUTE);
+        if (idx1mAgo < 0) {
+            Serial_printf("[Ret1m] FATAL: idx1mAgo invalid, secondIndex=%u\n", secondIndex);
+            return 0.0f;
+        }
+        price1mAgo = secondPrices[idx1mAgo];
+    }
+    else
+    {
+        if (secondIndex < VALUES_FOR_1MIN_RETURN) return 0.0f;
+        price1mAgo = secondPrices[secondIndex - VALUES_FOR_1MIN_RETURN];
+    }
     
     // Validate prices
     if (!areValidPrices(priceNow, price1mAgo))
@@ -2173,16 +2194,16 @@ static float calculateReturn1Minute()
     return ((priceNow - price1mAgo) / price1mAgo) * 100.0f;
 }
 
-// Calculate 5-minute return: price now vs 300 seconds ago
+// Calculate 5-minute return: price now vs 5 minutes ago
 static float calculateReturn5Minutes()
 {
-    // Need at least 300 seconds of history
-    if (!fiveMinuteArrayFilled && fiveMinuteIndex < 300)
+    // Need at least VALUES_FOR_5MIN_RETURN waarden (200 met 1500ms interval)
+    if (!fiveMinuteArrayFilled && fiveMinuteIndex < VALUES_FOR_5MIN_RETURN)
     {
         static uint32_t lastLogTime = 0;
         uint32_t now = millis();
         if (now - lastLogTime > 30000) {
-            Serial_printf("[Ret5m] Wachten op data: fiveMinuteIndex=%u (nodig: 300)\n", fiveMinuteIndex);
+            Serial_printf("[Ret5m] Wachten op data: fiveMinuteIndex=%u (nodig: %u)\n", fiveMinuteIndex, VALUES_FOR_5MIN_RETURN);
             lastLogTime = now;
         }
         return 0.0f;
@@ -2198,11 +2219,11 @@ static float calculateReturn5Minutes()
         priceNow = fiveMinutePrices[fiveMinuteIndex - 1];
     }
     
-    // Get price 300 seconds ago
+    // Get price VALUES_FOR_5MIN_RETURN posities geleden (5 minuten geleden)
     float price5mAgo;
     if (fiveMinuteArrayFilled)
     {
-        int32_t idx5mAgo = getRingBufferIndexAgo(fiveMinuteIndex, 300, SECONDS_PER_5MINUTES);
+        int32_t idx5mAgo = getRingBufferIndexAgo(fiveMinuteIndex, VALUES_FOR_5MIN_RETURN, SECONDS_PER_5MINUTES);
         if (idx5mAgo < 0) {
             Serial_printf("[Ret5m] FATAL: idx5mAgo invalid, fiveMinuteIndex=%u\n", fiveMinuteIndex);
             return 0.0f;
@@ -2211,8 +2232,8 @@ static float calculateReturn5Minutes()
     }
     else
     {
-        if (fiveMinuteIndex < 300) return 0.0f;
-        price5mAgo = fiveMinutePrices[fiveMinuteIndex - 300];
+        if (fiveMinuteIndex < VALUES_FOR_5MIN_RETURN) return 0.0f;
+        price5mAgo = fiveMinutePrices[fiveMinuteIndex - VALUES_FOR_5MIN_RETURN];
     }
     
     // Validate prices

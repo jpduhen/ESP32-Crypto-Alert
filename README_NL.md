@@ -744,6 +744,14 @@ Als je MQTT niet gebruikt, kun je de MQTT instellingen leeg laten in de web inte
 
 ## Versie Geschiedenis
 
+### Versie 3.49
+- **Huidige Versie**: Laatste stabiele release
+- **1m en 5m Return Berekeningen Opgelost**: Probleem opgelost waarbij 1m en 5m returns op 0.00% bleven
+  - Berekeningen aangepast voor 1500ms API update interval
+  - 1m return gebruikt nu correct 40 waarden (in plaats van 60) voor 1 minuut periode
+  - 5m return gebruikt nu correct 200 waarden (in plaats van 300) voor 5 minuten periode
+  - Toegevoegd `VALUES_FOR_1MIN_RETURN` en `VALUES_FOR_5MIN_RETURN` constanten gebaseerd op `UPDATE_API_INTERVAL`
+
 ### Versie 3.24
 - **TTGO Partition Scheme Fix**: Flash size detectie probleem opgelost voor TTGO T-Display
   - TTGO gebruikt nu `huge_app` partition scheme met expliciete `FlashSize=4M` instelling

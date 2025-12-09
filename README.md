@@ -788,8 +788,15 @@ If you don't use MQTT, you can leave the MQTT settings empty in the web interfac
 
 ## Version History
 
-### Version 3.46
+### Version 3.49
 - **Current Version**: Latest stable release
+- **Fixed 1m and 5m Return Calculations**: Fixed issue where 1m and 5m returns stayed at 0.00%
+  - Adjusted calculations to account for 1500ms API update interval
+  - 1m return now correctly uses 40 values (instead of 60) for 1 minute period
+  - 5m return now correctly uses 200 values (instead of 300) for 5 minute period
+  - Added `VALUES_FOR_1MIN_RETURN` and `VALUES_FOR_5MIN_RETURN` constants based on `UPDATE_API_INTERVAL`
+
+### Version 3.46
 - **MQTT Language Support**: Language setting (Nederlands/English) is now configurable via MQTT
   - New MQTT topic: `{prefix}/config/language/set` (accepts "0" for Nederlands or "1" for English)
   - Home Assistant auto-discovery: `select.{device_id}_language` entity
