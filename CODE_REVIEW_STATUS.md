@@ -1086,6 +1086,50 @@ Wanneer je een nieuwe verbetering start, gebruik dit template:
 - MQTT Message Queue om message loss te voorkomen
 - Split updateUI() in logische secties
 
+---
+
+## Fase 4: Extra Verbeteringen & Optimalisaties
+
+**Status**: ⚪ Niet gestart  
+**Start datum**: -  
+**Voltooid datum**: -
+
+**Doel**: Extra optimalisaties en polish die niet in Sprint 1-3 zaten
+
+**Geplande Verbeteringen**:
+1. ✅ HTTP Client Optimalisatie (connection reuse onderzoeken) - Voltooid
+2. ✅ Memory Optimalisatie (stack sizes, buffers, String restanten) - Voltooid
+3. ✅ Dead Code Removal (commented code, ongebruikte functies/variabelen) - Voltooid
+4. ⚪ Extra Refactoring (waar nodig)
+5. ⚪ LVGL Rendering Optimalisatie (extra polish)
+
+**Sprint 4.1: Dead Code Removal - Voltooid**
+- Comment regels verwijderd die verwijzen naar al verwijderde code (8 regels)
+- `getDeviceIdFromTopic()` refactored: String → char array (memory optimalisatie)
+- Alle 3 gebruikers van `getDeviceIdFromTopic()` aangepast
+- Code reductie: ~10 regels
+- Memory verbetering: 3 String objecten vervangen door char arrays
+
+**Sprint 4.2: Memory Optimalisatie - Voltooid**
+- `publishMqttDiscovery()` volledig geoptimaliseerd: ~40+ String objecten vervangen door char arrays
+- `connectMQTT()` geoptimaliseerd: clientId en subscribe topics gebruiken nu char arrays
+- Helper functie `getMqttDeviceId()` toegevoegd voor char array device ID generatie
+- Memory impact: ~50+ String objecten vervangen door char arrays
+- Geen memory fragmentatie meer in MQTT discovery en connect functies
+
+**Sprint 4.3: HTTP Client Optimalisatie - Voltooid**
+- Retry logica verbeterd: extra error codes toegevoegd voor retry (send failures)
+- Performance monitoring verbeterd: langzame calls gedefinieerd als > 1000ms (was > 1500ms)
+- Connection reuse onderzocht: uitgeschakeld gehouden (veroorzaakte eerder problemen)
+- Betere error handling: specifieke retry logica voor verschillende error types
+- Code documentatie verbeterd met duidelijke comments over connection reuse beslissing
+
+**Geschatte tijd**: ~8-10 uur  
+**Risico**: Laag tot Medium  
+**Impact**: Medium
+
+**Plan**: Zie `FASE4_PLAN.md` voor gedetailleerd stappenplan
+
 **Laatste wijziging**: 2025-12-09 22:30  
 **Bijgewerkt door**: Auto (AI Assistant)
 

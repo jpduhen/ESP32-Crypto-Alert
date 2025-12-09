@@ -31,8 +31,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 57
-#define VERSION_STRING "3.57"
+#define VERSION_MINOR 60
+#define VERSION_STRING "3.60"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -163,7 +163,6 @@ static lv_obj_t *ramLabel; // RAM label rechts op regel 1 (alleen voor CYD)
 static lv_obj_t *priceBox[SYMBOL_COUNT];
 static lv_obj_t *priceTitle[SYMBOL_COUNT];
 static lv_obj_t *priceLbl[SYMBOL_COUNT];
-// resetBtn en resetPressed verwijderd - functionaliteit nu op hele BTCEUR blok
 
 // FreeRTOS mutex voor data synchronisatie tussen cores
 SemaphoreHandle_t dataMutex = NULL;
@@ -181,7 +180,6 @@ static float anchorMax = 0.0f;  // Hoogste prijs sinds anchor
 static float anchorMin = 0.0f;  // Laagste prijs sinds anchor
 static unsigned long anchorTime = 0;
 static bool anchorActive = false;
-// anchorSetPending verwijderd - niet meer nodig zonder touchscreen
 static bool anchorNotificationPending = false;  // Flag voor pending anchor set notificatie
 static float anchorTakeProfit = ANCHOR_TAKE_PROFIT_DEFAULT;  // Take profit threshold (%)
 static float anchorMaxLoss = ANCHOR_MAX_LOSS_DEFAULT;        // Max loss threshold (%)
@@ -236,7 +234,6 @@ static lv_obj_t *price1MinDiffLabel; // Label voor verschil tussen max en min in
 static lv_obj_t *price30MinMaxLabel; // Label voor max waarde in 30 min buffer
 static lv_obj_t *price30MinMinLabel; // Label voor min waarde in 30 min buffer
 static lv_obj_t *price30MinDiffLabel; // Label voor verschil tussen max en min in 30 min buffer
-// anchorButton en anchorButtonLabel verwijderd - niet meer nodig zonder touchscreen
 static lv_obj_t *anchorLabel; // Label voor anchor price info (rechts midden, met percentage verschil)
 static lv_obj_t *anchorMaxLabel; // Label voor "Pak winst" (rechts, groen, boven)
 static lv_obj_t *anchorMinLabel; // Label voor "Stop loss" (rechts, rood, onder)
@@ -420,7 +417,9 @@ static bool httpGET(const char *url, char *buffer, size_t bufferSize, uint32_t t
         HTTPClient http;
         http.setTimeout(timeoutMs);
         http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS); // Sneller falen bij connect problemen
-        http.setReuse(false); // Voorkom connection reuse problemen
+        // Connection reuse uitgeschakeld - veroorzaakte eerder problemen
+        // Bij retries altijd false voor betrouwbaarheid
+        http.setReuse(false);
         
         unsigned long requestStart = millis();
         
@@ -460,8 +459,9 @@ static bool httpGET(const char *url, char *buffer, size_t bufferSize, uint32_t t
                 }
                 buffer[bytesRead] = '\0';
                 
-                // Log alleen bij langzame calls (> 1500ms) voor debugging
-                if (requestTime > 1500) {
+                // Performance monitoring: log langzame calls
+                // Normale calls zijn < 500ms, langzaam is > 1000ms
+                if (requestTime > 1000) {
                     Serial_printf("[HTTP] Langzame response: %lu ms (poging %d)\n", requestTime, attempt + 1);
                 }
             } else {
@@ -493,9 +493,17 @@ static bool httpGET(const char *url, char *buffer, size_t bufferSize, uint32_t t
             } else if (code == HTTPC_ERROR_READ_TIMEOUT) {
                 shouldRetry = true;
                 Serial_printf("[HTTP] Read timeout na %lu ms (poging %d/%d)\n", requestTime, attempt + 1, MAX_RETRIES + 1);
+            } else if (code == HTTPC_ERROR_SEND_HEADER_FAILED || code == HTTPC_ERROR_SEND_PAYLOAD_FAILED) {
+                // Send failures kunnen tijdelijk zijn - retry waardig
+                shouldRetry = true;
+                Serial_printf("[HTTP] Send failure: code=%d, tijd=%lu ms (poging %d/%d)\n", code, requestTime, attempt + 1, MAX_RETRIES + 1);
             } else if (code < 0) {
                 // Andere HTTPClient error codes - retry alleen bij network errors
-                shouldRetry = (code == HTTPC_ERROR_CONNECTION_REFUSED || code == HTTPC_ERROR_CONNECTION_LOST || code == HTTPC_ERROR_READ_TIMEOUT);
+                shouldRetry = (code == HTTPC_ERROR_CONNECTION_REFUSED || 
+                              code == HTTPC_ERROR_CONNECTION_LOST || 
+                              code == HTTPC_ERROR_READ_TIMEOUT ||
+                              code == HTTPC_ERROR_SEND_HEADER_FAILED ||
+                              code == HTTPC_ERROR_SEND_PAYLOAD_FAILED);
                 if (!shouldRetry) {
                     Serial_printf("[HTTP] Error code=%d, tijd=%lu ms (geen retry)\n", code, requestTime);
                 } else {
@@ -1279,35 +1287,51 @@ static void generateDefaultNtfyTopic(char* buffer, size_t bufferSize) {
     snprintf(buffer, bufferSize, "%s-alert", deviceId);
 }
 
-// Extract ESP32 device ID from NTFY topic (everything before "-alert")
-// If topic format is [ESP32-ID]-alert, returns the ESP32-ID
+// Helper: Generate MQTT device ID with prefix (char array version - voorkomt String gebruik)
+// Format: [PREFIX]_[ESP32-ID-HEX]
+static void getMqttDeviceId(char* buffer, size_t bufferSize) {
+    if (buffer == nullptr || bufferSize == 0) return;
+    
+    // Generate device ID from MAC address (lower 32 bits as HEX)
+    uint32_t macLower = (uint32_t)ESP.getEfuseMac();
+    snprintf(buffer, bufferSize, "%s_%08x", MQTT_TOPIC_PREFIX, macLower);
+}
+
+// Helper: Extract device ID from topic (char array version - voorkomt String gebruik)
+// If topic format is [ESP32-ID]-alert, extracts the ESP32-ID
 // Falls back to showing first part before any dash if format is different
-static String getDeviceIdFromTopic(const char* topic) {
+static void getDeviceIdFromTopic(const char* topic, char* buffer, size_t bufferSize) {
+    if (topic == nullptr || buffer == nullptr || bufferSize == 0) {
+        if (buffer && bufferSize > 0) buffer[0] = '\0';
+        return;
+    }
+    
     // Look for "-alert" at the end
     const char* alertPos = strstr(topic, "-alert");
     if (alertPos != nullptr) {
         // Extract everything before "-alert"
         size_t len = alertPos - topic;
-        if (len > 0 && len < 16) {
-            char deviceId[16];
-            strncpy(deviceId, topic, len);
-            deviceId[len] = '\0';
-            return String(deviceId);
+        if (len > 0 && len < bufferSize) {
+            strncpy(buffer, topic, len);
+            buffer[len] = '\0';
+            return;
         }
     }
+    
     // Fallback: use first part before any dash (for backwards compatibility)
     const char* dashPos = strchr(topic, '-');
     if (dashPos != nullptr) {
         size_t len = dashPos - topic;
-        if (len > 0 && len < 16) {
-            char deviceId[16];
-            strncpy(deviceId, topic, len);
-            deviceId[len] = '\0';
-            return String(deviceId);
+        if (len > 0 && len < bufferSize) {
+            strncpy(buffer, topic, len);
+            buffer[len] = '\0';
+            return;
         }
     }
-    // Last resort: use whole topic (limited)
-    return String(topic).substring(0, 15);
+    
+    // Last resort: use whole topic (limited to bufferSize-1)
+    strncpy(buffer, topic, bufferSize - 1);
+    buffer[bufferSize - 1] = '\0';
 }
 
 // Load settings from Preferences
@@ -1928,138 +1952,146 @@ void publishMqttValues(float price, float ret_1m, float ret_5m, float ret_30m) {
 }
 
 // Publiceer MQTT Discovery berichten voor Home Assistant
+// Geoptimaliseerd: gebruik char arrays i.p.v. String om geheugenfragmentatie te voorkomen
 void publishMqttDiscovery() {
     if (!mqttConnected) return;
     
-    String prefix = String(MQTT_TOPIC_PREFIX);
-    String deviceId = prefix + "_" + String((uint32_t)ESP.getEfuseMac(), HEX);
-    String deviceName = DEVICE_NAME;
-    String deviceManufacturer = "JanP";
-    String deviceModel = DEVICE_MODEL;
-    String deviceJson = "\"device\":{\"identifiers\":[\"" + deviceId + "\"],\"name\":\"" + deviceName + "\",\"manufacturer\":\"" + deviceManufacturer + "\",\"model\":\"" + deviceModel + "\"}";
+    // Generate device ID and device JSON string (char arrays)
+    char deviceId[64];
+    getMqttDeviceId(deviceId, sizeof(deviceId));
     
-    String discTopic1 = "homeassistant/number/" + deviceId + "_spike1m/config";
-    String payload1 = "{\"name\":\"1m Spike Threshold\",\"unique_id\":\"" + deviceId + "_spike1m\",\"state_topic\":\"" + prefix + "/config/spike1m\",\"command_topic\":\"" + prefix + "/config/spike1m/set\",\"min\":0.01,\"max\":5.0,\"step\":0.01,\"unit_of_measurement\":\"%\",\"icon\":\"mdi:chart-line-variant\",\"mode\":\"box\"," + deviceJson + "}";
-    mqttClient.publish(discTopic1.c_str(), payload1.c_str(), true);
+    char deviceJson[256];
+    snprintf(deviceJson, sizeof(deviceJson), 
+        "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"%s\",\"manufacturer\":\"JanP\",\"model\":\"%s\"}",
+        deviceId, DEVICE_NAME, DEVICE_MODEL);
+    
+    // Buffers voor topic en payload
+    char topicBuffer[128];
+    char payloadBuffer[512];
+    
+    // Discovery berichten met char arrays (geen String concatenatie)
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_spike1m/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"1m Spike Threshold\",\"unique_id\":\"%s_spike1m\",\"state_topic\":\"%s/config/spike1m\",\"command_topic\":\"%s/config/spike1m/set\",\"min\":0.01,\"max\":5.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-line-variant\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
-    String discTopic2 = "homeassistant/number/" + deviceId + "_spike5m/config";
-    String payload2 = "{\"name\":\"5m Spike Filter\",\"unique_id\":\"" + deviceId + "_spike5m\",\"state_topic\":\"" + prefix + "/config/spike5m\",\"command_topic\":\"" + prefix + "/config/spike5m/set\",\"min\":0.01,\"max\":10.0,\"step\":0.01,\"unit_of_measurement\":\"%\",\"icon\":\"mdi:filter\",\"mode\":\"box\"," + deviceJson + "}";
-    mqttClient.publish(discTopic2.c_str(), payload2.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_spike5m/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"5m Spike Filter\",\"unique_id\":\"%s_spike5m\",\"state_topic\":\"%s/config/spike5m\",\"command_topic\":\"%s/config/spike5m/set\",\"min\":0.01,\"max\":10.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:filter\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
-    String discTopic3 = "homeassistant/number/" + deviceId + "_move30m/config";
-    String payload3 = "{\"name\":\"30m Move Threshold\",\"unique_id\":\"" + deviceId + "_move30m\",\"state_topic\":\"" + prefix + "/config/move30m\",\"command_topic\":\"" + prefix + "/config/move30m/set\",\"min\":0.5,\"max\":20.0,\"step\":0.1,\"unit_of_measurement\":\"%\",\"icon\":\"mdi:trending-up\",\"mode\":\"box\"," + deviceJson + "}";
-    mqttClient.publish(discTopic3.c_str(), payload3.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_move30m/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"30m Move Threshold\",\"unique_id\":\"%s_move30m\",\"state_topic\":\"%s/config/move30m\",\"command_topic\":\"%s/config/move30m/set\",\"min\":0.5,\"max\":20.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:trending-up\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
-    String discTopic4 = "homeassistant/number/" + deviceId + "_move5m/config";
-    String payload4 = "{\"name\":\"5m Move Filter\",\"unique_id\":\"" + deviceId + "_move5m\",\"state_topic\":\"" + prefix + "/config/move5m\",\"command_topic\":\"" + prefix + "/config/move5m/set\",\"min\":0.1,\"max\":10.0,\"step\":0.1,\"unit_of_measurement\":\"%\",\"icon\":\"mdi:filter-variant\",\"mode\":\"box\"," + deviceJson + "}";
-    mqttClient.publish(discTopic4.c_str(), payload4.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_move5m/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"5m Move Filter\",\"unique_id\":\"%s_move5m\",\"state_topic\":\"%s/config/move5m\",\"command_topic\":\"%s/config/move5m/set\",\"min\":0.1,\"max\":10.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:filter-variant\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
-    String discTopic4a = "homeassistant/number/" + deviceId + "_move5mAlert/config";
-    String payload4a = "{\"name\":\"5m Move Alert Threshold\",\"unique_id\":\"" + deviceId + "_move5mAlert\",\"state_topic\":\"" + prefix + "/config/move5mAlert\",\"command_topic\":\"" + prefix + "/config/move5mAlert/set\",\"min\":0.1,\"max\":10.0,\"step\":0.1,\"unit_of_measurement\":\"%\",\"icon\":\"mdi:alert\",\"mode\":\"box\"," + deviceJson + "}";
-    mqttClient.publish(discTopic4a.c_str(), payload4a.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_move5mAlert/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"5m Move Alert Threshold\",\"unique_id\":\"%s_move5mAlert\",\"state_topic\":\"%s/config/move5mAlert\",\"command_topic\":\"%s/config/move5mAlert/set\",\"min\":0.1,\"max\":10.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:alert\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
-    String discTopic5 = "homeassistant/number/" + deviceId + "_cooldown1min/config";
-    String payload5 = "{\"name\":\"1m Cooldown\",\"unique_id\":\"" + deviceId + "_cooldown1min\",\"state_topic\":\"" + prefix + "/config/cooldown1min\",\"command_topic\":\"" + prefix + "/config/cooldown1min/set\",\"min\":10,\"max\":3600,\"step\":10,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer\",\"mode\":\"box\"," + deviceJson + "}";
-    mqttClient.publish(discTopic5.c_str(), payload5.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_cooldown1min/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"1m Cooldown\",\"unique_id\":\"%s_cooldown1min\",\"state_topic\":\"%s/config/cooldown1min\",\"command_topic\":\"%s/config/cooldown1min/set\",\"min\":10,\"max\":3600,\"step\":10,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
-    String discTopic6 = "homeassistant/number/" + deviceId + "_cooldown30min/config";
-    String payload6 = "{\"name\":\"30m Cooldown\",\"unique_id\":\"" + deviceId + "_cooldown30min\",\"state_topic\":\"" + prefix + "/config/cooldown30min\",\"command_topic\":\"" + prefix + "/config/cooldown30min/set\",\"min\":10,\"max\":3600,\"step\":10,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer-outline\",\"mode\":\"box\"," + deviceJson + "}";
-    mqttClient.publish(discTopic6.c_str(), payload6.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_cooldown30min/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"30m Cooldown\",\"unique_id\":\"%s_cooldown30min\",\"state_topic\":\"%s/config/cooldown30min\",\"command_topic\":\"%s/config/cooldown30min/set\",\"min\":10,\"max\":3600,\"step\":10,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer-outline\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
-    String discTopic6a = "homeassistant/number/" + deviceId + "_cooldown5min/config";
-    String payload6a = "{\"name\":\"5m Cooldown\",\"unique_id\":\"" + deviceId + "_cooldown5min\",\"state_topic\":\"" + prefix + "/config/cooldown5min\",\"command_topic\":\"" + prefix + "/config/cooldown5min/set\",\"min\":10,\"max\":3600,\"step\":10,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer-sand\",\"mode\":\"box\"," + deviceJson + "}";
-    mqttClient.publish(discTopic6a.c_str(), payload6a.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_cooldown5min/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"5m Cooldown\",\"unique_id\":\"%s_cooldown5min\",\"state_topic\":\"%s/config/cooldown5min\",\"command_topic\":\"%s/config/cooldown5min/set\",\"min\":10,\"max\":3600,\"step\":10,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer-sand\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
-    String discTopic7 = "homeassistant/text/" + deviceId + "_binanceSymbol/config";
-    String payload7 = "{\"name\":\"Binance Symbol\",\"unique_id\":\"" + deviceId + "_binanceSymbol\",\"state_topic\":\"" + prefix + "/config/binanceSymbol\",\"command_topic\":\"" + prefix + "/config/binanceSymbol/set\",\"icon\":\"mdi:currency-btc\"," + deviceJson + "}";
-    mqttClient.publish(discTopic7.c_str(), payload7.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/text/%s_binanceSymbol/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Binance Symbol\",\"unique_id\":\"%s_binanceSymbol\",\"state_topic\":\"%s/config/binanceSymbol\",\"command_topic\":\"%s/config/binanceSymbol/set\",\"icon\":\"mdi:currency-btc\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
-    String discTopic8 = "homeassistant/text/" + deviceId + "_ntfyTopic/config";
-    String payload8 = "{\"name\":\"NTFY Topic\",\"unique_id\":\"" + deviceId + "_ntfyTopic\",\"state_topic\":\"" + prefix + "/config/ntfyTopic\",\"command_topic\":\"" + prefix + "/config/ntfyTopic/set\",\"icon\":\"mdi:bell-ring\"," + deviceJson + "}";
-    mqttClient.publish(discTopic8.c_str(), payload8.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/text/%s_ntfyTopic/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"NTFY Topic\",\"unique_id\":\"%s_ntfyTopic\",\"state_topic\":\"%s/config/ntfyTopic\",\"command_topic\":\"%s/config/ntfyTopic/set\",\"icon\":\"mdi:bell-ring\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
-    String discTopic9 = "homeassistant/sensor/" + deviceId + "_price/config";
-    String payload9 = "{\"name\":\"Crypto Price\",\"unique_id\":\"" + deviceId + "_price\",\"state_topic\":\"" + prefix + "/values/price\",\"unit_of_measurement\":\"EUR\",\"icon\":\"mdi:currency-btc\",\"device_class\":\"monetary\"," + deviceJson + "}";
-    mqttClient.publish(discTopic9.c_str(), payload9.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_price/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Crypto Price\",\"unique_id\":\"%s_price\",\"state_topic\":\"%s/values/price\",\"unit_of_measurement\":\"EUR\",\"icon\":\"mdi:currency-btc\",\"device_class\":\"monetary\",%s}", deviceId, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
-    String discTopic10 = "homeassistant/sensor/" + deviceId + "_return_1m/config";
-    String payload10 = "{\"name\":\"1m Return\",\"unique_id\":\"" + deviceId + "_return_1m\",\"state_topic\":\"" + prefix + "/values/return_1m\",\"unit_of_measurement\":\"%\",\"icon\":\"mdi:chart-line-variant\"," + deviceJson + "}";
-    mqttClient.publish(discTopic10.c_str(), payload10.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_return_1m/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"1m Return\",\"unique_id\":\"%s_return_1m\",\"state_topic\":\"%s/values/return_1m\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-line-variant\",%s}", deviceId, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
-    String discTopic11 = "homeassistant/sensor/" + deviceId + "_return_5m/config";
-    String payload11 = "{\"name\":\"5m Return\",\"unique_id\":\"" + deviceId + "_return_5m\",\"state_topic\":\"" + prefix + "/values/return_5m\",\"unit_of_measurement\":\"%\",\"icon\":\"mdi:chart-timeline-variant\"," + deviceJson + "}";
-    mqttClient.publish(discTopic11.c_str(), payload11.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_return_5m/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"5m Return\",\"unique_id\":\"%s_return_5m\",\"state_topic\":\"%s/values/return_5m\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-timeline-variant\",%s}", deviceId, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
-    String discTopic12 = "homeassistant/sensor/" + deviceId + "_return_30m/config";
-    String payload12 = "{\"name\":\"30m Return\",\"unique_id\":\"" + deviceId + "_return_30m\",\"state_topic\":\"" + prefix + "/values/return_30m\",\"unit_of_measurement\":\"%\",\"icon\":\"mdi:trending-up\"," + deviceJson + "}";
-    mqttClient.publish(discTopic12.c_str(), payload12.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_return_30m/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"30m Return\",\"unique_id\":\"%s_return_30m\",\"state_topic\":\"%s/values/return_30m\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:trending-up\",%s}", deviceId, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     // Reset button
-    String discTopic13 = "homeassistant/button/" + deviceId + "_reset/config";
-    String payload13 = "{\"name\":\"Reset Open Price\",\"unique_id\":\"" + deviceId + "_reset\",\"command_topic\":\"" + prefix + "/button/reset/set\",\"icon\":\"mdi:restart\"," + deviceJson + "}";
-    mqttClient.publish(discTopic13.c_str(), payload13.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/button/%s_reset/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Reset Open Price\",\"unique_id\":\"%s_reset\",\"command_topic\":\"%s/button/reset/set\",\"icon\":\"mdi:restart\",%s}", deviceId, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     // Anchor take profit
-    String discTopic14 = "homeassistant/number/" + deviceId + "_anchorTakeProfit/config";
-    String payload14 = "{\"name\":\"Anchor Take Profit\",\"unique_id\":\"" + deviceId + "_anchorTakeProfit\",\"state_topic\":\"" + prefix + "/config/anchorTakeProfit\",\"command_topic\":\"" + prefix + "/config/anchorTakeProfit/set\",\"min\":0.1,\"max\":100.0,\"step\":0.1,\"unit_of_measurement\":\"%\",\"icon\":\"mdi:cash-plus\",\"mode\":\"box\"," + deviceJson + "}";
-    mqttClient.publish(discTopic14.c_str(), payload14.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_anchorTakeProfit/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Anchor Take Profit\",\"unique_id\":\"%s_anchorTakeProfit\",\"state_topic\":\"%s/config/anchorTakeProfit\",\"command_topic\":\"%s/config/anchorTakeProfit/set\",\"min\":0.1,\"max\":100.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:cash-plus\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     // Anchor max loss
-    String discTopic15 = "homeassistant/number/" + deviceId + "_anchorMaxLoss/config";
-    String payload15 = "{\"name\":\"Anchor Max Loss\",\"unique_id\":\"" + deviceId + "_anchorMaxLoss\",\"state_topic\":\"" + prefix + "/config/anchorMaxLoss\",\"command_topic\":\"" + prefix + "/config/anchorMaxLoss/set\",\"min\":-100.0,\"max\":-0.1,\"step\":0.1,\"unit_of_measurement\":\"%\",\"icon\":\"mdi:cash-minus\",\"mode\":\"box\"," + deviceJson + "}";
-    mqttClient.publish(discTopic15.c_str(), payload15.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_anchorMaxLoss/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Anchor Max Loss\",\"unique_id\":\"%s_anchorMaxLoss\",\"state_topic\":\"%s/config/anchorMaxLoss\",\"command_topic\":\"%s/config/anchorMaxLoss/set\",\"min\":-100.0,\"max\":-0.1,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:cash-minus\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     // Anchor event sensor
-    String discTopic16 = "homeassistant/sensor/" + deviceId + "_anchor_event/config";
-    String payload16 = "{\"name\":\"Anchor Event\",\"unique_id\":\"" + deviceId + "_anchor_event\",\"state_topic\":\"" + prefix + "/anchor/event\",\"json_attributes_topic\":\"" + prefix + "/anchor/event\",\"value_template\":\"{{ value_json.event }}\",\"icon\":\"mdi:anchor\"," + deviceJson + "}";
-    mqttClient.publish(discTopic16.c_str(), payload16.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_anchor_event/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Anchor Event\",\"unique_id\":\"%s_anchor_event\",\"state_topic\":\"%s/anchor/event\",\"json_attributes_topic\":\"%s/anchor/event\",\"value_template\":\"{{ value_json.event }}\",\"icon\":\"mdi:anchor\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     // Trend threshold
-    String discTopic17 = "homeassistant/number/" + deviceId + "_trendThreshold/config";
-    String payload17 = "{\"name\":\"Trend Threshold\",\"unique_id\":\"" + deviceId + "_trendThreshold\",\"state_topic\":\"" + prefix + "/config/trendThreshold\",\"command_topic\":\"" + prefix + "/config/trendThreshold/set\",\"min\":0.1,\"max\":10.0,\"step\":0.1,\"unit_of_measurement\":\"%\",\"icon\":\"mdi:chart-line\",\"mode\":\"box\"," + deviceJson + "}";
-    mqttClient.publish(discTopic17.c_str(), payload17.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_trendThreshold/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Trend Threshold\",\"unique_id\":\"%s_trendThreshold\",\"state_topic\":\"%s/config/trendThreshold\",\"command_topic\":\"%s/config/trendThreshold/set\",\"min\":0.1,\"max\":10.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-line\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     // Volatility low threshold
-    String discTopic18 = "homeassistant/number/" + deviceId + "_volatilityLowThreshold/config";
-    String payload18 = "{\"name\":\"Volatility Low Threshold\",\"unique_id\":\"" + deviceId + "_volatilityLowThreshold\",\"state_topic\":\"" + prefix + "/config/volatilityLowThreshold\",\"command_topic\":\"" + prefix + "/config/volatilityLowThreshold/set\",\"min\":0.01,\"max\":1.0,\"step\":0.01,\"unit_of_measurement\":\"%\",\"icon\":\"mdi:chart-timeline-variant\",\"mode\":\"box\"," + deviceJson + "}";
-    mqttClient.publish(discTopic18.c_str(), payload18.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_volatilityLowThreshold/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Volatility Low Threshold\",\"unique_id\":\"%s_volatilityLowThreshold\",\"state_topic\":\"%s/config/volatilityLowThreshold\",\"command_topic\":\"%s/config/volatilityLowThreshold/set\",\"min\":0.01,\"max\":1.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-timeline-variant\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     // Volatility high threshold
-    String discTopic19 = "homeassistant/number/" + deviceId + "_volatilityHighThreshold/config";
-    String payload19 = "{\"name\":\"Volatility High Threshold\",\"unique_id\":\"" + deviceId + "_volatilityHighThreshold\",\"state_topic\":\"" + prefix + "/config/volatilityHighThreshold\",\"command_topic\":\"" + prefix + "/config/volatilityHighThreshold/set\",\"min\":0.01,\"max\":1.0,\"step\":0.01,\"unit_of_measurement\":\"%\",\"icon\":\"mdi:chart-timeline-variant-shimmer\",\"mode\":\"box\"," + deviceJson + "}";
-    mqttClient.publish(discTopic19.c_str(), payload19.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_volatilityHighThreshold/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Volatility High Threshold\",\"unique_id\":\"%s_volatilityHighThreshold\",\"state_topic\":\"%s/config/volatilityHighThreshold\",\"command_topic\":\"%s/config/volatilityHighThreshold/set\",\"min\":0.01,\"max\":1.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-timeline-variant-shimmer\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     // IP Address sensor
-    String discTopic20 = "homeassistant/sensor/" + deviceId + "_ip_address/config";
-    String payload20 = "{\"name\":\"IP Address\",\"unique_id\":\"" + deviceId + "_ip_address\",\"state_topic\":\"" + prefix + "/values/ip_address\",\"icon\":\"mdi:ip-network\"," + deviceJson + "}";
-    mqttClient.publish(discTopic20.c_str(), payload20.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_ip_address/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"IP Address\",\"unique_id\":\"%s_ip_address\",\"state_topic\":\"%s/values/ip_address\",\"icon\":\"mdi:ip-network\",%s}", deviceId, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     // Language select
-    String discTopic21 = "homeassistant/select/" + deviceId + "_language/config";
-    String payload21 = "{\"name\":\"Language\",\"unique_id\":\"" + deviceId + "_language\",\"state_topic\":\"" + prefix + "/config/language\",\"command_topic\":\"" + prefix + "/config/language/set\",\"options\":[\"0\",\"1\"],\"icon\":\"mdi:translate\"," + deviceJson + "}";
-    mqttClient.publish(discTopic21.c_str(), payload21.c_str(), true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/select/%s_language/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Language\",\"unique_id\":\"%s_language\",\"state_topic\":\"%s/config/language\",\"command_topic\":\"%s/config/language/set\",\"options\":[\"0\",\"1\"],\"icon\":\"mdi:translate\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     Serial_println("[MQTT] Discovery messages published");
@@ -2072,27 +2104,43 @@ void connectMQTT() {
     mqttClient.setServer(mqttHost, mqttPort);
     mqttClient.setCallback(mqttCallback);
     
-    String clientId = String(MQTT_CLIENT_ID_PREFIX) + String((uint32_t)ESP.getEfuseMac(), HEX);
-    Serial_printf("[MQTT] Connecting to %s:%d as %s...\n", mqttHost, mqttPort, clientId.c_str());
+    // Geoptimaliseerd: gebruik char array i.p.v. String
+    char clientId[64];
+    uint32_t macLower = (uint32_t)ESP.getEfuseMac();
+    snprintf(clientId, sizeof(clientId), "%s%08x", MQTT_CLIENT_ID_PREFIX, macLower);
+    Serial_printf("[MQTT] Connecting to %s:%d as %s...\n", mqttHost, mqttPort, clientId);
     
-    if (mqttClient.connect(clientId.c_str(), mqttUser, mqttPass)) {
+    if (mqttClient.connect(clientId, mqttUser, mqttPass)) {
         Serial_println("[MQTT] Connected!");
         mqttConnected = true;
         mqttReconnectAttemptCount = 0; // Reset counter bij succesvolle verbinding
         
-        String prefix = String(MQTT_TOPIC_PREFIX);
-        mqttClient.subscribe((prefix + "/config/spike1m/set").c_str());
-        mqttClient.subscribe((prefix + "/config/spike5m/set").c_str());
-        mqttClient.subscribe((prefix + "/config/move30m/set").c_str());
-        mqttClient.subscribe((prefix + "/config/move5m/set").c_str());
-        mqttClient.subscribe((prefix + "/config/cooldown1min/set").c_str());
-        mqttClient.subscribe((prefix + "/config/cooldown30min/set").c_str());
-        mqttClient.subscribe((prefix + "/config/binanceSymbol/set").c_str());
-        mqttClient.subscribe((prefix + "/config/ntfyTopic/set").c_str());
-        mqttClient.subscribe((prefix + "/button/reset/set").c_str());
-        mqttClient.subscribe((prefix + "/config/anchorTakeProfit/set").c_str());
-        mqttClient.subscribe((prefix + "/config/anchorMaxLoss/set").c_str());
-        mqttClient.subscribe((prefix + "/config/language/set").c_str());
+        // Geoptimaliseerd: gebruik char arrays i.p.v. String voor subscribe topics
+        char topicBuffer[128];
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/spike1m/set", MQTT_TOPIC_PREFIX);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/spike5m/set", MQTT_TOPIC_PREFIX);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/move30m/set", MQTT_TOPIC_PREFIX);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/move5m/set", MQTT_TOPIC_PREFIX);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/cooldown1min/set", MQTT_TOPIC_PREFIX);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/cooldown30min/set", MQTT_TOPIC_PREFIX);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/binanceSymbol/set", MQTT_TOPIC_PREFIX);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/ntfyTopic/set", MQTT_TOPIC_PREFIX);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/button/reset/set", MQTT_TOPIC_PREFIX);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/anchorTakeProfit/set", MQTT_TOPIC_PREFIX);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/anchorMaxLoss/set", MQTT_TOPIC_PREFIX);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/language/set", MQTT_TOPIC_PREFIX);
+        mqttClient.subscribe(topicBuffer);
         
         publishMqttSettings();
         publishMqttDiscovery();
@@ -2370,7 +2418,6 @@ static void handleSave()
 }
 
 
-// Status pagina handler verwijderd - niet meer gebruikt
 
 // 404 handler voor onbekende routes
 static void handleNotFound()
@@ -2397,7 +2444,6 @@ static void setupWebServer()
     Serial.println("[WebServer] Route '/' geregistreerd");
     server.on("/save", HTTP_POST, handleSave);
     Serial.println("[WebServer] Route '/save' geregistreerd");
-    // Status pagina route verwijderd - niet meer gebruikt
     server.onNotFound(handleNotFound); // 404 handler
     Serial.println("[WebServer] 404 handler geregistreerd");
     server.begin();
@@ -3477,8 +3523,9 @@ static void updateChartSection(int32_t currentPrice, bool hasNewPriceData) {
     // Update chart begin letters label (TTGO displays)
     #ifdef PLATFORM_TTGO
     if (chartBeginLettersLabel != nullptr) {
-        String deviceId = getDeviceIdFromTopic(ntfyTopic);
-        lv_label_set_text(chartBeginLettersLabel, deviceId.c_str());
+        char deviceIdBuffer[16];
+        getDeviceIdFromTopic(ntfyTopic, deviceIdBuffer, sizeof(deviceIdBuffer));
+        lv_label_set_text(chartBeginLettersLabel, deviceIdBuffer);
     }
     #endif
 }
@@ -4007,8 +4054,9 @@ static void createChart()
     #ifndef PLATFORM_TTGO
     chartTitle = lv_label_create(lv_scr_act());
     lv_obj_set_style_text_font(chartTitle, &lv_font_montserrat_16, 0);
-    String deviceId = getDeviceIdFromTopic(ntfyTopic);
-    lv_label_set_text(chartTitle, deviceId.c_str());
+    char deviceIdBuffer[16];
+    getDeviceIdFromTopic(ntfyTopic, deviceIdBuffer, sizeof(deviceIdBuffer));
+    lv_label_set_text(chartTitle, deviceIdBuffer);
     lv_obj_set_style_text_color(chartTitle, lv_palette_main(LV_PALETTE_CYAN), 0);
     lv_obj_align_to(chartTitle, chart, LV_ALIGN_OUT_TOP_LEFT, 0, -4);
     #endif
@@ -4031,8 +4079,9 @@ static void createHeaderLabels()
     lv_obj_set_style_text_font(chartBeginLettersLabel, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(chartBeginLettersLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
     lv_obj_set_style_text_align(chartBeginLettersLabel, LV_TEXT_ALIGN_LEFT, 0);
-    String deviceId = getDeviceIdFromTopic(ntfyTopic);
-    lv_label_set_text(chartBeginLettersLabel, deviceId.c_str());
+    char deviceIdBuffer[16];
+    getDeviceIdFromTopic(ntfyTopic, deviceIdBuffer, sizeof(deviceIdBuffer));
+    lv_label_set_text(chartBeginLettersLabel, deviceIdBuffer);
     lv_obj_set_pos(chartBeginLettersLabel, 0, 2);
     
     chartTimeLabel = lv_label_create(lv_scr_act());
@@ -4410,7 +4459,6 @@ void checkButton() {
 }
 #endif
 
-// touchscreen_read functie verwijderd - niet meer nodig zonder touchscreen
 
 // Setup helper functions - split setup() into logical sections
 static void setupSerialAndDevice()
