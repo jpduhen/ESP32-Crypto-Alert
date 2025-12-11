@@ -226,8 +226,18 @@ Configure your MQTT broker for integration with Home Assistant or other systems:
   - *Optimized*: Good detection during peak activity
 
 #### Anchor Settings
+- **Anchor Value (EUR)**: Set the anchor price value
+  - Enter a custom value (default: current price is pre-filled)
+  - Leave empty to use the current price
+  - Click "Set Anchor" button to apply immediately (separate from saving other settings)
 - **Anchor Take Profit (%)**: Percentage above anchor for profit notification (default: 5.0%)
 - **Anchor Max Loss (%)**: Percentage below anchor for loss notification (default: -3.0%)
+
+**Note**: The anchor value can be set via:
+- **Web Interface**: Enter value and click "Set Anchor" button
+- **Physical Button** (TTGO only): Press reset button (GPIO 0)
+- **Touchscreen** (CYD only): Tap on the BTCEUR price card
+- **MQTT**: Send value to `{prefix}/config/anchorValue/set` topic (see MQTT section)
 
 **Save**: Click "Save" to save all settings. The device will automatically reconnect to MQTT if settings have changed.
 
@@ -359,6 +369,8 @@ The display shows real-time cryptocurrency information in a clear layout:
 
 #### Top Section (Header)
 - **Date and Time**: Current date and time (right-aligned)
+  - **CYD**: Format `dd-mm-yyyy` (e.g. "26-01-2025")
+  - **TTGO**: Format `dd-mm-yy` (e.g. "26-01-25") - compact format for lower resolution
 - **Version Number**: Software version (center)
 - **Chart Title**: First letters of your NTFY topic (CYD) or first letters on line 2 (TTGO)
 
@@ -655,6 +667,7 @@ These topics can be read (current value) and written (to change):
 - `{prefix}/config/ntfyTopic` - NTFY topic (string)
 - `{prefix}/config/anchorTakeProfit` - Anchor take profit % (float)
 - `{prefix}/config/anchorMaxLoss` - Anchor max loss % (float)
+- `{prefix}/config/anchorValue` - Anchor price value in EUR (float)
 - `{prefix}/config/trendThreshold` - Trend threshold % (float)
 - `{prefix}/config/volatilityLowThreshold` - Volatility low threshold % (float)
 - `{prefix}/config/volatilityHighThreshold` - Volatility high threshold % (float)
@@ -667,8 +680,18 @@ These topics can be read (current value) and written (to change):
 mosquitto_pub -h 192.168.1.100 -t "ttgo_crypto/config/spike1m/set" -m "0.5"
 ```
 
+**Example**: To set anchor value to 78650.00 EUR:
+```bash
+mosquitto_pub -h 192.168.1.100 -t "ttgo_crypto/config/anchorValue/set" -m "78650.00"
+```
+
+**Example**: To set anchor to current price:
+```bash
+mosquitto_pub -h 192.168.1.100 -t "ttgo_crypto/config/anchorValue/set" -m "current"
+```
+
 #### Control Topics
-- `{prefix}/button/reset/set` - Publish "PRESSED" to set anchor price (string)
+- `{prefix}/button/reset/set` - Publish "PRESS" to set anchor price to current price (string)
 
 ### Home Assistant Integration
 
@@ -705,6 +728,7 @@ After detection you get the following entities:
 - `number.{device_id}_cooldown5min` - 5m cooldown (seconds)
 - `number.{device_id}_anchorTakeProfit` - Anchor take profit %
 - `number.{device_id}_anchorMaxLoss` - Anchor max loss %
+- `number.{device_id}_anchorValue` - Anchor price value in EUR
 - `number.{device_id}_trendThreshold` - Trend threshold %
 - `number.{device_id}_volatilityLowThreshold` - Volatility low threshold %
 - `number.{device_id}_volatilityHighThreshold` - Volatility high threshold %
@@ -787,6 +811,32 @@ MQTT is optional and can also be used with other systems such as:
 If you don't use MQTT, you can leave the MQTT settings empty in the web interface.
 
 ## Version History
+
+### Version 3.62
+- **Anchor Value Setting via Web Interface and MQTT**:
+  - **Web Interface**: Added "Anchor Value (EUR)" input field with "Set Anchor" button in "Anchor Settings" section
+    - Default value is pre-filled with current price
+    - Can enter custom value or leave empty to use current price
+    - Button applies anchor immediately (separate from saving other settings)
+  - **MQTT Support**: Added `{prefix}/config/anchorValue/set` topic for setting anchor value
+    - Accepts numeric value (e.g. "78650.00") or "current" to use current price
+    - Home Assistant auto-discovery: `number.{device_id}_anchorValue` entity
+  - **Asynchronous Processing**: All anchor settings (web, MQTT, physical button) use queue for thread-safe processing
+  - **Improved Thread Safety**: Centralized `queueAnchorSetting()` helper function for all input methods
+  - **Better Error Handling**: Improved validation and error recovery
+- **Web Interface Improvements**:
+  - Reorganized sections: "General Settings" (Language, NTFY Topic, Binance Symbol) followed by "Anchor Settings"
+  - Anchor settings moved directly under General Settings for better organization
+  - Swapped order: "Trend & Volatility Settings" now comes before "MQTT Settings"
+- **Display Improvements**:
+  - **CYD**: Date format changed to `dd-mm-yyyy` (e.g. "26-01-2025") and position adjusted 2 pixels left
+  - **TTGO**: Date format remains `dd-mm-yy` (e.g. "26-01-25") for lower resolution compatibility
+
+### Version 3.61
+- **Web Interface Anchor Reset**: Added anchor value reset functionality via web interface
+  - Input field with current price as default
+  - Separate button for immediate anchor setting
+  - Asynchronous processing to prevent crashes
 
 ### Version 3.50
 - **Code Quality & Reliability Improvements (Sprint 1)**:

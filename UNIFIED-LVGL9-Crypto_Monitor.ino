@@ -31,8 +31,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 60
-#define VERSION_STRING "3.60"
+#define VERSION_MINOR 62
+#define VERSION_STRING "3.62"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -377,6 +377,37 @@ struct MqttMessage {
 
 static MqttMessage mqttQueue[MQTT_QUEUE_SIZE];
 static uint8_t mqttQueueHead = 0;
+
+// Anchor setting queue - voorkomt crashes door web server thread
+// Thread-safe: geschreven vanuit web server/MQTT, gelezen vanuit uiTask
+struct AnchorSetting {
+    volatile float value;      // volatile voor thread-safe access
+    volatile bool pending;      // volatile voor thread-safe access
+    volatile bool useCurrentPrice; // volatile voor thread-safe access
+};
+static AnchorSetting pendingAnchorSetting = {0.0f, false, false};
+static volatile unsigned long lastAnchorSetTime = 0; // volatile voor thread-safe access
+static const unsigned long ANCHOR_SET_COOLDOWN_MS = 2000; // Minimaal 2 seconden tussen anchor sets
+
+// Helper functie om anchor setting in queue te zetten (thread-safe)
+// Centraliseert de logica voor alle input methoden (web, MQTT)
+// Returns: true als succesvol in queue gezet, false bij fout
+static bool queueAnchorSetting(float value, bool useCurrentPrice) {
+    // Valideer waarde (alleen als niet useCurrentPrice)
+    if (!useCurrentPrice && (value <= 0.0f || !isValidPrice(value))) {
+        Serial_printf("[Anchor Queue] WARN: Ongeldige waarde: %.2f\n", value);
+        return false;
+    }
+    
+    // Thread-safe write: schrijf eerst value en useCurrentPrice, dan pending flag
+    // Dit voorkomt dat uiTask een incomplete state leest
+    pendingAnchorSetting.value = useCurrentPrice ? 0.0f : value;
+    pendingAnchorSetting.useCurrentPrice = useCurrentPrice;
+    // Memory barrier effect: pending flag als laatste (garandeert dat value en useCurrentPrice al geschreven zijn)
+    pendingAnchorSetting.pending = true;
+    
+    return true;
+}
 static uint8_t mqttQueueTail = 0;
 static uint8_t mqttQueueCount = 0;
 
@@ -903,6 +934,75 @@ static AnchorConfigEffective calcEffectiveAnchor(float baseMaxLoss, float baseTa
 }
 
 // Publiceer anchor event naar MQTT
+// Helper functie om anchor in te stellen (thread-safe)
+// anchorValue: de waarde om in te stellen (0.0 = gebruik huidige prijs)
+// shouldUpdateUI: true = update UI direct (alleen vanuit main loop thread), false = skip UI update (voor web/MQTT threads)
+// skipNotifications: true = skip NTFY en MQTT (voor web server thread om crashes te voorkomen), false = stuur notificaties
+// returns: true als succesvol, false als mislukt
+static bool setAnchorPrice(float anchorValue = 0.0f, bool shouldUpdateUI = true, bool skipNotifications = false) {
+    // Kortere timeout voor web server thread om watchdog te voorkomen
+    TickType_t timeout = skipNotifications ? pdMS_TO_TICKS(100) : pdMS_TO_TICKS(500);
+    if (safeMutexTake(dataMutex, timeout, "setAnchorPrice")) {
+        float priceToSet = anchorValue;
+        
+        // Als anchorValue 0 is of ongeldig, gebruik huidige prijs
+        if (priceToSet <= 0.0f || !isValidPrice(priceToSet)) {
+            if (isValidPrice(prices[0])) {
+                priceToSet = prices[0];
+                Serial_printf("[Anchor] Gebruik huidige prijs als anchor: %.2f\n", priceToSet);
+            } else {
+                Serial_println("[Anchor] WARN: Geen geldige prijs beschikbaar voor anchor");
+                safeMutexGive(dataMutex, "setAnchorPrice");
+                return false;
+            }
+        }
+        
+        // Valideer dat de prijs nog steeds geldig is na mutex lock
+        if (!isValidPrice(priceToSet)) {
+            Serial_println("[Anchor] WARN: Prijs ongeldig na validatie");
+            safeMutexGive(dataMutex, "setAnchorPrice");
+            return false;
+        }
+        
+        // Set anchor price (atomisch binnen mutex)
+        anchorPrice = priceToSet;
+        openPrices[0] = priceToSet;
+        anchorMax = priceToSet;  // Initialiseer max/min met anchor prijs
+        anchorMin = priceToSet;
+        anchorTime = millis();
+        anchorActive = true;
+        anchorTakeProfitSent = false;
+        anchorMaxLossSent = false;
+        Serial_printf("[Anchor] Anchor set: anchorPrice = %.2f\n", anchorPrice);
+        
+        safeMutexGive(dataMutex, "setAnchorPrice");
+        
+        // Publiceer anchor event naar MQTT en stuur notificatie alleen als niet overgeslagen
+        // Doe dit BUITEN de mutex om blocking operaties te voorkomen
+        if (!skipNotifications) {
+            publishMqttAnchorEvent(anchorPrice, "anchor_set");
+            
+            // Stuur NTFY notificatie
+            char timestamp[32];
+            getFormattedTimestamp(timestamp, sizeof(timestamp));
+            char title[64];
+            char msg[128];
+            snprintf(title, sizeof(title), "%s Anchor Set", binanceSymbol);
+            snprintf(msg, sizeof(msg), "%s: %.2f EUR", timestamp, priceToSet);
+            sendNotification(title, msg, "white_check_mark");
+        }
+        
+        // Update UI alleen als gevraagd (niet vanuit web/MQTT threads)
+        if (shouldUpdateUI) {
+            updateUI();
+        }
+        
+        return true;
+    }
+    Serial_println("[Anchor] WARN: Mutex timeout bij setAnchorPrice");
+    return false;
+}
+
 void publishMqttAnchorEvent(float anchor_price, const char* event_type) {
     if (!mqttConnected) return;
     
@@ -1733,52 +1833,66 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                         settingChanged = true;
                     }
                 } else {
-                    // button/reset - speciale logica (mutex + anchor set)
-                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/button/reset/set", prefixBuffer);
+                    // anchorValue/set - speciale logica (queue voor asynchrone verwerking)
+                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorValue/set", prefixBuffer);
                     if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                        // Reset button pressed via MQTT - gebruik als anchor
-                        if (strcmp(msgBuffer, "PRESS") == 0 || strcmp(msgBuffer, "press") == 0 || 
-                            strcmp(msgBuffer, "1") == 0 || strcmp(msgBuffer, "ON") == 0 || 
-                            strcmp(msgBuffer, "on") == 0) {
-                            Serial_println("[MQTT] Reset/Anchor button pressed via MQTT");
-                            // Execute reset/anchor (thread-safe)
-                            float currentPrice = 0.0f;
-                            if (safeMutexTake(dataMutex, pdMS_TO_TICKS(500), "mqttCallback button/reset")) {
-                                if (isValidPrice(prices[0])) {
-                                    currentPrice = prices[0];  // Sla prijs lokaal op
-                                    openPrices[0] = prices[0];
-                                    // Set anchor price
-                                    anchorPrice = prices[0];
-                                    anchorMax = prices[0];  // Initialiseer max/min met huidige prijs
-                                    anchorMin = prices[0];
-                                    anchorTime = millis();
-                                    anchorActive = true;
-                                    anchorTakeProfitSent = false;
-                                    anchorMaxLossSent = false;
-                                    Serial_printf("[MQTT] Anchor set: anchorPrice = %.2f\n", anchorPrice);
-                                }
-                                safeMutexGive(dataMutex, "mqttCallback button/reset");
-                                
-                                // Publiceer anchor event naar MQTT
-                                if (isValidPrice(currentPrice)) {
-                                    publishMqttAnchorEvent(anchorPrice, "anchor_set");
-                                    
-                                    // Stuur NTFY notificatie
-                                    char timestamp[32];
-                                    getFormattedTimestamp(timestamp, sizeof(timestamp));
-                                    char title[64];
-                                    char msg[128];
-                                    snprintf(title, sizeof(title), "%s Anchor Set", binanceSymbol);
-                                    snprintf(msg, sizeof(msg), "%s: %.2f EUR", timestamp, currentPrice);
-                                    sendNotification(title, msg, "white_check_mark");
-                                }
-                                
-                                // Update UI (this will also take the mutex internally)
-                                updateUI();
+                        // Verwerk anchor waarde via MQTT
+                        float val = 0.0f;
+                        bool useCurrentPrice = false;
+                        bool valid = false;
+                        
+                        // Lege waarde of "current" = gebruik huidige prijs
+                        if (strlen(msgBuffer) == 0 || strcmp(msgBuffer, "current") == 0 || 
+                            strcmp(msgBuffer, "CURRENT") == 0 || strcmp(msgBuffer, "0") == 0) {
+                            useCurrentPrice = true;
+                            valid = queueAnchorSetting(0.0f, true);
+                            if (valid) {
+                                Serial_println("[MQTT] Anchor setting queued: gebruik huidige prijs");
                             }
-                            // Publish state back (button entities don't need state, but we can acknowledge)
-                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/button/reset", prefixBuffer);
-                            mqttClient.publish(topicBufferFull, "PRESSED", false);
+                        } else if (safeAtof(msgBuffer, val) && val > 0.0f && isValidPrice(val)) {
+                            // Valide waarde - zet in queue voor asynchrone verwerking
+                            useCurrentPrice = false;
+                            valid = queueAnchorSetting(val, false);
+                            if (valid) {
+                                Serial_printf("[MQTT] Anchor setting queued: %.2f\n", val);
+                            }
+                        } else {
+                            Serial_printf("[MQTT] WARN: Ongeldige anchor waarde opgegeven: %s\n", msgBuffer);
+                        }
+                        
+                        // Publiceer bevestiging terug
+                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorValue", prefixBuffer);
+                        if (valid) {
+                            if (useCurrentPrice) {
+                                mqttClient.publish(topicBufferFull, "QUEUED: current price", false);
+                            } else {
+                                snprintf(valueBuffer, sizeof(valueBuffer), "%.2f", val);
+                                mqttClient.publish(topicBufferFull, valueBuffer, false);
+                            }
+                        } else {
+                            mqttClient.publish(topicBufferFull, "ERROR: Invalid value", false);
+                        }
+                        handled = true;
+                    }
+                    // button/reset - speciale logica (gebruik queue voor asynchrone verwerking)
+                    if (!handled) {
+                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/button/reset/set", prefixBuffer);
+                        if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                            // Reset button pressed via MQTT - gebruik als anchor (via queue)
+                            if (strcmp(msgBuffer, "PRESS") == 0 || strcmp(msgBuffer, "press") == 0 || 
+                                strcmp(msgBuffer, "1") == 0 || strcmp(msgBuffer, "ON") == 0 || 
+                                strcmp(msgBuffer, "on") == 0) {
+                                // Gebruik queue voor asynchrone verwerking (voorkomt crashes)
+                                if (queueAnchorSetting(0.0f, true)) {
+                                    Serial_println("[MQTT] Reset/Anchor button pressed via MQTT - queued");
+                                    handled = true;
+                                    // Publish state back (button entities don't need state, but we can acknowledge)
+                                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/button/reset", prefixBuffer);
+                                    mqttClient.publish(topicBufferFull, "PRESSED", false);
+                                } else {
+                                    Serial_println("[MQTT] WARN: Kon anchor setting niet in queue zetten");
+                                }
+                            }
                         }
                     }
                 }
@@ -2058,6 +2172,12 @@ void publishMqttDiscovery() {
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
+    // Anchor value (number entity for setting anchor price)
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_anchorValue/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Anchor Value\",\"unique_id\":\"%s_anchorValue\",\"state_topic\":\"%s/config/anchorValue\",\"command_topic\":\"%s/config/anchorValue/set\",\"min\":0.01,\"max\":1000000.0,\"step\":0.01,\"unit_of_measurement\":\"EUR\",\"icon\":\"mdi:anchor\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
     // Anchor event sensor
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_anchor_event/config", deviceId);
     snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Anchor Event\",\"unique_id\":\"%s_anchor_event\",\"state_topic\":\"%s/anchor/event\",\"json_attributes_topic\":\"%s/anchor/event\",\"value_template\":\"{{ value_json.event }}\",\"icon\":\"mdi:anchor\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
@@ -2139,6 +2259,8 @@ void connectMQTT() {
         mqttClient.subscribe(topicBuffer);
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/anchorMaxLoss/set", MQTT_TOPIC_PREFIX);
         mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/anchorValue/set", MQTT_TOPIC_PREFIX);
+        mqttClient.subscribe(topicBuffer);
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/language/set", MQTT_TOPIC_PREFIX);
         mqttClient.subscribe(topicBuffer);
         
@@ -2167,6 +2289,7 @@ static String getSettingsHTML()
     html += "button:hover{background:#00acc1;}.info{color:#888;font-size:12px;margin-top:5px;}</style></head><body>";
     html += "<h1>" + String(binanceSymbol) + " " + String(getText("Instellingen", "Settings")) + "</h1>";
     html += "<form method='POST' action='/save'>";
+    html += "<h2 style='color:#00BCD4;margin-top:30px;'>" + String(getText("Algemene instellingen", "General Settings")) + "</h2>";
     html += "<label>" + String(getText("Taal / Language:", "Language:")) + "<select name='language'>";
     html += "<option value='0'" + String(language == 0 ? " selected" : "") + ">Nederlands</option>";
     html += "<option value='1'" + String(language == 1 ? " selected" : "") + ">English</option>";
@@ -2176,6 +2299,52 @@ static String getSettingsHTML()
     html += "<div class='info'>" + String(getText("Dit is de NTFY topic waarop je je moet abonneren in de NTFY app om notificaties te ontvangen op je mobiel. Standaard wordt automatisch een uniek topic gegenereerd met je ESP32 device ID (format: [ESP32-ID]-alert).", "This is the NTFY topic you need to subscribe to in the NTFY app to receive notifications on your mobile. By default, a unique topic is automatically generated with your ESP32 device ID (format: [ESP32-ID]-alert).")) + "</div>";
     html += "<label>" + String(getText("Binance Symbool:", "Binance Symbol:")) + "<input type='text' name='binancesymbol' value='" + String(binanceSymbol) + "' maxlength='15'></label>";
     html += "<div class='info'>" + String(getText("Binance trading pair (bijv. BTCEUR, BTCUSDT, ETHUSDT)", "Binance trading pair (e.g. BTCEUR, BTCUSDT, ETHUSDT)")) + "</div>";
+    
+    // Anchor instellingen direct onder Binance Symbol
+    html += "<h2 style='color:#00BCD4;margin-top:30px;'>" + String(getText("Anchor Instellingen", "Anchor Settings")) + "</h2>";
+    
+    // Haal huidige prijs op voor default waarde (thread-safe)
+    float currentPriceForAnchor = 0.0f;
+    if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "getSettingsHTML price")) {
+        if (isValidPrice(prices[0])) {
+            currentPriceForAnchor = prices[0];
+        }
+        safeMutexGive(dataMutex, "getSettingsHTML price");
+    }
+    
+    // Anchor waarde input veld
+    String anchorValueStr = "";
+    if (currentPriceForAnchor > 0.0f) {
+        anchorValueStr = String(currentPriceForAnchor, 2);
+    } else if (anchorActive && isValidPrice(anchorPrice)) {
+        anchorValueStr = String(anchorPrice, 2);
+    }
+    
+    html += "<label>" + String(getText("Anchor Waarde (EUR):", "Anchor Value (EUR):")) + "<input type='number' step='0.01' id='anchorValue' value='" + anchorValueStr + "' min='0.01'></label>";
+    html += "<button type='button' onclick='setAnchor()' style='background:#4CAF50;margin-top:10px;'>" + String(getText("Stel Anchor In", "Set Anchor")) + "</button>";
+    html += "<div class='info'>" + String(getText("Stel de anchor-waarde in (standaard: huidige prijs). Leeg laten = gebruik huidige prijs.", "Set the anchor value (default: current price). Leave empty = use current price.")) + "</div>";
+    html += "<script>";
+    html += "function setAnchor() {";
+    html += "  var value = document.getElementById('anchorValue').value;";
+    html += "  var xhr = new XMLHttpRequest();";
+    html += "  xhr.open('POST', '/anchor/set', true);";
+    html += "  xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');";
+    html += "  xhr.onreadystatechange = function() {";
+    html += "    if (xhr.readyState === 4) {";
+    html += "      if (xhr.status === 200) {";
+    html += "        alert('" + String(getText("Anchor ingesteld!", "Anchor set!")) + "');";
+    html += "      } else {";
+    html += "        alert('" + String(getText("Fout bij instellen anchor", "Error setting anchor")) + "');";
+    html += "      }";
+    html += "    }";
+    html += "  };";
+    html += "  xhr.send('value=' + encodeURIComponent(value));";
+    html += "}";
+    html += "</script>";
+    html += "<label>" + String(getText("Anchor Take Profit (%):", "Anchor Take Profit (%):")) + "<input type='number' step='0.1' name='anchorTP' value='" + String(anchorTakeProfit, 1) + "' min='0.1' max='100'></label>";
+    html += "<div class='info'>" + String(getText("Take profit threshold boven anchor price (standaard: 5.0%)", "Take profit threshold above anchor price (default: 5.0%)")) + "</div>";
+    html += "<label>" + String(getText("Anchor Max Loss (%):", "Anchor Max Loss (%):")) + "<input type='number' step='0.1' name='anchorML' value='" + String(anchorMaxLoss, 1) + "' min='-100' max='-0.1'></label>";
+    html += "<div class='info'>" + String(getText("Max loss threshold onder anchor price (standaard: -3.0%)", "Max loss threshold below anchor price (default: -3.0%)")) + "</div>";
     html += "<hr style='border:1px solid #444;margin:30px 0;'>";
     html += "<h2 style='color:#00BCD4;margin-top:30px;'>" + String(getText("Spike & Move Alerts", "Spike & Move Alerts")) + "</h2>";
     html += "<label>1m Spike - ret_1m threshold (%):<input type='number' step='0.01' name='spike1m' value='" + String(spike1mThreshold, 2) + "'></label>";
@@ -2197,6 +2366,14 @@ static String getSettingsHTML()
     html += "<label>" + String(getText("5-minuten move cooldown (seconden):", "5-minute move cooldown (seconds):")) + "<input type='number' name='cd5min' value='" + String(notificationCooldown5MinMs / 1000) + "'></label>";
     html += "<div class='info'>" + String(getText("Tijd tussen 5-minuten move notificaties", "Time between 5-minute move notifications")) + "</div>";
     html += "<hr style='border:1px solid #444;margin:30px 0;'>";
+    html += "<h2 style='color:#00BCD4;margin-top:30px;'>" + String(getText("Trend & Volatiliteit Instellingen", "Trend & Volatility Settings")) + "</h2>";
+    html += "<label>" + String(getText("Trend Threshold (%):", "Trend Threshold (%):")) + "<input type='number' step='0.1' name='trendTh' value='" + String(trendThreshold, 1) + "' min='0.1' max='10'></label>";
+    html += "<div class='info'>" + String(getText("Trend detectie threshold voor 2h return (standaard: 1.0%)", "Trend detection threshold for 2h return (default: 1.0%)")) + "</div>";
+    html += "<label>" + String(getText("Volatiliteit Low Threshold (%):", "Volatility Low Threshold (%):")) + "<input type='number' step='0.01' name='volLow' value='" + String(volatilityLowThreshold, 2) + "' min='0.01' max='1'></label>";
+    html += "<div class='info'>" + String(getText("Onder deze waarde is volatiliteit LOW (standaard: 0.06%)", "Below this value volatility is LOW (default: 0.06%)")) + "</div>";
+    html += "<label>" + String(getText("Volatiliteit High Threshold (%):", "Volatility High Threshold (%):")) + "<input type='number' step='0.01' name='volHigh' value='" + String(volatilityHighThreshold, 2) + "' min='0.01' max='1'></label>";
+    html += "<div class='info'>" + String(getText("Boven deze waarde is volatiliteit HIGH (standaard: 0.12%)", "Above this value volatility is HIGH (default: 0.12%)")) + "</div>";
+    html += "<hr style='border:1px solid #444;margin:30px 0;'>";
     html += "<h2 style='color:#00BCD4;margin-top:30px;'>" + String(getText("MQTT Instellingen", "MQTT Settings")) + "</h2>";
     html += "<label>" + String(getText("MQTT Host (IP):", "MQTT Host (IP):")) + "<input type='text' name='mqtthost' value='" + String(mqttHost) + "' maxlength='63'></label>";
     html += "<div class='info'>" + String(getText("IP-adres van de MQTT broker (bijv. 192.168.68.3)", "IP address of MQTT broker (e.g. 192.168.68.3)")) + "</div>";
@@ -2206,20 +2383,6 @@ static String getSettingsHTML()
     html += "<div class='info'>" + String(getText("MQTT broker gebruikersnaam", "MQTT broker username")) + "</div>";
     html += "<label>" + String(getText("MQTT Wachtwoord:", "MQTT Password:")) + "<input type='password' name='mqttpass' value='" + String(mqttPass) + "' maxlength='63'></label>";
     html += "<div class='info'>" + String(getText("MQTT broker wachtwoord", "MQTT broker password")) + "</div>";
-    html += "<hr style='border:1px solid #444;margin:30px 0;'>";
-    html += "<h2 style='color:#00BCD4;margin-top:30px;'>" + String(getText("Trend & Volatiliteit Instellingen", "Trend & Volatility Settings")) + "</h2>";
-    html += "<label>" + String(getText("Trend Threshold (%):", "Trend Threshold (%):")) + "<input type='number' step='0.1' name='trendTh' value='" + String(trendThreshold, 1) + "' min='0.1' max='10'></label>";
-    html += "<div class='info'>" + String(getText("Trend detectie threshold voor 2h return (standaard: 1.0%)", "Trend detection threshold for 2h return (default: 1.0%)")) + "</div>";
-    html += "<label>" + String(getText("Volatiliteit Low Threshold (%):", "Volatility Low Threshold (%):")) + "<input type='number' step='0.01' name='volLow' value='" + String(volatilityLowThreshold, 2) + "' min='0.01' max='1'></label>";
-    html += "<div class='info'>" + String(getText("Onder deze waarde is volatiliteit LOW (standaard: 0.06%)", "Below this value volatility is LOW (default: 0.06%)")) + "</div>";
-    html += "<label>" + String(getText("Volatiliteit High Threshold (%):", "Volatility High Threshold (%):")) + "<input type='number' step='0.01' name='volHigh' value='" + String(volatilityHighThreshold, 2) + "' min='0.01' max='1'></label>";
-    html += "<div class='info'>" + String(getText("Boven deze waarde is volatiliteit HIGH (standaard: 0.12%)", "Above this value volatility is HIGH (default: 0.12%)")) + "</div>";
-    html += "<hr style='border:1px solid #444;margin:30px 0;'>";
-    html += "<h2 style='color:#00BCD4;margin-top:30px;'>" + String(getText("Anchor Instellingen", "Anchor Settings")) + "</h2>";
-    html += "<label>" + String(getText("Anchor Take Profit (%):", "Anchor Take Profit (%):")) + "<input type='number' step='0.1' name='anchorTP' value='" + String(anchorTakeProfit, 1) + "' min='0.1' max='100'></label>";
-    html += "<div class='info'>" + String(getText("Take profit threshold boven anchor price (standaard: 5.0%)", "Take profit threshold above anchor price (default: 5.0%)")) + "</div>";
-    html += "<label>" + String(getText("Anchor Max Loss (%):", "Anchor Max Loss (%):")) + "<input type='number' step='0.1' name='anchorML' value='" + String(anchorMaxLoss, 1) + "' min='-100' max='-0.1'></label>";
-    html += "<div class='info'>" + String(getText("Max loss threshold onder anchor price (standaard: -3.0%)", "Max loss threshold below anchor price (default: -3.0%)")) + "</div>";
     html += "<button type='submit'>" + String(getText("Opslaan", "Save")) + "</button></form>";
     html += "</body></html>";
     return html;
@@ -2369,7 +2532,8 @@ static void handleSave()
         }
     }
     
-    // Anchor settings
+    // Anchor settings - NIET vanuit web server thread verwerken om crashes te voorkomen
+    // Anchor setting wordt verwerkt via een aparte route /anchor/set die sneller is
     if (server.hasArg("anchorTP")) {
         float val;
         if (safeAtof(server.arg("anchorTP").c_str(), val) && val >= 0.1f && val <= 100.0f) {
@@ -2386,7 +2550,8 @@ static void handleSave()
     saveSettings();
     
     // Update UI om wijzigingen direct te tonen (bijv. NTFY-topic op scherm)
-    updateUI();
+    // Opmerking: updateUI() wordt periodiek aangeroepen vanuit uiTask, dus dit is optioneel
+    // Voor anchor wijzigingen wordt de UI geüpdatet via de uiTask, niet vanuit de web server thread
     
     // Herconnect MQTT als instellingen zijn gewijzigd
     if (mqttConnected) {
@@ -2437,6 +2602,46 @@ static void handleNotFound()
     Serial_println("[WebServer] 404: " + server.uri());
 }
 
+// Handler voor anchor set (aparte route om crashes te voorkomen)
+// Gebruikt een queue om asynchroon te verwerken vanuit main loop
+// Thread-safe: schrijft naar volatile variabelen die worden gelezen vanuit uiTask
+static void handleAnchorSet() {
+    if (server.hasArg("value")) {
+        String anchorValueStr = server.arg("value");
+        anchorValueStr.trim();
+        bool valid = false;
+        
+        if (anchorValueStr.length() > 0) {
+            float val;
+            if (safeAtof(anchorValueStr.c_str(), val) && val > 0.0f && isValidPrice(val)) {
+                // Valide waarde - zet in queue voor asynchrone verwerking
+                valid = queueAnchorSetting(val, false);
+                if (valid) {
+                    Serial_printf("[Web] Anchor setting queued: %.2f\n", val);
+                }
+            } else {
+                Serial_printf("[Web] WARN: Ongeldige anchor waarde opgegeven: '%s'\n", anchorValueStr.c_str());
+            }
+        } else {
+            // Leeg veld = gebruik huidige prijs
+            pendingAnchorSetting.value = 0.0f;
+            pendingAnchorSetting.useCurrentPrice = true;
+            // Zet pending flag als laatste (memory barrier effect)
+            pendingAnchorSetting.pending = true;
+            valid = true;
+            Serial_println("[Web] Anchor setting queued: gebruik huidige prijs");
+        }
+        
+        if (valid) {
+            server.send(200, "text/plain", "OK");
+        } else {
+            server.send(400, "text/plain", "ERROR: Invalid anchor value");
+        }
+    } else {
+        server.send(400, "text/plain", "ERROR: Missing 'value' parameter");
+    }
+}
+
 static void setupWebServer()
 {
     Serial.println("[WebServer] Routes registreren...");
@@ -2444,6 +2649,8 @@ static void setupWebServer()
     Serial.println("[WebServer] Route '/' geregistreerd");
     server.on("/save", HTTP_POST, handleSave);
     Serial.println("[WebServer] Route '/save' geregistreerd");
+    server.on("/anchor/set", HTTP_POST, handleAnchorSet);
+    Serial.println("[WebServer] Route '/anchor/set' geregistreerd");
     server.onNotFound(handleNotFound); // 404 handler
     Serial.println("[WebServer] 404 handler geregistreerd");
     server.begin();
@@ -3671,8 +3878,15 @@ static void updateDateTimeLabels()
         struct tm timeinfo;
         if (getLocalTime(&timeinfo))
         {
-            char dateStr[9];
+            #ifdef PLATFORM_TTGO
+            // TTGO: compact formaat dd-mm-yy voor lagere resolutie
+            char dateStr[9]; // dd-mm-yy + null terminator = 9 karakters
             strftime(dateStr, sizeof(dateStr), "%d-%m-%y", &timeinfo);
+            #else
+            // CYD: volledig formaat dd-mm-yyyy voor hogere resolutie
+            char dateStr[11]; // dd-mm-yyyy + null terminator = 11 karakters
+            strftime(dateStr, sizeof(dateStr), "%d-%m-%Y", &timeinfo);
+            #endif
             lv_label_set_text(chartDateLabel, dateStr);
         }
     }
@@ -4073,7 +4287,7 @@ static void createHeaderLabels()
     lv_obj_set_style_text_align(chartDateLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(chartDateLabel, "-- -- --");
     lv_obj_set_width(chartDateLabel, CHART_WIDTH);
-    lv_obj_set_pos(chartDateLabel, 0, 0);
+    lv_obj_set_pos(chartDateLabel, 0, 0); // TTGO: originele positie (geen aanpassing nodig)
     
     chartBeginLettersLabel = lv_label_create(lv_scr_act());
     lv_obj_set_style_text_font(chartBeginLettersLabel, &lv_font_montserrat_16, 0);
@@ -4099,7 +4313,7 @@ static void createHeaderLabels()
     lv_obj_set_style_text_align(chartDateLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(chartDateLabel, "-- -- --");
     lv_obj_set_width(chartDateLabel, 180);
-    lv_obj_set_pos(chartDateLabel, 0, 4);
+    lv_obj_set_pos(chartDateLabel, -2, 4); // 2 pixels naar links
     
     chartTimeLabel = lv_label_create(lv_scr_act());
     lv_obj_set_style_text_font(chartTimeLabel, &lv_font_montserrat_12, 0);
@@ -4408,41 +4622,12 @@ void checkButton() {
             }
         }
         
-        if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
-            if (prices[0] > 0.0f) {
-                currentPrice = prices[0];  // Sla prijs lokaal op
-                openPrices[0] = prices[0];
-                // Set anchor price
-                anchorPrice = prices[0];
-                anchorMax = prices[0];  // Initialiseer max/min met huidige prijs
-                anchorMin = prices[0];
-                anchorTime = millis();
-                anchorActive = true;
-                // Reset take profit / max loss flags bij nieuwe anchor
-                anchorTakeProfitSent = false;
-                anchorMaxLossSent = false;
-                Serial_printf("[Button] Reset: openPrices[0] = %.2f, Anchor = %.2f\n", openPrices[0], anchorPrice);
-            } else {
-                Serial_println("[Button] WARN: Prijs nog steeds niet beschikbaar na fetch");
-            }
-            safeMutexGive(dataMutex, "checkButton anchor set");
-                
-            // Publiceer anchor event naar MQTT en stuur notificatie
-            if (currentPrice > 0.0f) {
-                publishMqttAnchorEvent(anchorPrice, "anchor_set");
-                
-                // Stuur NTFY notificatie
-                char timestamp[32];
-                getFormattedTimestamp(timestamp, sizeof(timestamp));
-                char title[64];
-                char msg[128];
-                snprintf(title, sizeof(title), "%s Anchor Set", binanceSymbol);
-                snprintf(msg, sizeof(msg), "%s: %.2f EUR", timestamp, currentPrice);
-                sendNotification(title, msg, "white_check_mark");
-            }
-            
+        // Gebruik helper functie om anchor in te stellen (gebruikt huidige prijs als default)
+        if (setAnchorPrice(0.0f)) {
             // Update UI (this will also take the mutex internally)
             updateUI();
+        } else {
+            Serial_println("[Button] WARN: Kon anchor niet instellen");
         }
         
         // Publish to MQTT if connected (optional, for logging)
@@ -5200,6 +5385,62 @@ void uiTask(void *parameter)
             if (cpuUsagePercent < 0.0f) cpuUsagePercent = 0.0f;
             loopTimeSum = 0;
             loopCount = 0;
+        }
+        
+        // Verwerk pending anchor setting (asynchroon vanuit web server/MQTT)
+        // Thread-safe: kopieer waarde lokaal om race conditions te voorkomen
+        bool hasPendingAnchor = false;
+        float anchorValueToSet = 0.0f;
+        bool useCurrentPrice = false;
+        
+        // Thread-safe check: volatile variabelen worden atomisch gelezen op ESP32
+        // Voorkom te snelle opeenvolgende anchor sets met cooldown (handelt millis() wrap correct af)
+        unsigned long now = millis();
+        unsigned long lastSet = lastAnchorSetTime; // Lokale kopie voor thread-safety
+        
+        // Check cooldown: (now - lastSet) werkt correct zelfs bij millis() wrap
+        // Als lastSet > now, dan is er een wrap geweest en moeten we doorlaten
+        bool cooldownExpired = (lastSet == 0) || 
+                               (now >= lastSet && (now - lastSet) >= ANCHOR_SET_COOLDOWN_MS) ||
+                               (now < lastSet); // millis() wrap case
+        
+        if (pendingAnchorSetting.pending) {
+            if (cooldownExpired) {
+                // Kopieer waarden atomisch (ESP32 garandeert atomic read van 32-bit floats)
+                // Lees eerst value en useCurrentPrice, dan reset pending flag
+                // Dit voorkomt dat we een incomplete state lezen
+                anchorValueToSet = pendingAnchorSetting.value;
+                useCurrentPrice = pendingAnchorSetting.useCurrentPrice;
+                // Reset flag direct om dubbele verwerking te voorkomen
+                pendingAnchorSetting.pending = false;
+                hasPendingAnchor = true;
+            } else {
+                // Te snel na vorige set - wacht nog even (behoud pending flag)
+                unsigned long remaining = (lastSet == 0) ? ANCHOR_SET_COOLDOWN_MS :
+                    (now >= lastSet) ? (ANCHOR_SET_COOLDOWN_MS - (now - lastSet)) : ANCHOR_SET_COOLDOWN_MS;
+                static unsigned long lastLogTime = 0;
+                // Log alleen elke 5 seconden om spam te voorkomen
+                if (now - lastLogTime > 5000) {
+                    Serial_printf("[UI Task] Anchor set cooldown actief: %lu ms (pending request wordt bewaard)\n", remaining);
+                    lastLogTime = now;
+                }
+            }
+        }
+        
+        if (hasPendingAnchor) {
+            float valueToSet = useCurrentPrice ? 0.0f : anchorValueToSet;
+            // Verwerk vanuit uiTask - dit is veilig omdat we in de main loop thread zijn
+            // Gebruik skipNotifications=true om blocking operaties te voorkomen
+            if (setAnchorPrice(valueToSet, true, true)) {
+                lastAnchorSetTime = now; // Thread-safe write (uiTask is single-threaded voor deze variabele)
+                Serial_printf("[UI Task] Anchor set asynchroon: %.2f\n", 
+                    useCurrentPrice ? 0.0f : anchorValueToSet);
+            } else {
+                // Fout bij instellen - log maar probeer niet opnieuw (voorkomt infinite retries)
+                // De cooldown voorkomt dat we te snel opnieuw proberen
+                Serial_println("[UI Task] WARN: Kon anchor niet instellen (asynchroon) - mutex timeout of geen prijs beschikbaar");
+                // Note: pending flag is al gereset, dus dit wordt niet opnieuw geprobeerd tot nieuwe request
+            }
         }
         
         // Check physical button (alleen voor TTGO)

@@ -214,8 +214,18 @@ Configureer je MQTT broker voor integratie met Home Assistant of andere systemen
 - **Volatiliteit High Threshold (%)**: Boven deze waarde is markt VOLATIEL (standaard: 0.12%)
 
 #### Anchor Instellingen
+- **Anchor Waarde (EUR)**: Stel de anchor prijs waarde in
+  - Voer een aangepaste waarde in (standaard: huidige prijs is vooringevuld)
+  - Laat leeg om de huidige prijs te gebruiken
+  - Klik op "Stel Anchor In" knop om direct toe te passen (los van het opslaan van andere instellingen)
 - **Anchor Take Profit (%)**: Percentage boven anchor voor winstmelding (standaard: 5.0%)
 - **Anchor Max Loss (%)**: Percentage onder anchor voor verliesmelding (standaard: -3.0%)
+
+**Let op**: De anchor waarde kan worden ingesteld via:
+- **Web Interface**: Voer waarde in en klik op "Stel Anchor In" knop
+- **Fysieke Knop** (alleen TTGO): Druk op reset button (GPIO 0)
+- **Touchscreen** (alleen CYD): Tik op de BTCEUR prijs card
+- **MQTT**: Stuur waarde naar `{prefix}/config/anchorValue/set` topic (zie MQTT sectie)
 
 **Opslaan**: Klik op "Opslaan" om alle instellingen op te slaan. Het device zal automatisch opnieuw verbinden met MQTT als de instellingen zijn gewijzigd.
 
@@ -319,6 +329,8 @@ Het display toont real-time cryptocurrency informatie in een overzichtelijke lay
 
 #### Bovenste Sectie (Header)
 - **Datum en Tijd**: Huidige datum en tijd (rechts uitgelijnd)
+  - **CYD**: Formaat `dd-mm-yyyy` (bijv. "26-01-2025")
+  - **TTGO**: Formaat `dd-mm-yy` (bijv. "26-01-25") - compact formaat voor lagere resolutie
 - **Versienummer**: Software versie (midden)
 - **Chart Title**: Beginletters van je NTFY topic (CYD) of beginletters op regel 2 (TTGO)
 
@@ -615,6 +627,7 @@ Deze topics kunnen worden gelezen (huidige waarde) en geschreven (om te wijzigen
 - `{prefix}/config/ntfyTopic` - NTFY topic (string)
 - `{prefix}/config/anchorTakeProfit` - Anchor take profit % (float)
 - `{prefix}/config/anchorMaxLoss` - Anchor max loss % (float)
+- `{prefix}/config/anchorValue` - Anchor prijs waarde in EUR (float)
 - `{prefix}/config/trendThreshold` - Trend threshold % (float)
 - `{prefix}/config/volatilityLowThreshold` - Volatiliteit low threshold % (float)
 - `{prefix}/config/volatilityHighThreshold` - Volatiliteit high threshold % (float)
@@ -626,8 +639,18 @@ Deze topics kunnen worden gelezen (huidige waarde) en geschreven (om te wijzigen
 mosquitto_pub -h 192.168.1.100 -t "ttgo_crypto/config/spike1m/set" -m "0.5"
 ```
 
+**Voorbeeld**: Om anchor waarde in te stellen op 78650.00 EUR:
+```bash
+mosquitto_pub -h 192.168.1.100 -t "ttgo_crypto/config/anchorValue/set" -m "78650.00"
+```
+
+**Voorbeeld**: Om anchor in te stellen op huidige prijs:
+```bash
+mosquitto_pub -h 192.168.1.100 -t "ttgo_crypto/config/anchorValue/set" -m "current"
+```
+
 #### Control Topics
-- `{prefix}/button/reset/set` - Publiceer "PRESSED" om anchor price te zetten (string)
+- `{prefix}/button/reset/set` - Publiceer "PRESS" om anchor price in te stellen op huidige prijs (string)
 
 ### Home Assistant Integratie
 
@@ -664,6 +687,7 @@ Na detectie krijg je de volgende entities:
 - `number.{device_id}_cooldown5min` - 5m cooldown (seconden)
 - `number.{device_id}_anchorTakeProfit` - Anchor take profit %
 - `number.{device_id}_anchorMaxLoss` - Anchor max loss %
+- `number.{device_id}_anchorValue` - Anchor prijs waarde in EUR
 - `number.{device_id}_trendThreshold` - Trend threshold %
 - `number.{device_id}_volatilityLowThreshold` - Volatiliteit low threshold %
 - `number.{device_id}_volatilityHighThreshold` - Volatiliteit high threshold %
@@ -743,6 +767,32 @@ MQTT is optioneel en kan ook gebruikt worden met andere systemen zoals:
 Als je MQTT niet gebruikt, kun je de MQTT instellingen leeg laten in de web interface.
 
 ## Versie Geschiedenis
+
+### Versie 3.62
+- **Anchor Waarde Instellen via Web Interface en MQTT**:
+  - **Web Interface**: Toegevoegd "Anchor Waarde (EUR)" invoerveld met "Stel Anchor In" knop in "Anchor Instellingen" sectie
+    - Standaard waarde is vooringevuld met huidige prijs
+    - Kan aangepaste waarde invoeren of leeg laten om huidige prijs te gebruiken
+    - Knop past anchor direct toe (los van het opslaan van andere instellingen)
+  - **MQTT Ondersteuning**: Toegevoegd `{prefix}/config/anchorValue/set` topic voor het instellen van anchor waarde
+    - Accepteert numerieke waarde (bijv. "78650.00") of "current" om huidige prijs te gebruiken
+    - Home Assistant auto-discovery: `number.{device_id}_anchorValue` entity
+  - **Asynchrone Verwerking**: Alle anchor instellingen (web, MQTT, fysieke knop) gebruiken queue voor thread-safe verwerking
+  - **Verbeterde Thread Safety**: Gecentraliseerde `queueAnchorSetting()` helper functie voor alle input methoden
+  - **Betere Error Handling**: Verbeterde validatie en error recovery
+- **Web Interface Verbeteringen**:
+  - Secties herorganiseerd: "Algemene instellingen" (Taal, NTFY Topic, Binance Symbool) gevolgd door "Anchor Instellingen"
+  - Anchor instellingen verplaatst direct onder Algemene instellingen voor betere organisatie
+  - Volgorde gewisseld: "Trend & Volatiliteit Instellingen" komt nu voor "MQTT Instellingen"
+- **Display Verbeteringen**:
+  - **CYD**: Datum formaat gewijzigd naar `dd-mm-yyyy` (bijv. "26-01-2025") en positie 2 pixels naar links aangepast
+  - **TTGO**: Datum formaat blijft `dd-mm-yy` (bijv. "26-01-25") voor lagere resolutie compatibiliteit
+
+### Versie 3.61
+- **Web Interface Anchor Reset**: Toegevoegd anchor waarde reset functionaliteit via web interface
+  - Invoerveld met huidige prijs als standaard
+  - Aparte knop voor directe anchor instelling
+  - Asynchrone verwerking om crashes te voorkomen
 
 ### Versie 3.50
 - **Code Kwaliteit & Betrouwbaarheid Verbeteringen (Sprint 1)**:
