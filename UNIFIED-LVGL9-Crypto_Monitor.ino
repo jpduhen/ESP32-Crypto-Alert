@@ -84,7 +84,7 @@
 #define ANCHOR_MAX_LOSS_DEFAULT -3.0f      // Max loss: -3% onder anchor price
 
 // --- Trend Detection Configuration ---
-#define TREND_THRESHOLD_DEFAULT 1.2f       // Trend threshold: ±1.2% voor 2h trend (geoptimaliseerd op basis van metingen)
+#define TREND_THRESHOLD_DEFAULT 1.30f      // Trend threshold: ±1.30% voor 2h trend
 #define TREND_CHANGE_COOLDOWN_MS 600000UL  // 10 minuten cooldown voor trend change notificaties
 
 // --- Volatility Configuration ---
@@ -100,14 +100,14 @@
 #define THRESHOLD_30MIN_DOWN_DEFAULT -2.0f // Notificatie bij dalende trend < -2% per uur
 
 // Spike/Move alert thresholds (geoptimaliseerd op basis van metingen)
-#define SPIKE_1M_THRESHOLD_DEFAULT 0.28f   // 1m spike: |ret_1m| >= 0.28% (op basis van ruis-maxima)
+#define SPIKE_1M_THRESHOLD_DEFAULT 0.31f   // 1m spike: |ret_1m| >= 0.31%
 #define SPIKE_5M_THRESHOLD_DEFAULT 0.65f   // 5m spike filter: |ret_5m| >= 0.65% (past bij actuele volatiliteit)
 #define MOVE_30M_THRESHOLD_DEFAULT 1.3f    // 30m move: |ret_30m| >= 1.3% (0.8% was te gevoelig)
 #define MOVE_5M_THRESHOLD_DEFAULT 0.40f    // 5m move filter: |ret_5m| >= 0.40% (gevoeliger op momentum-opbouw)
 #define MOVE_5M_ALERT_THRESHOLD_DEFAULT 0.8f  // 5m move alert: |ret_5m| >= 0.8% (historisch vaak bij trend start)
 
 // Cooldown tijden (in milliseconden) om spam te voorkomen (geoptimaliseerd op basis van metingen)
-#define NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT 90000    // 90 seconden tussen 1-minuut spike notificaties (minder spam in snelle pumps)
+#define NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT 120000   // 2 minuten tussen 1-minuut spike notificaties
 #define NOTIFICATION_COOLDOWN_30MIN_MS_DEFAULT 900000  // 15 minuten tussen 30-minuten move notificaties (grote moves → langere rust)
 #define NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT 420000   // 7 minuten tussen 5-minuten move notificaties (sneller tweede signaal bij doorbraak)
 
