@@ -7,6 +7,7 @@ Een unificatie van de Crypto Monitor voor verschillende ESP32 display platforms:
 - **TTGO T-Display**: 1.14" 135x240 TFT display (ST7789)
 - **CYD 2.4"**: 2.4" 240x320 TFT display met touchscreen (XPT2046)
 - **CYD 2.8"**: 2.8" 240x320 TFT display met touchscreen (XPT2046)
+- **ESP32-S3 Super Mini**: ESP32-S3 Super Mini HW-747 v0.0.2i + 1.54" 240x240 TFT display (ST7789)
 
 ## Features
 
@@ -33,6 +34,11 @@ Een unificatie van de Crypto Monitor voor verschillende ESP32 display platforms:
 - ESP32 met CYD display module
 - 2.4" of 2.8" 240x320 TFT display
 - Touchscreen (XPT2046)
+
+### ESP32-S3 Super Mini
+- ESP32-S3 Super Mini HW-747 v0.0.2i
+- 1.54" 240x240 TFT display (ST7789)
+- Fysieke reset button (GPIO 0)
 
 ## Software Vereisten
 
@@ -92,9 +98,18 @@ cd UNIFIED-LVGL9-Crypto_Monitor
 #define PLATFORM_CYD28
 // #define PLATFORM_TTGO
 // #define PLATFORM_CYD24
+// #define PLATFORM_ESP32S3_SUPERMINI
 ```
 
-**⚠️ Let op**: Er mag maar ÉÉN platform actief zijn! Zorg dat de andere twee regels met `//` zijn uitgecommentarieerd.
+**Voor ESP32-S3 Super Mini:**
+```cpp
+//#define PLATFORM_CYD28
+// #define PLATFORM_TTGO
+// #define PLATFORM_CYD24
+#define PLATFORM_ESP32S3_SUPERMINI
+```
+
+**⚠️ Let op**: Er mag maar ÉÉN platform actief zijn! Zorg dat de andere drie regels met `//` zijn uitgecommentarieerd.
 
 #### Optioneel: Stel Standaard Taal In
 
@@ -451,6 +466,12 @@ Beide layouts tonen dezelfde informatie, maar de TTGO versie is geoptimaliseerd 
 - Touchscreen interactie via dedicated "Klik Vast" knop
 - Twee-regel footer: WiFi signaal/RAM (regel 1), IP/versie (regel 2)
 
+### ESP32-S3 Super Mini
+- Vierkant 240x240 display layout (240px verticaal, zelfde als TTGO)
+- Fysieke reset button voor anchor price (GPIO 0)
+- Compacte layout vergelijkbaar met TTGO (geoptimaliseerd voor 240px verticale resolutie)
+- Datum formaat: dd-mm-yy (compact formaat zoals TTGO)
+
 ## NTFY.sh Setup en Gebruik
 
 ### Wat is NTFY.sh?
@@ -598,7 +619,7 @@ Voor extra beveiliging kun je je topic beveiligen met een wachtwoord:
 
 ### MQTT Topics
 
-Het device publiceert naar de volgende topics (prefix is platform-specifiek: `ttgo_crypto`, `cyd24_crypto`, of `cyd28_crypto`):
+Het device publiceert naar de volgende topics (prefix is platform-specifiek: `ttgo_crypto`, `cyd24_crypto`, `cyd28_crypto`, of `esp32s3_crypto`):
 
 #### Data Topics (Read-only)
 - `{prefix}/values/price` - Huidige prijs (float, bijv. `52345.67`)

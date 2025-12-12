@@ -31,8 +31,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 62
-#define VERSION_STRING "3.62"
+#define VERSION_MINOR 63
+#define VERSION_STRING "3.63"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -3575,7 +3575,7 @@ static void fetchPrice()
         #ifdef PLATFORM_TTGO
         const TickType_t apiMutexTimeout = pdMS_TO_TICKS(300); // TTGO: 300ms
         #else
-        const TickType_t apiMutexTimeout = pdMS_TO_TICKS(200); // CYD: 200ms voor snellere UI updates
+        const TickType_t apiMutexTimeout = pdMS_TO_TICKS(200); // CYD/ESP32-S3: 200ms voor snellere UI updates
         #endif
         
         // Geoptimaliseerd: betere mutex timeout handling met retry logica
@@ -3728,7 +3728,7 @@ static void updateChartSection(int32_t currentPrice, bool hasNewPriceData) {
     }
     
     // Update chart begin letters label (TTGO displays)
-    #ifdef PLATFORM_TTGO
+    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI)
     if (chartBeginLettersLabel != nullptr) {
         char deviceIdBuffer[16];
         getDeviceIdFromTopic(ntfyTopic, deviceIdBuffer, sizeof(deviceIdBuffer));
@@ -3883,7 +3883,7 @@ static void updateDateTimeLabels()
             char dateStr[9]; // dd-mm-yy + null terminator = 9 karakters
             strftime(dateStr, sizeof(dateStr), "%d-%m-%y", &timeinfo);
             #else
-            // CYD: volledig formaat dd-mm-yyyy voor hogere resolutie
+            // CYD/ESP32-S3: volledig formaat dd-mm-yyyy voor hogere resolutie
             char dateStr[11]; // dd-mm-yyyy + null terminator = 11 karakters
             strftime(dateStr, sizeof(dateStr), "%d-%m-%Y", &timeinfo);
             #endif
@@ -4183,6 +4183,28 @@ static void updateFooter()
             lv_label_set_text(ipLabel, "--");
         }
     }
+    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
+    if (ipLabel != nullptr) {
+        if (WiFi.status() == WL_CONNECTED) {
+            // ESP32-S3: IP + dBm op één regel (5 spaties tussen IP en dBm)
+            static char ipBuffer[32];
+            formatIPAddress(WiFi.localIP(), ipBuffer, sizeof(ipBuffer));
+            int rssi = WiFi.RSSI();
+            char *ipEnd = ipBuffer + strlen(ipBuffer);
+            snprintf(ipEnd, sizeof(ipBuffer) - strlen(ipBuffer), "     %ddBm", rssi); // 5 spaties
+            lv_label_set_text(ipLabel, ipBuffer);
+        } else {
+            lv_label_set_text(ipLabel, "--     --dBm");
+        }
+    }
+    
+    if (chartVersionLabel != nullptr) {
+        // ESP32-S3: RAM + versie op één regel (5 spaties tussen kB en versie)
+        uint32_t freeRAM = heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024;
+        static char versionBuffer[16];
+        snprintf(versionBuffer, sizeof(versionBuffer), "%ukB     %s", freeRAM, VERSION_STRING); // 5 spaties
+        lv_label_set_text(chartVersionLabel, versionBuffer);
+    }
     #else
     if (lblFooterLine1 != nullptr) {
         int rssi = 0;
@@ -4265,7 +4287,7 @@ static void createChart()
     lv_label_set_text(volatilityLabel, "--");
     
     // Platform-specifieke layout voor chart title
-    #ifndef PLATFORM_TTGO
+    #if !defined(PLATFORM_TTGO) && !defined(PLATFORM_ESP32S3_SUPERMINI)
     chartTitle = lv_label_create(lv_scr_act());
     lv_obj_set_style_text_font(chartTitle, &lv_font_montserrat_16, 0);
     char deviceIdBuffer[16];
@@ -4305,6 +4327,32 @@ static void createHeaderLabels()
     lv_label_set_text(chartTimeLabel, "--:--:--");
     lv_obj_set_width(chartTimeLabel, CHART_WIDTH);
     lv_obj_set_pos(chartTimeLabel, 0, 10);
+    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
+    // ESP32-S3: Ruimere layout met datum/tijd zoals CYD, maar met device ID links
+    chartDateLabel = lv_label_create(lv_scr_act());
+    lv_obj_set_style_text_font(chartDateLabel, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(chartDateLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_align(chartDateLabel, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_text(chartDateLabel, "-- -- --");
+    lv_obj_set_width(chartDateLabel, 180);
+    lv_obj_set_pos(chartDateLabel, -2, 4); // 2 pixels naar links
+    
+    chartBeginLettersLabel = lv_label_create(lv_scr_act());
+    lv_obj_set_style_text_font(chartBeginLettersLabel, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(chartBeginLettersLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_align(chartBeginLettersLabel, LV_TEXT_ALIGN_LEFT, 0);
+    char deviceIdBuffer[16];
+    getDeviceIdFromTopic(ntfyTopic, deviceIdBuffer, sizeof(deviceIdBuffer));
+    lv_label_set_text(chartBeginLettersLabel, deviceIdBuffer);
+    lv_obj_set_pos(chartBeginLettersLabel, 0, 2);
+    
+    chartTimeLabel = lv_label_create(lv_scr_act());
+    lv_obj_set_style_text_font(chartTimeLabel, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(chartTimeLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_align(chartTimeLabel, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_text(chartTimeLabel, "--:--:--");
+    lv_obj_set_width(chartTimeLabel, 240);
+    lv_obj_set_pos(chartTimeLabel, 0, 4);
     #else
     // CYD: Ruimere layout met datum/tijd op verschillende posities
     chartDateLabel = lv_label_create(lv_scr_act());
@@ -4404,7 +4452,7 @@ static void createPriceBoxes()
             lv_obj_align_to(priceLbl[i], priceTitle[i], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
         }
         
-        // Anchor labels alleen voor BTCEUR (i == 0) - CYD layout
+        // Anchor labels alleen voor BTCEUR (i == 0) - CYD/ESP32-S3 layout (met percentages)
         if (i == 0) {
             anchorLabel = lv_label_create(priceBox[i]);
             lv_obj_set_style_text_font(anchorLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
@@ -4509,6 +4557,38 @@ static void createFooter()
     } else {
         lv_label_set_text(ipLabel, "--");
     }
+    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
+    // ESP32-S3 Super Mini: IP + dBm links, RAM + versie rechts (één regel, meer horizontale ruimte)
+    ipLabel = lv_label_create(lv_scr_act());
+    lv_obj_set_style_text_font(ipLabel, FONT_SIZE_FOOTER, 0);
+    lv_obj_set_style_text_color(ipLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_align(ipLabel, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(ipLabel, LV_ALIGN_BOTTOM_LEFT, 0, -2);
+    
+    chartVersionLabel = lv_label_create(lv_scr_act());
+    lv_obj_set_style_text_font(chartVersionLabel, FONT_SIZE_FOOTER, 0);
+    lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_text_fmt(chartVersionLabel, "%s", VERSION_STRING);
+    lv_obj_align(chartVersionLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
+    
+    if (WiFi.status() == WL_CONNECTED) {
+        // ESP32-S3: IP + dBm op één regel (5 spaties tussen IP en dBm)
+        static char ipBuffer[32];
+        formatIPAddress(WiFi.localIP(), ipBuffer, sizeof(ipBuffer));
+        int rssi = WiFi.RSSI();
+        char *ipEnd = ipBuffer + strlen(ipBuffer);
+        snprintf(ipEnd, sizeof(ipBuffer) - strlen(ipBuffer), "     %ddBm", rssi); // 5 spaties
+        lv_label_set_text(ipLabel, ipBuffer);
+    } else {
+        lv_label_set_text(ipLabel, "--     --dBm");
+    }
+    
+    // Update versie label met RAM info (5 spaties tussen kB en versie)
+    uint32_t freeRAM = heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024;
+    static char versionBuffer[16];
+    snprintf(versionBuffer, sizeof(versionBuffer), "%ukB     %s", freeRAM, VERSION_STRING); // 5 spaties
+    lv_label_set_text(chartVersionLabel, versionBuffer);
     #else
     // CYD: Footer met 2 regels
     lblFooterLine1 = lv_label_create(lv_scr_act());
@@ -4676,17 +4756,17 @@ static void setupDisplay()
         }
     }
     gfx->setRotation(0);
-    #ifdef PLATFORM_TTGO
-    gfx->invertDisplay(false); // TTGO T-Display heeft geen inversie nodig (ST7789)
+    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI)
+    gfx->invertDisplay(false); // TTGO/ESP32-S3 T-Display heeft geen inversie nodig (ST7789)
     #else
     gfx->invertDisplay(true); // Invert colors (as defined in Setup902_CYD28R_2USB.h with TFT_INVERSION_ON)
     #endif
     gfx->fillScreen(RGB565_BLACK);
     setDisplayBrigthness();
     
-    // Geef display tijd om te stabiliseren na initialisatie (vooral belangrijk voor CYD displays)
-    #ifndef PLATFORM_TTGO
-    delay(100);
+    // Geef display tijd om te stabiliseren na initialisatie (vooral belangrijk voor CYD displays en ESP32-S3)
+    #if !defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI)
+    delay(200); // ESP32-S3 heeft extra tijd nodig voor SPI stabilisatie
     #endif
 }
 
@@ -4706,8 +4786,8 @@ static void setupLVGL()
     uint32_t screenWidth = gfx->width();
     uint32_t screenHeight = gfx->height();
     // Buffer grootte - platform-specifiek
-    #ifdef PLATFORM_TTGO
-    // TTGO: 30 regels voor RAM besparing
+    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI)
+    // TTGO/ESP32-S3: 30 regels voor RAM besparing
     uint32_t bufSize = screenWidth * 30;
     #else
     // CYD: 40 regels (zoals in originele CYD code)
@@ -4820,11 +4900,22 @@ static void setupMutex()
 static void startFreeRTOSTasks()
 {
     // FreeRTOS Tasks voor multi-core processing
+    // ESP32-S3 heeft mogelijk meer stack ruimte nodig
+    #if defined(PLATFORM_ESP32S3_SUPERMINI)
+    const uint32_t apiTaskStack = 10240;  // ESP32-S3: meer stack voor API task
+    const uint32_t uiTaskStack = 10240;   // ESP32-S3: meer stack voor UI task
+    const uint32_t webTaskStack = 6144;   // ESP32-S3: meer stack voor web task
+    #else
+    const uint32_t apiTaskStack = 8192;   // ESP32: standaard stack
+    const uint32_t uiTaskStack = 8192;    // ESP32: standaard stack
+    const uint32_t webTaskStack = 4096;   // ESP32: standaard stack
+    #endif
+    
     // Core 1: API calls (elke seconde)
     xTaskCreatePinnedToCore(
         apiTask,           // Task function
         "API_Task",        // Task name
-        8192,              // Stack size
+        apiTaskStack,      // Stack size (platform-specifiek)
         NULL,              // Parameters
         1,                 // Priority
         NULL,              // Task handle
@@ -4835,7 +4926,7 @@ static void startFreeRTOSTasks()
     xTaskCreatePinnedToCore(
         uiTask,            // Task function
         "UI_Task",         // Task name
-        8192,              // Stack size
+        uiTaskStack,       // Stack size (platform-specifiek)
         NULL,              // Parameters
         1,                 // Priority
         NULL,              // Task handle
@@ -4846,7 +4937,7 @@ static void startFreeRTOSTasks()
     xTaskCreatePinnedToCore(
         webTask,           // Task function
         "Web_Task",        // Task name
-        4096,              // Stack size
+        webTaskStack,      // Stack size (platform-specifiek)
         NULL,              // Parameters
         1,                 // Priority
         NULL,              // Task handle
@@ -5307,7 +5398,7 @@ void uiTask(void *parameter)
     #ifdef PLATFORM_TTGO
     const TickType_t lvglFrequency = pdMS_TO_TICKS(5); // TTGO: elke 5ms
     #else
-    const TickType_t lvglFrequency = pdMS_TO_TICKS(3); // CYD: elke 3ms voor vloeiendere rendering
+    const TickType_t lvglFrequency = pdMS_TO_TICKS(3); // CYD/ESP32-S3: elke 3ms voor vloeiendere rendering
     #endif
     TickType_t lastLvglTime = xTaskGetTickCount();
     
@@ -5344,7 +5435,7 @@ void uiTask(void *parameter)
         #ifdef PLATFORM_TTGO
         const TickType_t mutexTimeout = pdMS_TO_TICKS(50); // TTGO: korte timeout
         #else
-        const TickType_t mutexTimeout = pdMS_TO_TICKS(100); // CYD: langere timeout voor betere grafiek updates
+        const TickType_t mutexTimeout = pdMS_TO_TICKS(100); // CYD/ESP32-S3: langere timeout voor betere grafiek updates
         #endif
         
         static uint32_t uiMutexTimeoutCount = 0;

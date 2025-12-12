@@ -7,6 +7,7 @@ A unified Crypto Monitor for different ESP32 display platforms: TTGO T-Display, 
 - **TTGO T-Display**: 1.14" 135x240 TFT display (ST7789)
 - **CYD 2.4"**: 2.4" 240x320 TFT display with touchscreen (XPT2046)
 - **CYD 2.8"**: 2.8" 240x320 TFT display with touchscreen (XPT2046)
+- **ESP32-S3 Super Mini**: ESP32-S3 Super Mini HW-747 v0.0.2i + 1.54" 240x240 TFT display (ST7789)
 
 ## Features
 
@@ -33,6 +34,11 @@ A unified Crypto Monitor for different ESP32 display platforms: TTGO T-Display, 
 - ESP32 with CYD display module
 - 2.4" or 2.8" 240x320 TFT display
 - Touchscreen (XPT2046)
+
+### ESP32-S3 Super Mini
+- ESP32-S3 Super Mini HW-747 v0.0.2i
+- 1.54" 240x240 TFT display (ST7789)
+- Physical reset button (GPIO 0)
 
 ## Software Requirements
 
@@ -93,9 +99,18 @@ cd UNIFIED-LVGL9-Crypto_Monitor
 #define PLATFORM_CYD28
 // #define PLATFORM_TTGO
 // #define PLATFORM_CYD24
+// #define PLATFORM_ESP32S3_SUPERMINI
 ```
 
-**⚠️ Note**: Only ONE platform can be active! Make sure the other two lines are commented out with `//`.
+**For ESP32-S3 Super Mini:**
+```cpp
+//#define PLATFORM_CYD28
+// #define PLATFORM_TTGO
+// #define PLATFORM_CYD24
+#define PLATFORM_ESP32S3_SUPERMINI
+```
+
+**⚠️ Note**: Only ONE platform can be active! Make sure the other three lines are commented out with `//`.
 
 #### Optional: Set Default Language
 
@@ -491,6 +506,12 @@ Both layouts show the same information, but the TTGO version is optimized for th
 - Touchscreen interaction via dedicated "Klik Vast" button
 - Two-line footer: WiFi signal/RAM (line 1), IP/version (line 2)
 
+### ESP32-S3 Super Mini
+- Square 240x240 display layout (240px vertical, same as TTGO)
+- Physical reset button for anchor price (GPIO 0)
+- Compact layout similar to TTGO (optimized for 240px vertical resolution)
+- Date format: dd-mm-yy (compact format like TTGO)
+
 ## NTFY.sh Setup and Usage
 
 ### What is NTFY.sh?
@@ -638,7 +659,7 @@ For extra security, you can secure your topic with a password:
 
 ### MQTT Topics
 
-The device publishes to the following topics (prefix is platform-specific: `ttgo_crypto`, `cyd24_crypto`, or `cyd28_crypto`):
+The device publishes to the following topics (prefix is platform-specific: `ttgo_crypto`, `cyd24_crypto`, `cyd28_crypto`, or `esp32s3_crypto`):
 
 #### Data Topics (Read-only)
 - `{prefix}/values/price` - Current price (float, e.g. `52345.67`)
