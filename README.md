@@ -12,7 +12,8 @@ A unified Crypto Monitor for different ESP32 display platforms: TTGO T-Display, 
 ## Features
 
 - Real-time Bitcoin (BTCEUR) price monitoring via Binance API
-- Live chart with 60 data points (1 minute history)
+- Live chart with 60 data points (~1.5 minutes history at 1500ms API interval)
+- 1 minute return calculation uses 40 data points (exactly 1 minute at 1500ms API interval)
 - Trend detection (2-hour trend analysis)
 - Volatility monitoring (low/medium/high)
 - Anchor price tracking with take profit and stop loss alerts

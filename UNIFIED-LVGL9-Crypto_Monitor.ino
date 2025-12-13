@@ -63,7 +63,7 @@
 
 // --- Chart Configuration ---
 #define PRICE_RANGE 200         // The range of price for the chart, adjust as needed
-#define POINTS_TO_CHART 60      // Number of points on the chart (60 = 1 minute of data)
+#define POINTS_TO_CHART 60      // Number of points on the chart (60 points = ~1.5 minutes at 1500ms API interval)
 
 // --- Timing Configuration ---
 #define UPDATE_UI_INTERVAL 1000   // UI update in ms (elke seconde)

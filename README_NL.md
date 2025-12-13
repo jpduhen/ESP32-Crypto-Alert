@@ -12,7 +12,8 @@ Een unificatie van de Crypto Monitor voor verschillende ESP32 display platforms:
 ## Features
 
 - Real-time Bitcoin (BTCEUR) prijs monitoring via Binance API
-- Live grafiek met 60 datapunten (1 minuut historie)
+- Live grafiek met 60 datapunten (~1.5 minuten historie bij 1500ms API interval)
+- 1 minuut return berekening gebruikt 40 datapunten (exact 1 minuut bij 1500ms API interval)
 - Trend detectie (2-uur trend analyse)
 - Volatiliteit monitoring (laag/gemiddeld/hoog)
 - Anchor price tracking met take profit en stop loss alerts
