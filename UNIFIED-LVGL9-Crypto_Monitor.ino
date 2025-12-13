@@ -31,8 +31,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 66
-#define VERSION_STRING "3.66"
+#define VERSION_MINOR 68
+#define VERSION_STRING "3.68"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -136,9 +136,9 @@
 #define MAX_5M_ALERTS_PER_HOUR 3
 
 // --- MQTT Configuration ---
-#define MQTT_HOST_DEFAULT "192.168.1.100"  // Standaard MQTT broker IP (pas aan naar jouw MQTT broker)
+#define MQTT_HOST_DEFAULT "192.168.68.3"  // Standaard MQTT broker IP (pas aan naar jouw MQTT broker)
 #define MQTT_PORT_DEFAULT 1883             // Standaard MQTT poort
-#define MQTT_USER_DEFAULT "mqtt_user"       // Standaard MQTT gebruiker (pas aan)
+#define MQTT_USER_DEFAULT "mosquitto"       // Standaard MQTT gebruiker (pas aan)
 #define MQTT_PASS_DEFAULT "mqtt_password"  // Standaard MQTT wachtwoord (pas aan)
 
 // --- Language Configuration ---
@@ -2768,152 +2768,367 @@ void connectMQTT() {
 // Web server HTML page
 static String getSettingsHTML()
 {
-    String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>";
+    // Haal huidige status op (thread-safe)
+    float currentPrice = 0.0f;
+    float currentRet1m = 0.0f;
+    float currentRet5m = 0.0f;
+    float currentRet30m = 0.0f;
+    TrendState currentTrend = TREND_SIDEWAYS;
+    VolatilityState currentVol = VOLATILITY_MEDIUM;
+    bool currentAnchorActive = false;
+    float currentAnchorPrice = 0.0f;
+    float currentAnchorPct = 0.0f;
+    
+    // Haal alle status data op binnen één mutex lock
+    if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "getSettingsHTML status")) {
+        if (isValidPrice(prices[0])) {
+            currentPrice = prices[0];
+        }
+        currentTrend = trendState;
+        currentVol = volatilityState;
+        currentAnchorActive = anchorActive;
+        if (anchorActive && isValidPrice(anchorPrice)) {
+            currentAnchorPrice = anchorPrice;
+            if (isValidPrice(prices[0]) && anchorPrice > 0.0f) {
+                currentAnchorPct = ((prices[0] - anchorPrice) / anchorPrice) * 100.0f;
+            }
+        }
+        // Bereken returns binnen dezelfde mutex lock
+        currentRet1m = calculateReturn1Minute();
+        currentRet5m = calculateReturn5Minutes();
+        currentRet30m = calculateReturn30Minutes();
+        safeMutexGive(dataMutex, "getSettingsHTML status");
+    }
+    
+    String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>";
     html += "<title>" + String(binanceSymbol) + " " + String(getText("Instellingen", "Settings")) + "</title>";
-    html += "<style>body{font-family:Arial;margin:20px;background:#1a1a1a;color:#fff;}";
-    html += "h1{color:#00BCD4;}form{max-width:500px;}";
+    html += "<style>";
+    html += "*{box-sizing:border-box;}";
+    html += "body{font-family:Arial;margin:0;padding:10px;background:#1a1a1a;color:#fff;}";
+    html += ".container{max-width:600px;margin:0 auto;padding:0 10px;}";
+    html += "h1{color:#00BCD4;margin:15px 0;font-size:24px;}";
+    html += "form{max-width:100%;}";
     html += "label{display:block;margin:15px 0 5px;color:#ccc;}";
-    html += "input[type=number],input[type=text],select{width:100%;padding:8px;border:1px solid #444;background:#2a2a2a;color:#fff;border-radius:4px;}";
-    html += "button{background:#00BCD4;color:#fff;padding:12px 24px;border:none;border-radius:4px;cursor:pointer;font-size:16px;margin-top:20px;}";
-    html += "button:hover{background:#00acc1;}.info{color:#888;font-size:12px;margin-top:5px;}</style></head><body>";
+    html += "input[type=number],input[type=text],select{width:100%;padding:8px;border:1px solid #444;background:#2a2a2a;color:#fff;border-radius:4px;box-sizing:border-box;}";
+    html += "button{background:#00BCD4;color:#fff;padding:12px 24px;border:none;border-radius:4px;cursor:pointer;font-size:16px;margin-top:20px;width:100%;}";
+    html += "button:hover{background:#00acc1;}";
+    html += ".info{color:#888;font-size:12px;margin-top:5px;}";
+    html += ".status-box{background:#2a2a2a;border:1px solid #444;border-radius:4px;padding:15px;margin:20px 0;max-width:100%;}";
+    html += ".status-row{display:flex;justify-content:space-between;margin:8px 0;padding:8px 0;border-bottom:1px solid #333;flex-wrap:wrap;}";
+    html += ".status-label{color:#888;flex:1;min-width:120px;}";
+    html += ".status-value{color:#fff;font-weight:bold;text-align:right;flex:1;min-width:100px;}";
+    html += ".section-header{background:#2a2a2a;border:1px solid #444;border-radius:4px;padding:12px;margin:15px 0 0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;}";
+    html += ".section-header:hover{background:#333;}";
+    html += ".section-header h3{margin:0;color:#00BCD4;font-size:16px;}";
+    html += ".section-content{display:none;padding:15px;background:#1a1a1a;border:1px solid #444;border-top:none;border-radius:0 0 4px 4px;}";
+    html += ".section-content.active{display:block;}";
+    html += ".section-desc{color:#888;font-size:12px;margin-top:5px;margin-bottom:15px;}";
+    html += ".toggle-icon{color:#00BCD4;font-size:18px;flex-shrink:0;margin-left:10px;}";
+    html += "@media (max-width:600px){";
+    html += "body{padding:5px;}";
+    html += ".container{padding:0 5px;}";
+    html += "h1{font-size:20px;margin:10px 0;}";
+    html += ".status-box{padding:10px;margin:15px 0;}";
+    html += ".status-row{flex-direction:column;padding:6px 0;}";
+    html += ".status-label{min-width:auto;margin-bottom:3px;}";
+    html += ".status-value{text-align:left;min-width:auto;}";
+    html += ".section-header{padding:10px;}";
+    html += ".section-header h3{font-size:14px;}";
+    html += ".section-content{padding:10px;}";
+    html += "button{padding:10px 20px;font-size:14px;}";
+    html += "label{font-size:14px;}";
+    html += "input[type=number],input[type=text],select{font-size:14px;padding:6px;}";
+    html += "}";
+    html += "</style>";
+    html += "<script type='text/javascript'>";
+    html += "(function(){";
+    html += "function toggleSection(id){";
+    html += "var content=document.getElementById('content-'+id);";
+    html += "var icon=document.getElementById('icon-'+id);";
+    html += "if(!content||!icon)return false;";
+    html += "if(content.classList.contains('active')){";
+    html += "content.classList.remove('active');";
+    html += "icon.innerHTML='&#9654;';";
+    html += "}else{";
+    html += "content.classList.add('active');";
+    html += "icon.innerHTML='&#9660;';";
+    html += "}";
+    html += "return false;";
+    html += "}";
+    html += "function setAnchorBtn(e){";
+    html += "if(e){e.preventDefault();e.stopPropagation();}";
+    html += "var input=document.getElementById('anchorValue');";
+    html += "if(!input){alert('Input not found');return false;}";
+    html += "var val=input.value||'';";
+    html += "var xhr=new XMLHttpRequest();";
+    html += "xhr.open('POST','/anchor/set',true);";
+    html += "xhr.setRequestHeader('Content-Type','application/x-www-form-urlencoded');";
+    html += "xhr.onreadystatechange=function(){";
+    html += "if(xhr.readyState==4){";
+    html += "if(xhr.status==200){";
+    html += "alert('" + String(getText("Anchor ingesteld!", "Anchor set!")) + "');";
+    html += "setTimeout(function(){location.reload();},500);";
+    html += "}else{";
+    html += "alert('" + String(getText("Fout bij instellen anchor", "Error setting anchor")) + "');";
+    html += "}";
+    html += "}";
+    html += "};";
+    html += "xhr.send('value='+encodeURIComponent(val));";
+    html += "return false;";
+    html += "}";
+    html += "window.addEventListener('DOMContentLoaded',function(){";
+    html += "var headers=document.querySelectorAll('.section-header');";
+    html += "for(var i=0;i<headers.length;i++){";
+    html += "headers[i].addEventListener('click',function(e){";
+    html += "var id=this.getAttribute('data-section');";
+    html += "toggleSection(id);";
+    html += "e.preventDefault();";
+    html += "return false;";
+    html += "});";
+    html += "}";
+    html += "var basic=document.getElementById('icon-basic');";
+    html += "var anchor=document.getElementById('icon-anchor');";
+    html += "if(basic)basic.innerHTML='&#9660;';";
+    html += "if(anchor)anchor.innerHTML='&#9660;';";
+    html += "var anchorBtn=document.getElementById('anchorBtn');";
+    html += "if(anchorBtn){";
+    html += "anchorBtn.addEventListener('click',setAnchorBtn);";
+    html += "}";
+    html += "});";
+    html += "})();";
+    html += "</script>";
+    html += "</head><body>";
+    html += "<div class='container'>";
     html += "<h1>" + String(binanceSymbol) + " " + String(getText("Instellingen", "Settings")) + "</h1>";
+    
+    // Huidige Status samenvatting (read-only)
+    html += "<div class='status-box'>";
+    html += "<h2 style='color:#00BCD4;margin-top:0;'>" + String(getText("Huidige Status", "Current Status")) + "</h2>";
+    
+    // Prijs
+    if (currentPrice > 0.0f) {
+        html += "<div class='status-row'><span class='status-label'>" + String(getText("Huidige Prijs", "Current Price")) + ":</span><span class='status-value'>" + String(currentPrice, 2) + " EUR</span></div>";
+    } else {
+        html += "<div class='status-row'><span class='status-label'>" + String(getText("Huidige Prijs", "Current Price")) + ":</span><span class='status-value'>--</span></div>";
+    }
+    
+    // Returns
+    html += "<div class='status-row'><span class='status-label'>1m Return:</span><span class='status-value'>" + String(currentRet1m, 2) + "%</span></div>";
+    html += "<div class='status-row'><span class='status-label'>5m Return:</span><span class='status-value'>" + String(currentRet5m, 2) + "%</span></div>";
+    html += "<div class='status-row'><span class='status-label'>30m Return:</span><span class='status-value'>" + String(currentRet30m, 2) + "%</span></div>";
+    
+    // Trend
+    const char* trendText = "";
+    switch (currentTrend) {
+        case TREND_UP: trendText = (language == 0) ? "UP" : "UP"; break;
+        case TREND_DOWN: trendText = (language == 0) ? "DOWN" : "DOWN"; break;
+        case TREND_SIDEWAYS: trendText = (language == 0) ? "SIDEWAYS" : "SIDEWAYS"; break;
+    }
+    html += "<div class='status-row'><span class='status-label'>" + String(getText("Trend", "Trend")) + ":</span><span class='status-value'>" + String(trendText) + "</span></div>";
+    
+    // Volatiliteit
+    const char* volText = "";
+    switch (currentVol) {
+        case VOLATILITY_LOW: volText = (language == 0) ? "LAAG" : "LOW"; break;
+        case VOLATILITY_MEDIUM: volText = (language == 0) ? "GEMIDDELD" : "MEDIUM"; break;
+        case VOLATILITY_HIGH: volText = (language == 0) ? "HOOG" : "HIGH"; break;
+    }
+    html += "<div class='status-row'><span class='status-label'>" + String(getText("Volatiliteit", "Volatility")) + ":</span><span class='status-value'>" + String(volText) + "</span></div>";
+    
+    // Anchor
+    if (currentAnchorActive && currentAnchorPrice > 0.0f) {
+        html += "<div class='status-row'><span class='status-label'>" + String(getText("Anchor", "Anchor")) + ":</span><span class='status-value'>" + String(currentAnchorPrice, 2) + " EUR</span></div>";
+        html += "<div class='status-row'><span class='status-label'>" + String(getText("PnL t.o.v. Anchor", "PnL vs Anchor")) + ":</span><span class='status-value'>" + String(currentAnchorPct, 2) + "%</span></div>";
+    } else {
+        html += "<div class='status-row'><span class='status-label'>" + String(getText("Anchor", "Anchor")) + ":</span><span class='status-value'>" + String(getText("Niet ingesteld", "Not set")) + "</span></div>";
+    }
+    
+    // Features status
+    html += "<div class='status-row'><span class='status-label'>" + String(getText("Trend-Adaptive", "Trend-Adaptive")) + ":</span><span class='status-value'>" + String(trendAdaptiveAnchorsEnabled ? getText("Aan", "On") : getText("Uit", "Off")) + "</span></div>";
+    html += "<div class='status-row'><span class='status-label'>" + String(getText("Smart Confluence", "Smart Confluence")) + ":</span><span class='status-value'>" + String(smartConfluenceEnabled ? getText("Aan", "On") : getText("Uit", "Off")) + "</span></div>";
+    html += "<div class='status-row'><span class='status-label'>" + String(getText("Auto-Volatility", "Auto-Volatility")) + ":</span><span class='status-value'>" + String(autoVolatilityEnabled ? getText("Aan", "On") : getText("Uit", "Off")) + "</span></div>";
+    
+    html += "</div>";
+    
     html += "<form method='POST' action='/save'>";
-    html += "<h2 style='color:#00BCD4;margin-top:30px;'>" + String(getText("Algemene instellingen", "General Settings")) + "</h2>";
-    html += "<label>" + String(getText("Taal / Language:", "Language:")) + "<select name='language'>";
+    
+    // ===== SECTIE 1: Basis & Connectiviteit =====
+    html += "<div class='section-header' data-section='basic'>";
+    html += "<h3>" + String(getText("Basis & Connectiviteit", "Basic & Connectivity")) + "</h3>";
+    html += "<span class='toggle-icon' id='icon-basic'>&#9660;</span>";
+    html += "</div>";
+    html += "<div class='section-content active' id='content-basic'>";
+    html += "<div class='section-desc'>" + String(getText("Basisinstellingen voor taal, notificaties en API connectiviteit", "Basic settings for language, notifications and API connectivity")) + "</div>";
+    
+    html += "<label>" + String(getText("Taal van het systeem", "System Language")) + ":<select name='language'>";
     html += "<option value='0'" + String(language == 0 ? " selected" : "") + ">Nederlands</option>";
     html += "<option value='1'" + String(language == 1 ? " selected" : "") + ">English</option>";
     html += "</select></label>";
-    html += "<div class='info'>" + String(getText("Selecteer de taal voor het display en de web interface", "Select language for display and web interface")) + "</div>";
-    html += "<label>NTFY Topic:<input type='text' name='ntfytopic' value='" + String(ntfyTopic) + "' maxlength='63'></label>";
-    html += "<div class='info'>" + String(getText("Dit is de NTFY topic waarop je je moet abonneren in de NTFY app om notificaties te ontvangen op je mobiel. Standaard wordt automatisch een uniek topic gegenereerd met je ESP32 device ID (format: [ESP32-ID]-alert).", "This is the NTFY topic you need to subscribe to in the NTFY app to receive notifications on your mobile. By default, a unique topic is automatically generated with your ESP32 device ID (format: [ESP32-ID]-alert).")) + "</div>";
-    html += "<label>" + String(getText("Binance Symbool:", "Binance Symbol:")) + "<input type='text' name='binancesymbol' value='" + String(binanceSymbol) + "' maxlength='15'></label>";
-    html += "<div class='info'>" + String(getText("Binance trading pair (bijv. BTCEUR, BTCUSDT, ETHUSDT)", "Binance trading pair (e.g. BTCEUR, BTCUSDT, ETHUSDT)")) + "</div>";
+    html += "<div class='info'>" + String(getText("Kies de taal voor het scherm en deze webpagina. Dit heeft geen invloed op de werking van het systeem.", "Choose the language for the screen and this webpage. This does not affect the system's operation.")) + "</div>";
     
-    // Anchor instellingen onder Algemene instellingen
-    html += "<h3 style='color:#00BCD4;margin-top:20px;'>" + String(getText("Anchor Instellingen", "Anchor Settings")) + "</h3>";
+    html += "<label>" + String(getText("Te volgen markt (Binance trading pair)", "Market to follow (Binance trading pair)")) + ":<input type='text' name='binancesymbol' value='" + String(binanceSymbol) + "' maxlength='15'></label>";
+    html += "<div class='info'>" + String(getText("Welke markt moet worden gevolgd, bijvoorbeeld BTCEUR of BTCUSDT. Alle berekeningen en alerts zijn gebaseerd op dit trading pair.", "Which market should be followed, for example BTCEUR or BTCUSDT. All calculations and alerts are based on this trading pair.")) + "</div>";
     
-    // Haal huidige prijs op voor default waarde (thread-safe)
-    float currentPriceForAnchor = 0.0f;
-    if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "getSettingsHTML price")) {
-        if (isValidPrice(prices[0])) {
-            currentPriceForAnchor = prices[0];
-        }
-        safeMutexGive(dataMutex, "getSettingsHTML price");
-    }
+    html += "<label>" + String(getText("Notificatiekanaal (NTFY)", "Notification channel (NTFY)")) + ":<input type='text' name='ntfytopic' value='" + String(ntfyTopic) + "' maxlength='63'></label>";
+    html += "<div class='info'>" + String(getText("Dit is het kanaal waarop je mobiele meldingen ontvangt via de NTFY-app. Abonneer je in de app op dit topic om alerts te krijgen.", "This is the channel where you receive mobile notifications via the NTFY app. Subscribe to this topic in the app to receive alerts.")) + "</div>";
     
-    // Anchor waarde input veld
+    html += "</div>";
+    
+    // ===== SECTIE 2: Anchor & Risicokader =====
+    html += "<div class='section-header' data-section='anchor'>";
+    html += "<h3>" + String(getText("Anchor & Risicokader", "Anchor & Risk Framework")) + "</h3>";
+    html += "<span class='toggle-icon' id='icon-anchor'>&#9660;</span>";
+    html += "</div>";
+    html += "<div class='section-content active' id='content-anchor'>";
+    html += "<div class='section-desc'>" + String(getText("Referentieprijs en risicogrenzen voor take profit en stop loss", "Reference price and risk boundaries for take profit and stop loss")) + "</div>";
+    
+    // Haal huidige prijs op voor default waarde
     String anchorValueStr = "";
-    if (currentPriceForAnchor > 0.0f) {
-        anchorValueStr = String(currentPriceForAnchor, 2);
-    } else if (anchorActive && isValidPrice(anchorPrice)) {
-        anchorValueStr = String(anchorPrice, 2);
+    if (currentPrice > 0.0f) {
+        anchorValueStr = String(currentPrice, 2);
+    } else if (currentAnchorActive && currentAnchorPrice > 0.0f) {
+        anchorValueStr = String(currentAnchorPrice, 2);
     }
     
-    html += "<label>" + String(getText("Anchor Waarde (EUR):", "Anchor Value (EUR):")) + "<input type='number' step='0.01' id='anchorValue' value='" + anchorValueStr + "' min='0.01'></label>";
-    html += "<button type='button' onclick='setAnchor()' style='background:#4CAF50;margin-top:10px;'>" + String(getText("Stel Anchor In", "Set Anchor")) + "</button>";
-    html += "<div class='info'>" + String(getText("Stel de anchor-waarde in (standaard: huidige prijs). Leeg laten = gebruik huidige prijs.", "Set the anchor value (default: current price). Leave empty = use current price.")) + "</div>";
-    html += "<script>";
-    html += "function setAnchor() {";
-    html += "  var value = document.getElementById('anchorValue').value;";
-    html += "  var xhr = new XMLHttpRequest();";
-    html += "  xhr.open('POST', '/anchor/set', true);";
-    html += "  xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');";
-    html += "  xhr.onreadystatechange = function() {";
-    html += "    if (xhr.readyState === 4) {";
-    html += "      if (xhr.status === 200) {";
-    html += "        alert('" + String(getText("Anchor ingesteld!", "Anchor set!")) + "');";
-    html += "      } else {";
-    html += "        alert('" + String(getText("Fout bij instellen anchor", "Error setting anchor")) + "');";
-    html += "      }";
-    html += "    }";
-    html += "  };";
-    html += "  xhr.send('value=' + encodeURIComponent(value));";
-    html += "}";
-    html += "</script>";
-    html += "<label>" + String(getText("Anchor Take Profit (%):", "Anchor Take Profit (%):")) + "<input type='number' step='0.1' name='anchorTP' value='" + String(anchorTakeProfit, 1) + "' min='0.1' max='100'></label>";
-    html += "<div class='info'>" + String(getText("Take profit threshold boven anchor price (standaard: 5.0%)", "Take profit threshold above anchor price (default: 5.0%)")) + "</div>";
-    html += "<label>" + String(getText("Anchor Max Loss (%):", "Anchor Max Loss (%):")) + "<input type='number' step='0.1' name='anchorML' value='" + String(anchorMaxLoss, 1) + "' min='-100' max='-0.1'></label>";
-    html += "<div class='info'>" + String(getText("Max loss threshold onder anchor price (standaard: -3.0%)", "Max loss threshold below anchor price (default: -3.0%)")) + "</div>";
+    html += "<label>" + String(getText("Referentieprijs (Anchor)", "Reference price (Anchor)")) + " (EUR):<input type='number' step='0.01' id='anchorValue' value='" + anchorValueStr + "' min='0.01'></label>";
+    html += "<button type='button' id='anchorBtn' style='background:#4CAF50;margin-top:10px;'>" + String(getText("Stel Anchor In", "Set Anchor")) + "</button>";
+    html += "<div class='info'>" + String(getText("De prijs waartegen winst en verlies worden gemeten. Laat leeg om automatisch de huidige marktprijs te gebruiken.", "The price against which profit and loss are measured. Leave empty to automatically use the current market price.")) + "</div>";
+    
+    html += "<label>" + String(getText("Winstdoel vanaf anchor (%)", "Profit target from anchor (%)")) + ":<input type='number' step='0.1' name='anchorTP' value='" + String(anchorTakeProfit, 1) + "' min='0.1' max='100'></label>";
+    html += "<div class='info'>" + String(getText("Hoeveel procent de prijs moet stijgen vanaf de anchor voordat een \"Take Profit\"-melding wordt gestuurd.", "How many percent the price must rise from the anchor before a \"Take Profit\" notification is sent.")) + "</div>";
+    
+    html += "<label>" + String(getText("Maximaal verlies vanaf anchor (%)", "Maximum loss from anchor (%)")) + ":<input type='number' step='0.1' name='anchorML' value='" + String(anchorMaxLoss, 1) + "' min='-100' max='-0.1'></label>";
+    html += "<div class='info'>" + String(getText("Hoeveel procent de prijs mag dalen vanaf de anchor voordat een \"Max Loss\"-melding wordt gestuurd.", "How many percent the price may fall from the anchor before a \"Max Loss\" notification is sent.")) + "</div>";
     
     // Trend-adaptive anchor settings
-    html += "<h4 style='color:#00BCD4;margin-top:15px;'>" + String(getText("Trend-Adaptive Anchors", "Trend-Adaptive Anchors")) + "</h4>";
-    html += "<label><input type='checkbox' name='trendAdapt' value='1'" + String(trendAdaptiveAnchorsEnabled ? " checked" : "") + "> " + String(getText("Trend-Adaptive Anchors Inschakelen", "Enable Trend-Adaptive Anchors")) + "</label>";
-    html += "<div class='info'>" + String(getText("Pas anchor thresholds automatisch aan op basis van de huidige trend (UP/DOWN/SIDEWAYS)", "Automatically adjust anchor thresholds based on current trend (UP/DOWN/SIDEWAYS)")) + "</div>";
+    html += "<h4 style='color:#00BCD4;margin-top:20px;'>" + String(getText("Trend-Adaptive Anchors", "Trend-Adaptive Anchors")) + "</h4>";
+    html += "<label><input type='checkbox' name='trendAdapt' value='1'" + String(trendAdaptiveAnchorsEnabled ? " checked" : "") + "> " + String(getText("Risico automatisch aanpassen aan trend", "Automatically adjust risk to trend")) + "</label>";
+    html += "<div class='info'>" + String(getText("Past je winst- en verliesgrenzen automatisch aan op basis van de marktrichting (stijgend, dalend of zijwaarts).", "Automatically adjusts your profit and loss limits based on market direction (rising, falling or sideways).")) + "</div>";
     
-    html += "<label>" + String(getText("UP Trend - Max Loss Multiplier:", "UP Trend - Max Loss Multiplier:")) + "<input type='number' step='0.01' name='upMLMult' value='" + String(uptrendMaxLossMultiplier, 2) + "' min='0.5' max='2.0'></label>";
-    html += "<div class='info'>" + String(getText("Multiplier voor max loss bij UP trend (standaard: 1.15)", "Multiplier for max loss in UP trend (default: 1.15)")) + "</div>";
+    html += "<label>" + String(getText("Extra ruimte bij stijgende markt (verlies)", "Extra room in rising market (loss)")) + ":<input type='number' step='0.01' name='upMLMult' value='" + String(uptrendMaxLossMultiplier, 2) + "' min='0.5' max='2.0'></label>";
+    html += "<div class='info'>" + String(getText("Bij een stijgende trend mag de prijs iets verder tegen je in bewegen voordat een Max Loss-melding komt.", "In a rising trend, the price may move slightly further against you before a Max Loss notification comes.")) + "</div>";
     
-    html += "<label>" + String(getText("UP Trend - Take Profit Multiplier:", "UP Trend - Take Profit Multiplier:")) + "<input type='number' step='0.01' name='upTPMult' value='" + String(uptrendTakeProfitMultiplier, 2) + "' min='0.5' max='2.0'></label>";
-    html += "<div class='info'>" + String(getText("Multiplier voor take profit bij UP trend (standaard: 1.2)", "Multiplier for take profit in UP trend (default: 1.2)")) + "</div>";
+    html += "<label>" + String(getText("Meer winst laten lopen bij stijgende markt", "Let more profit run in rising market")) + ":<input type='number' step='0.01' name='upTPMult' value='" + String(uptrendTakeProfitMultiplier, 2) + "' min='0.5' max='2.0'></label>";
+    html += "<div class='info'>" + String(getText("Bij een stijgende trend wordt het winstdoel automatisch verhoogd zodat winsten langer kunnen doorlopen.", "In a rising trend, the profit target is automatically increased so profits can run longer.")) + "</div>";
     
-    html += "<label>" + String(getText("DOWN Trend - Max Loss Multiplier:", "DOWN Trend - Max Loss Multiplier:")) + "<input type='number' step='0.01' name='downMLMult' value='" + String(downtrendMaxLossMultiplier, 2) + "' min='0.5' max='2.0'></label>";
-    html += "<div class='info'>" + String(getText("Multiplier voor max loss bij DOWN trend (standaard: 0.85)", "Multiplier for max loss in DOWN trend (default: 0.85)")) + "</div>";
+    html += "<label>" + String(getText("Sneller beschermen bij dalende markt", "Protect faster in falling market")) + ":<input type='number' step='0.01' name='downMLMult' value='" + String(downtrendMaxLossMultiplier, 2) + "' min='0.5' max='2.0'></label>";
+    html += "<div class='info'>" + String(getText("Bij een dalende trend wordt het maximale verlies verkleind om sneller risico te beperken.", "In a falling trend, the maximum loss is reduced to limit risk faster.")) + "</div>";
     
-    html += "<label>" + String(getText("DOWN Trend - Take Profit Multiplier:", "DOWN Trend - Take Profit Multiplier:")) + "<input type='number' step='0.01' name='downTPMult' value='" + String(downtrendTakeProfitMultiplier, 2) + "' min='0.5' max='2.0'></label>";
-    html += "<div class='info'>" + String(getText("Multiplier voor take profit bij DOWN trend (standaard: 0.8)", "Multiplier for take profit in DOWN trend (default: 0.8)")) + "</div>";
-    html += "<hr style='border:1px solid #444;margin:30px 0;'>";
-    html += "<h2 style='color:#00BCD4;margin-top:30px;'>" + String(getText("Spike & Move Alerts", "Spike & Move Alerts")) + "</h2>";
+    html += "<label>" + String(getText("Sneller winst nemen bij dalende markt", "Take profit faster in falling market")) + ":<input type='number' step='0.01' name='downTPMult' value='" + String(downtrendTakeProfitMultiplier, 2) + "' min='0.5' max='2.0'></label>";
+    html += "<div class='info'>" + String(getText("Bij een dalende trend wordt het winstdoel verlaagd om eerder winst veilig te stellen.", "In a falling trend, the profit target is lowered to secure profit earlier.")) + "</div>";
+    
+    html += "</div>";
+    
+    // ===== SECTIE 3: Signaalgeneratie =====
+    html += "<div class='section-header' data-section='signals'>";
+    html += "<h3>" + String(getText("Signaalgeneratie", "Signal Generation")) + "</h3>";
+    html += "<span class='toggle-icon' id='icon-signals'>&#9654;</span>";
+    html += "</div>";
+    html += "<div class='section-content' id='content-signals'>";
+    html += "<div class='section-desc'>" + String(getText("Thresholds voor spike en move detectie op verschillende timeframes", "Thresholds for spike and move detection on different timeframes")) + "</div>";
+    
+    html += "<label>" + String(getText("Snelle prijsbeweging (1 minuut)", "Fast price movement (1 minute)")) + " (%):<input type='number' step='0.01' name='spike1m' value='" + String(spike1mThreshold, 2) + "'></label>";
+    html += "<div class='info'>" + String(getText("Minimale procentuele beweging binnen 1 minuut om als \"snelle impuls\" te worden gezien.", "Minimum percentage movement within 1 minute to be considered a \"fast impulse\".")) + "</div>";
+    
+    html += "<label>" + String(getText("Bevestiging door 5 minuten (filter)", "Confirmation by 5 minutes (filter)")) + " (%):<input type='number' step='0.01' name='spike5m' value='" + String(spike5mThreshold, 2) + "'></label>";
+    html += "<div class='info'>" + String(getText("Een 1-minuut spike telt alleen mee als de beweging ook door de 5-minuten trend wordt ondersteund.", "A 1-minute spike only counts if the movement is also supported by the 5-minute trend.")) + "</div>";
+    
+    html += "<label>" + String(getText("Structurele beweging (5 minuten)", "Structural movement (5 minutes)")) + " (%):<input type='number' step='0.01' name='move5mAlert' value='" + String(move5mAlertThreshold, 2) + "'></label>";
+    html += "<div class='info'>" + String(getText("Minimale procentuele beweging over 5 minuten om als betekenisvolle beweging te worden gezien.", "Minimum percentage movement over 5 minutes to be considered a meaningful movement.")) + "</div>";
+    
+    html += "<label>" + String(getText("Grote beweging (30 minuten)", "Large movement (30 minutes)")) + " (%):<input type='number' step='0.01' name='move30m' value='" + String(move30mThreshold, 2) + "'></label>";
+    html += "<div class='info'>" + String(getText("Minimale procentuele beweging over 30 minuten om als grotere marktverplaatsing te gelden.", "Minimum percentage movement over 30 minutes to count as a larger market shift.")) + "</div>";
+    
+    html += "<label>" + String(getText("Korte-termijn bevestiging (5 minuten)", "Short-term confirmation (5 minutes)")) + " (%):<input type='number' step='0.01' name='move5m' value='" + String(move5mThreshold, 2) + "'></label>";
+    html += "<div class='info'>" + String(getText("Een 30-minuten beweging telt alleen mee als de 5-minuten trend dezelfde richting bevestigt.", "A 30-minute movement only counts if the 5-minute trend confirms the same direction.")) + "</div>";
+    
+    html += "<h4 style='color:#00BCD4;margin-top:20px;'>" + String(getText("Trend & Volatiliteit", "Trend & Volatility")) + "</h4>";
+    html += "<label>" + String(getText("Wanneer spreekt het systeem van een trend?", "When does the system speak of a trend?")) + " (%):<input type='number' step='0.1' name='trendTh' value='" + String(trendThreshold, 1) + "' min='0.1' max='10'></label>";
+    html += "<div class='info'>" + String(getText("Minimale procentuele beweging over 2 uur om de markt als stijgend of dalend te beschouwen.", "Minimum percentage movement over 2 hours to consider the market as rising or falling.")) + "</div>";
+    
+    html += "<label>" + String(getText("Rustige markt grens", "Quiet market threshold")) + " (%):<input type='number' step='0.01' name='volLow' value='" + String(volatilityLowThreshold, 2) + "' min='0.01' max='1'></label>";
+    html += "<div class='info'>" + String(getText("Onder deze waarde wordt de markt als rustig beschouwd.", "Below this value the market is considered quiet.")) + "</div>";
+    
+    html += "<label>" + String(getText("Drukke markt grens", "Busy market threshold")) + " (%):<input type='number' step='0.01' name='volHigh' value='" + String(volatilityHighThreshold, 2) + "' min='0.01' max='1'></label>";
+    html += "<div class='info'>" + String(getText("Boven deze waarde wordt de markt als zeer beweeglijk beschouwd.", "Above this value the market is considered very volatile.")) + "</div>";
+    
+    html += "</div>";
+    
+    // ===== SECTIE 4: Slimme logica & filters =====
+    html += "<div class='section-header' data-section='smart'>";
+    html += "<h3>" + String(getText("Slimme logica & filters", "Smart Logic & Filters")) + "</h3>";
+    html += "<span class='toggle-icon' id='icon-smart'>&#9654;</span>";
+    html += "</div>";
+    html += "<div class='section-content' id='content-smart'>";
+    html += "<div class='section-desc'>" + String(getText("Geavanceerde filtering en automatische aanpassing van thresholds", "Advanced filtering and automatic threshold adjustment")) + "</div>";
     
     // Smart Confluence Mode
-    html += "<h3 style='color:#00BCD4;margin-top:20px;'>" + String(getText("Smart Confluence Mode", "Smart Confluence Mode")) + "</h3>";
+    html += "<h4 style='color:#00BCD4;margin-top:10px;'>" + String(getText("Smart Confluence Mode", "Smart Confluence Mode")) + "</h4>";
     html += "<label><input type='checkbox' name='smartConf' value='1'" + String(smartConfluenceEnabled ? " checked" : "") + "> " + String(getText("Smart Confluence Mode Inschakelen", "Enable Smart Confluence Mode")) + "</label>";
     html += "<div class='info'>" + String(getText("Verstuur alleen alerts als er confluence is tussen 1m, 5m en 30m timeframes in dezelfde richting. Dit vermindert het aantal alerts maar verhoogt de betekenisvolheid.", "Only send alerts when there is confluence between 1m, 5m and 30m timeframes in the same direction. This reduces the number of alerts but increases their significance.")) + "</div>";
     
-    html += "<label>1m Spike - ret_1m threshold (%):<input type='number' step='0.01' name='spike1m' value='" + String(spike1mThreshold, 2) + "'></label>";
-    html += "<div class='info'>" + String(getText("1m spike alert: |ret_1m| >= deze waarde (standaard: 0.30%)", "1m spike alert: |ret_1m| >= this value (default: 0.30%)")) + "</div>";
-    html += "<label>1m Spike - ret_5m filter (%):<input type='number' step='0.01' name='spike5m' value='" + String(spike5mThreshold, 2) + "'></label>";
-    html += "<div class='info'>" + String(getText("1m spike alert: |ret_5m| >= deze waarde in dezelfde richting (standaard: 0.60%)", "1m spike alert: |ret_5m| >= this value in same direction (default: 0.60%)")) + "</div>";
-    html += "<label>30m Move - ret_30m threshold (%):<input type='number' step='0.01' name='move30m' value='" + String(move30mThreshold, 2) + "'></label>";
-    html += "<div class='info'>" + String(getText("30m move alert: |ret_30m| >= deze waarde (standaard: 2.0%)", "30m move alert: |ret_30m| >= this value (default: 2.0%)")) + "</div>";
-    html += "<label>30m Move - ret_5m filter (%):<input type='number' step='0.01' name='move5m' value='" + String(move5mThreshold, 2) + "'></label>";
-    html += "<div class='info'>" + String(getText("30m move alert: |ret_5m| >= deze waarde in dezelfde richting (standaard: 0.5%)", "30m move alert: |ret_5m| >= this value in same direction (default: 0.5%)")) + "</div>";
-    html += "<label>5m Move Alert - threshold (%):<input type='number' step='0.01' name='move5mAlert' value='" + String(move5mAlertThreshold, 2) + "'></label>";
-    html += "<div class='info'>" + String(getText("5m move alert: |ret_5m| >= deze waarde (standaard: 1.0%)", "5m move alert: |ret_5m| >= this value (default: 1.0%)")) + "</div>";
-    html += "<hr style='border:1px solid #444;margin:30px 0;'>";
-    html += "<h2 style='color:#00BCD4;margin-top:30px;'>" + String(getText("Cooldowns", "Cooldowns")) + "</h2>";
-    html += "<label>" + String(getText("1-minuut spike cooldown (seconden):", "1-minute spike cooldown (seconds):")) + "<input type='number' name='cd1min' value='" + String(notificationCooldown1MinMs / 1000) + "'></label>";
-    html += "<div class='info'>" + String(getText("Tijd tussen 1-minuut spike notificaties", "Time between 1-minute spike notifications")) + "</div>";
-    html += "<label>" + String(getText("30-minuten move cooldown (seconden):", "30-minute move cooldown (seconds):")) + "<input type='number' name='cd30min' value='" + String(notificationCooldown30MinMs / 1000) + "'></label>";
-    html += "<div class='info'>" + String(getText("Tijd tussen 30-minuten move notificaties", "Time between 30-minute move notifications")) + "</div>";
-    html += "<label>" + String(getText("5-minuten move cooldown (seconden):", "5-minute move cooldown (seconds):")) + "<input type='number' name='cd5min' value='" + String(notificationCooldown5MinMs / 1000) + "'></label>";
-    html += "<div class='info'>" + String(getText("Tijd tussen 5-minuten move notificaties", "Time between 5-minute move notifications")) + "</div>";
-    html += "<hr style='border:1px solid #444;margin:30px 0;'>";
-    html += "<h2 style='color:#00BCD4;margin-top:30px;'>" + String(getText("Trend & Volatiliteit Instellingen", "Trend & Volatility Settings")) + "</h2>";
-    html += "<label>" + String(getText("Trend Threshold (%):", "Trend Threshold (%):")) + "<input type='number' step='0.1' name='trendTh' value='" + String(trendThreshold, 1) + "' min='0.1' max='10'></label>";
-    html += "<div class='info'>" + String(getText("Trend detectie threshold voor 2h return (standaard: 1.0%)", "Trend detection threshold for 2h return (default: 1.0%)")) + "</div>";
-    html += "<label>" + String(getText("Volatiliteit Low Threshold (%):", "Volatility Low Threshold (%):")) + "<input type='number' step='0.01' name='volLow' value='" + String(volatilityLowThreshold, 2) + "' min='0.01' max='1'></label>";
-    html += "<div class='info'>" + String(getText("Onder deze waarde is volatiliteit LOW (standaard: 0.06%)", "Below this value volatility is LOW (default: 0.06%)")) + "</div>";
-    html += "<label>" + String(getText("Volatiliteit High Threshold (%):", "Volatility High Threshold (%):")) + "<input type='number' step='0.01' name='volHigh' value='" + String(volatilityHighThreshold, 2) + "' min='0.01' max='1'></label>";
-    html += "<div class='info'>" + String(getText("Boven deze waarde is volatiliteit HIGH (standaard: 0.12%)", "Above this value volatility is HIGH (default: 0.12%)")) + "</div>";
-    
     // Auto-Volatility Mode
-    html += "<h3 style='color:#00BCD4;margin-top:20px;'>" + String(getText("Auto-Volatility Mode", "Auto-Volatility Mode")) + "</h3>";
-    html += "<label><input type='checkbox' name='autoVol' value='1'" + String(autoVolatilityEnabled ? " checked" : "") + "> " + String(getText("Auto-Volatility Mode Inschakelen", "Enable Auto-Volatility Mode")) + "</label>";
-    html += "<div class='info'>" + String(getText("Pas thresholds automatisch aan op basis van de huidige volatiliteit. Bij hoge volatiliteit worden thresholds verhoogd, bij lage volatiliteit verlaagd.", "Automatically adjust thresholds based on current volatility. Thresholds are increased during high volatility and decreased during low volatility.")) + "</div>";
+    html += "<h4 style='color:#00BCD4;margin-top:20px;'>" + String(getText("Auto-Volatility Mode", "Auto-Volatility Mode")) + "</h4>";
+    html += "<label><input type='checkbox' name='autoVol' value='1'" + String(autoVolatilityEnabled ? " checked" : "") + "> " + String(getText("Drempels automatisch aanpassen aan markt", "Automatically adjust thresholds to market")) + "</label>";
+    html += "<div class='info'>" + String(getText("Past gevoeligheid automatisch aan: rustige markt → gevoeliger, drukke markt → strenger.", "Automatically adjusts sensitivity: quiet market → more sensitive, busy market → stricter.")) + "</div>";
     
-    html += "<label>" + String(getText("Window Lengte (minuten):", "Window Length (minutes):")) + "<input type='number' step='1' name='autoVolWin' value='" + String(autoVolatilityWindowMinutes) + "' min='10' max='120'></label>";
-    html += "<div class='info'>" + String(getText("Lengte van het sliding window voor volatiliteit berekening (standaard: 60 minuten)", "Length of sliding window for volatility calculation (default: 60 minutes)")) + "</div>";
+    html += "<label>" + String(getText("Hoe ver terugkijken voor volatiliteit", "How far back to look for volatility")) + " (minuten):<input type='number' step='1' name='autoVolWin' value='" + String(autoVolatilityWindowMinutes) + "' min='10' max='120'></label>";
+    html += "<div class='info'>" + String(getText("Aantal minuten dat wordt gebruikt om te bepalen hoe rustig of druk de markt is.", "Number of minutes used to determine how quiet or busy the market is.")) + "</div>";
     
-    html += "<label>" + String(getText("Baseline 1m Std Dev (%):", "Baseline 1m Std Dev (%):")) + "<input type='number' step='0.01' name='autoVolBase' value='" + String(autoVolatilityBaseline1mStdPct, 2) + "' min='0.01' max='1.0'></label>";
-    html += "<div class='info'>" + String(getText("Baseline standaarddeviatie voor 1m returns (standaard: 0.15%)", "Baseline standard deviation for 1m returns (default: 0.15%)")) + "</div>";
+    html += "<label>" + String(getText("Normale marktbeweging (referentie)", "Normal market movement (reference)")) + " (%):<input type='number' step='0.01' name='autoVolBase' value='" + String(autoVolatilityBaseline1mStdPct, 2) + "' min='0.01' max='1.0'></label>";
+    html += "<div class='info'>" + String(getText("Dit is wat het systeem beschouwt als \"normale\" 1-minuut beweging. Afwijkingen hiervan maken de drempels strenger of soepeler.", "This is what the system considers \"normal\" 1-minute movement. Deviations from this make thresholds stricter or more lenient.")) + "</div>";
     
-    html += "<label>" + String(getText("Min Multiplier:", "Min Multiplier:")) + "<input type='number' step='0.1' name='autoVolMin' value='" + String(autoVolatilityMinMultiplier, 1) + "' min='0.1' max='1.0'></label>";
-    html += "<div class='info'>" + String(getText("Minimum multiplier voor volatility factor (standaard: 0.7)", "Minimum multiplier for volatility factor (default: 0.7)")) + "</div>";
+    html += "<label>" + String(getText("Minimale gevoeligheid", "Minimum sensitivity")) + ":<input type='number' step='0.1' name='autoVolMin' value='" + String(autoVolatilityMinMultiplier, 1) + "' min='0.1' max='1.0'></label>";
+    html += "<div class='info'>" + String(getText("Voorkomt dat het systeem té gevoelig wordt in extreem rustige markten.", "Prevents the system from becoming too sensitive in extremely quiet markets.")) + "</div>";
     
-    html += "<label>" + String(getText("Max Multiplier:", "Max Multiplier:")) + "<input type='number' step='0.1' name='autoVolMax' value='" + String(autoVolatilityMaxMultiplier, 1) + "' min='1.0' max='3.0'></label>";
-    html += "<div class='info'>" + String(getText("Maximum multiplier voor volatility factor (standaard: 1.6)", "Maximum multiplier for volatility factor (default: 1.6)")) + "</div>";
+    html += "<label>" + String(getText("Maximale gevoeligheid", "Maximum sensitivity")) + ":<input type='number' step='0.1' name='autoVolMax' value='" + String(autoVolatilityMaxMultiplier, 1) + "' min='1.0' max='3.0'></label>";
+    html += "<div class='info'>" + String(getText("Voorkomt dat het systeem té streng wordt in extreem drukke markten.", "Prevents the system from becoming too strict in extremely busy markets.")) + "</div>";
     
-    html += "<hr style='border:1px solid #444;margin:30px 0;'>";
-    html += "<h2 style='color:#00BCD4;margin-top:30px;'>" + String(getText("MQTT Instellingen", "MQTT Settings")) + "</h2>";
-    html += "<label>" + String(getText("MQTT Host (IP):", "MQTT Host (IP):")) + "<input type='text' name='mqtthost' value='" + String(mqttHost) + "' maxlength='63'></label>";
-    html += "<div class='info'>" + String(getText("IP-adres van de MQTT broker (bijv. 192.168.68.3)", "IP address of MQTT broker (e.g. 192.168.68.3)")) + "</div>";
-    html += "<label>" + String(getText("MQTT Poort:", "MQTT Port:")) + "<input type='number' name='mqttport' value='" + String(mqttPort) + "' min='1' max='65535'></label>";
-    html += "<div class='info'>" + String(getText("MQTT broker poort (standaard: 1883)", "MQTT broker port (default: 1883)")) + "</div>";
-    html += "<label>" + String(getText("MQTT Gebruiker:", "MQTT User:")) + "<input type='text' name='mqttuser' value='" + String(mqttUser) + "' maxlength='63'></label>";
-    html += "<div class='info'>" + String(getText("MQTT broker gebruikersnaam", "MQTT broker username")) + "</div>";
-    html += "<label>" + String(getText("MQTT Wachtwoord:", "MQTT Password:")) + "<input type='password' name='mqttpass' value='" + String(mqttPass) + "' maxlength='63'></label>";
-    html += "<div class='info'>" + String(getText("MQTT broker wachtwoord", "MQTT broker password")) + "</div>";
+    html += "</div>";
+    
+    // ===== SECTIE 5: Cooldowns =====
+    html += "<div class='section-header' data-section='cooldowns'>";
+    html += "<h3>" + String(getText("Cooldowns", "Cooldowns")) + "</h3>";
+    html += "<span class='toggle-icon' id='icon-cooldowns'>&#9654;</span>";
+    html += "</div>";
+    html += "<div class='section-content' id='content-cooldowns'>";
+    html += "<div class='section-desc'>" + String(getText("Minimale tijd tussen alerts van hetzelfde type om spam te voorkomen", "Minimum time between alerts of the same type to prevent spam")) + "</div>";
+    
+    html += "<label>" + String(getText("Wachttijd tussen snelle meldingen", "Wait time between fast notifications")) + " (seconden):<input type='number' name='cd1min' value='" + String(notificationCooldown1MinMs / 1000) + "'></label>";
+    html += "<div class='info'>" + String(getText("Minimale tijd tussen twee snelle (1m) meldingen om spam te voorkomen.", "Minimum time between two fast (1m) notifications to prevent spam.")) + "</div>";
+    
+    html += "<label>" + String(getText("Wachttijd tussen 5m meldingen", "Wait time between 5m notifications")) + " (seconden):<input type='number' name='cd5min' value='" + String(notificationCooldown5MinMs / 1000) + "'></label>";
+    html += "<div class='info'>" + String(getText("Zorgt ervoor dat structurele bewegingen niet te vaak achter elkaar worden gemeld.", "Ensures that structural movements are not reported too frequently in succession.")) + "</div>";
+    
+    html += "<label>" + String(getText("Wachttijd tussen grote bewegingen", "Wait time between large movements")) + " (seconden):<input type='number' name='cd30min' value='" + String(notificationCooldown30MinMs / 1000) + "'></label>";
+    html += "<div class='info'>" + String(getText("Beperkt hoe vaak meldingen over grote marktbewegingen worden verstuurd.", "Limits how often notifications about large market movements are sent.")) + "</div>";
+    
+    html += "</div>";
+    
+    // ===== SECTIE 6: Integratie (MQTT) =====
+    html += "<div class='section-header' data-section='mqtt'>";
+    html += "<h3>" + String(getText("Integratie (MQTT)", "Integration (MQTT)")) + "</h3>";
+    html += "<span class='toggle-icon' id='icon-mqtt'>&#9654;</span>";
+    html += "</div>";
+    html += "<div class='section-content' id='content-mqtt'>";
+    html += "<div class='section-desc'>" + String(getText("MQTT broker configuratie voor Home Assistant integratie", "MQTT broker configuration for Home Assistant integration")) + "</div>";
+    
+    html += "<label>" + String(getText("MQTT server (IP-adres)", "MQTT server (IP address)")) + ":<input type='text' name='mqtthost' value='" + String(mqttHost) + "' maxlength='63'></label>";
+    html += "<div class='info'>" + String(getText("IP-adres van de MQTT broker waar status- en eventdata naartoe worden gestuurd.", "IP address of the MQTT broker where status and event data are sent.")) + "</div>";
+    
+    html += "<label>" + String(getText("MQTT poort", "MQTT port")) + ":<input type='number' name='mqttport' value='" + String(mqttPort) + "' min='1' max='65535'></label>";
+    html += "<div class='info'>" + String(getText("Poortnummer van de MQTT broker (meestal 1883).", "Port number of the MQTT broker (usually 1883).")) + "</div>";
+    
+    html += "<label>" + String(getText("MQTT gebruikersnaam", "MQTT username")) + ":<input type='text' name='mqttuser' value='" + String(mqttUser) + "' maxlength='63'></label>";
+    html += "<div class='info'>" + String(getText("Gebruikersnaam voor toegang tot de MQTT broker.", "Username for access to the MQTT broker.")) + "</div>";
+    
+    html += "<label>" + String(getText("MQTT wachtwoord", "MQTT password")) + ":<input type='password' name='mqttpass' value='" + String(mqttPass) + "' maxlength='63'></label>";
+    html += "<div class='info'>" + String(getText("Wachtwoord voor toegang tot de MQTT broker.", "Password for access to the MQTT broker.")) + "</div>";
+    
+    html += "</div>";
+    
     html += "<button type='submit'>" + String(getText("Opslaan", "Save")) + "</button></form>";
+    html += "</div>";
     html += "</body></html>";
     return html;
 }
