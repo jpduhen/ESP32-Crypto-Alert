@@ -22,6 +22,224 @@ Een unificatie van de Crypto Monitor voor verschillende ESP32 display platforms:
 - NTFY.sh notificaties voor alerts
 - Web interface voor configuratie
 - WiFi Manager voor eenvoudige WiFi setup
+- **Trend-Adaptive Anchors**: Dynamische anchor thresholds op basis van trend
+- **Smart Confluence Mode**: Gecombineerde alerts wanneer meerdere timeframes samenvallen
+- **Auto-Volatility Mode**: Automatische threshold aanpassing op basis van volatiliteit
+
+## Alert Systeem Decision Tree
+
+Het alertsysteem gebruikt een gestructureerde decision tree om alerts te genereren. Hieronder staat de volledige logica:
+
+### 1. Nieuwe candle / tick binnen
+
+1.1. Update prijs, 1m/5m/30m returns en historie
+
+### 2. Bepaal volatiliteit (Auto-Volatility Mode)
+
+2.1. Als `autoVolatilityEnabled == true`:
+    - Bereken standaarddeviatie (σ) van laatste N 1m-returns (sliding window)
+    - Bereken `volatilityFactor = clamp(σ / σ_baseline, minMultiplier, maxMultiplier)`
+    - Schaal alle thresholds:
+      - `1mSpikeThreshold = basis_1m * volatilityFactor`
+      - `5mMoveThreshold = basis_5m * sqrt(volatilityFactor)` (sqrt voor langere timeframes)
+      - `30mMoveThreshold = basis_30m * sqrt(volatilityFactor)` (sqrt voor langere timeframes)
+2.2. Als `autoVolatilityEnabled == false`:
+    - Gebruik basis thresholds zonder aanpassing
+
+### 3. Bepaal trend
+
+3.1. Bereken 2-uur return (`ret_2h`) en 30-minuut return (`ret_30m`)
+3.2. Als `ret_2h >= trendThreshold` EN `ret_30m >= 0.0` → Trend = **UP**
+3.3. Als `ret_2h <= -trendThreshold` EN `ret_30m <= 0.0` → Trend = **DOWN**
+3.4. Anders → Trend = **SIDEWAYS**
+
+### 4. Pas Anchor-risico aan (Trend-Adaptive Anchors)
+
+4.1. Als `trendAdaptiveAnchorsEnabled == true`:
+    - Start vanuit basiswaarden: `anchorMaxLossBase`, `anchorTakeProfitBase`
+    - Kies multipliers per Trend:
+      - bij **UP**: `lossMul_up`, `tpMul_up`
+      - bij **DOWN**: `lossMul_down`, `tpMul_down`
+      - bij **SIDEWAYS**: 1.0 (geen aanpassing)
+    - Bereken:
+      - `anchorMaxLoss = anchorMaxLossBase * lossMul_trend`
+      - `anchorTakeProfit = anchorTakeProfitBase * tpMul_trend`
+    - Clamp waarden voor veiligheid (max loss: -6% tot -1%, take profit: 2% tot 10%)
+4.2. Als `trendAdaptiveAnchorsEnabled == false`:
+    - Gebruik basiswaarden zonder aanpassing
+
+### 5. Detecteer spikes & moves op elk timeframe
+
+5.1. **1m Spike**: 
+    - `|ret_1m| >= effective1mSpikeThreshold` **EN**
+    - `|ret_5m| >= spike5mThreshold` (filter) **EN**
+    - Beide in dezelfde richting → kandidaat 1m spike
+
+5.2. **5m Move**: 
+    - `|ret_5m| >= effective5mMoveThreshold` → kandidaat 5m move
+
+5.3. **30m Move**: 
+    - `|ret_30m| >= effective30mMoveThreshold` **EN**
+    - `|ret_5m| >= move5mThreshold` (filter) **EN**
+    - Beide in dezelfde richting → kandidaat 30m move
+
+### 6. Smart Confluence logica
+
+6.1. Als `smartConfluenceEnabled == true`:
+    - Verzamel recente 1m en 5m events (richting UP of DOWN)
+    - Check of:
+      - 1m event en 5m event binnen tijdvenster liggen (±5 minuten)
+      - Beide events in dezelfde richting zijn
+      - 30m trend de richting ondersteunt (UP trend ondersteunt UP events, DOWN trend ondersteunt DOWN events, SIDEWAYS ondersteunt beide)
+      - Cooldown voor confluence alerts is verlopen
+    - Als alle voorwaarden voldaan:
+      - Stuur één "Confluence Alert" met samenvatting (1m magnitude, 5m magnitude, 30m trend)
+      - Markeer 1m en 5m events als "gebruikt in confluence"
+      - Onderdruk individuele alerts voor deze events
+    - Als voorwaarden niet voldaan:
+      - Verzend alleen losse alerts die voldoen aan cooldown/debouncing eisen
+      - Onderdruk alerts die al gebruikt zijn in confluence
+
+6.2. Als `smartConfluenceEnabled == false`:
+    - Verstuur alle alerts die thresholds overschrijden (onder respecteren van cooldowns)
+    - Geen confluence checks
+
+### 7. Anchor Max Loss / Take Profit bewaken
+
+7.1. Bereken PnL t.o.v. Anchor:
+    - `deltaPct = (prijs - anchorPrice) / anchorPrice * 100%`
+
+7.2. Als `deltaPct <= effectiveAnchorMaxLoss`:
+    - Stuur "Max Loss" alert
+    - Vermeld trend en effective threshold (als trend-adaptive aan staat)
+
+7.3. Als `deltaPct >= effectiveAnchorTakeProfit`:
+    - Stuur "Take Profit" alert
+    - Vermeld trend en effective threshold (als trend-adaptive aan staat)
+
+### 8. Cooldown & housekeeping
+
+8.1. Per signaaltype (1m, 5m, 30m, Confluence, Anchor):
+    - Check of cooldown verlopen is
+    - Werk laatste verzendtijd bij
+    - Check maximum aantal alerts per uur
+
+8.2. Log alle events (signalen, trend, volatiliteit, anchors) voor analyse
+
+### Flow Chart
+
+```
+[ START: nieuwe candle / tick ]
+            |
+            v
+[ Update prijs & historie ]
+- update price
+- bereken ret_1m, ret_5m, ret_30m, ret_2h
+- update sliding windows
+            |
+            v
+[ Auto-Volatility Mode ? ]
+      |                         |
+     ja                        nee
+      |                         |
+      v                         v
+[ Bereken σ (1m returns) ]   [ Gebruik basis thresholds ]
+[ volFactor = clamp(σ/σ₀) ]
+[ eff thresholds:
+  - 1m  = base1m * volFactor
+  - 5m  = base5m * sqrt(volFactor)
+  - 30m = base30m * sqrt(volFactor) ]
+            |
+            v
+[ Bepaal TrendState ]
+- if ret_2h ≥ trendThreshold AND ret_30m ≥ 0 → TREND_UP
+- if ret_2h ≤ -trendThreshold AND ret_30m ≤ 0 → TREND_DOWN
+- else → TREND_SIDEWAYS
+            |
+            v
+[ Trend-Adaptive Anchors ? ]
+      |                         |
+     ja                        nee
+      |                         |
+      v                         v
+[ Bereken effective anchors ] [ Gebruik basis anchors ]
+- start from base MaxLoss / TakeProfit
+- apply multipliers per TrendState
+- clamp (veiligheidsgrenzen)
+            |
+            v
+[ Detecteer events per timeframe ]
+            |
+            +--> [ 1m Spike check ]
+            |     - |ret_1m| ≥ effSpike1m
+            |     - |ret_5m| ≥ spike5mThreshold
+            |     - zelfde richting
+            |     → kandidaat 1m event
+            |
+            +--> [ 5m Move check ]
+            |     - |ret_5m| ≥ effMove5m
+            |     → kandidaat 5m event
+            |
+            +--> [ 30m Move check ]
+                  - |ret_30m| ≥ effMove30m
+                  - |ret_5m| ≥ move5mThreshold
+                  - zelfde richting
+                  → kandidaat 30m event
+            |
+            v
+[ Smart Confluence Mode ? ]
+      |                         |
+     ja                        nee
+      |                         |
+      v                         v
+[ Verzamel recente events ]  [ Verstuur losse alerts ]
+- 1m + 5m events
+- richting (UP/DOWN)
+- timestamps
+            |
+            v
+[ Confluence voorwaarden check ]
+- 1m & 5m binnen tijdvenster (±5 min)
+- zelfde richting
+- TrendState ondersteunt richting
+  * UP → alleen UP
+  * DOWN → alleen DOWN
+  * SIDEWAYS → beide
+- confluence cooldown verlopen?
+            |
+      +-----+-----+
+      |           |
+     ja          nee
+      |           |
+      v           v
+[ Confluence Alert ]   [ Losse alerts ]
+- stuur 1 alert     - alleen als cooldown ok
+- markeer events    - events niet dubbel sturen
+  als "gebruikt"
+            |
+            v
+[ Anchor bewaking ]
+- deltaPct = (price - anchorPrice) / anchorPrice * 100
+- if deltaPct ≤ effAnchorMaxLoss → Max Loss alert
+- if deltaPct ≥ effAnchorTakeProfit → Take Profit alert
+            |
+            v
+[ Cooldowns & housekeeping ]
+- update lastSent times
+- max alerts / uur check
+- log: trend, volatility, events, anchors
+            |
+            v
+[ EINDE → wachten op volgende candle ]
+```
+
+### Belangrijke Notities
+
+- **5m-Confirmatiefilter**: Let op: 1m spike en 30m move alerts zijn 'gated' door een 5m-confirmatiefilter (`spike5mThreshold` / `move5mThreshold`). Dit betekent dat deze alerts alleen worden verzonden wanneer zowel de 1m/30m threshold als de 5m filter threshold worden overschreden, en beide in dezelfde richting zijn.
+- **Effective Thresholds**: Wanneer Auto-Volatility Mode aan staat, worden alle threshold vergelijkingen gedaan met de effective thresholds (aangepast op basis van volatiliteit)
+- **Feature Uitschakeling**: Wanneer alle drie features uit staan, is het gedrag identiek aan de basisversie (geen aanpassingen)
+- **Thread Safety**: Alle berekeningen zijn thread-safe met mutex bescherming waar nodig
+- **Edge Cases**: Validatie voorkomt deling door nul, negatieve thresholds, en onvoldoende data
 
 ## Hardware Vereisten
 

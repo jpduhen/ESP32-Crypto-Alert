@@ -31,8 +31,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 63
-#define VERSION_STRING "3.63"
+#define VERSION_MINOR 66
+#define VERSION_STRING "3.66"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -83,9 +83,28 @@
 #define ANCHOR_TAKE_PROFIT_DEFAULT 5.0f    // Take profit: +5% boven anchor price
 #define ANCHOR_MAX_LOSS_DEFAULT -3.0f      // Max loss: -3% onder anchor price
 
+// --- Trend-Adaptive Anchor Configuration ---
+#define TREND_ADAPTIVE_ANCHORS_ENABLED_DEFAULT false  // Default: uitgeschakeld
+#define UPTREND_MAX_LOSS_MULTIPLIER_DEFAULT 1.15f      // UP: maxLoss * 1.15
+#define UPTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT 1.2f    // UP: takeProfit * 1.2
+#define DOWNTREND_MAX_LOSS_MULTIPLIER_DEFAULT 0.85f    // DOWN: maxLoss * 0.85
+#define DOWNTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT 0.8f  // DOWN: takeProfit * 0.8
+
 // --- Trend Detection Configuration ---
 #define TREND_THRESHOLD_DEFAULT 1.30f      // Trend threshold: ±1.30% voor 2h trend
 #define TREND_CHANGE_COOLDOWN_MS 600000UL  // 10 minuten cooldown voor trend change notificaties
+
+// --- Smart Confluence Mode Configuration ---
+#define SMART_CONFLUENCE_ENABLED_DEFAULT false  // Default: uitgeschakeld
+#define CONFLUENCE_TIME_WINDOW_MS 300000UL     // 5 minuten tijdshorizon voor confluence (1m en 5m events moeten binnen ±5 minuten liggen)
+
+// --- Auto-Volatility Mode Configuration ---
+#define AUTO_VOLATILITY_ENABLED_DEFAULT false      // Default: uitgeschakeld
+#define AUTO_VOLATILITY_WINDOW_MINUTES_DEFAULT 60  // Sliding window lengte in minuten
+#define AUTO_VOLATILITY_BASELINE_1M_STD_PCT_DEFAULT 0.15f  // Baseline standaarddeviatie van 1m returns in procent
+#define AUTO_VOLATILITY_MIN_MULTIPLIER_DEFAULT 0.7f  // Minimum multiplier voor volFactor
+#define AUTO_VOLATILITY_MAX_MULTIPLIER_DEFAULT 1.6f  // Maximum multiplier voor volFactor
+#define MAX_VOLATILITY_WINDOW_SIZE 120  // Maximum window size (voor array grootte)
 
 // --- Volatility Configuration ---
 #define VOLATILITY_LOW_THRESHOLD_DEFAULT 0.05f   // Volatiliteit laag: < 0.05% (geoptimaliseerd voor rustige nachturen)
@@ -186,6 +205,13 @@ static float anchorMaxLoss = ANCHOR_MAX_LOSS_DEFAULT;        // Max loss thresho
 static bool anchorTakeProfitSent = false;  // Flag om te voorkomen dat take profit meerdere keren wordt verzonden
 static bool anchorMaxLossSent = false;    // Flag om te voorkomen dat max loss meerdere keren wordt verzonden
 
+// Trend-adaptive anchor settings
+static bool trendAdaptiveAnchorsEnabled = TREND_ADAPTIVE_ANCHORS_ENABLED_DEFAULT;
+static float uptrendMaxLossMultiplier = UPTREND_MAX_LOSS_MULTIPLIER_DEFAULT;
+static float uptrendTakeProfitMultiplier = UPTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT;
+static float downtrendMaxLossMultiplier = DOWNTREND_MAX_LOSS_MULTIPLIER_DEFAULT;
+static float downtrendTakeProfitMultiplier = DOWNTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT;
+
 // Trend detection
 enum TrendState {
     TREND_UP,
@@ -197,6 +223,36 @@ enum TrendState {
 struct AnchorConfigEffective {
     float maxLossPct;      // Effectieve max loss percentage (negatief)
     float takeProfitPct;   // Effectieve take profit percentage (positief)
+};
+
+// Smart Confluence Mode: State structs voor recente events
+enum EventDirection {
+    EVENT_UP,
+    EVENT_DOWN,
+    EVENT_NONE
+};
+
+struct LastOneMinuteEvent {
+    EventDirection direction;
+    unsigned long timestamp;
+    float magnitude;  // |ret_1m|
+    bool usedInConfluence;  // Flag om te voorkomen dat dit event dubbel wordt gebruikt
+};
+
+struct LastFiveMinuteEvent {
+    EventDirection direction;
+    unsigned long timestamp;
+    float magnitude;  // |ret_5m|
+    bool usedInConfluence;  // Flag om te voorkomen dat dit event dubbel wordt gebruikt
+};
+
+// Auto-Volatility Mode: Struct voor effective thresholds
+struct EffectiveThresholds {
+    float spike1m;
+    float move5m;
+    float move30m;
+    float volFactor;
+    float stdDev;
 };
 
 static float ret_2h = 0.0f;  // 2-hour return percentage
@@ -217,6 +273,25 @@ static VolatilityState volatilityState = VOLATILITY_MEDIUM;  // Current volatili
 static float volatilityLowThreshold = VOLATILITY_LOW_THRESHOLD_DEFAULT;  // Low threshold (%)
 static float volatilityHighThreshold = VOLATILITY_HIGH_THRESHOLD_DEFAULT;  // High threshold (%)
 static unsigned long lastTrendChangeNotification = 0;  // Timestamp van laatste trend change notificatie
+
+// Smart Confluence Mode state
+static bool smartConfluenceEnabled = SMART_CONFLUENCE_ENABLED_DEFAULT;
+static LastOneMinuteEvent last1mEvent = {EVENT_NONE, 0, 0.0f, false};
+static LastFiveMinuteEvent last5mEvent = {EVENT_NONE, 0, 0.0f, false};
+static unsigned long lastConfluenceAlert = 0;  // Timestamp van laatste confluence alert (cooldown)
+
+// Auto-Volatility Mode state
+static bool autoVolatilityEnabled = AUTO_VOLATILITY_ENABLED_DEFAULT;
+static uint8_t autoVolatilityWindowMinutes = AUTO_VOLATILITY_WINDOW_MINUTES_DEFAULT;
+static float autoVolatilityBaseline1mStdPct = AUTO_VOLATILITY_BASELINE_1M_STD_PCT_DEFAULT;
+static float autoVolatilityMinMultiplier = AUTO_VOLATILITY_MIN_MULTIPLIER_DEFAULT;
+static float autoVolatilityMaxMultiplier = AUTO_VOLATILITY_MAX_MULTIPLIER_DEFAULT;
+static float volatility1mReturns[MAX_VOLATILITY_WINDOW_SIZE];  // Sliding window voor 1m returns
+static uint8_t volatility1mIndex = 0;  // Index voor circulaire buffer
+static bool volatility1mArrayFilled = false;  // Flag om aan te geven of array gevuld is
+static float currentVolFactor = 1.0f;  // Huidige volatility factor
+static unsigned long lastVolatilityLog = 0;  // Timestamp van laatste volatility log (voor debug)
+#define VOLATILITY_LOG_INTERVAL_MS 300000UL  // Log elke 5 minuten
 
 static uint8_t symbolIndexToChart = 0; // The symbol index to chart
 static uint32_t maxRange;
@@ -897,28 +972,36 @@ static void checkTrendChange(float ret_30m_value)
 // Bereken effectieve anchor-waarden op basis van trend
 // Basiswaarden worden aangepast:
 // - TREND_UP: meer ruimte voor verlies (1.25x), meer winst (1.10x)
-// - TREND_DOWN: strakker stop-loss (0.75x), sneller winst (0.70x)
-// - TREND_SIDEWAYS: basiswaarden
-static AnchorConfigEffective calcEffectiveAnchor(float baseMaxLoss, float baseTakeProfit, TrendState trend)
+// Bereken effectieve anchor thresholds op basis van trend (alleen als trend-adaptive enabled is)
+// - TREND_UP: configureerbare multipliers (default: maxLoss * 1.15, takeProfit * 1.2)
+// - TREND_DOWN: configureerbare multipliers (default: maxLoss * 0.85, takeProfit * 0.8)
+// - TREND_SIDEWAYS: basiswaarden (geen aanpassing)
+static AnchorConfigEffective calculateEffectiveAnchorThresholds(TrendState trend, float baseMaxLoss, float baseTakeProfit)
 {
     AnchorConfigEffective eff;
     
+    // Als trend-adaptive uit staat, gebruik basiswaarden
+    if (!trendAdaptiveAnchorsEnabled) {
+        eff.maxLossPct = baseMaxLoss;
+        eff.takeProfitPct = baseTakeProfit;
+        return eff;
+    }
+    
+    // Pas multipliers toe op basis van trend
     switch (trend) {
         case TREND_UP:
-            // Bullish: meer ruimte voor verlies, meer winst laten lopen
-            eff.maxLossPct = baseMaxLoss * 1.25f;      // -3.0% → -3.75% (afgerond -3.8%)
-            eff.takeProfitPct = baseTakeProfit * 1.10f; // +5.0% → +5.5%
+            eff.maxLossPct = baseMaxLoss * uptrendMaxLossMultiplier;
+            eff.takeProfitPct = baseTakeProfit * uptrendTakeProfitMultiplier;
             break;
             
         case TREND_DOWN:
-            // Bearish: strakker stop-loss, sneller winst nemen
-            eff.maxLossPct = baseMaxLoss * 0.75f;      // -3.0% → -2.25% (afgerond -2.2%)
-            eff.takeProfitPct = baseTakeProfit * 0.70f; // +5.0% → +3.5%
+            eff.maxLossPct = baseMaxLoss * downtrendMaxLossMultiplier;
+            eff.takeProfitPct = baseTakeProfit * downtrendTakeProfitMultiplier;
             break;
             
         case TREND_SIDEWAYS:
         default:
-            // Basiswaarden
+            // Basiswaarden (geen aanpassing)
             eff.maxLossPct = baseMaxLoss;
             eff.takeProfitPct = baseTakeProfit;
             break;
@@ -931,6 +1014,12 @@ static AnchorConfigEffective calcEffectiveAnchor(float baseMaxLoss, float baseTa
     if (eff.takeProfitPct > 10.0f) eff.takeProfitPct = 10.0f;
     
     return eff;
+}
+
+// Legacy functie voor backward compatibility (gebruikt nu calculateEffectiveAnchorThresholds)
+static AnchorConfigEffective calcEffectiveAnchor(float baseMaxLoss, float baseTakeProfit, TrendState trend)
+{
+    return calculateEffectiveAnchorThresholds(trend, baseMaxLoss, baseTakeProfit);
 }
 
 // Publiceer anchor event naar MQTT
@@ -1039,6 +1128,304 @@ void publishMqttAnchorEvent(float anchor_price, const char* event_type) {
     }
 }
 
+// ============================================================================
+// Auto-Volatility Mode: VolatilityAdjuster Module
+// ============================================================================
+
+// Bereken standaarddeviatie van 1m returns in het sliding window
+static float calculateStdDev1mReturns()
+{
+    if (!volatility1mArrayFilled && volatility1mIndex == 0) {
+        return 0.0f;  // Geen data beschikbaar
+    }
+    
+    // Gebruik de geconfigureerde window size, maar clamp naar array grootte
+    uint8_t windowSize = (autoVolatilityWindowMinutes > MAX_VOLATILITY_WINDOW_SIZE) ? MAX_VOLATILITY_WINDOW_SIZE : autoVolatilityWindowMinutes;
+    
+    // Validatie: window size moet minimaal 1 zijn
+    if (windowSize == 0) {
+        return 0.0f;
+    }
+    
+    uint8_t count = volatility1mArrayFilled ? windowSize : volatility1mIndex;
+    
+    if (count < 2) {
+        return 0.0f;  // Minimaal 2 samples nodig voor std dev
+    }
+    
+    // Bereken gemiddelde
+    float sum = 0.0f;
+    for (uint8_t i = 0; i < count; i++) {
+        sum += volatility1mReturns[i];
+    }
+    float mean = sum / count;
+    
+    // Bereken variantie
+    float variance = 0.0f;
+    for (uint8_t i = 0; i < count; i++) {
+        float diff = volatility1mReturns[i] - mean;
+        variance += diff * diff;
+    }
+    variance /= (count - 1);  // Sample variance (n-1)
+    
+    // Standaarddeviatie
+    return sqrtf(variance);
+}
+
+// Update sliding window met nieuwe 1m return
+static void updateVolatilityWindow(float ret_1m)
+{
+    if (!autoVolatilityEnabled) return;
+    
+    // Gebruik de geconfigureerde window size, maar clamp naar array grootte
+    uint8_t windowSize = (autoVolatilityWindowMinutes > MAX_VOLATILITY_WINDOW_SIZE) ? MAX_VOLATILITY_WINDOW_SIZE : autoVolatilityWindowMinutes;
+    
+    // Voeg nieuwe return toe aan circulaire buffer
+    volatility1mReturns[volatility1mIndex] = ret_1m;
+    volatility1mIndex++;
+    
+    if (volatility1mIndex >= windowSize) {
+        volatility1mIndex = 0;
+        volatility1mArrayFilled = true;
+    }
+}
+
+// Bereken volatility factor en effective thresholds
+static EffectiveThresholds calculateEffectiveThresholds(float baseSpike1m, float baseMove5m, float baseMove30m)
+{
+    EffectiveThresholds eff;
+    eff.volFactor = 1.0f;
+    eff.stdDev = 0.0f;
+    
+    if (!autoVolatilityEnabled) {
+        // Als disabled, gebruik basiswaarden
+        eff.spike1m = baseSpike1m;
+        eff.move5m = baseMove5m;
+        eff.move30m = baseMove30m;
+        return eff;
+    }
+    
+    // Bereken standaarddeviatie
+    eff.stdDev = calculateStdDev1mReturns();
+    
+    // Als er onvoldoende data is, gebruik volFactor = 1.0
+    // Minimaal 10 samples nodig voor betrouwbare berekening
+    uint8_t windowSize = (autoVolatilityWindowMinutes > MAX_VOLATILITY_WINDOW_SIZE) ? MAX_VOLATILITY_WINDOW_SIZE : autoVolatilityWindowMinutes;
+    uint8_t minSamples = (windowSize < 10) ? windowSize : 10;
+    
+    if (eff.stdDev <= 0.0f || (!volatility1mArrayFilled && volatility1mIndex < minSamples)) {
+        eff.volFactor = 1.0f;
+        eff.spike1m = baseSpike1m;
+        eff.move5m = baseMove5m;
+        eff.move30m = baseMove30m;
+        return eff;
+    }
+    
+    // Bereken volatility factor
+    // Validatie: voorkom deling door nul
+    if (autoVolatilityBaseline1mStdPct <= 0.0f) {
+        eff.volFactor = 1.0f;
+        eff.spike1m = baseSpike1m;
+        eff.move5m = baseMove5m;
+        eff.move30m = baseMove30m;
+        return eff;
+    }
+    
+    float rawVolFactor = eff.stdDev / autoVolatilityBaseline1mStdPct;
+    
+    // Clamp tussen min en max (validatie)
+    eff.volFactor = rawVolFactor;
+    if (eff.volFactor < autoVolatilityMinMultiplier) {
+        eff.volFactor = autoVolatilityMinMultiplier;
+    }
+    if (eff.volFactor > autoVolatilityMaxMultiplier) {
+        eff.volFactor = autoVolatilityMaxMultiplier;
+    }
+    
+    // Validatie: voorkom negatieve of nul thresholds
+    if (eff.volFactor <= 0.0f) {
+        eff.volFactor = 1.0f;
+    }
+    
+    // Update globale volFactor voor logging
+    currentVolFactor = eff.volFactor;
+    
+    // Bereken effective thresholds
+    eff.spike1m = baseSpike1m * eff.volFactor;
+    eff.move5m = baseMove5m * sqrtf(eff.volFactor);  // sqrt voor langere timeframes
+    eff.move30m = baseMove30m * sqrtf(eff.volFactor);
+    
+    // Validatie: voorkom negatieve thresholds (safety check)
+    if (eff.spike1m < 0.0f) eff.spike1m = baseSpike1m;
+    if (eff.move5m < 0.0f) eff.move5m = baseMove5m;
+    if (eff.move30m < 0.0f) eff.move30m = baseMove30m;
+    
+    return eff;
+}
+
+// Log volatility status (voor debug)
+static void logVolatilityStatus(const EffectiveThresholds& eff)
+{
+    if (!autoVolatilityEnabled) return;
+    
+    unsigned long now = millis();
+    if (lastVolatilityLog > 0 && (now - lastVolatilityLog) < VOLATILITY_LOG_INTERVAL_MS) {
+        return;  // Nog niet tijd voor volgende log
+    }
+    
+    Serial_printf("[Volatility] σ=%.4f%%, volFactor=%.3f, thresholds: 1m=%.3f%%, 5m=%.3f%%, 30m=%.3f%%\n",
+                  eff.stdDev, eff.volFactor, eff.spike1m, eff.move5m, eff.move30m);
+    lastVolatilityLog = now;
+}
+
+// ============================================================================
+// Smart Confluence Mode: ConfluenceDetector Module
+// ============================================================================
+
+// Helper: Check if two events are within confluence time window
+static bool eventsWithinTimeWindow(unsigned long timestamp1, unsigned long timestamp2, unsigned long now)
+{
+    if (timestamp1 == 0 || timestamp2 == 0) return false;
+    unsigned long timeDiff = (timestamp1 > timestamp2) ? (timestamp1 - timestamp2) : (timestamp2 - timestamp1);
+    return (timeDiff <= CONFLUENCE_TIME_WINDOW_MS);
+}
+
+// Helper: Check if 30m trend supports the direction (UP/DOWN)
+static bool trendSupportsDirection(EventDirection direction)
+{
+    if (direction == EVENT_UP) {
+        // UP-confluence: 30m trend moet UP zijn of op zijn minst niet sterk DOWN
+        return (trendState == TREND_UP || trendState == TREND_SIDEWAYS);
+    } else if (direction == EVENT_DOWN) {
+        // DOWN-confluence: 30m trend moet DOWN zijn of op zijn minst niet sterk UP
+        return (trendState == TREND_DOWN || trendState == TREND_SIDEWAYS);
+    }
+    return false;
+}
+
+// Check for confluence and send combined alert if found
+// Returns true if confluence was found and alert sent, false otherwise
+static bool checkAndSendConfluenceAlert(unsigned long now, float ret_30m)
+{
+    if (!smartConfluenceEnabled) return false;
+    
+    // Check if we have valid 1m and 5m events
+    if (last1mEvent.direction == EVENT_NONE || last5mEvent.direction == EVENT_NONE) {
+        return false;
+    }
+    
+    // Check if events are already used in confluence
+    if (last1mEvent.usedInConfluence || last5mEvent.usedInConfluence) {
+        return false;
+    }
+    
+    // Check if events are within time window
+    if (!eventsWithinTimeWindow(last1mEvent.timestamp, last5mEvent.timestamp, now)) {
+        return false;
+    }
+    
+    // Check if both events are in the same direction
+    if (last1mEvent.direction != last5mEvent.direction) {
+        return false;
+    }
+    
+    // Check if 30m trend supports the direction
+    if (!trendSupportsDirection(last1mEvent.direction)) {
+        return false;
+    }
+    
+    // Check cooldown (prevent spam)
+    if (lastConfluenceAlert > 0 && (now - lastConfluenceAlert) < CONFLUENCE_TIME_WINDOW_MS) {
+        return false;
+    }
+    
+    // Confluence detected! Send combined alert
+    EventDirection direction = last1mEvent.direction;
+    const char* directionText = (direction == EVENT_UP) ? "UP" : "DOWN";
+    const char* trendText = "";
+    switch (trendState) {
+        case TREND_UP: trendText = "UP"; break;
+        case TREND_DOWN: trendText = "DOWN"; break;
+        case TREND_SIDEWAYS: trendText = "SIDEWAYS"; break;
+    }
+    
+    char timestamp[32];
+    getFormattedTimestamp(timestamp, sizeof(timestamp));
+    char title[80];
+    snprintf(title, sizeof(title), "%s Confluence Alert (1m+5m+Trend)", binanceSymbol);
+    
+    char msg[320];
+    if (direction == EVENT_UP) {
+        snprintf(msg, sizeof(msg),
+                 "Confluence %s gedetecteerd!\n\n"
+                 "1m: +%.2f%%\n"
+                 "5m: +%.2f%%\n"
+                 "30m Trend: %s (%.2f%%)\n\n"
+                 "Prijs %s: %.2f",
+                 directionText,
+                 last1mEvent.magnitude,
+                 last5mEvent.magnitude,
+                 trendText, ret_30m,
+                 timestamp, prices[0]);
+    } else {
+        snprintf(msg, sizeof(msg),
+                 "Confluence %s gedetecteerd!\n\n"
+                 "1m: %.2f%%\n"
+                 "5m: %.2f%%\n"
+                 "30m Trend: %s (%.2f%%)\n\n"
+                 "Prijs %s: %.2f",
+                 directionText,
+                 -last1mEvent.magnitude,
+                 -last5mEvent.magnitude,
+                 trendText, ret_30m,
+                 timestamp, prices[0]);
+    }
+    
+    const char* colorTag = (direction == EVENT_UP) ? "green_square,📈" : "red_square,📉";
+    sendNotification(title, msg, colorTag);
+    
+    // Mark events as used
+    last1mEvent.usedInConfluence = true;
+    last5mEvent.usedInConfluence = true;
+    lastConfluenceAlert = now;
+    
+    Serial_printf("[Confluence] Alert verzonden: 1m=%.2f%%, 5m=%.2f%%, trend=%s, ret_30m=%.2f%%\n",
+                  (direction == EVENT_UP ? last1mEvent.magnitude : -last1mEvent.magnitude),
+                  (direction == EVENT_UP ? last5mEvent.magnitude : -last5mEvent.magnitude),
+                  trendText, ret_30m);
+    
+    return true;
+}
+
+// Update 1m event state (gebruikt effective threshold voor consistentie)
+static void update1mEvent(float ret_1m, unsigned long timestamp, float effectiveSpike1mThreshold)
+{
+    if (!smartConfluenceEnabled) return;
+    
+    float absRet1m = fabsf(ret_1m);
+    if (absRet1m >= effectiveSpike1mThreshold) {
+        last1mEvent.direction = (ret_1m > 0) ? EVENT_UP : EVENT_DOWN;
+        last1mEvent.timestamp = timestamp;
+        last1mEvent.magnitude = absRet1m;
+        last1mEvent.usedInConfluence = false;  // Reset flag when new event occurs
+    }
+}
+
+// Update 5m event state (gebruikt effective threshold voor consistentie)
+static void update5mEvent(float ret_5m, unsigned long timestamp, float effectiveMove5mThreshold)
+{
+    if (!smartConfluenceEnabled) return;
+    
+    float absRet5m = fabsf(ret_5m);
+    // Check for 5m move alert threshold (effective threshold)
+    if (absRet5m >= effectiveMove5mThreshold) {
+        last5mEvent.direction = (ret_5m > 0) ? EVENT_UP : EVENT_DOWN;
+        last5mEvent.timestamp = timestamp;
+        last5mEvent.magnitude = absRet5m;
+        last5mEvent.usedInConfluence = false;  // Reset flag when new event occurs
+    }
+}
+
 // Check anchor take profit / max loss alerts
 static void checkAnchorAlerts()
 {
@@ -1047,27 +1434,41 @@ static void checkAnchorAlerts()
     }
     
     // Bereken dynamische anchor-waarden op basis van trend
-    // Gebruik ret_30m en ret_2h die al beschikbaar zijn in de scope
-    AnchorConfigEffective effAnchor = calcEffectiveAnchor(anchorMaxLoss, anchorTakeProfit, trendState);
+    AnchorConfigEffective effAnchor = calculateEffectiveAnchorThresholds(trendState, anchorMaxLoss, anchorTakeProfit);
     
     // Bereken percentage verandering t.o.v. anchor
     float anchorPct = ((prices[0] - anchorPrice) / anchorPrice) * 100.0f;
+    
+    // Helper: get trend name
+    const char* trendName = "";
+    switch (trendState) {
+        case TREND_UP: trendName = "UP"; break;
+        case TREND_DOWN: trendName = "DOWN"; break;
+        case TREND_SIDEWAYS: trendName = "SIDEWAYS"; break;
+    }
     
     // Check take profit met dynamische waarde
     if (!anchorTakeProfitSent && anchorPct >= effAnchor.takeProfitPct) {
         char timestamp[32];
         getFormattedTimestamp(timestamp, sizeof(timestamp));
         char title[64];
-        char msg[256];
+        char msg[320];
         snprintf(title, sizeof(title), "%s Take Profit", binanceSymbol);
-        // Toon zowel basis als effectieve waarde in notificatie
-        snprintf(msg, sizeof(msg), 
-                 "Take profit bereikt: +%.2f%%\nThreshold: %.2f%% (basis: %.2f%%)\nAnchor: %.2f EUR\nPrijs %s: %.2f EUR\nWinst: +%.2f EUR",
-                 anchorPct, effAnchor.takeProfitPct, anchorTakeProfit, anchorPrice, timestamp, prices[0], prices[0] - anchorPrice);
+        
+        // Toon trend en effective thresholds in notificatie
+        if (trendAdaptiveAnchorsEnabled) {
+            snprintf(msg, sizeof(msg), 
+                     "Take profit bereikt: +%.2f%%\nTrend: %s, Threshold (eff.): +%.2f%% (basis: +%.2f%%)\nAnchor: %.2f EUR\nPrijs %s: %.2f EUR\nWinst: +%.2f EUR",
+                     anchorPct, trendName, effAnchor.takeProfitPct, anchorTakeProfit, anchorPrice, timestamp, prices[0], prices[0] - anchorPrice);
+        } else {
+            snprintf(msg, sizeof(msg), 
+                     "Take profit bereikt: +%.2f%%\nThreshold: +%.2f%%\nAnchor: %.2f EUR\nPrijs %s: %.2f EUR\nWinst: +%.2f EUR",
+                     anchorPct, effAnchor.takeProfitPct, anchorPrice, timestamp, prices[0], prices[0] - anchorPrice);
+        }
         sendNotification(title, msg, "green_square,💰");
         anchorTakeProfitSent = true;
-        Serial_printf("[Anchor] Take profit notificatie verzonden: %.2f%% (threshold: %.2f%%, basis: %.2f%%, anchor: %.2f, prijs: %.2f)\n", 
-                     anchorPct, effAnchor.takeProfitPct, anchorTakeProfit, anchorPrice, prices[0]);
+        Serial_printf("[Anchor] Take profit notificatie verzonden: %.2f%% (threshold: %.2f%%, basis: %.2f%%, trend: %s, anchor: %.2f, prijs: %.2f)\n", 
+                     anchorPct, effAnchor.takeProfitPct, anchorTakeProfit, trendName, anchorPrice, prices[0]);
         
         // Publiceer take profit event naar MQTT
         publishMqttAnchorEvent(anchorPrice, "take_profit");
@@ -1078,16 +1479,23 @@ static void checkAnchorAlerts()
         char timestamp[32];
         getFormattedTimestamp(timestamp, sizeof(timestamp));
         char title[64];
-        char msg[256];
+        char msg[320];
         snprintf(title, sizeof(title), "%s Max Loss", binanceSymbol);
-        // Toon zowel basis als effectieve waarde in notificatie
-        snprintf(msg, sizeof(msg), 
-                 "Max loss bereikt: %.2f%%\nThreshold: %.2f%% (basis: %.2f%%)\nAnchor: %.2f EUR\nPrijs %s: %.2f EUR\nVerlies: %.2f EUR",
-                 anchorPct, effAnchor.maxLossPct, anchorMaxLoss, anchorPrice, timestamp, prices[0], prices[0] - anchorPrice);
+        
+        // Toon trend en effective thresholds in notificatie
+        if (trendAdaptiveAnchorsEnabled) {
+            snprintf(msg, sizeof(msg), 
+                     "Max loss bereikt: %.2f%%\nTrend: %s, Threshold (eff.): %.2f%% (basis: %.2f%%)\nAnchor: %.2f EUR\nPrijs %s: %.2f EUR\nVerlies: %.2f EUR",
+                     anchorPct, trendName, effAnchor.maxLossPct, anchorMaxLoss, anchorPrice, timestamp, prices[0], prices[0] - anchorPrice);
+        } else {
+            snprintf(msg, sizeof(msg), 
+                     "Max loss bereikt: %.2f%%\nThreshold: %.2f%%\nAnchor: %.2f EUR\nPrijs %s: %.2f EUR\nVerlies: %.2f EUR",
+                     anchorPct, effAnchor.maxLossPct, anchorPrice, timestamp, prices[0], prices[0] - anchorPrice);
+        }
         sendNotification(title, msg, "red_square,⚠️");
         anchorMaxLossSent = true;
-        Serial_printf("[Anchor] Max loss notificatie verzonden: %.2f%% (threshold: %.2f%%, basis: %.2f%%, anchor: %.2f, prijs: %.2f)\n", 
-                     anchorPct, effAnchor.maxLossPct, anchorMaxLoss, anchorPrice, prices[0]);
+        Serial_printf("[Anchor] Max loss notificatie verzonden: %.2f%% (threshold: %.2f%%, basis: %.2f%%, trend: %s, anchor: %.2f, prijs: %.2f)\n", 
+                     anchorPct, effAnchor.maxLossPct, anchorMaxLoss, trendName, anchorPrice, prices[0]);
         
         // Publiceer max loss event naar MQTT
         publishMqttAnchorEvent(anchorPrice, "max_loss");
@@ -1175,6 +1583,17 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
 {
     unsigned long now = millis();
     
+    // Update volatility window met nieuwe 1m return (Auto-Volatility Mode)
+    if (ret_1m != 0.0f) {
+        updateVolatilityWindow(ret_1m);
+    }
+    
+    // Bereken effective thresholds (Auto-Volatility Mode)
+    EffectiveThresholds effThresh = calculateEffectiveThresholds(spike1mThreshold, move5mAlertThreshold, move30mThreshold);
+    
+    // Log volatility status (voor debug)
+    logVolatilityStatus(effThresh);
+    
     // Reset tellers elk uur
     if (hourStartTime == 0 || (now - hourStartTime >= 3600000UL)) { // 1 uur = 3600000 ms
         alerts1MinThisHour = 0;
@@ -1185,7 +1604,7 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
     }
     
     // ===== 1-MINUUT SPIKE ALERT =====
-    // Voorwaarde: |ret_1m| >= spike1mThreshold EN |ret_5m| >= spike5mThreshold in dezelfde richting
+    // Voorwaarde: |ret_1m| >= effectiveSpike1mThreshold EN |ret_5m| >= spike5mThreshold in dezelfde richting
     if (ret_1m != 0.0f && ret_5m != 0.0f)
     {
         float absRet1m = fabsf(ret_1m);
@@ -1194,47 +1613,68 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         // Check of beide in dezelfde richting zijn (beide positief of beide negatief)
         bool sameDirection = ((ret_1m > 0 && ret_5m > 0) || (ret_1m < 0 && ret_5m < 0));
         
-        // Threshold check: ret_1m >= spike1mThreshold EN ret_5m >= spike5mThreshold
-        bool spikeDetected = (absRet1m >= spike1mThreshold) && (absRet5m >= spike5mThreshold) && sameDirection;
+        // Threshold check: ret_1m >= effectiveSpike1mThreshold EN ret_5m >= spike5mThreshold
+        bool spikeDetected = (absRet1m >= effThresh.spike1m) && (absRet5m >= spike5mThreshold) && sameDirection;
+        
+        // Update 1m event state voor Smart Confluence Mode
+        if (spikeDetected) {
+            update1mEvent(ret_1m, now, effThresh.spike1m);
+        }
         
         // Debug logging alleen bij spike detectie
         if (spikeDetected) {
             Serial_printf("[Notify] 1m spike: ret_1m=%.2f%%, ret_5m=%.2f%%\n", ret_1m, ret_5m);
             
-            // Bereken min en max uit secondPrices buffer
-            float minVal, maxVal;
-            findMinMaxInSecondPrices(minVal, maxVal);
-            
-            // Format message with 5m info
-            char timestamp[32];
-            getFormattedTimestamp(timestamp, sizeof(timestamp));
-            char msg[256];
-            if (ret_1m >= 0) {
-                snprintf(msg, sizeof(msg), 
-                         "1m UP spike: +%.2f%% (5m: +%.2f%%)\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
-                         ret_1m, ret_5m, timestamp, prices[0], maxVal, minVal);
-            } else {
-                snprintf(msg, sizeof(msg), 
-                         "1m DOWN spike: %.2f%% (5m: %.2f%%)\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
-                         ret_1m, ret_5m, timestamp, prices[0], maxVal, minVal);
+            // Check for confluence first (Smart Confluence Mode)
+            bool confluenceFound = false;
+            if (smartConfluenceEnabled) {
+                confluenceFound = checkAndSendConfluenceAlert(now, ret_30m);
             }
             
-            const char* colorTag = determineColorTag(ret_1m, spike1mThreshold, spike1mThreshold * 1.5f);
-            char title[64];
-            snprintf(title, sizeof(title), "%s 1m Spike Alert", binanceSymbol);
-            
-            if (checkAlertConditions(now, lastNotification1Min, notificationCooldown1MinMs, 
-                                     alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR, "1m spike")) {
-                sendNotification(title, msg, colorTag);
-                lastNotification1Min = now;
-                alerts1MinThisHour++;
-                Serial_printf("[Notify] 1m spike notificatie verstuurd (%d/%d dit uur)\n", alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR);
+            // Als confluence werd gevonden, skip individuele alert
+            if (confluenceFound) {
+                Serial_printf("[Notify] 1m spike onderdrukt (gebruikt in confluence alert)\n");
+            } else {
+                // Check of dit event al gebruikt is in confluence (suppress individuele alert)
+                if (smartConfluenceEnabled && last1mEvent.usedInConfluence) {
+                    Serial_printf("[Notify] 1m spike onderdrukt (al gebruikt in confluence)\n");
+                } else {
+                    // Bereken min en max uit secondPrices buffer
+                    float minVal, maxVal;
+                    findMinMaxInSecondPrices(minVal, maxVal);
+                    
+                    // Format message with 5m info
+                    char timestamp[32];
+                    getFormattedTimestamp(timestamp, sizeof(timestamp));
+                    char msg[256];
+                    if (ret_1m >= 0) {
+                        snprintf(msg, sizeof(msg), 
+                                 "1m UP spike: +%.2f%% (5m: +%.2f%%)\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
+                                 ret_1m, ret_5m, timestamp, prices[0], maxVal, minVal);
+                    } else {
+                        snprintf(msg, sizeof(msg), 
+                                 "1m DOWN spike: %.2f%% (5m: %.2f%%)\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
+                                 ret_1m, ret_5m, timestamp, prices[0], maxVal, minVal);
+                    }
+                    
+                    const char* colorTag = determineColorTag(ret_1m, effThresh.spike1m, effThresh.spike1m * 1.5f);
+                    char title[64];
+                    snprintf(title, sizeof(title), "%s 1m Spike Alert", binanceSymbol);
+                    
+                    if (checkAlertConditions(now, lastNotification1Min, notificationCooldown1MinMs, 
+                                             alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR, "1m spike")) {
+                        sendNotification(title, msg, colorTag);
+                        lastNotification1Min = now;
+                        alerts1MinThisHour++;
+                        Serial_printf("[Notify] 1m spike notificatie verstuurd (%d/%d dit uur)\n", alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR);
+                    }
+                }
             }
         }
     }
     
     // ===== 30-MINUTEN TREND MOVE ALERT =====
-    // Voorwaarde: |ret_30m| >= move30mThreshold EN |ret_5m| >= move5mThreshold in dezelfde richting
+    // Voorwaarde: |ret_30m| >= effectiveMove30mThreshold EN |ret_5m| >= move5mThreshold in dezelfde richting
     if (ret_30m != 0.0f && ret_5m != 0.0f)
     {
         float absRet30m = fabsf(ret_30m);
@@ -1243,8 +1683,9 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         // Check of beide in dezelfde richting zijn
         bool sameDirection = ((ret_30m > 0 && ret_5m > 0) || (ret_30m < 0 && ret_5m < 0));
         
-        // Threshold check: ret_30m >= move30mThreshold EN ret_5m >= move5mThreshold
-        bool moveDetected = (absRet30m >= move30mThreshold) && (absRet5m >= move5mThreshold) && sameDirection;
+        // Threshold check: ret_30m >= effectiveMove30mThreshold EN ret_5m >= move5mThreshold
+        // Note: move5mThreshold is de filter threshold, niet de alert threshold
+        bool moveDetected = (absRet30m >= effThresh.move30m) && (absRet5m >= move5mThreshold) && sameDirection;
         
         // Debug logging alleen bij move detectie
         if (moveDetected) {
@@ -1268,7 +1709,7 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                          ret_30m, ret_5m, timestamp, prices[0], maxVal, minVal);
             }
             
-            const char* colorTag = determineColorTag(ret_30m, move30mThreshold, move30mThreshold * 1.5f);
+            const char* colorTag = determineColorTag(ret_30m, effThresh.move30m, effThresh.move30m * 1.5f);
             char title[64];
             snprintf(title, sizeof(title), "%s 30m Move Alert", binanceSymbol);
             
@@ -1283,52 +1724,73 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
     }
     
     // ===== 5-MINUTEN MOVE ALERT =====
-    // Voorwaarde: |ret_5m| >= move5mAlertThreshold
+    // Voorwaarde: |ret_5m| >= effectiveMove5mThreshold
     if (ret_5m != 0.0f)
     {
         float absRet5m = fabsf(ret_5m);
         
-        // Threshold check: ret_5m >= move5mAlertThreshold
-        bool move5mDetected = (absRet5m >= move5mAlertThreshold);
+        // Threshold check: ret_5m >= effectiveMove5mThreshold
+        bool move5mDetected = (absRet5m >= effThresh.move5m);
+        
+        // Update 5m event state voor Smart Confluence Mode
+        if (move5mDetected) {
+            update5mEvent(ret_5m, now, effThresh.move5m);
+        }
         
         // Debug logging alleen bij move detectie
         if (move5mDetected) {
             Serial_printf("[Notify] 5m move: ret_5m=%.2f%%\n", ret_5m);
             
-            // Bereken min en max uit fiveMinutePrices buffer
-            float minVal = fiveMinutePrices[0];
-            float maxVal = fiveMinutePrices[0];
-            for (int i = 1; i < SECONDS_PER_5MINUTES; i++) {
-                if (fiveMinutePrices[i] > 0.0f) {
-                    if (fiveMinutePrices[i] < minVal || minVal <= 0.0f) minVal = fiveMinutePrices[i];
-                    if (fiveMinutePrices[i] > maxVal || maxVal <= 0.0f) maxVal = fiveMinutePrices[i];
-                }
+            // Check for confluence first (Smart Confluence Mode)
+            bool confluenceFound = false;
+            if (smartConfluenceEnabled) {
+                confluenceFound = checkAndSendConfluenceAlert(now, ret_30m);
             }
             
-            // Format message
-            char timestamp[32];
-            getFormattedTimestamp(timestamp, sizeof(timestamp));
-            char msg[256];
-            if (ret_5m >= 0) {
-                snprintf(msg, sizeof(msg), 
-                         "5m UP move: +%.2f%%\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
-                         ret_5m, timestamp, prices[0], maxVal, minVal);
+            // Als confluence werd gevonden, skip individuele alert
+            if (confluenceFound) {
+                Serial_printf("[Notify] 5m move onderdrukt (gebruikt in confluence alert)\n");
             } else {
-                snprintf(msg, sizeof(msg), 
-                         "5m DOWN move: %.2f%%\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
-                         ret_5m, timestamp, prices[0], maxVal, minVal);
-            }
-            
-            const char* colorTag = determineColorTag(ret_5m, move5mAlertThreshold, move5mAlertThreshold * 1.5f);
-            char title[64];
-            snprintf(title, sizeof(title), "%s 5m Move Alert", binanceSymbol);
-            
-            if (checkAlertConditions(now, lastNotification5Min, notificationCooldown5MinMs, 
-                                     alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR, "5m move")) {
-                sendNotification(title, msg, colorTag);
-                lastNotification5Min = now;
-                alerts5MinThisHour++;
-                Serial_printf("[Notify] 5m move notificatie verstuurd (%d/%d dit uur)\n", alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR);
+                // Check of dit event al gebruikt is in confluence (suppress individuele alert)
+                if (smartConfluenceEnabled && last5mEvent.usedInConfluence) {
+                    Serial_printf("[Notify] 5m move onderdrukt (al gebruikt in confluence)\n");
+                } else {
+                    // Bereken min en max uit fiveMinutePrices buffer
+                    float minVal = fiveMinutePrices[0];
+                    float maxVal = fiveMinutePrices[0];
+                    for (int i = 1; i < SECONDS_PER_5MINUTES; i++) {
+                        if (fiveMinutePrices[i] > 0.0f) {
+                            if (fiveMinutePrices[i] < minVal || minVal <= 0.0f) minVal = fiveMinutePrices[i];
+                            if (fiveMinutePrices[i] > maxVal || maxVal <= 0.0f) maxVal = fiveMinutePrices[i];
+                        }
+                    }
+                    
+                    // Format message
+                    char timestamp[32];
+                    getFormattedTimestamp(timestamp, sizeof(timestamp));
+                    char msg[256];
+                    if (ret_5m >= 0) {
+                        snprintf(msg, sizeof(msg), 
+                                 "5m UP move: +%.2f%%\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
+                                 ret_5m, timestamp, prices[0], maxVal, minVal);
+                    } else {
+                        snprintf(msg, sizeof(msg), 
+                                 "5m DOWN move: %.2f%%\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
+                                 ret_5m, timestamp, prices[0], maxVal, minVal);
+                    }
+                    
+                    const char* colorTag = determineColorTag(ret_5m, effThresh.move5m, effThresh.move5m * 1.5f);
+                    char title[64];
+                    snprintf(title, sizeof(title), "%s 5m Move Alert", binanceSymbol);
+                    
+                    if (checkAlertConditions(now, lastNotification5Min, notificationCooldown5MinMs, 
+                                             alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR, "5m move")) {
+                        sendNotification(title, msg, colorTag);
+                        lastNotification5Min = now;
+                        alerts5MinThisHour++;
+                        Serial_printf("[Notify] 5m move notificatie verstuurd (%d/%d dit uur)\n", alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR);
+                    }
+                }
             }
         }
     }
@@ -1517,6 +1979,16 @@ static void loadSettings()
     anchorTakeProfit = preferences.getFloat("anchorTP", ANCHOR_TAKE_PROFIT_DEFAULT);
     anchorMaxLoss = preferences.getFloat("anchorML", ANCHOR_MAX_LOSS_DEFAULT);
     
+    // Load trend-adaptive anchor settings
+    trendAdaptiveAnchorsEnabled = preferences.getBool("trendAdapt", TREND_ADAPTIVE_ANCHORS_ENABLED_DEFAULT);
+    uptrendMaxLossMultiplier = preferences.getFloat("upMLMult", UPTREND_MAX_LOSS_MULTIPLIER_DEFAULT);
+    uptrendTakeProfitMultiplier = preferences.getFloat("upTPMult", UPTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT);
+    downtrendMaxLossMultiplier = preferences.getFloat("downMLMult", DOWNTREND_MAX_LOSS_MULTIPLIER_DEFAULT);
+    downtrendTakeProfitMultiplier = preferences.getFloat("downTPMult", DOWNTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT);
+    
+    // Load Smart Confluence Mode settings
+    smartConfluenceEnabled = preferences.getBool("smartConf", SMART_CONFLUENCE_ENABLED_DEFAULT);
+    
     // Load trend and volatility settings
     trendThreshold = preferences.getFloat("trendTh", TREND_THRESHOLD_DEFAULT);
     volatilityLowThreshold = preferences.getFloat("volLow", VOLATILITY_LOW_THRESHOLD_DEFAULT);
@@ -1559,6 +2031,23 @@ static void saveSettings()
     // Save anchor settings
     preferences.putFloat("anchorTP", anchorTakeProfit);
     preferences.putFloat("anchorML", anchorMaxLoss);
+    
+    // Save trend-adaptive anchor settings
+    preferences.putBool("trendAdapt", trendAdaptiveAnchorsEnabled);
+    preferences.putFloat("upMLMult", uptrendMaxLossMultiplier);
+    preferences.putFloat("upTPMult", uptrendTakeProfitMultiplier);
+    preferences.putFloat("downMLMult", downtrendMaxLossMultiplier);
+    preferences.putFloat("downTPMult", downtrendTakeProfitMultiplier);
+    
+    // Save Smart Confluence Mode settings
+    preferences.putBool("smartConf", smartConfluenceEnabled);
+    
+    // Save Auto-Volatility Mode settings
+    preferences.putBool("autoVol", autoVolatilityEnabled);
+    preferences.putUChar("autoVolWin", autoVolatilityWindowMinutes);
+    preferences.putFloat("autoVolBase", autoVolatilityBaseline1mStdPct);
+    preferences.putFloat("autoVolMin", autoVolatilityMinMultiplier);
+    preferences.putFloat("autoVolMax", autoVolatilityMaxMultiplier);
     
     // Save trend and volatility settings
     preferences.putFloat("trendTh", trendThreshold);
@@ -2300,8 +2789,8 @@ static String getSettingsHTML()
     html += "<label>" + String(getText("Binance Symbool:", "Binance Symbol:")) + "<input type='text' name='binancesymbol' value='" + String(binanceSymbol) + "' maxlength='15'></label>";
     html += "<div class='info'>" + String(getText("Binance trading pair (bijv. BTCEUR, BTCUSDT, ETHUSDT)", "Binance trading pair (e.g. BTCEUR, BTCUSDT, ETHUSDT)")) + "</div>";
     
-    // Anchor instellingen direct onder Binance Symbol
-    html += "<h2 style='color:#00BCD4;margin-top:30px;'>" + String(getText("Anchor Instellingen", "Anchor Settings")) + "</h2>";
+    // Anchor instellingen onder Algemene instellingen
+    html += "<h3 style='color:#00BCD4;margin-top:20px;'>" + String(getText("Anchor Instellingen", "Anchor Settings")) + "</h3>";
     
     // Haal huidige prijs op voor default waarde (thread-safe)
     float currentPriceForAnchor = 0.0f;
@@ -2345,8 +2834,31 @@ static String getSettingsHTML()
     html += "<div class='info'>" + String(getText("Take profit threshold boven anchor price (standaard: 5.0%)", "Take profit threshold above anchor price (default: 5.0%)")) + "</div>";
     html += "<label>" + String(getText("Anchor Max Loss (%):", "Anchor Max Loss (%):")) + "<input type='number' step='0.1' name='anchorML' value='" + String(anchorMaxLoss, 1) + "' min='-100' max='-0.1'></label>";
     html += "<div class='info'>" + String(getText("Max loss threshold onder anchor price (standaard: -3.0%)", "Max loss threshold below anchor price (default: -3.0%)")) + "</div>";
+    
+    // Trend-adaptive anchor settings
+    html += "<h4 style='color:#00BCD4;margin-top:15px;'>" + String(getText("Trend-Adaptive Anchors", "Trend-Adaptive Anchors")) + "</h4>";
+    html += "<label><input type='checkbox' name='trendAdapt' value='1'" + String(trendAdaptiveAnchorsEnabled ? " checked" : "") + "> " + String(getText("Trend-Adaptive Anchors Inschakelen", "Enable Trend-Adaptive Anchors")) + "</label>";
+    html += "<div class='info'>" + String(getText("Pas anchor thresholds automatisch aan op basis van de huidige trend (UP/DOWN/SIDEWAYS)", "Automatically adjust anchor thresholds based on current trend (UP/DOWN/SIDEWAYS)")) + "</div>";
+    
+    html += "<label>" + String(getText("UP Trend - Max Loss Multiplier:", "UP Trend - Max Loss Multiplier:")) + "<input type='number' step='0.01' name='upMLMult' value='" + String(uptrendMaxLossMultiplier, 2) + "' min='0.5' max='2.0'></label>";
+    html += "<div class='info'>" + String(getText("Multiplier voor max loss bij UP trend (standaard: 1.15)", "Multiplier for max loss in UP trend (default: 1.15)")) + "</div>";
+    
+    html += "<label>" + String(getText("UP Trend - Take Profit Multiplier:", "UP Trend - Take Profit Multiplier:")) + "<input type='number' step='0.01' name='upTPMult' value='" + String(uptrendTakeProfitMultiplier, 2) + "' min='0.5' max='2.0'></label>";
+    html += "<div class='info'>" + String(getText("Multiplier voor take profit bij UP trend (standaard: 1.2)", "Multiplier for take profit in UP trend (default: 1.2)")) + "</div>";
+    
+    html += "<label>" + String(getText("DOWN Trend - Max Loss Multiplier:", "DOWN Trend - Max Loss Multiplier:")) + "<input type='number' step='0.01' name='downMLMult' value='" + String(downtrendMaxLossMultiplier, 2) + "' min='0.5' max='2.0'></label>";
+    html += "<div class='info'>" + String(getText("Multiplier voor max loss bij DOWN trend (standaard: 0.85)", "Multiplier for max loss in DOWN trend (default: 0.85)")) + "</div>";
+    
+    html += "<label>" + String(getText("DOWN Trend - Take Profit Multiplier:", "DOWN Trend - Take Profit Multiplier:")) + "<input type='number' step='0.01' name='downTPMult' value='" + String(downtrendTakeProfitMultiplier, 2) + "' min='0.5' max='2.0'></label>";
+    html += "<div class='info'>" + String(getText("Multiplier voor take profit bij DOWN trend (standaard: 0.8)", "Multiplier for take profit in DOWN trend (default: 0.8)")) + "</div>";
     html += "<hr style='border:1px solid #444;margin:30px 0;'>";
     html += "<h2 style='color:#00BCD4;margin-top:30px;'>" + String(getText("Spike & Move Alerts", "Spike & Move Alerts")) + "</h2>";
+    
+    // Smart Confluence Mode
+    html += "<h3 style='color:#00BCD4;margin-top:20px;'>" + String(getText("Smart Confluence Mode", "Smart Confluence Mode")) + "</h3>";
+    html += "<label><input type='checkbox' name='smartConf' value='1'" + String(smartConfluenceEnabled ? " checked" : "") + "> " + String(getText("Smart Confluence Mode Inschakelen", "Enable Smart Confluence Mode")) + "</label>";
+    html += "<div class='info'>" + String(getText("Verstuur alleen alerts als er confluence is tussen 1m, 5m en 30m timeframes in dezelfde richting. Dit vermindert het aantal alerts maar verhoogt de betekenisvolheid.", "Only send alerts when there is confluence between 1m, 5m and 30m timeframes in the same direction. This reduces the number of alerts but increases their significance.")) + "</div>";
+    
     html += "<label>1m Spike - ret_1m threshold (%):<input type='number' step='0.01' name='spike1m' value='" + String(spike1mThreshold, 2) + "'></label>";
     html += "<div class='info'>" + String(getText("1m spike alert: |ret_1m| >= deze waarde (standaard: 0.30%)", "1m spike alert: |ret_1m| >= this value (default: 0.30%)")) + "</div>";
     html += "<label>1m Spike - ret_5m filter (%):<input type='number' step='0.01' name='spike5m' value='" + String(spike5mThreshold, 2) + "'></label>";
@@ -2373,6 +2885,24 @@ static String getSettingsHTML()
     html += "<div class='info'>" + String(getText("Onder deze waarde is volatiliteit LOW (standaard: 0.06%)", "Below this value volatility is LOW (default: 0.06%)")) + "</div>";
     html += "<label>" + String(getText("Volatiliteit High Threshold (%):", "Volatility High Threshold (%):")) + "<input type='number' step='0.01' name='volHigh' value='" + String(volatilityHighThreshold, 2) + "' min='0.01' max='1'></label>";
     html += "<div class='info'>" + String(getText("Boven deze waarde is volatiliteit HIGH (standaard: 0.12%)", "Above this value volatility is HIGH (default: 0.12%)")) + "</div>";
+    
+    // Auto-Volatility Mode
+    html += "<h3 style='color:#00BCD4;margin-top:20px;'>" + String(getText("Auto-Volatility Mode", "Auto-Volatility Mode")) + "</h3>";
+    html += "<label><input type='checkbox' name='autoVol' value='1'" + String(autoVolatilityEnabled ? " checked" : "") + "> " + String(getText("Auto-Volatility Mode Inschakelen", "Enable Auto-Volatility Mode")) + "</label>";
+    html += "<div class='info'>" + String(getText("Pas thresholds automatisch aan op basis van de huidige volatiliteit. Bij hoge volatiliteit worden thresholds verhoogd, bij lage volatiliteit verlaagd.", "Automatically adjust thresholds based on current volatility. Thresholds are increased during high volatility and decreased during low volatility.")) + "</div>";
+    
+    html += "<label>" + String(getText("Window Lengte (minuten):", "Window Length (minutes):")) + "<input type='number' step='1' name='autoVolWin' value='" + String(autoVolatilityWindowMinutes) + "' min='10' max='120'></label>";
+    html += "<div class='info'>" + String(getText("Lengte van het sliding window voor volatiliteit berekening (standaard: 60 minuten)", "Length of sliding window for volatility calculation (default: 60 minutes)")) + "</div>";
+    
+    html += "<label>" + String(getText("Baseline 1m Std Dev (%):", "Baseline 1m Std Dev (%):")) + "<input type='number' step='0.01' name='autoVolBase' value='" + String(autoVolatilityBaseline1mStdPct, 2) + "' min='0.01' max='1.0'></label>";
+    html += "<div class='info'>" + String(getText("Baseline standaarddeviatie voor 1m returns (standaard: 0.15%)", "Baseline standard deviation for 1m returns (default: 0.15%)")) + "</div>";
+    
+    html += "<label>" + String(getText("Min Multiplier:", "Min Multiplier:")) + "<input type='number' step='0.1' name='autoVolMin' value='" + String(autoVolatilityMinMultiplier, 1) + "' min='0.1' max='1.0'></label>";
+    html += "<div class='info'>" + String(getText("Minimum multiplier voor volatility factor (standaard: 0.7)", "Minimum multiplier for volatility factor (default: 0.7)")) + "</div>";
+    
+    html += "<label>" + String(getText("Max Multiplier:", "Max Multiplier:")) + "<input type='number' step='0.1' name='autoVolMax' value='" + String(autoVolatilityMaxMultiplier, 1) + "' min='1.0' max='3.0'></label>";
+    html += "<div class='info'>" + String(getText("Maximum multiplier voor volatility factor (standaard: 1.6)", "Maximum multiplier for volatility factor (default: 1.6)")) + "</div>";
+    
     html += "<hr style='border:1px solid #444;margin:30px 0;'>";
     html += "<h2 style='color:#00BCD4;margin-top:30px;'>" + String(getText("MQTT Instellingen", "MQTT Settings")) + "</h2>";
     html += "<label>" + String(getText("MQTT Host (IP):", "MQTT Host (IP):")) + "<input type='text' name='mqtthost' value='" + String(mqttHost) + "' maxlength='63'></label>";
@@ -2544,6 +3074,63 @@ static void handleSave()
         float val;
         if (safeAtof(server.arg("anchorML").c_str(), val) && val >= -100.0f && val <= -0.1f) {
             anchorMaxLoss = val;
+        }
+    }
+    
+    // Trend-adaptive anchor settings
+    trendAdaptiveAnchorsEnabled = server.hasArg("trendAdapt");
+    if (server.hasArg("upMLMult")) {
+        float val;
+        if (safeAtof(server.arg("upMLMult").c_str(), val) && val >= 0.5f && val <= 2.0f) {
+            uptrendMaxLossMultiplier = val;
+        }
+    }
+    if (server.hasArg("upTPMult")) {
+        float val;
+        if (safeAtof(server.arg("upTPMult").c_str(), val) && val >= 0.5f && val <= 2.0f) {
+            uptrendTakeProfitMultiplier = val;
+        }
+    }
+    if (server.hasArg("downMLMult")) {
+        float val;
+        if (safeAtof(server.arg("downMLMult").c_str(), val) && val >= 0.5f && val <= 2.0f) {
+            downtrendMaxLossMultiplier = val;
+        }
+    }
+    if (server.hasArg("downTPMult")) {
+        float val;
+        if (safeAtof(server.arg("downTPMult").c_str(), val) && val >= 0.5f && val <= 2.0f) {
+            downtrendTakeProfitMultiplier = val;
+        }
+    }
+    
+    // Smart Confluence Mode settings
+    smartConfluenceEnabled = server.hasArg("smartConf");
+    
+    // Auto-Volatility Mode settings
+    autoVolatilityEnabled = server.hasArg("autoVol");
+    if (server.hasArg("autoVolWin")) {
+        uint8_t val = server.arg("autoVolWin").toInt();
+        if (val >= 10 && val <= 120) {
+            autoVolatilityWindowMinutes = val;
+        }
+    }
+    if (server.hasArg("autoVolBase")) {
+        float val;
+        if (safeAtof(server.arg("autoVolBase").c_str(), val) && val >= 0.01f && val <= 1.0f) {
+            autoVolatilityBaseline1mStdPct = val;
+        }
+    }
+    if (server.hasArg("autoVolMin")) {
+        float val;
+        if (safeAtof(server.arg("autoVolMin").c_str(), val) && val >= 0.1f && val <= 1.0f) {
+            autoVolatilityMinMultiplier = val;
+        }
+    }
+    if (server.hasArg("autoVolMax")) {
+        float val;
+        if (safeAtof(server.arg("autoVolMax").c_str(), val) && val >= 1.0f && val <= 3.0f) {
+            autoVolatilityMaxMultiplier = val;
         }
     }
     

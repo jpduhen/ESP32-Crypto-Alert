@@ -22,6 +22,224 @@ A unified Crypto Monitor for different ESP32 display platforms: TTGO T-Display, 
 - NTFY.sh notifications for alerts
 - Web interface for configuration
 - WiFi Manager for easy WiFi setup
+- **Trend-Adaptive Anchors**: Dynamic anchor thresholds based on trend
+- **Smart Confluence Mode**: Combined alerts when multiple timeframes align
+- **Auto-Volatility Mode**: Automatic threshold adjustment based on volatility
+
+## Alert System Decision Tree
+
+The alert system uses a structured decision tree to generate alerts. Below is the complete logic:
+
+### 1. New candle / tick received
+
+1.1. Update price, 1m/5m/30m returns and history
+
+### 2. Determine volatility (Auto-Volatility Mode)
+
+2.1. If `autoVolatilityEnabled == true`:
+    - Calculate standard deviation (σ) of last N 1m-returns (sliding window)
+    - Calculate `volatilityFactor = clamp(σ / σ_baseline, minMultiplier, maxMultiplier)`
+    - Scale all thresholds:
+      - `1mSpikeThreshold = base_1m * volatilityFactor`
+      - `5mMoveThreshold = base_5m * sqrt(volatilityFactor)` (sqrt for longer timeframes)
+      - `30mMoveThreshold = base_30m * sqrt(volatilityFactor)` (sqrt for longer timeframes)
+2.2. If `autoVolatilityEnabled == false`:
+    - Use base thresholds without adjustment
+
+### 3. Determine trend
+
+3.1. Calculate 2-hour return (`ret_2h`) and 30-minute return (`ret_30m`)
+3.2. If `ret_2h >= trendThreshold` AND `ret_30m >= 0.0` → Trend = **UP**
+3.3. If `ret_2h <= -trendThreshold` AND `ret_30m <= 0.0` → Trend = **DOWN**
+3.4. Otherwise → Trend = **SIDEWAYS**
+
+### 4. Adjust Anchor risk (Trend-Adaptive Anchors)
+
+4.1. If `trendAdaptiveAnchorsEnabled == true`:
+    - Start from base values: `anchorMaxLossBase`, `anchorTakeProfitBase`
+    - Choose multipliers per Trend:
+      - for **UP**: `lossMul_up`, `tpMul_up`
+      - for **DOWN**: `lossMul_down`, `tpMul_down`
+      - for **SIDEWAYS**: 1.0 (no adjustment)
+    - Calculate:
+      - `anchorMaxLoss = anchorMaxLossBase * lossMul_trend`
+      - `anchorTakeProfit = anchorTakeProfitBase * tpMul_trend`
+    - Clamp values for safety (max loss: -6% to -1%, take profit: 2% to 10%)
+4.2. If `trendAdaptiveAnchorsEnabled == false`:
+    - Use base values without adjustment
+
+### 5. Detect spikes & moves on each timeframe
+
+5.1. **1m Spike**: 
+    - `|ret_1m| >= effective1mSpikeThreshold` **AND**
+    - `|ret_5m| >= spike5mThreshold` (filter) **AND**
+    - Both in same direction → candidate 1m spike
+
+5.2. **5m Move**: 
+    - `|ret_5m| >= effective5mMoveThreshold` → candidate 5m move
+
+5.3. **30m Move**: 
+    - `|ret_30m| >= effective30mMoveThreshold` **AND**
+    - `|ret_5m| >= move5mThreshold` (filter) **AND**
+    - Both in same direction → candidate 30m move
+
+### 6. Smart Confluence logic
+
+6.1. If `smartConfluenceEnabled == true`:
+    - Collect recent 1m and 5m events (direction UP or DOWN)
+    - Check if:
+      - 1m event and 5m event are within time window (±5 minutes)
+      - Both events are in same direction
+      - 30m trend supports the direction (UP trend supports UP events, DOWN trend supports DOWN events, SIDEWAYS supports both)
+      - Cooldown for confluence alerts has expired
+    - If all conditions met:
+      - Send one "Confluence Alert" with summary (1m magnitude, 5m magnitude, 30m trend)
+      - Mark 1m and 5m events as "used in confluence"
+      - Suppress individual alerts for these events
+    - If conditions not met:
+      - Send only individual alerts that meet cooldown/debouncing requirements
+      - Suppress alerts already used in confluence
+
+6.2. If `smartConfluenceEnabled == false`:
+    - Send all alerts that exceed thresholds (respecting cooldowns)
+    - No confluence checks
+
+### 7. Monitor Anchor Max Loss / Take Profit
+
+7.1. Calculate PnL vs Anchor:
+    - `deltaPct = (price - anchorPrice) / anchorPrice * 100%`
+
+7.2. If `deltaPct <= effectiveAnchorMaxLoss`:
+    - Send "Max Loss" alert
+    - Include trend and effective threshold (if trend-adaptive enabled)
+
+7.3. If `deltaPct >= effectiveAnchorTakeProfit`:
+    - Send "Take Profit" alert
+    - Include trend and effective threshold (if trend-adaptive enabled)
+
+### 8. Cooldown & housekeeping
+
+8.1. Per signal type (1m, 5m, 30m, Confluence, Anchor):
+    - Check if cooldown has expired
+    - Update last send time
+    - Check maximum alerts per hour
+
+8.2. Log all events (signals, trend, volatility, anchors) for analysis
+
+### Flow Chart
+
+```
+[ START: new candle / tick ]
+            |
+            v
+[ Update price & history ]
+- update price
+- calculate ret_1m, ret_5m, ret_30m, ret_2h
+- update sliding windows
+            |
+            v
+[ Auto-Volatility Mode ? ]
+      |                         |
+    yes                        no
+      |                         |
+      v                         v
+[ Calculate σ (1m returns) ]   [ Use base thresholds ]
+[ volFactor = clamp(σ/σ₀) ]
+[ eff thresholds:
+  - 1m  = base1m * volFactor
+  - 5m  = base5m * sqrt(volFactor)
+  - 30m = base30m * sqrt(volFactor) ]
+            |
+            v
+[ Determine TrendState ]
+- if ret_2h ≥ trendThreshold AND ret_30m ≥ 0 → TREND_UP
+- if ret_2h ≤ -trendThreshold AND ret_30m ≤ 0 → TREND_DOWN
+- else → TREND_SIDEWAYS
+            |
+            v
+[ Trend-Adaptive Anchors ? ]
+      |                         |
+    yes                        no
+      |                         |
+      v                         v
+[ Calculate effective anchors ] [ Use base anchors ]
+- start from base MaxLoss / TakeProfit
+- apply multipliers per TrendState
+- clamp (safety bounds)
+            |
+            v
+[ Detect events per timeframe ]
+            |
+            +--> [ 1m Spike check ]
+            |     - |ret_1m| ≥ effSpike1m
+            |     - |ret_5m| ≥ spike5mThreshold
+            |     - same direction
+            |     → candidate 1m event
+            |
+            +--> [ 5m Move check ]
+            |     - |ret_5m| ≥ effMove5m
+            |     → candidate 5m event
+            |
+            +--> [ 30m Move check ]
+                  - |ret_30m| ≥ effMove30m
+                  - |ret_5m| ≥ move5mThreshold
+                  - same direction
+                  → candidate 30m event
+            |
+            v
+[ Smart Confluence Mode ? ]
+      |                         |
+    yes                        no
+      |                         |
+      v                         v
+[ Collect recent events ]  [ Send individual alerts ]
+- 1m + 5m events
+- direction (UP/DOWN)
+- timestamps
+            |
+            v
+[ Confluence conditions check ]
+- 1m & 5m within time window (±5 min)
+- same direction
+- TrendState supports direction
+  * UP → only UP
+  * DOWN → only DOWN
+  * SIDEWAYS → both
+- confluence cooldown expired?
+            |
+      +-----+-----+
+      |           |
+    yes          no
+      |           |
+      v           v
+[ Confluence Alert ]   [ Individual alerts ]
+- send 1 alert      - only if cooldown ok
+- mark events       - don't send events twice
+  as "used"
+            |
+            v
+[ Anchor monitoring ]
+- deltaPct = (price - anchorPrice) / anchorPrice * 100
+- if deltaPct ≤ effAnchorMaxLoss → Max Loss alert
+- if deltaPct ≥ effAnchorTakeProfit → Take Profit alert
+            |
+            v
+[ Cooldowns & housekeeping ]
+- update lastSent times
+- max alerts / hour check
+- log: trend, volatility, events, anchors
+            |
+            v
+[ END → wait for next candle ]
+```
+
+### Important Notes
+
+- **5m Confirmation Filter**: Note: 1m spike and 30m move alerts are 'gated' by a 5m confirmation filter (`spike5mThreshold` / `move5mThreshold`). This means these alerts are only sent when both the 1m/30m threshold and the 5m filter threshold are exceeded, and both are in the same direction.
+- **Effective Thresholds**: When Auto-Volatility Mode is enabled, all threshold comparisons use effective thresholds (adjusted based on volatility)
+- **Feature Disabling**: When all three features are disabled, behavior is identical to base version (no adjustments)
+- **Thread Safety**: All calculations are thread-safe with mutex protection where needed
+- **Edge Cases**: Validation prevents division by zero, negative thresholds, and insufficient data
 
 ## Hardware Requirements
 
