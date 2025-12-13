@@ -27,6 +27,37 @@ A unified Crypto Monitor for different ESP32 display platforms: TTGO T-Display, 
 - **Smart Confluence Mode**: Combined alerts when multiple timeframes align
 - **Auto-Volatility Mode**: Automatic threshold adjustment based on volatility
 
+## TL;DR – Reading alerts at a glance
+
+**Confluence Alert** = highest priority
+→ multiple timeframes pointing in the same direction
+
+**1m Spike** = quick impulse
+→ mainly a watch moment, not a direct trading signal
+
+**5m Move** = momentum building
+→ more important than 1m, indicates direction
+
+**30m Move** = structural shift
+→ rare, but significant
+
+**TrendState**
+- **UP** → UP signals are more important
+- **DOWN** → DOWN signals are more important
+- **SIDEWAYS** → only confluence is really interesting
+
+**Volatility**
+- **LOW** → small movements count
+- **HIGH** → only large movements count
+
+**Anchor alerts** (Max Loss / Take Profit)
+→ decision moments, boundaries adapt to trend
+
+**No alerts** = no clear opportunity
+→ system deliberately filters out noise
+
+**Fewer notifications = higher quality.** The system helps determine when it's worth looking, not what you should do.
+
 ## Alert System Decision Tree
 
 The alert system uses a structured decision tree to generate alerts. Below is the complete logic:

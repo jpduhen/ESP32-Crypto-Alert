@@ -27,6 +27,37 @@ Een unificatie van de Crypto Monitor voor verschillende ESP32 display platforms:
 - **Smart Confluence Mode**: Gecombineerde alerts wanneer meerdere timeframes samenvallen
 - **Auto-Volatility Mode**: Automatische threshold aanpassing op basis van volatiliteit
 
+## TL;DR – Alerts lezen in één oogopslag
+
+**Confluence Alert** = hoogste prioriteit
+→ meerdere timeframes wijzen dezelfde kant op
+
+**1m Spike** = snelle impuls
+→ vooral een opletmoment, geen direct handelssignaal
+
+**5m Move** = momentum-opbouw
+→ belangrijker dan 1m, geeft richting
+
+**30m Move** = structurele verplaatsing
+→ zeldzaam, maar zwaarwegend
+
+**TrendState**
+- **UP** → UP-signalen zijn belangrijker
+- **DOWN** → DOWN-signalen zijn belangrijker
+- **SIDEWAYS** → alleen confluence echt interessant
+
+**Volatiliteit**
+- **LOW** → kleine bewegingen tellen
+- **HIGH** → alleen grote bewegingen tellen
+
+**Anchor alerts** (Max Loss / Take Profit)
+→ beslissingsmomenten, grenzen passen zich aan de trend aan
+
+**Geen alerts** = geen duidelijke kans
+→ systeem filtert ruis bewust weg
+
+**Minder meldingen = hogere kwaliteit.** Het systeem helpt bepalen wanneer kijken zinvol is, niet wat je moet doen.
+
 ## Alert Systeem Decision Tree
 
 Het alertsysteem gebruikt een gestructureerde decision tree om alerts te genereren. Hieronder staat de volledige logica:
