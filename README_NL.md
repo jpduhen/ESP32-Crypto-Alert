@@ -26,6 +26,7 @@ Een unificatie van de Crypto Monitor voor verschillende ESP32 display platforms:
 - **Trend-Adaptive Anchors**: Dynamische anchor thresholds op basis van trend
 - **Smart Confluence Mode**: Gecombineerde alerts wanneer meerdere timeframes samenvallen
 - **Auto-Volatility Mode**: Automatische threshold aanpassing op basis van volatiliteit
+- **Warm-Start met Binance historische data**: Vul buffers bij opstarten met historische data voor direct bruikbare trend- en volatiliteitsindicaties
 
 ## TL;DR – Alerts lezen in één oogopslag
 

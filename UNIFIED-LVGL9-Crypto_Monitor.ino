@@ -24,6 +24,28 @@
 #include <freertos/task.h>
 #include <freertos/semphr.h>
 #include <esp_task_wdt.h>
+#include <esp_heap_caps.h>
+
+// SettingsStore module
+#include "src/SettingsStore/SettingsStore.h"
+
+// ArduinoJson support (optioneel - als library niet beschikbaar is, gebruik handmatige parsing)
+// Probeer ArduinoJson te includen - als het niet beschikbaar is, gebruik handmatige parsing
+#define USE_ARDUINOJSON 0  // Standaard uit, wordt gezet naar 1 als ArduinoJson beschikbaar is
+#ifdef __has_include
+    #if __has_include(<ArduinoJson.h>)
+        #include <ArduinoJson.h>
+        #undef USE_ARDUINOJSON
+        #define USE_ARDUINOJSON 1
+    #endif
+#else
+    // Fallback voor compilers zonder __has_include
+    #ifdef ARDUINOJSON_VERSION_MAJOR
+        #include <ArduinoJson.h>
+        #undef USE_ARDUINOJSON
+        #define USE_ARDUINOJSON 1
+    #endif
+#endif
 
 // ============================================================================
 // Constants and Configuration
@@ -31,8 +53,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 68
-#define VERSION_STRING "3.68"
+#define VERSION_MINOR 86
+#define VERSION_STRING "3.86"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -58,8 +80,8 @@
 // --- API Configuration ---
 #define BINANCE_API "https://api.binance.com/api/v3/ticker/price?symbol="  // Binance API endpoint
 #define BINANCE_SYMBOL_DEFAULT "BTCEUR"  // Default Binance symbol
-#define HTTP_TIMEOUT_MS 3000  // HTTP timeout (verhoogd voor betere stabiliteit bij langzame netwerken)
-#define HTTP_CONNECT_TIMEOUT_MS 2000  // Connect timeout (sneller falen bij connect problemen)
+#define HTTP_TIMEOUT_MS 1200  // HTTP timeout (1200ms = 80% van API interval 1500ms, voorkomt timing opstapeling)
+#define HTTP_CONNECT_TIMEOUT_MS 1000  // Connect timeout (1000ms voor snellere failure bij connect problemen)
 
 // --- Chart Configuration ---
 #define PRICE_RANGE 200         // The range of price for the chart, adjust as needed
@@ -97,6 +119,15 @@
 // --- Smart Confluence Mode Configuration ---
 #define SMART_CONFLUENCE_ENABLED_DEFAULT false  // Default: uitgeschakeld
 #define CONFLUENCE_TIME_WINDOW_MS 300000UL     // 5 minuten tijdshorizon voor confluence (1m en 5m events moeten binnen ±5 minuten liggen)
+
+// --- Warm-Start Configuration ---
+#define WARM_START_ENABLED_DEFAULT true  // Default: warm-start met Binance historische data aan
+#define WARM_START_1M_EXTRA_CANDLES_DEFAULT 15  // Extra 1m candles bovenop volatility window
+#define WARM_START_5M_CANDLES_DEFAULT 12  // Aantal 5m candles (default: 12 = 1 uur)
+#define WARM_START_30M_CANDLES_DEFAULT 8  // Aantal 30m candles (default: 8 = 4 uur)
+#define WARM_START_2H_CANDLES_DEFAULT 6  // Aantal 2h candles (default: 6 = 12 uur)
+#define BINANCE_KLINES_API "https://api.binance.com/api/v3/klines"  // Binance klines endpoint
+#define WARM_START_TIMEOUT_MS 10000  // Timeout voor warm-start API calls (10 seconden)
 
 // --- Auto-Volatility Mode Configuration ---
 #define AUTO_VOLATILITY_ENABLED_DEFAULT false      // Default: uitgeschakeld
@@ -170,6 +201,8 @@
 
 // LVGL Display global variables
 lv_display_t *disp;
+static lv_color_t *disp_draw_buf = nullptr;  // Draw buffer pointer (één keer gealloceerd bij init)
+static size_t disp_draw_buf_size = 0;  // Buffer grootte in bytes (voor logging)
 
 // Widgets LVGL global variables
 static lv_obj_t *chart;
@@ -211,6 +244,41 @@ static float uptrendMaxLossMultiplier = UPTREND_MAX_LOSS_MULTIPLIER_DEFAULT;
 static float uptrendTakeProfitMultiplier = UPTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT;
 static float downtrendMaxLossMultiplier = DOWNTREND_MAX_LOSS_MULTIPLIER_DEFAULT;
 static float downtrendTakeProfitMultiplier = DOWNTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT;
+
+// Warm-Start: Data source tracking
+enum DataSource {
+    SOURCE_BINANCE,  // Data van Binance historische klines
+    SOURCE_LIVE      // Data van live API calls
+};
+
+// Warm-Start: System status
+enum WarmStartStatus {
+    WARMING_UP,  // Buffers bevatten nog Binance data
+    LIVE,        // Volledig op live data
+    LIVE_COLD    // Live data maar warm-start gefaald (cold start)
+};
+
+// Warm-Start: Mode
+enum WarmStartMode {
+    WS_MODE_FULL,     // Alle timeframes succesvol geladen
+    WS_MODE_PARTIAL,  // Gedeeltelijk geladen (sommige timeframes gefaald)
+    WS_MODE_FAILED,   // Alle timeframes gefaald
+    WS_MODE_DISABLED  // Warm-start uitgeschakeld
+};
+
+// Warm-Start: Statistics struct
+struct WarmStartStats {
+    uint16_t loaded1m;      // Aantal 1m candles geladen
+    uint16_t loaded5m;      // Aantal 5m candles geladen
+    uint16_t loaded30m;     // Aantal 30m candles geladen
+    uint16_t loaded2h;      // Aantal 2h candles geladen
+    bool warmStartOk1m;     // 1m warm-start succesvol
+    bool warmStartOk5m;     // 5m warm-start succesvol
+    bool warmStartOk30m;    // 30m warm-start succesvol
+    bool warmStartOk2h;     // 2h warm-start succesvol
+    WarmStartMode mode;     // Warm-start mode
+    uint8_t warmUpProgress; // Warm-up progress percentage (0-100)
+};
 
 // Trend detection
 enum TrendState {
@@ -256,6 +324,14 @@ struct EffectiveThresholds {
 };
 
 static float ret_2h = 0.0f;  // 2-hour return percentage
+static float ret_30m = 0.0f;  // 30-minute return percentage (calculated from minuteAverages or warm-start data)
+static bool hasRet2hWarm = false;  // Flag: ret_2h beschikbaar vanuit warm-start (minimaal 2 candles)
+static bool hasRet30mWarm = false;  // Flag: ret_30m beschikbaar vanuit warm-start (minimaal 2 candles)
+static bool hasRet2hLive = false;  // Flag: ret_2h kan worden berekend uit live data (minuteIndex >= 120)
+static bool hasRet30mLive = false;  // Flag: ret_30m kan worden berekend uit live data (minuteIndex >= 30)
+// Combined flags: beschikbaar vanuit warm-start OF live data
+static bool hasRet2h = false;  // hasRet2hWarm || hasRet2hLive
+static bool hasRet30m = false;  // hasRet30mWarm || hasRet30mLive
 static TrendState trendState = TREND_SIDEWAYS;  // Current trend state
 static TrendState previousTrendState = TREND_SIDEWAYS;  // Previous trend state (voor change detection)
 static float trendThreshold = TREND_THRESHOLD_DEFAULT;  // Trend threshold (%)
@@ -314,6 +390,7 @@ static lv_obj_t *anchorMaxLabel; // Label voor "Pak winst" (rechts, groen, boven
 static lv_obj_t *anchorMinLabel; // Label voor "Stop loss" (rechts, rood, onder)
 static lv_obj_t *anchorDeltaLabel; // Label voor anchor delta % (TTGO, rechts)
 static lv_obj_t *trendLabel; // Label voor trend weergave
+static lv_obj_t *warmStartStatusLabel; // Label voor warm-start status weergave (rechts bovenin chart)
 static lv_obj_t *volatilityLabel; // Label voor volatiliteit weergave
 
 static uint32_t lastApiMs = 0; // Time of last api call
@@ -324,15 +401,75 @@ static unsigned long loopTimeSum = 0;
 static uint16_t loopCount = 0;
 static const unsigned long LOOP_PERIOD_MS = UPDATE_UI_INTERVAL; // 1000ms
 
+// Heap Telemetry: Low watermark tracking
+static uint32_t heapLowWatermark = UINT32_MAX;  // Minimum free heap sinds boot
+static unsigned long lastHeapTelemetryLog = 0;   // Timestamp van laatste heap telemetry log
+static const unsigned long HEAP_TELEMETRY_INTERVAL_MS = 60000UL; // Elke 60 seconden
+
+// Static buffers voor hot paths (voorkomt String allocaties)
+static char httpResponseBuffer[512];  // Buffer voor HTTP responses (httpGET, sendNtfyNotification)
+static char notificationMsgBuffer[512];  // Buffer voor notification messages
+static char notificationTitleBuffer[128];  // Buffer voor notification titles
+
+// Streaming buffer voor Binance klines parsing (geen grote heap allocaties)
+static char binanceStreamBuffer[1024];  // Fixed-size buffer voor chunked JSON parsing
+
+// LVGL UI buffers en cache (voorkomt herhaalde allocaties en onnodige updates)
+static char priceLblBuffer[32];  // Buffer voor price label (%.2f format)
+static char anchorMaxLabelBuffer[32];  // Buffer voor anchor max label
+static char anchorLabelBuffer[32];  // Buffer voor anchor label
+static char anchorMinLabelBuffer[32];  // Buffer voor anchor min label
+static char priceTitleBuffer[3][64];  // Buffers voor price titles (3 symbols)
+static char price1MinMaxLabelBuffer[32];  // Buffer voor 1m max label
+static char price1MinMinLabelBuffer[32];  // Buffer voor 1m min label
+static char price1MinDiffLabelBuffer[32];  // Buffer voor 1m diff label
+static char price30MinMaxLabelBuffer[32];  // Buffer voor 30m max label
+static char price30MinMinLabelBuffer[32];  // Buffer voor 30m min label
+static char price30MinDiffLabelBuffer[32];  // Buffer voor 30m diff label
+
+// Cache laatste waarden (alleen updaten als veranderd)
+static float lastPriceLblValue = -1.0f;  // Cache voor price label
+static float lastAnchorMaxValue = -1.0f;  // Cache voor anchor max
+static float lastAnchorValue = -1.0f;  // Cache voor anchor
+static float lastAnchorMinValue = -1.0f;  // Cache voor anchor min
+static float lastPrice1MinMaxValue = -1.0f;  // Cache voor 1m max
+static float lastPrice1MinMinValue = -1.0f;  // Cache voor 1m min
+static float lastPrice1MinDiffValue = -1.0f;  // Cache voor 1m diff
+static float lastPrice30MinMaxValue = -1.0f;  // Cache voor 30m max
+static float lastPrice30MinMinValue = -1.0f;  // Cache voor 30m min
+static float lastPrice30MinDiffValue = -1.0f;  // Cache voor 30m diff
+static char lastPriceTitleText[3][64] = {""};  // Cache voor price titles
+static char priceLblBufferArray[3][32];  // Buffers voor average price labels (3 symbols)
+static char footerRssiBuffer[16];  // Buffer voor footer RSSI
+static char footerRamBuffer[16];  // Buffer voor footer RAM
+static float lastPriceLblValueArray[3] = {-1.0f, -1.0f, -1.0f};  // Cache voor average price labels
+static int32_t lastRssiValue = -999;  // Cache voor RSSI
+static uint32_t lastRamValue = 0;  // Cache voor RAM
+// lastDateText en lastTimeText zijn verplaatst naar direct voor updateDateTimeLabels() functie
+
+// ArduinoJson: globaal hergebruikte StaticJsonDocument (geen herhaalde allocaties per tick)
+// Conservatieve capaciteit: 256 bytes is voldoende voor Binance ticker/price responses (~100 bytes)
+#if USE_ARDUINOJSON
+static StaticJsonDocument<256> jsonDoc;  // Hergebruik voor alle JSON parsing
+#endif
+
 // Price history for calculating returns and moving averages
 // Array van 60 posities voor laatste 60 seconden (1 minuut)
 static float secondPrices[SECONDS_PER_MINUTE];
+static DataSource secondPricesSource[SECONDS_PER_MINUTE];  // Source tracking per sample
 static uint8_t secondIndex = 0;
 static bool secondArrayFilled = false;
 static bool newPriceDataAvailable = false;  // Flag om aan te geven of er nieuwe prijsdata is voor grafiek update
 
 // Array van 300 posities voor laatste 300 seconden (5 minuten) - voor ret_5m berekening
+// Voor CYD zonder PSRAM: dynamisch alloceren om DRAM overflow te voorkomen
+#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+static float *fiveMinutePrices = nullptr;  // Dynamisch gealloceerd voor CYD zonder PSRAM
+static DataSource *fiveMinutePricesSource = nullptr;  // Dynamisch gealloceerd
+#else
 static float fiveMinutePrices[SECONDS_PER_5MINUTES];
+static DataSource fiveMinutePricesSource[SECONDS_PER_5MINUTES];  // Source tracking per sample
+#endif
 static uint16_t fiveMinuteIndex = 0;
 static bool fiveMinuteArrayFilled = false;
 
@@ -340,11 +477,28 @@ static bool fiveMinuteArrayFilled = false;
 // Elke minuut wordt het gemiddelde van de 60 seconden opgeslagen
 // We hebben 60 posities nodig om het gemiddelde van laatste 30 minuten te vergelijken
 // met het gemiddelde van de 30 minuten daarvoor (maar we houden 120 voor buffer)
+// Voor CYD zonder PSRAM: dynamisch alloceren om DRAM overflow te voorkomen
+#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+static float *minuteAverages = nullptr;  // Dynamisch gealloceerd voor CYD zonder PSRAM
+static DataSource *minuteAveragesSource = nullptr;  // Dynamisch gealloceerd
+#else
 static float minuteAverages[MINUTES_FOR_30MIN_CALC];
+static DataSource minuteAveragesSource[MINUTES_FOR_30MIN_CALC];  // Source tracking per sample
+#endif
 static uint8_t minuteIndex = 0;
 static bool minuteArrayFilled = false;
 static unsigned long lastMinuteUpdate = 0;
 static float firstMinuteAverage = 0.0f; // Eerste minuut gemiddelde prijs als basis voor 30-min berekening
+
+// Warm-Start state
+static bool warmStartEnabled = WARM_START_ENABLED_DEFAULT;
+static uint8_t warmStart1mExtraCandles = WARM_START_1M_EXTRA_CANDLES_DEFAULT;
+static uint8_t warmStart5mCandles = WARM_START_5M_CANDLES_DEFAULT;
+static uint8_t warmStart30mCandles = WARM_START_30M_CANDLES_DEFAULT;
+static uint8_t warmStart2hCandles = WARM_START_2H_CANDLES_DEFAULT;
+static WarmStartStatus warmStartStatus = LIVE;  // Default: LIVE (cold start als warm-start faalt)
+static unsigned long warmStartCompleteTime = 0;  // Timestamp wanneer systeem volledig LIVE werd
+static WarmStartStats warmStartStats = {0, 0, 0, 0, false, false, false, false, WS_MODE_DISABLED, 0};
 
 // Notification settings - NTFY.sh
 // Note: NTFY topic wordt dynamisch gegenereerd met ESP32 device ID
@@ -357,23 +511,7 @@ static float firstMinuteAverage = 0.0f; // Eerste minuut gemiddelde prijs als ba
 static uint8_t language = DEFAULT_LANGUAGE;  // 0 = Nederlands, 1 = English
 
 // Settings structs voor betere organisatie
-struct AlertThresholds {
-    float spike1m;
-    float spike5m;
-    float move30m;
-    float move5m;
-    float move5mAlert;
-    float threshold1MinUp;
-    float threshold1MinDown;
-    float threshold30MinUp;
-    float threshold30MinDown;
-};
-
-struct NotificationCooldowns {
-    unsigned long cooldown1MinMs;
-    unsigned long cooldown30MinMs;
-    unsigned long cooldown5MinMs;
-};
+// NOTE: AlertThresholds en NotificationCooldowns zijn nu gedefinieerd in SettingsStore.h
 
 // Instelbare grenswaarden (worden geladen uit Preferences)
 // Note: ntfyTopic wordt geïnitialiseerd in loadSettings() met unieke ESP32 ID
@@ -426,7 +564,9 @@ static unsigned long hourStartTime = 0; // Starttijd van het huidige uur
 
 // Web server voor instellingen
 WebServer server(80);
-Preferences preferences;
+
+// SettingsStore instance
+SettingsStore settingsStore;
 
 // MQTT configuratie (instelbaar via web interface)
 static char mqttHost[64] = MQTT_HOST_DEFAULT;    // MQTT broker IP
@@ -470,7 +610,7 @@ static const unsigned long ANCHOR_SET_COOLDOWN_MS = 2000; // Minimaal 2 seconden
 static bool queueAnchorSetting(float value, bool useCurrentPrice) {
     // Valideer waarde (alleen als niet useCurrentPrice)
     if (!useCurrentPrice && (value <= 0.0f || !isValidPrice(value))) {
-        Serial_printf("[Anchor Queue] WARN: Ongeldige waarde: %.2f\n", value);
+        Serial_printf(F("[Anchor Queue] WARN: Ongeldige waarde: %.2f\n"), value);
         return false;
     }
     
@@ -510,14 +650,14 @@ static const uint8_t MAX_MQTT_RECONNECT_ATTEMPTS = 3; // Max aantal reconnect po
 static bool httpGET(const char *url, char *buffer, size_t bufferSize, uint32_t timeoutMs = HTTP_TIMEOUT_MS)
 {
     if (buffer == nullptr || bufferSize == 0) {
-        Serial_printf("[HTTP] Invalid buffer parameters\n");
+        Serial_printf(F("[HTTP] Invalid buffer parameters\n"));
         return false;
     }
     
     buffer[0] = '\0'; // Initialize buffer
     
-    const uint8_t MAX_RETRIES = 2; // Max 2 retries (3 pogingen totaal)
-    const uint32_t RETRY_DELAY_MS = 500; // 500ms delay tussen retries
+    const uint8_t MAX_RETRIES = 1; // Max 1 retry (2 pogingen totaal) - verminderd voor snellere failure
+    const uint32_t RETRY_DELAY_MS = 100; // 100ms delay tussen retries - verlaagd voor betere timing
     
     for (uint8_t attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         HTTPClient http;
@@ -533,7 +673,7 @@ static bool httpGET(const char *url, char *buffer, size_t bufferSize, uint32_t t
         {
             http.end();
             if (attempt == MAX_RETRIES) {
-                Serial_printf("[HTTP] http.begin() gefaald na %d pogingen voor: %s\n", attempt + 1, url);
+                Serial_printf(F("[HTTP] http.begin() gefaald na %d pogingen voor: %s\n"), attempt + 1, url);
                 return false;
             }
             // Retry bij begin failure
@@ -549,7 +689,7 @@ static bool httpGET(const char *url, char *buffer, size_t bufferSize, uint32_t t
             // Get response size first
             int contentLength = http.getSize();
             if (contentLength > 0 && (size_t)contentLength >= bufferSize) {
-                Serial_printf("[HTTP] Response te groot: %d bytes (buffer: %zu bytes)\n", contentLength, bufferSize);
+                Serial_printf(F("[HTTP] Response te groot: %d bytes (buffer: %zu bytes)\n"), contentLength, bufferSize);
                 http.end();
                 return false;
             }
@@ -568,14 +708,15 @@ static bool httpGET(const char *url, char *buffer, size_t bufferSize, uint32_t t
                 // Performance monitoring: log langzame calls
                 // Normale calls zijn < 500ms, langzaam is > 1000ms
                 if (requestTime > 1000) {
-                    Serial_printf("[HTTP] Langzame response: %lu ms (poging %d)\n", requestTime, attempt + 1);
+                    Serial_printf(F("[HTTP] Langzame response: %lu ms (poging %d)\n"), requestTime, attempt + 1);
                 }
             } else {
-                // Fallback: gebruik getString() als stream niet beschikbaar is
+                // Fallback: stream niet beschikbaar, gebruik getString() maar kopieer direct naar buffer
+                // Dit voorkomt String fragmentatie door direct naar buffer te kopiëren
                 String payload = http.getString();
                 size_t len = payload.length();
                 if (len >= bufferSize) {
-                    Serial_printf("[HTTP] Response te groot: %zu bytes (buffer: %zu bytes)\n", len, bufferSize);
+                    Serial_printf(F("[HTTP] Response te groot: %zu bytes (buffer: %zu bytes)\n"), len, bufferSize);
                     http.end();
                     return false;
                 }
@@ -585,8 +726,10 @@ static bool httpGET(const char *url, char *buffer, size_t bufferSize, uint32_t t
             
             http.end();
             if (attempt > 0) {
-                Serial_printf("[HTTP] Succes na retry (poging %d/%d)\n", attempt + 1, MAX_RETRIES + 1);
+                Serial_printf(F("[HTTP] Succes na retry (poging %d/%d)\n"), attempt + 1, MAX_RETRIES + 1);
             }
+            // Heap telemetry na HTTP fetch (optioneel, alleen bij belangrijke requests)
+            // logHeapTelemetry("http");  // Uitgecommentarieerd om spam te voorkomen
             return true;
         }
         else
@@ -595,14 +738,14 @@ static bool httpGET(const char *url, char *buffer, size_t bufferSize, uint32_t t
             bool shouldRetry = false;
             if (code == HTTPC_ERROR_CONNECTION_REFUSED || code == HTTPC_ERROR_CONNECTION_LOST) {
                 shouldRetry = true;
-                Serial_printf("[HTTP] Connectie probleem: code=%d, tijd=%lu ms (poging %d/%d)\n", code, requestTime, attempt + 1, MAX_RETRIES + 1);
+                Serial_printf(F("[HTTP] Connectie probleem: code=%d, tijd=%lu ms (poging %d/%d)\n"), code, requestTime, attempt + 1, MAX_RETRIES + 1);
             } else if (code == HTTPC_ERROR_READ_TIMEOUT) {
                 shouldRetry = true;
-                Serial_printf("[HTTP] Read timeout na %lu ms (poging %d/%d)\n", requestTime, attempt + 1, MAX_RETRIES + 1);
+                Serial_printf(F("[HTTP] Read timeout na %lu ms (poging %d/%d)\n"), requestTime, attempt + 1, MAX_RETRIES + 1);
             } else if (code == HTTPC_ERROR_SEND_HEADER_FAILED || code == HTTPC_ERROR_SEND_PAYLOAD_FAILED) {
                 // Send failures kunnen tijdelijk zijn - retry waardig
                 shouldRetry = true;
-                Serial_printf("[HTTP] Send failure: code=%d, tijd=%lu ms (poging %d/%d)\n", code, requestTime, attempt + 1, MAX_RETRIES + 1);
+                Serial_printf(F("[HTTP] Send failure: code=%d, tijd=%lu ms (poging %d/%d)\n"), code, requestTime, attempt + 1, MAX_RETRIES + 1);
             } else if (code < 0) {
                 // Andere HTTPClient error codes - retry alleen bij network errors
                 shouldRetry = (code == HTTPC_ERROR_CONNECTION_REFUSED || 
@@ -611,13 +754,13 @@ static bool httpGET(const char *url, char *buffer, size_t bufferSize, uint32_t t
                               code == HTTPC_ERROR_SEND_HEADER_FAILED ||
                               code == HTTPC_ERROR_SEND_PAYLOAD_FAILED);
                 if (!shouldRetry) {
-                    Serial_printf("[HTTP] Error code=%d, tijd=%lu ms (geen retry)\n", code, requestTime);
+                    Serial_printf(F("[HTTP] Error code=%d, tijd=%lu ms (geen retry)\n"), code, requestTime);
                 } else {
-                    Serial_printf("[HTTP] Error code=%d, tijd=%lu ms (poging %d/%d)\n", code, requestTime, attempt + 1, MAX_RETRIES + 1);
+                    Serial_printf(F("[HTTP] Error code=%d, tijd=%lu ms (poging %d/%d)\n"), code, requestTime, attempt + 1, MAX_RETRIES + 1);
                 }
             } else {
                 // HTTP error codes (4xx, 5xx) - geen retry
-                Serial_printf("[HTTP] GET gefaald: code=%d, tijd=%lu ms (geen retry)\n", code, requestTime);
+                Serial_printf(F("[HTTP] GET gefaald: code=%d, tijd=%lu ms (geen retry)\n"), code, requestTime);
             }
             
             http.end();
@@ -636,6 +779,717 @@ static bool httpGET(const char *url, char *buffer, size_t bufferSize, uint32_t t
     return false;
 }
 
+// ============================================================================
+// Warm-Start: Binance Klines Functions
+// ============================================================================
+
+// Parse een enkele kline entry uit JSON array
+// Format: [openTime, open, high, low, close, volume, ...]
+// Returns: true als succesvol, false bij fout
+static bool parseKlineEntry(const char* jsonStr, float* closePrice, unsigned long* openTime)
+{
+    if (jsonStr == nullptr || closePrice == nullptr || openTime == nullptr) {
+        return false;
+    }
+    
+    // Skip opening bracket
+    const char* ptr = jsonStr;
+    while (*ptr && (*ptr == '[' || *ptr == ' ')) ptr++;
+    if (*ptr == '\0') return false;
+    
+    // Parse openTime (eerste veld)
+    unsigned long time = 0;
+    while (*ptr && *ptr != ',') {
+        if (*ptr >= '0' && *ptr <= '9') {
+            time = time * 10 + (*ptr - '0');
+        }
+        ptr++;
+    }
+    if (*ptr != ',') return false;
+    *openTime = time;
+    ptr++; // Skip comma
+    
+    // Skip open, high, low (velden 2-4)
+    for (int i = 0; i < 3; i++) {
+        while (*ptr && *ptr != ',') ptr++;
+        if (*ptr != ',') return false;
+        ptr++; // Skip comma
+    }
+    
+    // Parse close price (veld 5)
+    char priceStr[32];
+    int priceIdx = 0;
+    while (*ptr && *ptr != ',' && priceIdx < (int)sizeof(priceStr) - 1) {
+        if (*ptr == '"') {
+            ptr++;
+            continue;
+        }
+        priceStr[priceIdx++] = *ptr;
+        ptr++;
+    }
+    priceStr[priceIdx] = '\0';
+    
+    float price;
+    if (!safeAtof(priceStr, price) || !isValidPrice(price)) {
+        return false;
+    }
+    *closePrice = price;
+    return true;
+}
+
+// Haal Binance klines op voor een specifiek timeframe
+// Memory efficient: streaming parsing, bewaar alleen laatste maxCount candles
+// Returns: aantal candles opgehaald, of -1 bij fout
+static int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit, float* prices, unsigned long* timestamps, uint16_t maxCount)
+{
+    if (symbol == nullptr || interval == nullptr || prices == nullptr || maxCount == 0) {
+        return -1;
+    }
+    
+    // Build URL
+    char url[256];
+    int urlLen = snprintf(url, sizeof(url), "%s?symbol=%s&interval=%s&limit=%u", 
+                         BINANCE_KLINES_API, symbol, interval, limit);
+    if (urlLen < 0 || urlLen >= (int)sizeof(url)) {
+        return -1;
+    }
+    
+    // Streaming HTTP request: parse direct van stream
+    HTTPClient http;
+    http.setTimeout(WARM_START_TIMEOUT_MS);
+    http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+    http.setReuse(false);
+    
+    if (!http.begin(url)) {
+        http.end();
+        return -1;
+    }
+    
+    int code = http.GET();
+    if (code != 200) {
+        http.end();
+        return -1;
+    }
+    
+    WiFiClient* stream = http.getStreamPtr();
+    if (stream == nullptr) {
+        http.end();
+        return -1;
+    }
+    
+    // Streaming JSON parser: gebruik fixed-size buffer voor chunked reading
+    // Parse iteratief en sla alleen noodzakelijke values op (closes/returns)
+    int writeIdx = 0;  // Schrijf index in circulaire buffer
+    int totalParsed = 0;
+    bool bufferFilled = false;  // True wanneer buffer vol is en we gaan wrappen
+    
+    // Parser state
+    enum ParseState {
+        PS_START,
+        PS_OUTER_ARRAY,
+        PS_ENTRY_START,
+        PS_FIELD,
+        PS_ENTRY_END
+    };
+    ParseState state = PS_START;
+    int fieldIdx = 0;
+    char fieldBuf[64];
+    int fieldBufIdx = 0;
+    unsigned long openTime = 0;
+    float closePrice = 0.0f;
+    
+    // Buffer voor chunked reading (hergebruik fixed buffer)
+    size_t bufferPos = 0;
+    size_t bufferLen = 0;
+    const size_t BUFFER_SIZE = sizeof(binanceStreamBuffer);
+    
+    // Feed watchdog tijdens parsing
+    unsigned long lastWatchdogFeed = millis();
+    const unsigned long WATCHDOG_FEED_INTERVAL = 1000; // Feed elke seconde
+    
+    // Timeout voor parsing
+    unsigned long parseStartTime = millis();
+    const unsigned long PARSE_TIMEOUT_MS = 8000;
+    unsigned long lastDataTime = millis();
+    const unsigned long DATA_TIMEOUT_MS = 2000;
+    
+    // Parse streaming JSON
+    // Continue zolang stream connected/available OF er nog data in buffer is
+    while (stream->connected() || stream->available() || (bufferPos < bufferLen)) {
+        // Timeout check: stop als parsing te lang duurt
+        if ((millis() - parseStartTime) > PARSE_TIMEOUT_MS) {
+            break;
+        }
+        // Feed watchdog periodiek (alleen elke seconde)
+        if ((millis() - lastWatchdogFeed) >= WATCHDOG_FEED_INTERVAL) {
+            yield();
+            delay(0);
+            lastWatchdogFeed = millis();
+        }
+        
+        // Read chunk into buffer als nodig
+        if (bufferPos >= bufferLen) {
+            if (stream->available()) {
+                bufferLen = stream->readBytes((uint8_t*)binanceStreamBuffer, BUFFER_SIZE - 1);
+                binanceStreamBuffer[bufferLen] = '\0';
+                bufferPos = 0;
+                lastDataTime = millis();
+                
+                if (bufferLen == 0) {
+                    break;
+                }
+            } else {
+                // Check data timeout
+                if ((millis() - lastDataTime) > DATA_TIMEOUT_MS) {
+                    break;
+                }
+                // Wait a bit for more data
+                delay(10);
+                continue;
+            }
+        }
+        
+        char c = binanceStreamBuffer[bufferPos++];
+        
+        // State machine voor JSON parsing
+        switch (state) {
+            case PS_START:
+                if (c == '[') {
+                    state = PS_OUTER_ARRAY;
+                } else if (c == ']') {
+                    goto parse_done;
+                }
+                break;
+                
+            case PS_OUTER_ARRAY:
+                if (c == '[') {
+                    state = PS_ENTRY_START;
+                    fieldIdx = 0;
+                    fieldBufIdx = 0;
+                    openTime = 0;
+                    closePrice = 0.0f;
+                } else if (c == ']') {
+                    // End of outer array
+                    goto parse_done;
+                }
+                break;
+                
+            case PS_ENTRY_START:
+            case PS_FIELD:
+                if (c == ',' && fieldBufIdx > 0) {
+                    // End of field
+                    fieldBuf[fieldBufIdx] = '\0';
+                    
+                    if (fieldIdx == 0) {
+                        // openTime
+                        unsigned long time = 0;
+                        for (int i = 0; fieldBuf[i] != '\0'; i++) {
+                            if (fieldBuf[i] >= '0' && fieldBuf[i] <= '9') {
+                                time = time * 10 + (fieldBuf[i] - '0');
+                            }
+                        }
+                        openTime = time;
+                    } else if (fieldIdx == 4) {
+                        // close price (5th field, index 4)
+                        float price;
+                        if (safeAtof(fieldBuf, price) && isValidPrice(price)) {
+                            closePrice = price;
+                        }
+                    }
+                    
+                    fieldIdx++;
+                    fieldBufIdx = 0;
+                    state = PS_FIELD;
+                } else if (c == ']') {
+                    // End of entry
+                    if (fieldBufIdx > 0) {
+                        // Process last field
+                        fieldBuf[fieldBufIdx] = '\0';
+                        if (fieldIdx == 4) {
+                            float price;
+                            if (safeAtof(fieldBuf, price) && isValidPrice(price)) {
+                                closePrice = price;
+                            }
+                        }
+                    }
+                    state = PS_ENTRY_END;
+                } else if (c != ' ' && c != '\n' && c != '\r' && c != '"') {
+                    // Accumulate field character
+                    if (fieldBufIdx < (int)sizeof(fieldBuf) - 1) {
+                        fieldBuf[fieldBufIdx++] = c;
+                    }
+                    state = PS_FIELD;
+                }
+                break;
+                
+            case PS_ENTRY_END:
+                // Store candle in circulaire buffer
+                if (closePrice > 0.0f) {
+                    prices[writeIdx] = closePrice;
+                    if (timestamps != nullptr) {
+                        timestamps[writeIdx] = openTime;
+                    }
+                    
+                    writeIdx++;
+                    if (writeIdx >= (int)maxCount) {
+                        writeIdx = 0;  // Wrap around
+                        bufferFilled = true;
+                    }
+                    totalParsed++;
+                    
+                    if (totalParsed >= (int)limit) {
+                        goto parse_done;
+                    }
+                }
+                
+                // Move to next entry
+                if (c == ',') {
+                    state = PS_ENTRY_START;
+                    fieldIdx = 0;
+                    fieldBufIdx = 0;
+                    openTime = 0;
+                    closePrice = 0.0f;
+                } else if (c == ']') {
+                    // End of outer array
+                    goto parse_done;
+                } else if (c == '[') {
+                    // Next entry
+                    state = PS_ENTRY_START;
+                    fieldIdx = 0;
+                    fieldBufIdx = 0;
+                    openTime = 0;
+                    closePrice = 0.0f;
+                }
+                break;
+        }
+    }
+    
+parse_done:
+    http.end();
+    
+    // Als buffer gewrapped is, herschik naar chronologische volgorde
+    // Memory efficient: gebruik alleen kleine temp buffer of heap voor grote buffers
+    int storedCount = bufferFilled ? (int)maxCount : writeIdx;
+    if (bufferFilled && writeIdx > 0) {
+        // Buffer is gewrapped: [writeIdx..maxCount-1, 0..writeIdx-1] -> [0..maxCount-1]
+        // Voor kleine buffers: gebruik stack temp (max 60)
+        if (writeIdx <= 60 && maxCount <= 120) {
+            float tempReorder[60];  // Max 60 floats = 240 bytes (veilig voor stack)
+            unsigned long tempReorderTimes[60];
+            
+            // Kopieer eerste deel (0..writeIdx-1) naar temp
+            for (int i = 0; i < writeIdx; i++) {
+                tempReorder[i] = prices[i];
+                if (timestamps != nullptr) {
+                    tempReorderTimes[i] = timestamps[i];
+                }
+            }
+            // Verschuif tweede deel (writeIdx..maxCount-1) naar begin
+            for (int i = 0; i < (int)maxCount - writeIdx; i++) {
+                prices[i] = prices[writeIdx + i];
+                if (timestamps != nullptr) {
+                    timestamps[i] = timestamps[writeIdx + i];
+                }
+            }
+            // Kopieer eerste deel naar einde
+            for (int i = 0; i < writeIdx; i++) {
+                prices[(int)maxCount - writeIdx + i] = tempReorder[i];
+                if (timestamps != nullptr) {
+                    timestamps[(int)maxCount - writeIdx + i] = tempReorderTimes[i];
+                }
+            }
+        } else {
+            // Voor grote buffers: gebruik heap allocatie
+            float* tempFull = (float*)malloc(maxCount * sizeof(float));
+            unsigned long* tempFullTimes = (timestamps != nullptr) ? (unsigned long*)malloc(maxCount * sizeof(unsigned long)) : nullptr;
+            
+            if (tempFull != nullptr) {
+                // Kopieer hele buffer
+                for (uint16_t i = 0; i < maxCount; i++) {
+                    tempFull[i] = prices[i];
+                    if (tempFullTimes != nullptr && timestamps != nullptr) {
+                        tempFullTimes[i] = timestamps[i];
+                    }
+                }
+                // Herschik: [writeIdx..maxCount-1, 0..writeIdx-1] -> [0..maxCount-1]
+                for (uint16_t i = 0; i < maxCount - writeIdx; i++) {
+                    prices[i] = tempFull[writeIdx + i];
+                    if (tempFullTimes != nullptr && timestamps != nullptr) {
+                        timestamps[i] = tempFullTimes[writeIdx + i];
+                    }
+                }
+                for (uint16_t i = 0; i < writeIdx; i++) {
+                    prices[(int)maxCount - writeIdx + i] = tempFull[i];
+                    if (tempFullTimes != nullptr && timestamps != nullptr) {
+                        timestamps[(int)maxCount - writeIdx + i] = tempFullTimes[i];
+                    }
+                }
+                free(tempFull);
+                if (tempFullTimes != nullptr) free(tempFullTimes);
+            }
+            // Bij heap allocatie failure: buffer blijft in wrapped volgorde (geen probleem)
+        }
+    }
+    
+    return storedCount;
+}
+
+// Helper: Clamp waarde tussen min en max
+static uint16_t clampUint16(uint16_t value, uint16_t minVal, uint16_t maxVal)
+{
+    if (value < minVal) return minVal;
+    if (value > maxVal) return maxVal;
+    return value;
+}
+
+// Helper: Detecteer PSRAM beschikbaarheid (runtime check)
+static bool hasPSRAM()
+{
+    #ifdef BOARD_HAS_PSRAM
+        return psramFound();
+    #else
+        // Fallback: check PSRAM size (runtime)
+        return (ESP.getPsramSize() > 0);
+    #endif
+}
+
+// Helper: Bereken 1m candles nodig (volatility window + extra)
+// PSRAM-aware: clamp afhankelijk van PSRAM beschikbaarheid
+static uint16_t calculate1mCandles()
+{
+    uint16_t baseCandles = autoVolatilityWindowMinutes + warmStart1mExtraCandles;
+    bool psramAvailable = hasPSRAM();
+    uint16_t maxCandles = psramAvailable ? 150 : 80;  // Met PSRAM: 150, zonder: 80
+    return clampUint16(baseCandles, 30, maxCandles);
+}
+
+// Forward declarations voor heap telemetry (nodig voor performWarmStart)
+static void logHeapTelemetry(const char* context);
+
+// Warm-start: Vul buffers met Binance historische data (returns-only, memory efficient)
+// Returns: WarmStartMode (FULL/PARTIAL/FAILED/DISABLED)
+static WarmStartMode performWarmStart()
+{
+    // Initialize stats
+    warmStartStats = {0, 0, 0, 0, false, false, false, false, WS_MODE_DISABLED, 0};
+    
+    if (!warmStartEnabled) {
+        Serial.println(F("[WarmStart] Warm-start uitgeschakeld, cold start"));
+        warmStartStatus = LIVE;
+        warmStartStats.mode = WS_MODE_DISABLED;
+        return WS_MODE_DISABLED;
+    }
+    
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println(F("[WarmStart] WiFi niet verbonden, cold start"));
+        warmStartStatus = LIVE_COLD;
+        warmStartStats.mode = WS_MODE_FAILED;
+        hasRet2hWarm = false;
+        hasRet30mWarm = false;
+        hasRet2h = hasRet2hWarm || hasRet2hLive;
+        hasRet30m = hasRet30mWarm || hasRet30mLive;
+        return WS_MODE_FAILED;
+    }
+    
+    // Fail-safe: check heap space vóór warm-start (minimaal 20KB nodig)
+    uint32_t freeHeap = ESP.getFreeHeap();
+    if (freeHeap < 20000) {
+        Serial_printf(F("[WarmStart] WARN: Onvoldoende heap (%u bytes), skip warm-start\n"), freeHeap);
+        warmStartStatus = LIVE_COLD;
+        warmStartStats.mode = WS_MODE_FAILED;
+        hasRet2hWarm = false;
+        hasRet30mWarm = false;
+        hasRet2h = hasRet2hWarm || hasRet2hLive;
+        hasRet30m = hasRet30mWarm || hasRet30mLive;
+        return WS_MODE_FAILED;
+    }
+    
+    warmStartStatus = WARMING_UP;
+    
+    // Bereken dynamische candle limits (PSRAM-aware clamping)
+    bool psramAvailable = hasPSRAM();
+    uint16_t req1mCandles = calculate1mCandles();  // PSRAM-aware (max 150 met PSRAM, 80 zonder)
+    uint16_t max5m = psramAvailable ? 24 : 12;  // Met PSRAM: 24, zonder: 12
+    uint16_t max30m = psramAvailable ? 12 : 6;  // Met PSRAM: 12, zonder: 6
+    uint16_t max2h = psramAvailable ? 8 : 4;  // Met PSRAM: 8, zonder: 4
+    uint16_t req5mCandles = clampUint16(warmStart5mCandles, 2, max5m);
+    uint16_t req30mCandles = clampUint16(warmStart30mCandles, 2, max30m);
+    uint16_t req2hCandles = clampUint16(warmStart2hCandles, 2, max2h);
+    
+    
+    // 1. Vul 1m buffer voor volatiliteit (returns-only: alleen laatste closes nodig)
+    // Memory efficient: alleen laatste SECONDS_PER_MINUTE closes bewaren
+    float temp1mPrices[SECONDS_PER_MINUTE];  // Alleen laatste 60 nodig
+    int count1m = fetchBinanceKlines(binanceSymbol, "1m", req1mCandles, temp1mPrices, nullptr, SECONDS_PER_MINUTE);
+    if (count1m > 0) {
+        // Vul secondPrices buffer (gebruik laatste count1m candles, max SECONDS_PER_MINUTE)
+        int copyCount = (count1m < SECONDS_PER_MINUTE) ? count1m : SECONDS_PER_MINUTE;
+        for (int i = 0; i < copyCount; i++) {
+            int srcIdx = count1m - copyCount + i;
+            if (srcIdx >= 0 && srcIdx < count1m) {
+                secondPrices[i] = temp1mPrices[srcIdx];
+                secondPricesSource[i] = SOURCE_BINANCE;
+            }
+        }
+        secondIndex = copyCount;
+        secondArrayFilled = (copyCount == SECONDS_PER_MINUTE);
+        warmStartStats.loaded1m = count1m;
+        warmStartStats.warmStartOk1m = true;
+    } else {
+        warmStartStats.warmStartOk1m = false;
+    }
+    
+    // 2. Vul 5m buffer (returns-only: alleen laatste 2 closes nodig)
+    float temp5mPrices[2];
+    int count5m = fetchBinanceKlines(binanceSymbol, "5m", req5mCandles, temp5mPrices, nullptr, 2);
+    if (count5m >= 2) {
+        // Interpoleer laatste 2 candles naar fiveMinutePrices buffer
+        // Elke 5m candle = 300 seconden, gebruik laatste candle voor hele buffer
+        float lastPrice = temp5mPrices[count5m - 1];
+        for (int s = 0; s < SECONDS_PER_5MINUTES; s++) {
+            fiveMinutePrices[s] = lastPrice;
+            fiveMinutePricesSource[s] = SOURCE_BINANCE;
+        }
+        fiveMinuteIndex = SECONDS_PER_5MINUTES;
+        fiveMinuteArrayFilled = true;
+        warmStartStats.loaded5m = count5m;
+        warmStartStats.warmStartOk5m = true;
+    } else {
+        warmStartStats.warmStartOk5m = false;
+    }
+    
+    yield();
+    delay(0);
+    
+    // 3. Vul 30m buffer via minuteAverages (returns-only: alleen laatste 2 closes nodig)
+    // Retry-logica: probeer maximaal 3 keer als eerste poging faalt
+    float temp30mPrices[2];
+    int count30m = 0;
+    const int maxRetries30m = 3;
+    for (int retry = 0; retry < maxRetries30m; retry++) {
+        if (retry > 0) {
+            Serial_printf(F("[WarmStart] 30m retry %d/%d...\n"), retry, maxRetries30m - 1);
+            yield();
+            delay(500);  // Korte delay tussen retries
+        }
+        count30m = fetchBinanceKlines(binanceSymbol, "30m", req30mCandles, temp30mPrices, nullptr, 2);
+        if (count30m >= 2) {
+            break;  // Succes, stop retries
+        }
+    }
+    
+    if (count30m >= 2) {
+        // Bereken ret_30m uit eerste en laatste 30m candle (gesloten candles)
+        float first30mPrice = temp30mPrices[0];
+        float last30mPrice = temp30mPrices[count30m - 1];
+        if (first30mPrice > 0.0f && last30mPrice > 0.0f) {
+            ret_30m = ((last30mPrice - first30mPrice) / first30mPrice) * 100.0f;
+            hasRet30mWarm = true;
+        } else {
+            hasRet30mWarm = false;
+        }
+        
+        float lastPrice = temp30mPrices[count30m - 1];
+        for (int m = 0; m < MINUTES_FOR_30MIN_CALC; m++) {
+            minuteAverages[m] = lastPrice;
+            minuteAveragesSource[m] = SOURCE_BINANCE;
+        }
+        minuteIndex = MINUTES_FOR_30MIN_CALC;
+        minuteArrayFilled = true;
+        firstMinuteAverage = minuteAverages[0];
+        warmStartStats.loaded30m = count30m;
+        warmStartStats.warmStartOk30m = true;
+    } else {
+        warmStartStats.warmStartOk30m = false;
+        hasRet30mWarm = false;
+        if (count30m < 0) {
+            Serial_printf(F("[WarmStart] 30m fetch gefaald na %d pogingen (error: %d)\n"), maxRetries30m, count30m);
+        } else if (count30m == 0) {
+            Serial_printf(F("[WarmStart] 30m fetch: 0 candles na %d pogingen (mogelijk timeout of lege response)\n"), maxRetries30m);
+        } else {
+            Serial_printf(F("[WarmStart] 30m fetch: onvoldoende candles na %d pogingen (%d, minimaal 2 nodig)\n"), maxRetries30m, count30m);
+        }
+    }
+    
+    // Feed watchdog
+    yield();
+    delay(0);
+    
+    // 4. Initieer 2h trend berekening
+    // Retry-logica: probeer maximaal 3 keer als eerste poging faalt
+    float temp2hPrices[2];
+    int count2h = 0;
+    const int maxRetries2h = 3;
+    for (int retry = 0; retry < maxRetries2h; retry++) {
+        if (retry > 0) {
+            Serial_printf(F("[WarmStart] 2h retry %d/%d...\n"), retry, maxRetries2h - 1);
+            yield();
+            delay(500);  // Korte delay tussen retries
+        }
+        count2h = fetchBinanceKlines(binanceSymbol, "2h", req2hCandles, temp2hPrices, nullptr, 2);
+        if (count2h >= 2) {
+            break;  // Succes, stop retries
+        }
+    }
+    
+    if (count2h >= 2) {
+        // Bereken ret_2h uit eerste en laatste candle (gesloten candles)
+        float firstPrice = temp2hPrices[0];
+        float lastPrice = temp2hPrices[count2h - 1];
+        if (firstPrice > 0.0f && lastPrice > 0.0f) {
+            ret_2h = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
+            hasRet2hWarm = true;
+            warmStartStats.loaded2h = count2h;
+            warmStartStats.warmStartOk2h = true;
+        } else {
+            warmStartStats.warmStartOk2h = false;
+            hasRet2hWarm = false;
+        }
+    } else {
+        warmStartStats.warmStartOk2h = false;
+        hasRet2hWarm = false;
+        if (count2h < 0) {
+            Serial_printf(F("[WarmStart] 2h fetch gefaald na %d pogingen (error: %d)\n"), maxRetries2h, count2h);
+        } else if (count2h == 0) {
+            Serial_printf(F("[WarmStart] 2h fetch: 0 candles na %d pogingen (mogelijk timeout of lege response)\n"), maxRetries2h);
+        } else {
+            Serial_printf(F("[WarmStart] 2h fetch: onvoldoende candles na %d pogingen (%d, minimaal 2 nodig)\n"), maxRetries2h, count2h);
+        }
+    }
+    
+    // Update combined flags na warm-start
+    hasRet2h = hasRet2hWarm || hasRet2hLive;
+    hasRet30m = hasRet30mWarm || hasRet30mLive;
+    
+    // Bepaal trend state op basis van warm-start data
+    if (hasRet2h && hasRet30m) {
+        trendState = determineTrendState(ret_2h, ret_30m);
+    }
+    
+    // Bepaal mode op basis van successen
+    int successCount = (warmStartStats.warmStartOk1m ? 1 : 0) +
+                       (warmStartStats.warmStartOk5m ? 1 : 0) +
+                       (warmStartStats.warmStartOk30m ? 1 : 0) +
+                       (warmStartStats.warmStartOk2h ? 1 : 0);
+    
+    if (successCount == 4) {
+        warmStartStats.mode = WS_MODE_FULL;
+        warmStartStatus = WARMING_UP;
+    } else if (successCount > 0) {
+        warmStartStats.mode = WS_MODE_PARTIAL;
+        warmStartStatus = WARMING_UP;
+    } else {
+        warmStartStats.mode = WS_MODE_FAILED;
+        warmStartStatus = LIVE_COLD;
+    }
+    
+    // Compacte boot log regel
+    const char* modeStr = (warmStartStats.mode == WS_MODE_FULL) ? "FULL" :
+                          (warmStartStats.mode == WS_MODE_PARTIAL) ? "PARTIAL" :
+                          (warmStartStats.mode == WS_MODE_FAILED) ? "FAILED" : "DISABLED";
+    Serial.print(F("[WarmStart] 1m="));
+    Serial.print(warmStartStats.loaded1m);
+    Serial.print(F(" 5m="));
+    Serial.print(warmStartStats.loaded5m);
+    Serial.print(F(" 30m="));
+    Serial.print(warmStartStats.loaded30m);
+    Serial.print(F(" 2h="));
+    Serial.print(warmStartStats.loaded2h);
+    Serial.print(F(" (mode="));
+    Serial.print(modeStr);
+    Serial.print(F(", hasRet2h="));
+    Serial.print(hasRet2hWarm ? 1 : 0);
+    Serial.print(F("/"));
+    Serial.print(hasRet2hLive ? 1 : 0);
+    Serial.print(F(", hasRet30m="));
+    Serial.print(hasRet30mWarm ? 1 : 0);
+    Serial.print(F("/"));
+    Serial.print(hasRet30mLive ? 1 : 0);
+    Serial.println(F(")"));
+    Serial.flush();
+    
+    // Fail-safe: als warm-start gefaald is, ga door als cold start
+    if (warmStartStats.mode == WS_MODE_FAILED) {
+        warmStartStatus = LIVE_COLD;
+        hasRet2h = false;
+        hasRet30m = false;
+        Serial.println(F("[WarmStart] Warm-start gefaald, ga door als cold start (LIVE_COLD)"));
+    }
+    
+    // Heap telemetry na warm-start
+    logHeapTelemetry("warm-start");
+    
+    return warmStartStats.mode;
+}
+
+// Update warm-start status: check of systeem volledig LIVE is en bereken progress
+static void updateWarmStartStatus()
+{
+    if (warmStartStatus == LIVE || warmStartStatus == LIVE_COLD) {
+        warmStartStats.warmUpProgress = 100;
+        return; // Al LIVE, geen update nodig
+    }
+    
+    // Bereken warm-up progress: percentage LIVE data in buffers
+    uint8_t volatilityLivePct = 0;
+    uint8_t trendLivePct = 0;
+    
+    // Check volatiliteit: percentage LIVE in secondPrices buffer
+    if (secondArrayFilled) {
+        uint8_t liveCount = 0;
+        for (uint8_t i = 0; i < SECONDS_PER_MINUTE; i++) {
+            if (secondPricesSource[i] == SOURCE_LIVE) {
+                liveCount++;
+            }
+        }
+        volatilityLivePct = (liveCount * 100) / SECONDS_PER_MINUTE;
+    } else if (secondIndex > 0) {
+        uint8_t liveCount = 0;
+        for (uint8_t i = 0; i < secondIndex; i++) {
+            if (secondPricesSource[i] == SOURCE_LIVE) {
+                liveCount++;
+            }
+        }
+        volatilityLivePct = (liveCount * 100) / secondIndex;
+    }
+    
+    // Check trend: percentage LIVE in minuteAverages buffer
+    if (minuteArrayFilled) {
+        uint8_t liveCount = 0;
+        for (uint8_t i = 0; i < MINUTES_FOR_30MIN_CALC; i++) {
+            if (minuteAveragesSource[i] == SOURCE_LIVE) {
+                liveCount++;
+            }
+        }
+        trendLivePct = (liveCount * 100) / MINUTES_FOR_30MIN_CALC;
+    } else if (minuteIndex > 0) {
+        uint8_t liveCount = 0;
+        for (uint8_t i = 0; i < minuteIndex; i++) {
+            if (minuteAveragesSource[i] == SOURCE_LIVE) {
+                liveCount++;
+            }
+        }
+        trendLivePct = (liveCount * 100) / minuteIndex;
+    }
+    
+    // Warm-up progress = gemiddelde van volatiliteit en trend progress
+    warmStartStats.warmUpProgress = (volatilityLivePct + trendLivePct) / 2;
+    
+    // Check of volledig LIVE (≥80% voor beide)
+    bool volatilityLive = (volatilityLivePct >= 80);
+    bool trendLive = (trendLivePct >= 80);
+    
+    if (volatilityLive && trendLive) {
+        if (warmStartStatus == WARMING_UP) {
+            warmStartStatus = LIVE;
+            warmStartCompleteTime = millis();
+            warmStartStats.warmUpProgress = 100;
+            unsigned long bootTime = (warmStartCompleteTime / 1000); // seconden
+            Serial_printf(F("[WarmStart] Status: LIVE (volledig op live data na %lu seconden)\n"), bootTime);
+        }
+    }
+}
+
 // Send notification via Ntfy.sh
 // colorTag: "green_square" voor stijging, "red_square" voor daling, "blue_square" voor neutraal
 // Geoptimaliseerd: betere error handling en resource cleanup
@@ -644,27 +1498,27 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
     // Check WiFi verbinding eerst
     if (WiFi.status() != WL_CONNECTED)
     {
-        Serial_println("[Notify] WiFi niet verbonden, kan NTFY notificatie niet versturen");
+        Serial_println(F("[Notify] WiFi niet verbonden, kan NTFY notificatie niet versturen"));
         return false;
     }
     
     // Valideer inputs
     if (strlen(ntfyTopic) == 0)
     {
-        Serial_println("[Notify] Ntfy topic niet geconfigureerd");
+        Serial_println(F("[Notify] Ntfy topic niet geconfigureerd"));
         return false;
     }
     
     if (title == nullptr || message == nullptr)
     {
-        Serial_println("[Notify] Ongeldige title of message pointer");
+        Serial_println(F("[Notify] Ongeldige title of message pointer"));
         return false;
     }
     
     // Valideer lengte van inputs om buffer overflows te voorkomen
     if (strlen(title) > 64 || strlen(message) > 512)
     {
-        Serial_println("[Notify] Title of message te lang");
+        Serial_println(F("[Notify] Title of message te lang"));
         return false;
     }
     
@@ -672,13 +1526,13 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
     int urlLen = snprintf(url, sizeof(url), "https://ntfy.sh/%s", ntfyTopic);
     if (urlLen < 0 || urlLen >= (int)sizeof(url))
     {
-        Serial_println("[Notify] URL buffer overflow");
+        Serial_println(F("[Notify] URL buffer overflow"));
         return false;
     }
     
-    Serial_printf("[Notify] Ntfy URL: %s\n", url);
-    Serial_printf("[Notify] Ntfy Title: %s\n", title);
-    Serial_printf("[Notify] Ntfy Message: %s\n", message);
+    Serial_printf(F("[Notify] Ntfy URL: %s\n"), url);
+    Serial_printf(F("[Notify] Ntfy Title: %s\n"), title);
+    Serial_printf(F("[Notify] Ntfy Message: %s\n"), message);
     
     HTTPClient http;
     http.setTimeout(5000);
@@ -686,7 +1540,7 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
     
     if (!http.begin(url))
     {
-        Serial_println("[Notify] Ntfy HTTP begin gefaald");
+        Serial_println(F("[Notify] Ntfy HTTP begin gefaald"));
         http.end();
         return false;
     }
@@ -699,21 +1553,41 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
     {
         if (strlen(colorTag) <= 64) // Valideer lengte
         {
-            http.addHeader("Tags", colorTag);
-            Serial_printf("[Notify] Ntfy Tag: %s\n", colorTag);
+            http.addHeader(F("Tags"), colorTag);
+            Serial_printf(F("[Notify] Ntfy Tag: %s\n"), colorTag);
         }
     }
     
-    Serial_println("[Notify] Ntfy POST versturen...");
+    Serial_println(F("[Notify] Ntfy POST versturen..."));
     int code = http.POST(message);
     
     // Haal response alleen op bij succes (bespaar geheugen)
-    String response;
+    // Gebruik static buffer i.p.v. String om fragmentatie te voorkomen
     if (code == 200 || code == 201)
     {
-        response = http.getString();
-        if (response.length() > 0)
-            Serial_printf("[Notify] Ntfy response: %s\n", response.c_str());
+        WiFiClient* stream = http.getStreamPtr();
+        if (stream != nullptr) {
+            size_t totalLen = 0;
+            while (stream->available() && totalLen < (sizeof(httpResponseBuffer) - 1)) {
+                size_t bytesRead = stream->readBytes((uint8_t*)(httpResponseBuffer + totalLen), sizeof(httpResponseBuffer) - 1 - totalLen);
+                totalLen += bytesRead;
+            }
+            httpResponseBuffer[totalLen] = '\0';
+            if (totalLen > 0) {
+                Serial_printf(F("[Notify] Ntfy response: %s\n"), httpResponseBuffer);
+            }
+        } else {
+            // Fallback: gebruik getString() maar kopieer direct naar buffer
+            String response = http.getString();
+            if (response.length() > 0) {
+                size_t len = response.length();
+                if (len < sizeof(httpResponseBuffer)) {
+                    strncpy(httpResponseBuffer, response.c_str(), sizeof(httpResponseBuffer) - 1);
+                    httpResponseBuffer[sizeof(httpResponseBuffer) - 1] = '\0';
+                    Serial_printf(F("[Notify] Ntfy response: %s\n"), httpResponseBuffer);
+                }
+            }
+        }
     }
     
     http.end();
@@ -721,11 +1595,11 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
     bool result = (code == 200 || code == 201);
     if (result)
     {
-        Serial_printf("[Notify] Ntfy bericht succesvol verstuurd! (code: %d)\n", code);
+        Serial_printf(F("[Notify] Ntfy bericht succesvol verstuurd! (code: %d)\n"), code);
     }
     else
     {
-        Serial_printf("[Notify] Ntfy fout bij versturen (code: %d)\n", code);
+        Serial_printf(F("[Notify] Ntfy fout bij versturen (code: %d)\n"), code);
     }
     
     return result;
@@ -776,7 +1650,7 @@ static bool safeAtof(const char* str, float& out)
     
     // Check for NaN or Inf
     if (isnan(val) || isinf(val)) {
-        Serial_printf("[Validation] Invalid float value (NaN/Inf): %s\n", str);
+        Serial_printf(F("[Validation] Invalid float value (NaN/Inf): %s\n"), str);
         return false;
     }
     
@@ -802,7 +1676,7 @@ static const unsigned long MAX_MUTEX_HOLD_TIME_MS = 2000; // Max 2 seconden hold
 static bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const char* context)
 {
     if (mutex == nullptr) {
-        Serial_printf("[Mutex] ERROR: Attempt to take nullptr mutex in %s\n", context);
+        Serial_printf(F("[Mutex] ERROR: Attempt to take nullptr mutex in %s\n"), context);
         return false;
     }
     
@@ -810,7 +1684,7 @@ static bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const cha
     if (mutexHolderContext != nullptr && mutexTakeTime > 0) {
         unsigned long holdTime = millis() - mutexTakeTime;
         if (holdTime > MAX_MUTEX_HOLD_TIME_MS) {
-            Serial_printf("[Mutex] WARNING: Potential deadlock detected! Mutex held for %lu ms by %s\n", 
+            Serial_printf(F("[Mutex] WARNING: Potential deadlock detected! Mutex held for %lu ms by %s\n"), 
                          holdTime, mutexHolderContext);
         }
     }
@@ -830,7 +1704,7 @@ static bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const cha
 static bool safeMutexGive(SemaphoreHandle_t mutex, const char* context)
 {
     if (mutex == nullptr) {
-        Serial_printf("[Mutex] ERROR: Attempt to give nullptr mutex in %s\n", context);
+        Serial_printf(F("[Mutex] ERROR: Attempt to give nullptr mutex in %s\n"), context);
         return false;
     }
     
@@ -838,14 +1712,14 @@ static bool safeMutexGive(SemaphoreHandle_t mutex, const char* context)
     if (mutexTakeTime > 0) {
         unsigned long holdTime = millis() - mutexTakeTime;
         if (holdTime > MAX_MUTEX_HOLD_TIME_MS) {
-            Serial_printf("[Mutex] WARNING: Mutex held for %lu ms by %s (potential deadlock)\n", 
+            Serial_printf(F("[Mutex] WARNING: Mutex held for %lu ms by %s (potential deadlock)\n"), 
                          holdTime, mutexHolderContext ? mutexHolderContext : "unknown");
         }
     }
     
     BaseType_t result = xSemaphoreGive(mutex);
     if (result != pdTRUE) {
-        Serial_printf("[Mutex] ERROR: xSemaphoreGive failed in %s (result=%d)\n", context, result);
+        Serial_printf(F("[Mutex] ERROR: xSemaphoreGive failed in %s (result=%d)\n"), context, result);
         // Note: This could indicate a mutex leak or double-release
         return false;
     }
@@ -860,6 +1734,7 @@ static bool safeMutexGive(SemaphoreHandle_t mutex, const char* context)
 // Forward declarations
 static void findMinMaxInSecondPrices(float &minVal, float &maxVal);
 static void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
+static void checkHeapTelemetry();
 
 // ============================================================================
 // Utility Functions
@@ -867,6 +1742,60 @@ static void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
 
 static void formatIPAddress(IPAddress ip, char *buffer, size_t bufferSize) {
     snprintf(buffer, bufferSize, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+}
+
+// ============================================================================
+// Heap Telemetry Functions
+// ============================================================================
+
+// Log heap telemetry (compacte regel)
+// context: optionele context string (bijv. "warm-start", "http", "lvgl")
+static void logHeapTelemetry(const char* context = nullptr)
+{
+    uint32_t freeHeap = ESP.getFreeHeap();
+    size_t largestFreeBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    size_t freeSize8bit = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    
+    // Update low watermark
+    if (freeHeap < heapLowWatermark) {
+        heapLowWatermark = freeHeap;
+    }
+    
+    // PSRAM check
+    bool hasPSRAM = (ESP.getPsramSize() > 0);
+    size_t freeSizePSRAM = 0;
+    if (hasPSRAM) {
+        freeSizePSRAM = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    }
+    
+    // Compacte log regel
+    if (context != nullptr) {
+        if (hasPSRAM) {
+            Serial_printf(F("[Heap] %s: free=%u largest=%u 8bit=%u PSRAM=%u low=%u\n"),
+                         context, freeHeap, largestFreeBlock, freeSize8bit, freeSizePSRAM, heapLowWatermark);
+        } else {
+            Serial_printf(F("[Heap] %s: free=%u largest=%u 8bit=%u low=%u\n"),
+                         context, freeHeap, largestFreeBlock, freeSize8bit, heapLowWatermark);
+        }
+    } else {
+        if (hasPSRAM) {
+            Serial_printf(F("[Heap] free=%u largest=%u 8bit=%u PSRAM=%u low=%u\n"),
+                         freeHeap, largestFreeBlock, freeSize8bit, freeSizePSRAM, heapLowWatermark);
+        } else {
+            Serial_printf(F("[Heap] free=%u largest=%u 8bit=%u low=%u\n"),
+                         freeHeap, largestFreeBlock, freeSize8bit, heapLowWatermark);
+        }
+    }
+}
+
+// Periodic heap telemetry (elke 60 seconden)
+static void checkHeapTelemetry()
+{
+    unsigned long now = millis();
+    if (now - lastHeapTelemetryLog >= HEAP_TELEMETRY_INTERVAL_MS) {
+        logHeapTelemetry();
+        lastHeapTelemetryLog = now;
+    }
 }
 
 // ============================================================================
@@ -956,7 +1885,7 @@ static void checkTrendChange(float ret_30m_value)
             sendNotification(title, msg, colorTag);
             lastTrendChangeNotification = now;
             
-            Serial_printf("[Trend] Trend change notificatie verzonden: %s → %s (2h: %.2f%%, 30m: %.2f%%, Vol: %s)\n", 
+            Serial_printf(F("[Trend] Trend change notificatie verzonden: %s → %s (2h: %.2f%%, 30m: %.2f%%, Vol: %s)\n"), 
                          fromTrend, toTrend, ret_2h, ret_30m_value, volText);
         }
         
@@ -1038,7 +1967,7 @@ static bool setAnchorPrice(float anchorValue = 0.0f, bool shouldUpdateUI = true,
         if (priceToSet <= 0.0f || !isValidPrice(priceToSet)) {
             if (isValidPrice(prices[0])) {
                 priceToSet = prices[0];
-                Serial_printf("[Anchor] Gebruik huidige prijs als anchor: %.2f\n", priceToSet);
+                Serial_printf(F("[Anchor] Gebruik huidige prijs als anchor: %.2f\n"), priceToSet);
             } else {
                 Serial_println("[Anchor] WARN: Geen geldige prijs beschikbaar voor anchor");
                 safeMutexGive(dataMutex, "setAnchorPrice");
@@ -1062,7 +1991,7 @@ static bool setAnchorPrice(float anchorValue = 0.0f, bool shouldUpdateUI = true,
         anchorActive = true;
         anchorTakeProfitSent = false;
         anchorMaxLossSent = false;
-        Serial_printf("[Anchor] Anchor set: anchorPrice = %.2f\n", anchorPrice);
+        Serial_printf(F("[Anchor] Anchor set: anchorPrice = %.2f\n"), anchorPrice);
         
         safeMutexGive(dataMutex, "setAnchorPrice");
         
@@ -1118,12 +2047,12 @@ void publishMqttAnchorEvent(float anchor_price, const char* event_type) {
     
     // Try direct publish, queue if failed
     if (mqttConnected && mqttClient.publish(topic, payload, false)) {
-        Serial_printf("[MQTT] Anchor event gepubliceerd: %s (prijs: %.2f, event: %s)\n", 
+        Serial_printf(F("[MQTT] Anchor event gepubliceerd: %s (prijs: %.2f, event: %s)\n"), 
                      timeStr, anchor_price, event_type);
     } else {
         // Queue message if not connected or publish failed
         enqueueMqttMessage(topic, payload, false);
-        Serial_printf("[MQTT] Anchor event in queue: %s (prijs: %.2f, event: %s)\n", 
+        Serial_printf(F("[MQTT] Anchor event in queue: %s (prijs: %.2f, event: %s)\n"), 
                      timeStr, anchor_price, event_type);
     }
 }
@@ -1273,7 +2202,7 @@ static void logVolatilityStatus(const EffectiveThresholds& eff)
         return;  // Nog niet tijd voor volgende log
     }
     
-    Serial_printf("[Volatility] σ=%.4f%%, volFactor=%.3f, thresholds: 1m=%.3f%%, 5m=%.3f%%, 30m=%.3f%%\n",
+    Serial_printf(F("[Volatility] σ=%.4f%%, volFactor=%.3f, thresholds: 1m=%.3f%%, 5m=%.3f%%, 30m=%.3f%%\n"),
                   eff.stdDev, eff.volFactor, eff.spike1m, eff.move5m, eff.move30m);
     lastVolatilityLog = now;
 }
@@ -1389,7 +2318,7 @@ static bool checkAndSendConfluenceAlert(unsigned long now, float ret_30m)
     last5mEvent.usedInConfluence = true;
     lastConfluenceAlert = now;
     
-    Serial_printf("[Confluence] Alert verzonden: 1m=%.2f%%, 5m=%.2f%%, trend=%s, ret_30m=%.2f%%\n",
+    Serial_printf(F("[Confluence] Alert verzonden: 1m=%.2f%%, 5m=%.2f%%, trend=%s, ret_30m=%.2f%%\n"),
                   (direction == EVENT_UP ? last1mEvent.magnitude : -last1mEvent.magnitude),
                   (direction == EVENT_UP ? last5mEvent.magnitude : -last5mEvent.magnitude),
                   trendText, ret_30m);
@@ -1467,7 +2396,7 @@ static void checkAnchorAlerts()
         }
         sendNotification(title, msg, "green_square,💰");
         anchorTakeProfitSent = true;
-        Serial_printf("[Anchor] Take profit notificatie verzonden: %.2f%% (threshold: %.2f%%, basis: %.2f%%, trend: %s, anchor: %.2f, prijs: %.2f)\n", 
+        Serial_printf(F("[Anchor] Take profit notificatie verzonden: %.2f%% (threshold: %.2f%%, basis: %.2f%%, trend: %s, anchor: %.2f, prijs: %.2f)\n"), 
                      anchorPct, effAnchor.takeProfitPct, anchorTakeProfit, trendName, anchorPrice, prices[0]);
         
         // Publiceer take profit event naar MQTT
@@ -1494,7 +2423,7 @@ static void checkAnchorAlerts()
         }
         sendNotification(title, msg, "red_square,⚠️");
         anchorMaxLossSent = true;
-        Serial_printf("[Anchor] Max loss notificatie verzonden: %.2f%% (threshold: %.2f%%, basis: %.2f%%, trend: %s, anchor: %.2f, prijs: %.2f)\n", 
+        Serial_printf(F("[Anchor] Max loss notificatie verzonden: %.2f%% (threshold: %.2f%%, basis: %.2f%%, trend: %s, anchor: %.2f, prijs: %.2f)\n"), 
                      anchorPct, effAnchor.maxLossPct, anchorMaxLoss, trendName, anchorPrice, prices[0]);
         
         // Publiceer max loss event naar MQTT
@@ -1574,7 +2503,7 @@ static bool sendAlertNotification(float ret, float threshold, float strongThresh
     sendNotification(title, msg, colorTag);
     lastNotification = now;
     alertsThisHour++;
-    Serial_printf("[Notify] %s notificatie verstuurd (%d/%d dit uur)\n", alertType, alertsThisHour, maxAlertsPerHour);
+        Serial_printf(F("[Notify] %s notificatie verstuurd (%d/%d dit uur)\n"), alertType, alertsThisHour, maxAlertsPerHour);
     
     return true;
 }
@@ -1600,7 +2529,7 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         alerts30MinThisHour = 0;
         alerts5MinThisHour = 0;
         hourStartTime = now;
-        Serial_printf("[Notify] Uur-tellers gereset\n");
+        Serial_printf(F("[Notify] Uur-tellers gereset\n"));
     }
     
     // ===== 1-MINUUT SPIKE ALERT =====
@@ -1623,7 +2552,7 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         
         // Debug logging alleen bij spike detectie
         if (spikeDetected) {
-            Serial_printf("[Notify] 1m spike: ret_1m=%.2f%%, ret_5m=%.2f%%\n", ret_1m, ret_5m);
+            Serial_printf(F("[Notify] 1m spike: ret_1m=%.2f%%, ret_5m=%.2f%%\n"), ret_1m, ret_5m);
             
             // Check for confluence first (Smart Confluence Mode)
             bool confluenceFound = false;
@@ -1633,11 +2562,11 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
             
             // Als confluence werd gevonden, skip individuele alert
             if (confluenceFound) {
-                Serial_printf("[Notify] 1m spike onderdrukt (gebruikt in confluence alert)\n");
+                Serial_printf(F("[Notify] 1m spike onderdrukt (gebruikt in confluence alert)\n"));
             } else {
                 // Check of dit event al gebruikt is in confluence (suppress individuele alert)
                 if (smartConfluenceEnabled && last1mEvent.usedInConfluence) {
-                    Serial_printf("[Notify] 1m spike onderdrukt (al gebruikt in confluence)\n");
+                    Serial_printf(F("[Notify] 1m spike onderdrukt (al gebruikt in confluence)\n"));
                 } else {
                     // Bereken min en max uit secondPrices buffer
                     float minVal, maxVal;
@@ -1666,7 +2595,7 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                         sendNotification(title, msg, colorTag);
                         lastNotification1Min = now;
                         alerts1MinThisHour++;
-                        Serial_printf("[Notify] 1m spike notificatie verstuurd (%d/%d dit uur)\n", alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR);
+                        Serial_printf(F("[Notify] 1m spike notificatie verstuurd (%d/%d dit uur)\n"), alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR);
                     }
                 }
             }
@@ -1689,7 +2618,7 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         
         // Debug logging alleen bij move detectie
         if (moveDetected) {
-            Serial_printf("[Notify] 30m move: ret_30m=%.2f%%, ret_5m=%.2f%%\n", ret_30m, ret_5m);
+            Serial_printf(F("[Notify] 30m move: ret_30m=%.2f%%, ret_5m=%.2f%%\n"), ret_30m, ret_5m);
             
             // Bereken min en max uit laatste 30 minuten van minuteAverages buffer
             float minVal, maxVal;
@@ -1718,7 +2647,7 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                 sendNotification(title, msg, colorTag);
                 lastNotification30Min = now;
                 alerts30MinThisHour++;
-                Serial_printf("[Notify] 30m move notificatie verstuurd (%d/%d dit uur)\n", alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR);
+                Serial_printf(F("[Notify] 30m move notificatie verstuurd (%d/%d dit uur)\n"), alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR);
             }
         }
     }
@@ -1739,7 +2668,7 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         
         // Debug logging alleen bij move detectie
         if (move5mDetected) {
-            Serial_printf("[Notify] 5m move: ret_5m=%.2f%%\n", ret_5m);
+            Serial_printf(F("[Notify] 5m move: ret_5m=%.2f%%\n"), ret_5m);
             
             // Check for confluence first (Smart Confluence Mode)
             bool confluenceFound = false;
@@ -1749,11 +2678,11 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
             
             // Als confluence werd gevonden, skip individuele alert
             if (confluenceFound) {
-                Serial_printf("[Notify] 5m move onderdrukt (gebruikt in confluence alert)\n");
+                Serial_printf(F("[Notify] 5m move onderdrukt (gebruikt in confluence alert)\n"));
             } else {
                 // Check of dit event al gebruikt is in confluence (suppress individuele alert)
                 if (smartConfluenceEnabled && last5mEvent.usedInConfluence) {
-                    Serial_printf("[Notify] 5m move onderdrukt (al gebruikt in confluence)\n");
+                    Serial_printf(F("[Notify] 5m move onderdrukt (al gebruikt in confluence)\n"));
                 } else {
                     // Bereken min en max uit fiveMinutePrices buffer
                     float minVal = fiveMinutePrices[0];
@@ -1788,7 +2717,7 @@ static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                         sendNotification(title, msg, colorTag);
                         lastNotification5Min = now;
                         alerts5MinThisHour++;
-                        Serial_printf("[Notify] 5m move notificatie verstuurd (%d/%d dit uur)\n", alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR);
+                        Serial_printf(F("[Notify] 5m move notificatie verstuurd (%d/%d dit uur)\n"), alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR);
                     }
                 }
             }
@@ -1811,42 +2740,14 @@ static void getTrendWaitText(char* buffer, size_t bufferSize, uint8_t minutes) {
     }
 }
 
-// Generate unique ESP32 device ID using Crockford Base32 encoding
-// Uses safe character set without confusing characters (no 0/O, 1/I/L, U)
-// Character set: 0123456789ABCDEFGHJKMNPQRSTVWXYZ (32 characters)
-// Uses 8 characters = 40 bits, giving 2^40 = 1.1 trillion possible combinations
-static const char* base32Alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-
-// Geoptimaliseerd: gebruik char array i.p.v. String om geheugenfragmentatie te voorkomen
-static void getESP32DeviceId(char* buffer, size_t bufferSize) {
-    uint64_t chipid = ESP.getEfuseMac(); // 48-bit unique MAC address
-    
-    // Extract 40 bits (8 characters * 5 bits each) from the MAC address
-    // We use the lower 40 bits of the 48-bit MAC address
-    uint64_t value = chipid & 0xFFFFFFFFFF; // Mask to 40 bits
-    
-    // Valideer buffer size (minimaal 9 bytes nodig: 8 chars + null terminator)
-    if (bufferSize < 9) {
-        buffer[0] = '\0';
-        return;
-    }
-    
-    for (int i = 0; i < 8; i++) {
-        uint8_t index = value & 0x1F;  // Get 5 bits (0-31)
-        buffer[i] = base32Alphabet[index];
-        value >>= 5;  // Shift right by 5 bits for next character
-    }
-    buffer[8] = '\0'; // Null terminator
-}
-
 // Generate default NTFY topic with ESP32 device ID
+// NOTE: getESP32DeviceId is nu verplaatst naar SettingsStore module
 // Format: [ESP32-ID]-alert
 // Example: 9MK28H3Q-alert (8 characters using Crockford Base32 encoding for safe, unique ID)
 // Geoptimaliseerd: gebruik char array i.p.v. String
+// NOTE: Deze functie is nu een wrapper voor SettingsStore::generateDefaultNtfyTopic
 static void generateDefaultNtfyTopic(char* buffer, size_t bufferSize) {
-    char deviceId[9];
-    getESP32DeviceId(deviceId, sizeof(deviceId));
-    snprintf(buffer, bufferSize, "%s-alert", deviceId);
+    SettingsStore::generateDefaultNtfyTopic(buffer, bufferSize);
 }
 
 // Helper: Generate MQTT device ID with prefix (char array version - voorkomt String gebruik)
@@ -1903,161 +2804,124 @@ static void getDeviceIdFromTopic(const char* topic, char* buffer, size_t bufferS
 
 static void loadSettings()
 {
-    preferences.begin("crypto", true); // read-only mode
+    // Load settings using SettingsStore module
+    CryptoMonitorSettings settings = settingsStore.load();
     
-    // Generate default NTFY topic with unique ESP32 device ID
-    // Geoptimaliseerd: gebruik char array i.p.v. String
-    char defaultTopic[64];
-    generateDefaultNtfyTopic(defaultTopic, sizeof(defaultTopic));
-    
-    // Load NTFY topic from Preferences, or use generated default
-    String topic = preferences.getString("ntfyTopic", defaultTopic);
-    
-    // If the loaded topic is the old default (without device ID), replace it with new format
-    // Also migrate old format with prefix (e.g. "crypt-xxxxxx-alert") to new format without prefix
-    // BUT: Don't migrate custom topics that users have set manually
-    bool needsMigration = false;
-    if (topic == "crypto-monitor-alerts") {
-        // Old default format
-        needsMigration = true;
-    } else if (topic.endsWith("-alert")) {
-        // Check if it has the old prefix format (e.g. "crypt-xxxxxx-alert")
-        // New format should be just "xxxxxx-alert" (no prefix before first dash)
-        int alertPos = topic.indexOf("-alert");
-        if (alertPos > 0) {
-            String beforeAlert = topic.substring(0, alertPos);
-            // Check if there's a dash in the part before "-alert" (indicating old prefix format)
-            int dashInBefore = beforeAlert.indexOf('-');
-            if (dashInBefore >= 0) {
-                // Has old format with prefix (e.g. "crypt-xxxxxx"), migrate to new format
-                needsMigration = true;
-            }
-            // Note: We no longer migrate topics that don't have exactly 8 chars,
-            // as users might have set custom topics with different lengths
-        }
-    }
-    
-    if (needsMigration) {
-        // Migrate to new format without prefix
-        topic = defaultTopic;
-        // Save the new default topic
-        preferences.end();
-        preferences.begin("crypto", false);
-        preferences.putString("ntfyTopic", topic);
-        preferences.end();
-        preferences.begin("crypto", true);
-    }
-    
-    topic.toCharArray(ntfyTopic, sizeof(ntfyTopic));
-    String symbol = preferences.getString("binanceSymbol", BINANCE_SYMBOL_DEFAULT);
-    symbol.toCharArray(binanceSymbol, sizeof(binanceSymbol));
+    // Copy settings to global variables (backward compatibility)
+    safeStrncpy(ntfyTopic, settings.ntfyTopic, sizeof(ntfyTopic));
+    safeStrncpy(binanceSymbol, settings.binanceSymbol, sizeof(binanceSymbol));
     // Update symbols array with the loaded binance symbol
     safeStrncpy(symbolsArray[0], binanceSymbol, sizeof(symbolsArray[0]));
-    threshold1MinUp = preferences.getFloat("th1Up", THRESHOLD_1MIN_UP_DEFAULT);
-    threshold1MinDown = preferences.getFloat("th1Down", THRESHOLD_1MIN_DOWN_DEFAULT);
-    threshold30MinUp = preferences.getFloat("th30Up", THRESHOLD_30MIN_UP_DEFAULT);
-    threshold30MinDown = preferences.getFloat("th30Down", THRESHOLD_30MIN_DOWN_DEFAULT);
-    spike1mThreshold = preferences.getFloat("spike1m", SPIKE_1M_THRESHOLD_DEFAULT);
-    spike5mThreshold = preferences.getFloat("spike5m", SPIKE_5M_THRESHOLD_DEFAULT);
-    move30mThreshold = preferences.getFloat("move30m", MOVE_30M_THRESHOLD_DEFAULT);
-    move5mThreshold = preferences.getFloat("move5m", MOVE_5M_THRESHOLD_DEFAULT);
-    move5mAlertThreshold = preferences.getFloat("move5mAlert", MOVE_5M_ALERT_THRESHOLD_DEFAULT);
-    notificationCooldown1MinMs = preferences.getULong("cd1Min", NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT);
-    notificationCooldown30MinMs = preferences.getULong("cd30Min", NOTIFICATION_COOLDOWN_30MIN_MS_DEFAULT);
-    notificationCooldown5MinMs = preferences.getULong("cd5Min", NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT);
+    language = settings.language;
     
-    // Load MQTT settings
-    String host = preferences.getString("mqttHost", MQTT_HOST_DEFAULT);
-    host.toCharArray(mqttHost, sizeof(mqttHost));
-    mqttPort = preferences.getUInt("mqttPort", MQTT_PORT_DEFAULT);
-    String user = preferences.getString("mqttUser", MQTT_USER_DEFAULT);
-    user.toCharArray(mqttUser, sizeof(mqttUser));
-    String pass = preferences.getString("mqttPass", MQTT_PASS_DEFAULT);
-    pass.toCharArray(mqttPass, sizeof(mqttPass));
+    // Copy alert thresholds
+    alertThresholds = settings.alertThresholds;
     
-    // Load anchor settings
-    anchorTakeProfit = preferences.getFloat("anchorTP", ANCHOR_TAKE_PROFIT_DEFAULT);
-    anchorMaxLoss = preferences.getFloat("anchorML", ANCHOR_MAX_LOSS_DEFAULT);
+    // Copy notification cooldowns
+    notificationCooldowns = settings.notificationCooldowns;
     
-    // Load trend-adaptive anchor settings
-    trendAdaptiveAnchorsEnabled = preferences.getBool("trendAdapt", TREND_ADAPTIVE_ANCHORS_ENABLED_DEFAULT);
-    uptrendMaxLossMultiplier = preferences.getFloat("upMLMult", UPTREND_MAX_LOSS_MULTIPLIER_DEFAULT);
-    uptrendTakeProfitMultiplier = preferences.getFloat("upTPMult", UPTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT);
-    downtrendMaxLossMultiplier = preferences.getFloat("downMLMult", DOWNTREND_MAX_LOSS_MULTIPLIER_DEFAULT);
-    downtrendTakeProfitMultiplier = preferences.getFloat("downTPMult", DOWNTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT);
+    // Copy MQTT settings
+    safeStrncpy(mqttHost, settings.mqttHost, sizeof(mqttHost));
+    mqttPort = settings.mqttPort;
+    safeStrncpy(mqttUser, settings.mqttUser, sizeof(mqttUser));
+    safeStrncpy(mqttPass, settings.mqttPass, sizeof(mqttPass));
     
-    // Load Smart Confluence Mode settings
-    smartConfluenceEnabled = preferences.getBool("smartConf", SMART_CONFLUENCE_ENABLED_DEFAULT);
+    // Copy anchor settings
+    anchorTakeProfit = settings.anchorTakeProfit;
+    anchorMaxLoss = settings.anchorMaxLoss;
     
-    // Load trend and volatility settings
-    trendThreshold = preferences.getFloat("trendTh", TREND_THRESHOLD_DEFAULT);
-    volatilityLowThreshold = preferences.getFloat("volLow", VOLATILITY_LOW_THRESHOLD_DEFAULT);
-    volatilityHighThreshold = preferences.getFloat("volHigh", VOLATILITY_HIGH_THRESHOLD_DEFAULT);
+    // Copy trend-adaptive anchor settings
+    trendAdaptiveAnchorsEnabled = settings.trendAdaptiveAnchorsEnabled;
+    uptrendMaxLossMultiplier = settings.uptrendMaxLossMultiplier;
+    uptrendTakeProfitMultiplier = settings.uptrendTakeProfitMultiplier;
+    downtrendMaxLossMultiplier = settings.downtrendMaxLossMultiplier;
+    downtrendTakeProfitMultiplier = settings.downtrendTakeProfitMultiplier;
     
-    // Load language setting
-    language = preferences.getUChar("language", DEFAULT_LANGUAGE);
+    // Copy Smart Confluence Mode settings
+    smartConfluenceEnabled = settings.smartConfluenceEnabled;
     
-    preferences.end();
-    Serial_printf("[Settings] Loaded: topic=%s, symbol=%s, 1min trend=%.2f/%.2f%%/min, 30min trend=%.2f/%.2f%%/uur, cooldown=%lu/%lu ms\n",
+    // Copy Warm-Start settings
+    warmStartEnabled = settings.warmStartEnabled;
+    warmStart1mExtraCandles = settings.warmStart1mExtraCandles;
+    warmStart5mCandles = settings.warmStart5mCandles;
+    warmStart30mCandles = settings.warmStart30mCandles;
+    warmStart2hCandles = settings.warmStart2hCandles;
+    
+    // Copy Auto-Volatility Mode settings
+    autoVolatilityEnabled = settings.autoVolatilityEnabled;
+    autoVolatilityWindowMinutes = settings.autoVolatilityWindowMinutes;
+    autoVolatilityBaseline1mStdPct = settings.autoVolatilityBaseline1mStdPct;
+    autoVolatilityMinMultiplier = settings.autoVolatilityMinMultiplier;
+    autoVolatilityMaxMultiplier = settings.autoVolatilityMaxMultiplier;
+    
+    // Copy trend and volatility settings
+    trendThreshold = settings.trendThreshold;
+    volatilityLowThreshold = settings.volatilityLowThreshold;
+    volatilityHighThreshold = settings.volatilityHighThreshold;
+    
+    Serial_printf(F("[Settings] Loaded: topic=%s, symbol=%s, 1min trend=%.2f/%.2f%%/min, 30min trend=%.2f/%.2f%%/uur, cooldown=%lu/%lu ms\n"),
                   ntfyTopic, binanceSymbol, threshold1MinUp, threshold1MinDown, threshold30MinUp, threshold30MinDown,
                   notificationCooldown1MinMs, notificationCooldown30MinMs);
 }
 
-// Save settings to Preferences
+// Save settings to Preferences using SettingsStore
 static void saveSettings()
 {
-    preferences.begin("crypto", false); // read-write mode
-    preferences.putString("ntfyTopic", ntfyTopic);
-    preferences.putString("binanceSymbol", binanceSymbol);
-    preferences.putFloat("th1Up", threshold1MinUp);
-    preferences.putFloat("th1Down", threshold1MinDown);
-    preferences.putFloat("th30Up", threshold30MinUp);
-    preferences.putFloat("th30Down", threshold30MinDown);
-    preferences.putFloat("spike1m", spike1mThreshold);
-    preferences.putFloat("spike5m", spike5mThreshold);
-    preferences.putFloat("move30m", move30mThreshold);
-    preferences.putFloat("move5m", move5mThreshold);
-    preferences.putFloat("move5mAlert", move5mAlertThreshold);
-    preferences.putULong("cd1Min", notificationCooldown1MinMs);
-    preferences.putULong("cd30Min", notificationCooldown30MinMs);
-    preferences.putULong("cd5Min", notificationCooldown5MinMs);
+    // Create settings struct from global variables
+    CryptoMonitorSettings settings;
     
-    // Save MQTT settings
-    preferences.putString("mqttHost", mqttHost);
-    preferences.putUInt("mqttPort", mqttPort);
-    preferences.putString("mqttUser", mqttUser);
-    preferences.putString("mqttPass", mqttPass);
+    // Copy basic settings
+    safeStrncpy(settings.ntfyTopic, ntfyTopic, sizeof(settings.ntfyTopic));
+    safeStrncpy(settings.binanceSymbol, binanceSymbol, sizeof(settings.binanceSymbol));
+    settings.language = language;
     
-    // Save anchor settings
-    preferences.putFloat("anchorTP", anchorTakeProfit);
-    preferences.putFloat("anchorML", anchorMaxLoss);
+    // Copy alert thresholds
+    settings.alertThresholds = alertThresholds;
     
-    // Save trend-adaptive anchor settings
-    preferences.putBool("trendAdapt", trendAdaptiveAnchorsEnabled);
-    preferences.putFloat("upMLMult", uptrendMaxLossMultiplier);
-    preferences.putFloat("upTPMult", uptrendTakeProfitMultiplier);
-    preferences.putFloat("downMLMult", downtrendMaxLossMultiplier);
-    preferences.putFloat("downTPMult", downtrendTakeProfitMultiplier);
+    // Copy notification cooldowns
+    settings.notificationCooldowns = notificationCooldowns;
     
-    // Save Smart Confluence Mode settings
-    preferences.putBool("smartConf", smartConfluenceEnabled);
+    // Copy MQTT settings
+    safeStrncpy(settings.mqttHost, mqttHost, sizeof(settings.mqttHost));
+    settings.mqttPort = mqttPort;
+    safeStrncpy(settings.mqttUser, mqttUser, sizeof(settings.mqttUser));
+    safeStrncpy(settings.mqttPass, mqttPass, sizeof(settings.mqttPass));
     
-    // Save Auto-Volatility Mode settings
-    preferences.putBool("autoVol", autoVolatilityEnabled);
-    preferences.putUChar("autoVolWin", autoVolatilityWindowMinutes);
-    preferences.putFloat("autoVolBase", autoVolatilityBaseline1mStdPct);
-    preferences.putFloat("autoVolMin", autoVolatilityMinMultiplier);
-    preferences.putFloat("autoVolMax", autoVolatilityMaxMultiplier);
+    // Copy anchor settings
+    settings.anchorTakeProfit = anchorTakeProfit;
+    settings.anchorMaxLoss = anchorMaxLoss;
     
-    // Save trend and volatility settings
-    preferences.putFloat("trendTh", trendThreshold);
-    preferences.putFloat("volLow", volatilityLowThreshold);
-    preferences.putFloat("volHigh", volatilityHighThreshold);
+    // Copy trend-adaptive anchor settings
+    settings.trendAdaptiveAnchorsEnabled = trendAdaptiveAnchorsEnabled;
+    settings.uptrendMaxLossMultiplier = uptrendMaxLossMultiplier;
+    settings.uptrendTakeProfitMultiplier = uptrendTakeProfitMultiplier;
+    settings.downtrendMaxLossMultiplier = downtrendMaxLossMultiplier;
+    settings.downtrendTakeProfitMultiplier = downtrendTakeProfitMultiplier;
     
-    // Save language setting
-    preferences.putUChar("language", language);
+    // Copy Smart Confluence Mode settings
+    settings.smartConfluenceEnabled = smartConfluenceEnabled;
     
-    preferences.end();
+    // Copy Warm-Start settings
+    settings.warmStartEnabled = warmStartEnabled;
+    settings.warmStart1mExtraCandles = warmStart1mExtraCandles;
+    settings.warmStart5mCandles = warmStart5mCandles;
+    settings.warmStart30mCandles = warmStart30mCandles;
+    settings.warmStart2hCandles = warmStart2hCandles;
+    
+    // Copy Auto-Volatility Mode settings
+    settings.autoVolatilityEnabled = autoVolatilityEnabled;
+    settings.autoVolatilityWindowMinutes = autoVolatilityWindowMinutes;
+    settings.autoVolatilityBaseline1mStdPct = autoVolatilityBaseline1mStdPct;
+    settings.autoVolatilityMinMultiplier = autoVolatilityMinMultiplier;
+    settings.autoVolatilityMaxMultiplier = autoVolatilityMaxMultiplier;
+    
+    // Copy trend and volatility settings
+    settings.trendThreshold = trendThreshold;
+    settings.volatilityLowThreshold = volatilityLowThreshold;
+    settings.volatilityHighThreshold = volatilityHighThreshold;
+    
+    // Save using SettingsStore
+    settingsStore.save(settings);
     Serial_println("[Settings] Saved");
 }
 
@@ -2089,7 +2953,7 @@ static bool safeSecondsToMs(int seconds, uint32_t& resultMs)
     // Max safe value: 4,294,967 seconds (4294967 * 1000 = 4,294,967,000 ms)
     // Our max is 3600 seconds, so overflow is not possible, but check anyway for safety
     if (seconds > 4294967) {
-        Serial_printf("[Overflow] Seconds value too large: %d (max: 4294967)\n", seconds);
+        Serial_printf(F("[Overflow] Seconds value too large: %d (max: 4294967)\n"), seconds);
         return false;
     }
     
@@ -2098,7 +2962,7 @@ static bool safeSecondsToMs(int seconds, uint32_t& resultMs)
     
     // Verify result is reasonable (should be >= 1000 and <= 3,600,000 for our use case)
     if (resultMs < 1000UL || resultMs > 3600000UL) {
-        Serial_printf("[Overflow] Invalid result: %lu ms (expected 1000-3600000)\n", resultMs);
+        Serial_printf(F("[Overflow] Invalid result: %lu ms (expected 1000-3600000)\n"), resultMs);
         return false;
     }
     
@@ -2110,7 +2974,7 @@ static bool handleMqttIntSetting(const char* value, uint32_t* targetMs, int minV
     if (seconds >= minVal && seconds <= maxVal) {
         uint32_t resultMs;
         if (!safeSecondsToMs(seconds, resultMs)) {
-            Serial_printf("[MQTT] Overflow check failed for cooldown: %d seconds\n", seconds);
+            Serial_printf(F("[MQTT] Overflow check failed for cooldown: %d seconds\n"), seconds);
             return false;
         }
         *targetMs = resultMs;
@@ -2194,7 +3058,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         msgBuffer[msgLen] = '\0';
     }
     
-    Serial_printf("[MQTT] Message: %s => %s\n", topicBuffer, msgBuffer);
+    Serial_printf(F("[MQTT] Message: %s => %s\n"), topicBuffer, msgBuffer);
     
     // Helper: maak MQTT topic prefix
     snprintf(prefixBuffer, sizeof(prefixBuffer), "%s", MQTT_TOPIC_PREFIX);
@@ -2260,7 +3124,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                 settingChanged = true;
                 handled = true;
             } else {
-                Serial_printf("[MQTT] Invalid value for %s: %s\n", floatSettings[i].suffix, msgBuffer);
+                Serial_printf(F("[MQTT] Invalid value for %s: %s\n"), floatSettings[i].suffix, msgBuffer);
             }
             break;
         }
@@ -2275,7 +3139,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                                 if (seconds >= 1 && seconds <= 3600) {
                                     uint32_t resultMs;
                                     if (!safeSecondsToMs(seconds, resultMs)) {
-                                        Serial_printf("[MQTT] Overflow check failed for cooldown: %d seconds\n", seconds);
+                                        Serial_printf(F("[MQTT] Overflow check failed for cooldown: %d seconds\n"), seconds);
                                         break;
                                     }
                                     *cooldownSettings[i].targetMs = resultMs;
@@ -2285,7 +3149,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                     settingChanged = true;
                     handled = true;
                 } else {
-                    Serial_printf("[MQTT] Invalid cooldown value (range: 1-3600 seconds): %s\n", msgBuffer);
+                    Serial_printf(F("[MQTT] Invalid cooldown value (range: 1-3600 seconds): %s\n"), msgBuffer);
                 }
                 break;
             }
@@ -2343,10 +3207,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                             useCurrentPrice = false;
                             valid = queueAnchorSetting(val, false);
                             if (valid) {
-                                Serial_printf("[MQTT] Anchor setting queued: %.2f\n", val);
+                                Serial_printf(F("[MQTT] Anchor setting queued: %.2f\n"), val);
                             }
                         } else {
-                            Serial_printf("[MQTT] WARN: Ongeldige anchor waarde opgegeven: %s\n", msgBuffer);
+                            Serial_printf(F("[MQTT] WARN: Ongeldige anchor waarde opgegeven: %s\n"), msgBuffer);
                         }
                         
                         // Publiceer bevestiging terug
@@ -2717,7 +3581,7 @@ void connectMQTT() {
     char clientId[64];
     uint32_t macLower = (uint32_t)ESP.getEfuseMac();
     snprintf(clientId, sizeof(clientId), "%s%08x", MQTT_CLIENT_ID_PREFIX, macLower);
-    Serial_printf("[MQTT] Connecting to %s:%d as %s...\n", mqttHost, mqttPort, clientId);
+    Serial_printf(F("[MQTT] Connecting to %s:%d as %s...\n"), mqttHost, mqttPort, clientId);
     
     if (mqttClient.connect(clientId, mqttUser, mqttPass)) {
         Serial_println("[MQTT] Connected!");
@@ -2760,13 +3624,279 @@ void connectMQTT() {
         processMqttQueue();
         
     } else {
-        Serial_printf("[MQTT] Connect failed, rc=%d (poging %u)\n", mqttClient.state(), mqttReconnectAttemptCount);
+        Serial_printf(F("[MQTT] Connect failed, rc=%d (poging %u)\n"), mqttClient.state(), mqttReconnectAttemptCount);
         mqttConnected = false;
     }
 }
 
 // Web server HTML page
-static String getSettingsHTML()
+// Helper functies voor chunked HTML rendering
+static void sendHtmlHeader(const char* platformName, const char* ntfyTopic)
+{
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "text/html; charset=utf-8", "");
+    
+    // HTML doctype en head (lang='en' om punt als decimaal scheidingsteken te forceren)
+    server.sendContent(F("<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"));
+    
+    // Title
+    char titleBuf[128];
+    snprintf(titleBuf, sizeof(titleBuf), "<title>%s %s %s</title>", 
+             getText("Instellingen", "Settings"), platformName, ntfyTopic);
+    server.sendContent(titleBuf);
+    
+    // CSS
+    server.sendContent(F("<style>"));
+    server.sendContent(F("*{box-sizing:border-box;}"));
+    server.sendContent(F("body{font-family:Arial;margin:0;padding:10px;background:#1a1a1a;color:#fff;}"));
+    server.sendContent(F(".container{max-width:600px;margin:0 auto;padding:0 10px;}"));
+    server.sendContent(F("h1{color:#00BCD4;margin:15px 0;font-size:24px;}"));
+    server.sendContent(F("form{max-width:100%;}"));
+    server.sendContent(F("label{display:block;margin:15px 0 5px;color:#ccc;}"));
+    server.sendContent(F("input[type=number],input[type=text],select{width:100%;padding:8px;border:1px solid #444;background:#2a2a2a;color:#fff;border-radius:4px;box-sizing:border-box;}"));
+    server.sendContent(F("button{background:#00BCD4;color:#fff;padding:12px 24px;border:none;border-radius:4px;cursor:pointer;font-size:16px;margin-top:20px;width:100%;}"));
+    server.sendContent(F("button:hover{background:#00acc1;}"));
+    server.sendContent(F(".info{color:#888;font-size:12px;margin-top:5px;}"));
+    server.sendContent(F(".status-box{background:#2a2a2a;border:1px solid #444;border-radius:4px;padding:15px;margin:20px 0;max-width:100%;}"));
+    server.sendContent(F(".status-row{display:flex;justify-content:space-between;margin:8px 0;padding:8px 0;border-bottom:1px solid #333;flex-wrap:wrap;}"));
+    server.sendContent(F(".status-label{color:#888;flex:1;min-width:120px;}"));
+    server.sendContent(F(".status-value{color:#fff;font-weight:bold;text-align:right;flex:1;min-width:100px;}"));
+    server.sendContent(F(".section-header{background:#2a2a2a;border:1px solid #444;border-radius:4px;padding:12px;margin:15px 0 0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;}"));
+    server.sendContent(F(".section-header:hover{background:#333;}"));
+    server.sendContent(F(".section-header h3{margin:0;color:#00BCD4;font-size:16px;}"));
+    server.sendContent(F(".section-content{display:none;padding:15px;background:#1a1a1a;border:1px solid #444;border-top:none;border-radius:0 0 4px 4px;}"));
+    server.sendContent(F(".section-content.active{display:block;}"));
+    server.sendContent(F(".section-desc{color:#888;font-size:12px;margin-top:5px;margin-bottom:15px;}"));
+    server.sendContent(F(".toggle-icon{color:#00BCD4;font-size:18px;flex-shrink:0;margin-left:10px;}"));
+    server.sendContent(F("@media (max-width:600px){"));
+    server.sendContent(F("body{padding:5px;}"));
+    server.sendContent(F(".container{padding:0 5px;}"));
+    server.sendContent(F("h1{font-size:20px;margin:10px 0;}"));
+    server.sendContent(F(".status-box{padding:10px;margin:15px 0;}"));
+    server.sendContent(F(".status-row{flex-direction:column;padding:6px 0;}"));
+    server.sendContent(F(".status-label{min-width:auto;margin-bottom:3px;}"));
+    server.sendContent(F(".status-value{text-align:left;min-width:auto;}"));
+    server.sendContent(F(".section-header{padding:10px;}"));
+    server.sendContent(F(".section-header h3{font-size:14px;}"));
+    server.sendContent(F(".section-content{padding:10px;}"));
+    server.sendContent(F("button{padding:10px 20px;font-size:14px;}"));
+    server.sendContent(F("label{font-size:14px;}"));
+    server.sendContent(F("input[type=number],input[type=text],select{font-size:14px;padding:6px;}"));
+    server.sendContent(F("}"));
+    server.sendContent(F("</style>"));
+    
+    // JavaScript
+    server.sendContent(F("<script type='text/javascript'>"));
+    server.sendContent(F("(function(){"));
+    server.sendContent(F("function toggleSection(id){"));
+    server.sendContent(F("var content=document.getElementById('content-'+id);"));
+    server.sendContent(F("var icon=document.getElementById('icon-'+id);"));
+    server.sendContent(F("if(!content||!icon)return false;"));
+    server.sendContent(F("if(content.classList.contains('active')){"));
+    server.sendContent(F("content.classList.remove('active');"));
+    server.sendContent(F("icon.innerHTML='&#9654;';"));
+    server.sendContent(F("}else{"));
+    server.sendContent(F("content.classList.add('active');"));
+    server.sendContent(F("icon.innerHTML='&#9660;';"));
+    server.sendContent(F("}"));
+    server.sendContent(F("return false;"));
+    server.sendContent(F("}"));
+    server.sendContent(F("function setAnchorBtn(e){"));
+    server.sendContent(F("if(e){e.preventDefault();e.stopPropagation();}"));
+    server.sendContent(F("var input=document.getElementById('anchorValue');"));
+    server.sendContent(F("if(!input){alert('Input not found');return false;}"));
+    server.sendContent(F("var val=input.value||'';"));
+    server.sendContent(F("var xhr=new XMLHttpRequest();"));
+    server.sendContent(F("xhr.open('POST','/anchor/set',true);"));
+    server.sendContent(F("xhr.setRequestHeader('Content-Type','application/x-www-form-urlencoded');"));
+    server.sendContent(F("xhr.onreadystatechange=function(){"));
+    server.sendContent(F("if(xhr.readyState==4){"));
+    server.sendContent(F("if(xhr.status==200){"));
+    
+    char alertBuf[128];
+    snprintf(alertBuf, sizeof(alertBuf), "alert('%s');", getText("Anchor ingesteld!", "Anchor set!"));
+    server.sendContent(alertBuf);
+    
+    server.sendContent(F("setTimeout(function(){location.reload();},500);"));
+    server.sendContent(F("}else{"));
+    
+    snprintf(alertBuf, sizeof(alertBuf), "alert('%s');", getText("Fout bij instellen anchor", "Error setting anchor"));
+    server.sendContent(alertBuf);
+    
+    server.sendContent(F("}"));
+    server.sendContent(F("}"));
+    server.sendContent(F("};"));
+    server.sendContent(F("xhr.send('value='+encodeURIComponent(val));"));
+    server.sendContent(F("return false;"));
+    server.sendContent(F("}"));
+    server.sendContent(F("function resetNtfyBtn(e){"));
+    server.sendContent(F("if(e){e.preventDefault();e.stopPropagation();}"));
+    server.sendContent(F("var xhr=new XMLHttpRequest();"));
+    server.sendContent(F("xhr.open('POST','/ntfy/reset',true);"));
+    server.sendContent(F("xhr.onreadystatechange=function(){"));
+    server.sendContent(F("if(xhr.readyState==4){"));
+    server.sendContent(F("if(xhr.status==200){"));
+    server.sendContent(F("setTimeout(function(){location.reload();},500);"));
+    server.sendContent(F("}else{"));
+    
+    snprintf(alertBuf, sizeof(alertBuf), "alert('%s');", getText("Fout bij resetten NTFY topic", "Error resetting NTFY topic"));
+    server.sendContent(alertBuf);
+    
+    server.sendContent(F("}"));
+    server.sendContent(F("}"));
+    server.sendContent(F("};"));
+    server.sendContent(F("xhr.send();"));
+    server.sendContent(F("return false;"));
+    server.sendContent(F("}"));
+    server.sendContent(F("window.addEventListener('DOMContentLoaded',function(){"));
+    // Fix: converteer komma's naar punten in number inputs (locale fix)
+    server.sendContent(F("var numberInputs=document.querySelectorAll('input[type=\"number\"]');"));
+    server.sendContent(F("for(var i=0;i<numberInputs.length;i++){"));
+    server.sendContent(F("numberInputs[i].addEventListener('input',function(e){"));
+    server.sendContent(F("var val=this.value.replace(',','.');"));
+    server.sendContent(F("if(val!==this.value){this.value=val;}});"));
+    server.sendContent(F("numberInputs[i].addEventListener('blur',function(e){"));
+    server.sendContent(F("var val=this.value.replace(',','.');"));
+    server.sendContent(F("if(val!==this.value){this.value=val;}});"));
+    server.sendContent(F("}"));
+    server.sendContent(F("var headers=document.querySelectorAll('.section-header');"));
+    server.sendContent(F("for(var i=0;i<headers.length;i++){"));
+    server.sendContent(F("headers[i].addEventListener('click',function(e){"));
+    server.sendContent(F("var id=this.getAttribute('data-section');"));
+    server.sendContent(F("toggleSection(id);"));
+    server.sendContent(F("e.preventDefault();"));
+    server.sendContent(F("return false;"));
+    server.sendContent(F("});"));
+    server.sendContent(F("}"));
+    server.sendContent(F("var basic=document.getElementById('icon-basic');"));
+    server.sendContent(F("var anchor=document.getElementById('icon-anchor');"));
+    server.sendContent(F("if(basic)basic.innerHTML='&#9660;';"));
+    server.sendContent(F("if(anchor)anchor.innerHTML='&#9660;';"));
+    server.sendContent(F("var anchorBtn=document.getElementById('anchorBtn');"));
+    server.sendContent(F("if(anchorBtn){"));
+    server.sendContent(F("anchorBtn.addEventListener('click',setAnchorBtn);"));
+    server.sendContent(F("}"));
+    server.sendContent(F("var ntfyResetBtn=document.getElementById('ntfyResetBtn');"));
+    server.sendContent(F("if(ntfyResetBtn){"));
+    server.sendContent(F("ntfyResetBtn.addEventListener('click',resetNtfyBtn);"));
+    server.sendContent(F("}"));
+    server.sendContent(F("});"));
+    server.sendContent(F("})();"));
+    server.sendContent(F("</script>"));
+    server.sendContent(F("</head><body>"));
+    server.sendContent(F("<div class='container'>"));
+    
+    // Title
+    char h1Buf[128];
+    snprintf(h1Buf, sizeof(h1Buf), "<h1>%s %s %s</h1>", 
+             getText("Instellingen", "Settings"), platformName, ntfyTopic);
+    server.sendContent(h1Buf);
+}
+
+static void sendHtmlFooter()
+{
+    server.sendContent(F("</div>"));
+    server.sendContent(F("</body></html>"));
+}
+
+static void sendInputRow(const char* label, const char* name, const char* type, const char* value, 
+                         const char* info, float minVal = 0, float maxVal = 0, float step = 0.01f)
+{
+    char buf[256];
+    if (strcmp(type, "number") == 0) {
+        // Format step met juiste precisie (detecteer aantal decimalen)
+        // Gebruik altijd punt als decimaal scheidingsteken (niet komma)
+        // Vermijd floating point precisie problemen door expliciete string matching
+        char stepStr[16];
+        // Check voor veelvoorkomende step waarden eerst (exacte match)
+        if (step == 1.0f) {
+            strcpy(stepStr, "1");
+        } else if (step == 0.1f) {
+            strcpy(stepStr, "0.1");
+        } else if (step == 0.01f) {
+            strcpy(stepStr, "0.01");
+        } else if (step == 0.001f) {
+            strcpy(stepStr, "0.001");
+        } else if (step == 0.0001f) {
+            strcpy(stepStr, "0.0001");
+        } else if (step >= 1.0f) {
+            snprintf(stepStr, sizeof(stepStr), "%.0f", step);
+        } else if (step >= 0.1f) {
+            snprintf(stepStr, sizeof(stepStr), "%.1f", step);
+        } else if (step >= 0.01f) {
+            snprintf(stepStr, sizeof(stepStr), "%.2f", step);
+        } else if (step >= 0.001f) {
+            snprintf(stepStr, sizeof(stepStr), "%.3f", step);
+        } else {
+            snprintf(stepStr, sizeof(stepStr), "%.4f", step);
+        }
+        
+        // Format min/max met juiste precisie
+        char minStr[16], maxStr[16];
+        if (minVal != 0 || maxVal != 0) {
+            snprintf(minStr, sizeof(minStr), "%.2f", minVal);
+            snprintf(maxStr, sizeof(maxStr), "%.2f", maxVal);
+            snprintf(buf, sizeof(buf), "<label>%s:<input type='number' step='%s' name='%s' value='%s' min='%s' max='%s' lang='en' inputmode='decimal'></label>",
+                     label, stepStr, name, value, minStr, maxStr);
+        } else {
+            snprintf(buf, sizeof(buf), "<label>%s:<input type='number' step='%s' name='%s' value='%s' lang='en' inputmode='decimal'></label>",
+                     label, stepStr, name, value);
+        }
+    } else if (strcmp(type, "text") == 0) {
+        snprintf(buf, sizeof(buf), "<label>%s:<input type='text' name='%s' value='%s' maxlength='63'></label>",
+                 label, name, value);
+    } else {
+        snprintf(buf, sizeof(buf), "<label>%s:<input type='%s' name='%s' value='%s'></label>",
+                 label, type, name, value);
+    }
+    server.sendContent(buf);
+    if (info && strlen(info) > 0) {
+        snprintf(buf, sizeof(buf), "<div class='info'>%s</div>", info);
+        server.sendContent(buf);
+    }
+}
+
+static void sendCheckboxRow(const char* label, const char* name, bool checked)
+{
+    char buf[256];
+    snprintf(buf, sizeof(buf), "<label><input type='checkbox' name='%s' value='1'%s> %s</label>",
+             name, checked ? " checked" : "", label);
+    server.sendContent(buf);
+}
+
+static void sendStatusRow(const char* label, const char* value)
+{
+    char buf[256];
+    snprintf(buf, sizeof(buf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value'>%s</span></div>",
+             label, value);
+    server.sendContent(buf);
+}
+
+static void sendSectionHeader(const char* title, const char* sectionId, bool expanded = false)
+{
+    char buf[256];
+    snprintf(buf, sizeof(buf), "<div class='section-header' data-section='%s'><h3>%s</h3><span class='toggle-icon' id='icon-%s'>%s</span></div>",
+             sectionId, title, sectionId, expanded ? "&#9660;" : "&#9654;");
+    server.sendContent(buf);
+    snprintf(buf, sizeof(buf), "<div class='section-content%s' id='content-%s'>",
+             expanded ? " active" : "", sectionId);
+    server.sendContent(buf);
+}
+
+static void sendSectionFooter()
+{
+    server.sendContent(F("</div>"));
+}
+
+static void sendSectionDesc(const char* desc)
+{
+    char buf[256];
+    snprintf(buf, sizeof(buf), "<div class='section-desc'>%s</div>", desc);
+    server.sendContent(buf);
+}
+
+// Refactored: chunked HTML rendering (geen grote String in heap)
+static void renderSettingsHTML()
 {
     // Haal huidige status op (thread-safe)
     float currentPrice = 0.0f;
@@ -2800,337 +3930,313 @@ static String getSettingsHTML()
         safeMutexGive(dataMutex, "getSettingsHTML status");
     }
     
-    String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>";
-    html += "<title>" + String(binanceSymbol) + " " + String(getText("Instellingen", "Settings")) + "</title>";
-    html += "<style>";
-    html += "*{box-sizing:border-box;}";
-    html += "body{font-family:Arial;margin:0;padding:10px;background:#1a1a1a;color:#fff;}";
-    html += ".container{max-width:600px;margin:0 auto;padding:0 10px;}";
-    html += "h1{color:#00BCD4;margin:15px 0;font-size:24px;}";
-    html += "form{max-width:100%;}";
-    html += "label{display:block;margin:15px 0 5px;color:#ccc;}";
-    html += "input[type=number],input[type=text],select{width:100%;padding:8px;border:1px solid #444;background:#2a2a2a;color:#fff;border-radius:4px;box-sizing:border-box;}";
-    html += "button{background:#00BCD4;color:#fff;padding:12px 24px;border:none;border-radius:4px;cursor:pointer;font-size:16px;margin-top:20px;width:100%;}";
-    html += "button:hover{background:#00acc1;}";
-    html += ".info{color:#888;font-size:12px;margin-top:5px;}";
-    html += ".status-box{background:#2a2a2a;border:1px solid #444;border-radius:4px;padding:15px;margin:20px 0;max-width:100%;}";
-    html += ".status-row{display:flex;justify-content:space-between;margin:8px 0;padding:8px 0;border-bottom:1px solid #333;flex-wrap:wrap;}";
-    html += ".status-label{color:#888;flex:1;min-width:120px;}";
-    html += ".status-value{color:#fff;font-weight:bold;text-align:right;flex:1;min-width:100px;}";
-    html += ".section-header{background:#2a2a2a;border:1px solid #444;border-radius:4px;padding:12px;margin:15px 0 0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;}";
-    html += ".section-header:hover{background:#333;}";
-    html += ".section-header h3{margin:0;color:#00BCD4;font-size:16px;}";
-    html += ".section-content{display:none;padding:15px;background:#1a1a1a;border:1px solid #444;border-top:none;border-radius:0 0 4px 4px;}";
-    html += ".section-content.active{display:block;}";
-    html += ".section-desc{color:#888;font-size:12px;margin-top:5px;margin-bottom:15px;}";
-    html += ".toggle-icon{color:#00BCD4;font-size:18px;flex-shrink:0;margin-left:10px;}";
-    html += "@media (max-width:600px){";
-    html += "body{padding:5px;}";
-    html += ".container{padding:0 5px;}";
-    html += "h1{font-size:20px;margin:10px 0;}";
-    html += ".status-box{padding:10px;margin:15px 0;}";
-    html += ".status-row{flex-direction:column;padding:6px 0;}";
-    html += ".status-label{min-width:auto;margin-bottom:3px;}";
-    html += ".status-value{text-align:left;min-width:auto;}";
-    html += ".section-header{padding:10px;}";
-    html += ".section-header h3{font-size:14px;}";
-    html += ".section-content{padding:10px;}";
-    html += "button{padding:10px 20px;font-size:14px;}";
-    html += "label{font-size:14px;}";
-    html += "input[type=number],input[type=text],select{font-size:14px;padding:6px;}";
-    html += "}";
-    html += "</style>";
-    html += "<script type='text/javascript'>";
-    html += "(function(){";
-    html += "function toggleSection(id){";
-    html += "var content=document.getElementById('content-'+id);";
-    html += "var icon=document.getElementById('icon-'+id);";
-    html += "if(!content||!icon)return false;";
-    html += "if(content.classList.contains('active')){";
-    html += "content.classList.remove('active');";
-    html += "icon.innerHTML='&#9654;';";
-    html += "}else{";
-    html += "content.classList.add('active');";
-    html += "icon.innerHTML='&#9660;';";
-    html += "}";
-    html += "return false;";
-    html += "}";
-    html += "function setAnchorBtn(e){";
-    html += "if(e){e.preventDefault();e.stopPropagation();}";
-    html += "var input=document.getElementById('anchorValue');";
-    html += "if(!input){alert('Input not found');return false;}";
-    html += "var val=input.value||'';";
-    html += "var xhr=new XMLHttpRequest();";
-    html += "xhr.open('POST','/anchor/set',true);";
-    html += "xhr.setRequestHeader('Content-Type','application/x-www-form-urlencoded');";
-    html += "xhr.onreadystatechange=function(){";
-    html += "if(xhr.readyState==4){";
-    html += "if(xhr.status==200){";
-    html += "alert('" + String(getText("Anchor ingesteld!", "Anchor set!")) + "');";
-    html += "setTimeout(function(){location.reload();},500);";
-    html += "}else{";
-    html += "alert('" + String(getText("Fout bij instellen anchor", "Error setting anchor")) + "');";
-    html += "}";
-    html += "}";
-    html += "};";
-    html += "xhr.send('value='+encodeURIComponent(val));";
-    html += "return false;";
-    html += "}";
-    html += "window.addEventListener('DOMContentLoaded',function(){";
-    html += "var headers=document.querySelectorAll('.section-header');";
-    html += "for(var i=0;i<headers.length;i++){";
-    html += "headers[i].addEventListener('click',function(e){";
-    html += "var id=this.getAttribute('data-section');";
-    html += "toggleSection(id);";
-    html += "e.preventDefault();";
-    html += "return false;";
-    html += "});";
-    html += "}";
-    html += "var basic=document.getElementById('icon-basic');";
-    html += "var anchor=document.getElementById('icon-anchor');";
-    html += "if(basic)basic.innerHTML='&#9660;';";
-    html += "if(anchor)anchor.innerHTML='&#9660;';";
-    html += "var anchorBtn=document.getElementById('anchorBtn');";
-    html += "if(anchorBtn){";
-    html += "anchorBtn.addEventListener('click',setAnchorBtn);";
-    html += "}";
-    html += "});";
-    html += "})();";
-    html += "</script>";
-    html += "</head><body>";
-    html += "<div class='container'>";
-    html += "<h1>" + String(binanceSymbol) + " " + String(getText("Instellingen", "Settings")) + "</h1>";
+    // Bepaal platform naam
+    const char* platformName = "";
+    #ifdef PLATFORM_TTGO
+        platformName = "TTGO";
+    #elif defined(PLATFORM_CYD24)
+        platformName = "CYD24";
+    #elif defined(PLATFORM_CYD28)
+        platformName = "CYD28";
+    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
+        platformName = "ESP32-S3";
+    #else
+        platformName = "Unknown";
+    #endif
     
-    // Huidige Status samenvatting (read-only)
-    html += "<div class='status-box'>";
-    html += "<h2 style='color:#00BCD4;margin-top:0;'>" + String(getText("Huidige Status", "Current Status")) + "</h2>";
+    // Start chunked output
+    sendHtmlHeader(platformName, ntfyTopic);
     
-    // Prijs
+    // Temporary buffer voor variabele waarden
+    char tmpBuf[256];
+    char valueBuf[64];
+    
+    // Form start (voor anchor instellen)
+    server.sendContent(F("<form method='POST' action='/save'>"));
+    
+    // Anchor instellen - helemaal bovenaan
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", 
+             (currentPrice > 0.0f) ? currentPrice : 
+             ((currentAnchorActive && currentAnchorPrice > 0.0f) ? currentAnchorPrice : 0.0f));
+    
+    server.sendContent(F("<div style='background:#2a2a2a;border:1px solid #444;border-radius:4px;padding:15px;margin:15px 0;'>"));
+    snprintf(tmpBuf, sizeof(tmpBuf), "<label style='display:block;margin-top:0;margin-bottom:8px;color:#fff;font-weight:bold;'>%s (EUR):</label>", 
+             getText("Referentieprijs (Anchor)", "Reference price (Anchor)"));
+    server.sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<input type='number' step='0.01' id='anchorValue' value='%s' min='0.01' lang='en' style='width:100%%;padding:8px;margin-bottom:10px;border:1px solid #444;background:#1a1a1a;color:#fff;border-radius:4px;box-sizing:border-box;'>",
+             valueBuf);
+    server.sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<button type='button' id='anchorBtn' style='width:100%%;background:#4CAF50;color:#fff;padding:12px 24px;border:none;border-radius:4px;cursor:pointer;font-size:16px;font-weight:bold;'>%s</button>",
+             getText("Stel Anchor in", "Set Anchor"));
+    server.sendContent(tmpBuf);
+    server.sendContent(F("</div>"));
+    
+    // Status box
+    server.sendContent(F("<div class='status-box'>"));
     if (currentPrice > 0.0f) {
-        html += "<div class='status-row'><span class='status-label'>" + String(getText("Huidige Prijs", "Current Price")) + ":</span><span class='status-value'>" + String(currentPrice, 2) + " EUR</span></div>";
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f EUR", currentPrice);
+        sendStatusRow(getText("Huidige Prijs", "Current Price"), valueBuf);
     } else {
-        html += "<div class='status-row'><span class='status-label'>" + String(getText("Huidige Prijs", "Current Price")) + ":</span><span class='status-value'>--</span></div>";
+        sendStatusRow(getText("Huidige Prijs", "Current Price"), getText("--", "--"));
     }
     
-    // Returns
-    html += "<div class='status-row'><span class='status-label'>1m Return:</span><span class='status-value'>" + String(currentRet1m, 2) + "%</span></div>";
-    html += "<div class='status-row'><span class='status-label'>5m Return:</span><span class='status-value'>" + String(currentRet5m, 2) + "%</span></div>";
-    html += "<div class='status-row'><span class='status-label'>30m Return:</span><span class='status-value'>" + String(currentRet30m, 2) + "%</span></div>";
-    
-    // Trend
     const char* trendText = "";
     switch (currentTrend) {
-        case TREND_UP: trendText = (language == 0) ? "UP" : "UP"; break;
-        case TREND_DOWN: trendText = (language == 0) ? "DOWN" : "DOWN"; break;
-        case TREND_SIDEWAYS: trendText = (language == 0) ? "SIDEWAYS" : "SIDEWAYS"; break;
+        case TREND_UP: trendText = getText("OMHOOG", "UP"); break;
+        case TREND_DOWN: trendText = getText("OMLAAG", "DOWN"); break;
+        case TREND_SIDEWAYS: default: trendText = getText("VLAK", "SIDEWAYS"); break;
     }
-    html += "<div class='status-row'><span class='status-label'>" + String(getText("Trend", "Trend")) + ":</span><span class='status-value'>" + String(trendText) + "</span></div>";
+    sendStatusRow(getText("Trend", "Trend"), trendText);
     
-    // Volatiliteit
     const char* volText = "";
     switch (currentVol) {
-        case VOLATILITY_LOW: volText = (language == 0) ? "LAAG" : "LOW"; break;
-        case VOLATILITY_MEDIUM: volText = (language == 0) ? "GEMIDDELD" : "MEDIUM"; break;
-        case VOLATILITY_HIGH: volText = (language == 0) ? "HOOG" : "HIGH"; break;
+        case VOLATILITY_LOW: volText = getText("Laag", "Low"); break;
+        case VOLATILITY_MEDIUM: volText = getText("Gemiddeld", "Medium"); break;
+        case VOLATILITY_HIGH: volText = getText("Hoog", "High"); break;
     }
-    html += "<div class='status-row'><span class='status-label'>" + String(getText("Volatiliteit", "Volatility")) + ":</span><span class='status-value'>" + String(volText) + "</span></div>";
+    sendStatusRow(getText("Volatiliteit", "Volatility"), volText);
     
-    // Anchor
+    if (currentRet1m != 0.0f) {
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f%%", currentRet1m);
+        sendStatusRow(getText("1m Return", "1m Return"), valueBuf);
+    }
+    if (currentRet30m != 0.0f) {
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f%%", currentRet30m);
+        sendStatusRow(getText("30m Return", "30m Return"), valueBuf);
+    }
+    
     if (currentAnchorActive && currentAnchorPrice > 0.0f) {
-        html += "<div class='status-row'><span class='status-label'>" + String(getText("Anchor", "Anchor")) + ":</span><span class='status-value'>" + String(currentAnchorPrice, 2) + " EUR</span></div>";
-        html += "<div class='status-row'><span class='status-label'>" + String(getText("PnL t.o.v. Anchor", "PnL vs Anchor")) + ":</span><span class='status-value'>" + String(currentAnchorPct, 2) + "%</span></div>";
-    } else {
-        html += "<div class='status-row'><span class='status-label'>" + String(getText("Anchor", "Anchor")) + ":</span><span class='status-value'>" + String(getText("Niet ingesteld", "Not set")) + "</span></div>";
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f EUR", currentAnchorPrice);
+        sendStatusRow(getText("Anchor", "Anchor"), valueBuf);
+        if (currentAnchorPct != 0.0f) {
+            snprintf(valueBuf, sizeof(valueBuf), "%.2f%%", currentAnchorPct);
+            sendStatusRow(getText("Anchor Delta", "Anchor Delta"), valueBuf);
+        }
+    }
+    server.sendContent(F("</div>"));
+    
+    // Basis & Connectiviteit sectie
+    sendSectionHeader(getText("Basis & Connectiviteit", "Basic & Connectivity"), "basic", true);
+    sendSectionDesc(getText("Basisinstellingen voor symbol, notificaties en connectiviteit", "Basic settings for symbol, notifications and connectivity"));
+    
+    // NTFY Topic met reset knop (onder input veld, net als anchor)
+    snprintf(tmpBuf, sizeof(tmpBuf), "<label>%s:", 
+             getText("NTFY Topic", "NTFY Topic"));
+    server.sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<input type='text' name='ntfytopic' value='%s' maxlength='63' style='width:100%%;padding:8px;margin-bottom:10px;border:1px solid #444;background:#1a1a1a;color:#fff;border-radius:4px;box-sizing:border-box;'>", ntfyTopic);
+    server.sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<button type='button' id='ntfyResetBtn' style='width:100%%;background:#2196F3;color:#fff;padding:12px 24px;border:none;border-radius:4px;cursor:pointer;font-size:16px;font-weight:bold;'>%s</button>", 
+             getText("Standaard uniek NTFY-topic", "Default unique NTFY topic"));
+    server.sendContent(tmpBuf);
+    server.sendContent(F("</label>"));
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='info'>%s</div>", 
+             getText("NTFY.sh topic voor notificaties", "NTFY.sh topic for notifications"));
+    server.sendContent(tmpBuf);
+    sendInputRow(getText("Binance Symbol", "Binance Symbol"), "binancesymbol", "text", binanceSymbol, 
+                 getText("Bijv. BTCEUR, ETHBTC", "E.g. BTCEUR, ETHBTC"));
+    sendInputRow(getText("Taal", "Language"), "language", "number", (language == 0) ? "0" : "1", 
+                 getText("0 = Nederlands, 1 = English", "0 = Dutch, 1 = English"), 0, 1, 1);
+    
+    sendSectionFooter();
+    
+    // Anchor & Risicokader sectie
+    sendSectionHeader(getText("Anchor & Risicokader", "Anchor & Risk Framework"), "anchor", true);
+    sendSectionDesc(getText("Anchor prijs instellingen en risicobeheer", "Anchor price settings and risk management"));
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", anchorTakeProfit);
+    sendInputRow(getText("Take Profit", "Take Profit"), "anchorTP", "number", 
+                 valueBuf, getText("Take profit percentage boven anchor", "Take profit percentage above anchor"), 
+                 0.1f, 100.0f, 0.1f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", anchorMaxLoss);
+    sendInputRow(getText("Max Loss", "Max Loss"), "anchorML", "number", 
+                 valueBuf, getText("Max loss percentage onder anchor (negatief)", "Max loss percentage below anchor (negative)"), 
+                 -100.0f, -0.1f, 0.1f);
+    
+    sendSectionFooter();
+    
+    // Signaalgeneratie sectie
+    sendSectionHeader(getText("Signaalgeneratie", "Signal Generation"), "signals", false);
+    sendSectionDesc(getText("Thresholds voor spike en move detectie", "Thresholds for spike and move detection"));
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", spike1mThreshold);
+    sendInputRow(getText("1m Spike Threshold", "1m Spike Threshold"), "spike1m", "number", 
+                 valueBuf, getText("Minimum 1m return voor spike alert", "Minimum 1m return for spike alert"), 
+                 0.01f, 10.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", spike5mThreshold);
+    sendInputRow(getText("5m Spike Threshold", "5m Spike Threshold"), "spike5m", "number", 
+                 valueBuf, getText("Minimum 5m return voor spike confirmatie", "Minimum 5m return for spike confirmation"), 
+                 0.01f, 10.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", move5mAlertThreshold);
+    sendInputRow(getText("5m Move Threshold", "5m Move Threshold"), "move5mAlert", "number", 
+                 valueBuf, getText("Minimum 5m return voor move alert", "Minimum 5m return for move alert"), 
+                 0.01f, 10.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", move5mThreshold);
+    sendInputRow(getText("5m Move Filter", "5m Move Filter"), "move5m", "number", 
+                 valueBuf, getText("Minimum 5m return voor 30m move confirmatie", "Minimum 5m return for 30m move confirmation"), 
+                 0.01f, 10.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", move30mThreshold);
+    sendInputRow(getText("30m Move Threshold", "30m Move Threshold"), "move30m", "number", 
+                 valueBuf, getText("Minimum 30m return voor move alert", "Minimum 30m return for move alert"), 
+                 0.01f, 20.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", trendThreshold);
+    sendInputRow(getText("Trend Threshold", "Trend Threshold"), "trendTh", "number", 
+                 valueBuf, getText("Minimum 2h return voor trend detectie", "Minimum 2h return for trend detection"), 
+                 0.1f, 10.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", volatilityLowThreshold);
+    sendInputRow(getText("Volatiliteit Laag", "Volatility Low"), "volLow", "number", 
+                 valueBuf, getText("Threshold voor lage volatiliteit", "Threshold for low volatility"), 
+                 0.01f, 1.0f, 0.0001f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", volatilityHighThreshold);
+    sendInputRow(getText("Volatiliteit Hoog", "Volatility High"), "volHigh", "number", 
+                 valueBuf, getText("Threshold voor hoge volatiliteit", "Threshold for high volatility"), 
+                 0.01f, 1.0f, 0.0001f);
+    
+    sendSectionFooter();
+    
+    // Slimme logica & filters sectie
+    sendSectionHeader(getText("Slimme logica & filters", "Smart Logic & Filters"), "smart", false);
+    sendSectionDesc(getText("Trend-adaptive anchors, Confluence Mode en Auto-Volatility", "Trend-adaptive anchors, Confluence Mode and Auto-Volatility"));
+    
+    sendCheckboxRow(getText("Trend-Adaptive Anchors", "Trend-Adaptive Anchors"), "trendAdapt", trendAdaptiveAnchorsEnabled);
+    
+    if (trendAdaptiveAnchorsEnabled) {
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", uptrendMaxLossMultiplier);
+        sendInputRow(getText("UP Trend Max Loss Multiplier", "UP Trend Max Loss Multiplier"), "upMLMult", "number", 
+                     valueBuf, getText("Multiplier voor max loss bij UP trend", "Multiplier for max loss in UP trend"), 
+                     0.5f, 2.0f, 0.01f);
+        
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", uptrendTakeProfitMultiplier);
+        sendInputRow(getText("UP Trend Take Profit Multiplier", "UP Trend Take Profit Multiplier"), "upTPMult", "number", 
+                     valueBuf, getText("Multiplier voor take profit bij UP trend", "Multiplier for take profit in UP trend"), 
+                     0.5f, 2.0f, 0.01f);
+        
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", downtrendMaxLossMultiplier);
+        sendInputRow(getText("DOWN Trend Max Loss Multiplier", "DOWN Trend Max Loss Multiplier"), "downMLMult", "number", 
+                     valueBuf, getText("Multiplier voor max loss bij DOWN trend", "Multiplier for max loss in DOWN trend"), 
+                     0.5f, 2.0f, 0.01f);
+        
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", downtrendTakeProfitMultiplier);
+        sendInputRow(getText("DOWN Trend Take Profit Multiplier", "DOWN Trend Take Profit Multiplier"), "downTPMult", "number", 
+                     valueBuf, getText("Multiplier voor take profit bij DOWN trend", "Multiplier for take profit in DOWN trend"), 
+                     0.5f, 2.0f, 0.01f);
     }
     
-    // Features status
-    html += "<div class='status-row'><span class='status-label'>" + String(getText("Trend-Adaptive", "Trend-Adaptive")) + ":</span><span class='status-value'>" + String(trendAdaptiveAnchorsEnabled ? getText("Aan", "On") : getText("Uit", "Off")) + "</span></div>";
-    html += "<div class='status-row'><span class='status-label'>" + String(getText("Smart Confluence", "Smart Confluence")) + ":</span><span class='status-value'>" + String(smartConfluenceEnabled ? getText("Aan", "On") : getText("Uit", "Off")) + "</span></div>";
-    html += "<div class='status-row'><span class='status-label'>" + String(getText("Auto-Volatility", "Auto-Volatility")) + ":</span><span class='status-value'>" + String(autoVolatilityEnabled ? getText("Aan", "On") : getText("Uit", "Off")) + "</span></div>";
+    sendCheckboxRow(getText("Smart Confluence Mode", "Smart Confluence Mode"), "smartConf", smartConfluenceEnabled);
     
-    html += "</div>";
+    sendCheckboxRow(getText("Auto-Volatility Mode", "Auto-Volatility Mode"), "autoVol", autoVolatilityEnabled);
     
-    html += "<form method='POST' action='/save'>";
-    
-    // ===== SECTIE 1: Basis & Connectiviteit =====
-    html += "<div class='section-header' data-section='basic'>";
-    html += "<h3>" + String(getText("Basis & Connectiviteit", "Basic & Connectivity")) + "</h3>";
-    html += "<span class='toggle-icon' id='icon-basic'>&#9660;</span>";
-    html += "</div>";
-    html += "<div class='section-content active' id='content-basic'>";
-    html += "<div class='section-desc'>" + String(getText("Basisinstellingen voor taal, notificaties en API connectiviteit", "Basic settings for language, notifications and API connectivity")) + "</div>";
-    
-    html += "<label>" + String(getText("Taal van het systeem", "System Language")) + ":<select name='language'>";
-    html += "<option value='0'" + String(language == 0 ? " selected" : "") + ">Nederlands</option>";
-    html += "<option value='1'" + String(language == 1 ? " selected" : "") + ">English</option>";
-    html += "</select></label>";
-    html += "<div class='info'>" + String(getText("Kies de taal voor het scherm en deze webpagina. Dit heeft geen invloed op de werking van het systeem.", "Choose the language for the screen and this webpage. This does not affect the system's operation.")) + "</div>";
-    
-    html += "<label>" + String(getText("Te volgen markt (Binance trading pair)", "Market to follow (Binance trading pair)")) + ":<input type='text' name='binancesymbol' value='" + String(binanceSymbol) + "' maxlength='15'></label>";
-    html += "<div class='info'>" + String(getText("Welke markt moet worden gevolgd, bijvoorbeeld BTCEUR of BTCUSDT. Alle berekeningen en alerts zijn gebaseerd op dit trading pair.", "Which market should be followed, for example BTCEUR or BTCUSDT. All calculations and alerts are based on this trading pair.")) + "</div>";
-    
-    html += "<label>" + String(getText("Notificatiekanaal (NTFY)", "Notification channel (NTFY)")) + ":<input type='text' name='ntfytopic' value='" + String(ntfyTopic) + "' maxlength='63'></label>";
-    html += "<div class='info'>" + String(getText("Dit is het kanaal waarop je mobiele meldingen ontvangt via de NTFY-app. Abonneer je in de app op dit topic om alerts te krijgen.", "This is the channel where you receive mobile notifications via the NTFY app. Subscribe to this topic in the app to receive alerts.")) + "</div>";
-    
-    html += "</div>";
-    
-    // ===== SECTIE 2: Anchor & Risicokader =====
-    html += "<div class='section-header' data-section='anchor'>";
-    html += "<h3>" + String(getText("Anchor & Risicokader", "Anchor & Risk Framework")) + "</h3>";
-    html += "<span class='toggle-icon' id='icon-anchor'>&#9660;</span>";
-    html += "</div>";
-    html += "<div class='section-content active' id='content-anchor'>";
-    html += "<div class='section-desc'>" + String(getText("Referentieprijs en risicogrenzen voor take profit en stop loss", "Reference price and risk boundaries for take profit and stop loss")) + "</div>";
-    
-    // Haal huidige prijs op voor default waarde
-    String anchorValueStr = "";
-    if (currentPrice > 0.0f) {
-        anchorValueStr = String(currentPrice, 2);
-    } else if (currentAnchorActive && currentAnchorPrice > 0.0f) {
-        anchorValueStr = String(currentAnchorPrice, 2);
+    if (autoVolatilityEnabled) {
+        snprintf(valueBuf, sizeof(valueBuf), "%u", autoVolatilityWindowMinutes);
+        sendInputRow(getText("Volatility Window (min)", "Volatility Window (min)"), "autoVolWin", "number", 
+                     valueBuf, getText("Aantal minuten voor volatiliteit berekening", "Number of minutes for volatility calculation"), 
+                     10, 120, 1);
+        
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", autoVolatilityBaseline1mStdPct);
+        sendInputRow(getText("Baseline σ (1m)", "Baseline σ (1m)"), "autoVolBase", "number", 
+                     valueBuf, getText("Baseline standaarddeviatie voor 1m returns", "Baseline standard deviation for 1m returns"), 
+                     0.01f, 1.0f, 0.0001f);
+        
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", autoVolatilityMinMultiplier);
+        sendInputRow(getText("Min Multiplier", "Min Multiplier"), "autoVolMin", "number", 
+                     valueBuf, getText("Minimum volatility multiplier", "Minimum volatility multiplier"), 
+                     0.1f, 1.0f, 0.01f);
+        
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", autoVolatilityMaxMultiplier);
+        sendInputRow(getText("Max Multiplier", "Max Multiplier"), "autoVolMax", "number", 
+                     valueBuf, getText("Maximum volatility multiplier", "Maximum volatility multiplier"), 
+                     1.0f, 3.0f, 0.01f);
     }
     
-    html += "<label>" + String(getText("Referentieprijs (Anchor)", "Reference price (Anchor)")) + " (EUR):<input type='number' step='0.01' id='anchorValue' value='" + anchorValueStr + "' min='0.01'></label>";
-    html += "<button type='button' id='anchorBtn' style='background:#4CAF50;margin-top:10px;'>" + String(getText("Stel Anchor In", "Set Anchor")) + "</button>";
-    html += "<div class='info'>" + String(getText("De prijs waartegen winst en verlies worden gemeten. Laat leeg om automatisch de huidige marktprijs te gebruiken.", "The price against which profit and loss are measured. Leave empty to automatically use the current market price.")) + "</div>";
+    sendSectionFooter();
     
-    html += "<label>" + String(getText("Winstdoel vanaf anchor (%)", "Profit target from anchor (%)")) + ":<input type='number' step='0.1' name='anchorTP' value='" + String(anchorTakeProfit, 1) + "' min='0.1' max='100'></label>";
-    html += "<div class='info'>" + String(getText("Hoeveel procent de prijs moet stijgen vanaf de anchor voordat een \"Take Profit\"-melding wordt gestuurd.", "How many percent the price must rise from the anchor before a \"Take Profit\" notification is sent.")) + "</div>";
+    // Cooldowns sectie
+    sendSectionHeader(getText("Cooldowns", "Cooldowns"), "cooldowns", false);
+    sendSectionDesc(getText("Tijdsintervallen tussen alerts", "Time intervals between alerts"));
     
-    html += "<label>" + String(getText("Maximaal verlies vanaf anchor (%)", "Maximum loss from anchor (%)")) + ":<input type='number' step='0.1' name='anchorML' value='" + String(anchorMaxLoss, 1) + "' min='-100' max='-0.1'></label>";
-    html += "<div class='info'>" + String(getText("Hoeveel procent de prijs mag dalen vanaf de anchor voordat een \"Max Loss\"-melding wordt gestuurd.", "How many percent the price may fall from the anchor before a \"Max Loss\" notification is sent.")) + "</div>";
+    snprintf(valueBuf, sizeof(valueBuf), "%lu", notificationCooldown1MinMs / 1000UL);
+    sendInputRow(getText("1m Cooldown (sec)", "1m Cooldown (sec)"), "cd1min", "number", 
+                 valueBuf, getText("Cooldown tussen 1m spike alerts in seconden", "Cooldown between 1m spike alerts in seconds"), 
+                 1, 3600, 1);
     
-    // Trend-adaptive anchor settings
-    html += "<h4 style='color:#00BCD4;margin-top:20px;'>" + String(getText("Trend-Adaptive Anchors", "Trend-Adaptive Anchors")) + "</h4>";
-    html += "<label><input type='checkbox' name='trendAdapt' value='1'" + String(trendAdaptiveAnchorsEnabled ? " checked" : "") + "> " + String(getText("Risico automatisch aanpassen aan trend", "Automatically adjust risk to trend")) + "</label>";
-    html += "<div class='info'>" + String(getText("Past je winst- en verliesgrenzen automatisch aan op basis van de marktrichting (stijgend, dalend of zijwaarts).", "Automatically adjusts your profit and loss limits based on market direction (rising, falling or sideways).")) + "</div>";
+    snprintf(valueBuf, sizeof(valueBuf), "%lu", notificationCooldown5MinMs / 1000UL);
+    sendInputRow(getText("5m Cooldown (sec)", "5m Cooldown (sec)"), "cd5min", "number", 
+                 valueBuf, getText("Cooldown tussen 5m move alerts in seconden", "Cooldown between 5m move alerts in seconds"), 
+                 1, 3600, 1);
     
-    html += "<label>" + String(getText("Extra ruimte bij stijgende markt (verlies)", "Extra room in rising market (loss)")) + ":<input type='number' step='0.01' name='upMLMult' value='" + String(uptrendMaxLossMultiplier, 2) + "' min='0.5' max='2.0'></label>";
-    html += "<div class='info'>" + String(getText("Bij een stijgende trend mag de prijs iets verder tegen je in bewegen voordat een Max Loss-melding komt.", "In a rising trend, the price may move slightly further against you before a Max Loss notification comes.")) + "</div>";
+    snprintf(valueBuf, sizeof(valueBuf), "%lu", notificationCooldown30MinMs / 1000UL);
+    sendInputRow(getText("30m Cooldown (sec)", "30m Cooldown (sec)"), "cd30min", "number", 
+                 valueBuf, getText("Cooldown tussen 30m move alerts in seconden", "Cooldown between 30m move alerts in seconds"), 
+                 1, 3600, 1);
     
-    html += "<label>" + String(getText("Meer winst laten lopen bij stijgende markt", "Let more profit run in rising market")) + ":<input type='number' step='0.01' name='upTPMult' value='" + String(uptrendTakeProfitMultiplier, 2) + "' min='0.5' max='2.0'></label>";
-    html += "<div class='info'>" + String(getText("Bij een stijgende trend wordt het winstdoel automatisch verhoogd zodat winsten langer kunnen doorlopen.", "In a rising trend, the profit target is automatically increased so profits can run longer.")) + "</div>";
+    sendSectionFooter();
     
-    html += "<label>" + String(getText("Sneller beschermen bij dalende markt", "Protect faster in falling market")) + ":<input type='number' step='0.01' name='downMLMult' value='" + String(downtrendMaxLossMultiplier, 2) + "' min='0.5' max='2.0'></label>";
-    html += "<div class='info'>" + String(getText("Bij een dalende trend wordt het maximale verlies verkleind om sneller risico te beperken.", "In a falling trend, the maximum loss is reduced to limit risk faster.")) + "</div>";
+    // Warm-Start sectie
+    sendSectionHeader(getText("Warm-Start", "Warm-Start"), "warmstart", false);
+    sendSectionDesc(getText("Binance historische data voor snelle initialisatie", "Binance historical data for fast initialization"));
     
-    html += "<label>" + String(getText("Sneller winst nemen bij dalende markt", "Take profit faster in falling market")) + ":<input type='number' step='0.01' name='downTPMult' value='" + String(downtrendTakeProfitMultiplier, 2) + "' min='0.5' max='2.0'></label>";
-    html += "<div class='info'>" + String(getText("Bij een dalende trend wordt het winstdoel verlaagd om eerder winst veilig te stellen.", "In a falling trend, the profit target is lowered to secure profit earlier.")) + "</div>";
+    sendCheckboxRow(getText("Warm-Start Ingeschakeld", "Warm-Start Enabled"), "warmStart", warmStartEnabled);
     
-    html += "</div>";
+    if (warmStartEnabled) {
+        snprintf(valueBuf, sizeof(valueBuf), "%u", warmStart1mExtraCandles);
+        sendInputRow(getText("1m Extra Candles", "1m Extra Candles"), "ws1mExtra", "number", 
+                     valueBuf, getText("Extra 1m candles bovenop volatility window", "Extra 1m candles on top of volatility window"), 
+                     0, 100, 1);
+        
+        snprintf(valueBuf, sizeof(valueBuf), "%u", warmStart5mCandles);
+        sendInputRow(getText("5m Candles", "5m Candles"), "ws5m", "number", 
+                     valueBuf, getText("Aantal 5m candles", "Number of 5m candles"), 
+                     2, 200, 1);
+        
+        snprintf(valueBuf, sizeof(valueBuf), "%u", warmStart30mCandles);
+        sendInputRow(getText("30m Candles", "30m Candles"), "ws30m", "number", 
+                     valueBuf, getText("Aantal 30m candles", "Number of 30m candles"), 
+                     2, 200, 1);
+        
+        snprintf(valueBuf, sizeof(valueBuf), "%u", warmStart2hCandles);
+        sendInputRow(getText("2h Candles", "2h Candles"), "ws2h", "number", 
+                     valueBuf, getText("Aantal 2h candles", "Number of 2h candles"), 
+                     2, 200, 1);
+    }
     
-    // ===== SECTIE 3: Signaalgeneratie =====
-    html += "<div class='section-header' data-section='signals'>";
-    html += "<h3>" + String(getText("Signaalgeneratie", "Signal Generation")) + "</h3>";
-    html += "<span class='toggle-icon' id='icon-signals'>&#9654;</span>";
-    html += "</div>";
-    html += "<div class='section-content' id='content-signals'>";
-    html += "<div class='section-desc'>" + String(getText("Thresholds voor spike en move detectie op verschillende timeframes", "Thresholds for spike and move detection on different timeframes")) + "</div>";
+    sendSectionFooter();
     
-    html += "<label>" + String(getText("Snelle prijsbeweging (1 minuut)", "Fast price movement (1 minute)")) + " (%):<input type='number' step='0.01' name='spike1m' value='" + String(spike1mThreshold, 2) + "'></label>";
-    html += "<div class='info'>" + String(getText("Minimale procentuele beweging binnen 1 minuut om als \"snelle impuls\" te worden gezien.", "Minimum percentage movement within 1 minute to be considered a \"fast impulse\".")) + "</div>";
+    // MQTT sectie
+    sendSectionHeader(getText("Integratie", "Integration"), "mqtt", false);
+    sendSectionDesc(getText("MQTT instellingen voor Home Assistant", "MQTT settings for Home Assistant"));
     
-    html += "<label>" + String(getText("Bevestiging door 5 minuten (filter)", "Confirmation by 5 minutes (filter)")) + " (%):<input type='number' step='0.01' name='spike5m' value='" + String(spike5mThreshold, 2) + "'></label>";
-    html += "<div class='info'>" + String(getText("Een 1-minuut spike telt alleen mee als de beweging ook door de 5-minuten trend wordt ondersteund.", "A 1-minute spike only counts if the movement is also supported by the 5-minute trend.")) + "</div>";
+    sendInputRow(getText("MQTT Host", "MQTT Host"), "mqtthost", "text", mqttHost, 
+                 getText("MQTT broker hostname of IP", "MQTT broker hostname or IP"));
     
-    html += "<label>" + String(getText("Structurele beweging (5 minuten)", "Structural movement (5 minutes)")) + " (%):<input type='number' step='0.01' name='move5mAlert' value='" + String(move5mAlertThreshold, 2) + "'></label>";
-    html += "<div class='info'>" + String(getText("Minimale procentuele beweging over 5 minuten om als betekenisvolle beweging te worden gezien.", "Minimum percentage movement over 5 minutes to be considered a meaningful movement.")) + "</div>";
+    snprintf(valueBuf, sizeof(valueBuf), "%u", mqttPort);
+    sendInputRow(getText("MQTT Port", "MQTT Port"), "mqttport", "number", 
+                 valueBuf, getText("MQTT broker poort", "MQTT broker port"), 
+                 1, 65535, 1);
     
-    html += "<label>" + String(getText("Grote beweging (30 minuten)", "Large movement (30 minutes)")) + " (%):<input type='number' step='0.01' name='move30m' value='" + String(move30mThreshold, 2) + "'></label>";
-    html += "<div class='info'>" + String(getText("Minimale procentuele beweging over 30 minuten om als grotere marktverplaatsing te gelden.", "Minimum percentage movement over 30 minutes to count as a larger market shift.")) + "</div>";
+    sendInputRow(getText("MQTT User", "MQTT User"), "mqttuser", "text", mqttUser, 
+                 getText("MQTT gebruikersnaam (optioneel)", "MQTT username (optional)"));
     
-    html += "<label>" + String(getText("Korte-termijn bevestiging (5 minuten)", "Short-term confirmation (5 minutes)")) + " (%):<input type='number' step='0.01' name='move5m' value='" + String(move5mThreshold, 2) + "'></label>";
-    html += "<div class='info'>" + String(getText("Een 30-minuten beweging telt alleen mee als de 5-minuten trend dezelfde richting bevestigt.", "A 30-minute movement only counts if the 5-minute trend confirms the same direction.")) + "</div>";
+    sendInputRow(getText("MQTT Password", "MQTT Password"), "mqttpass", "text", mqttPass, 
+                 getText("MQTT wachtwoord (optioneel)", "MQTT password (optional)"));
     
-    html += "<h4 style='color:#00BCD4;margin-top:20px;'>" + String(getText("Trend & Volatiliteit", "Trend & Volatility")) + "</h4>";
-    html += "<label>" + String(getText("Wanneer spreekt het systeem van een trend?", "When does the system speak of a trend?")) + " (%):<input type='number' step='0.1' name='trendTh' value='" + String(trendThreshold, 1) + "' min='0.1' max='10'></label>";
-    html += "<div class='info'>" + String(getText("Minimale procentuele beweging over 2 uur om de markt als stijgend of dalend te beschouwen.", "Minimum percentage movement over 2 hours to consider the market as rising or falling.")) + "</div>";
+    sendSectionFooter();
     
-    html += "<label>" + String(getText("Rustige markt grens", "Quiet market threshold")) + " (%):<input type='number' step='0.01' name='volLow' value='" + String(volatilityLowThreshold, 2) + "' min='0.01' max='1'></label>";
-    html += "<div class='info'>" + String(getText("Onder deze waarde wordt de markt als rustig beschouwd.", "Below this value the market is considered quiet.")) + "</div>";
+    // Submit button
+    snprintf(tmpBuf, sizeof(tmpBuf), "<button type='submit'>%s</button>", 
+             getText("Opslaan", "Save"));
+    server.sendContent(tmpBuf);
     
-    html += "<label>" + String(getText("Drukke markt grens", "Busy market threshold")) + " (%):<input type='number' step='0.01' name='volHigh' value='" + String(volatilityHighThreshold, 2) + "' min='0.01' max='1'></label>";
-    html += "<div class='info'>" + String(getText("Boven deze waarde wordt de markt als zeer beweeglijk beschouwd.", "Above this value the market is considered very volatile.")) + "</div>";
+    server.sendContent(F("</form>"));
     
-    html += "</div>";
-    
-    // ===== SECTIE 4: Slimme logica & filters =====
-    html += "<div class='section-header' data-section='smart'>";
-    html += "<h3>" + String(getText("Slimme logica & filters", "Smart Logic & Filters")) + "</h3>";
-    html += "<span class='toggle-icon' id='icon-smart'>&#9654;</span>";
-    html += "</div>";
-    html += "<div class='section-content' id='content-smart'>";
-    html += "<div class='section-desc'>" + String(getText("Geavanceerde filtering en automatische aanpassing van thresholds", "Advanced filtering and automatic threshold adjustment")) + "</div>";
-    
-    // Smart Confluence Mode
-    html += "<h4 style='color:#00BCD4;margin-top:10px;'>" + String(getText("Smart Confluence Mode", "Smart Confluence Mode")) + "</h4>";
-    html += "<label><input type='checkbox' name='smartConf' value='1'" + String(smartConfluenceEnabled ? " checked" : "") + "> " + String(getText("Smart Confluence Mode Inschakelen", "Enable Smart Confluence Mode")) + "</label>";
-    html += "<div class='info'>" + String(getText("Verstuur alleen alerts als er confluence is tussen 1m, 5m en 30m timeframes in dezelfde richting. Dit vermindert het aantal alerts maar verhoogt de betekenisvolheid.", "Only send alerts when there is confluence between 1m, 5m and 30m timeframes in the same direction. This reduces the number of alerts but increases their significance.")) + "</div>";
-    
-    // Auto-Volatility Mode
-    html += "<h4 style='color:#00BCD4;margin-top:20px;'>" + String(getText("Auto-Volatility Mode", "Auto-Volatility Mode")) + "</h4>";
-    html += "<label><input type='checkbox' name='autoVol' value='1'" + String(autoVolatilityEnabled ? " checked" : "") + "> " + String(getText("Drempels automatisch aanpassen aan markt", "Automatically adjust thresholds to market")) + "</label>";
-    html += "<div class='info'>" + String(getText("Past gevoeligheid automatisch aan: rustige markt → gevoeliger, drukke markt → strenger.", "Automatically adjusts sensitivity: quiet market → more sensitive, busy market → stricter.")) + "</div>";
-    
-    html += "<label>" + String(getText("Hoe ver terugkijken voor volatiliteit", "How far back to look for volatility")) + " (minuten):<input type='number' step='1' name='autoVolWin' value='" + String(autoVolatilityWindowMinutes) + "' min='10' max='120'></label>";
-    html += "<div class='info'>" + String(getText("Aantal minuten dat wordt gebruikt om te bepalen hoe rustig of druk de markt is.", "Number of minutes used to determine how quiet or busy the market is.")) + "</div>";
-    
-    html += "<label>" + String(getText("Normale marktbeweging (referentie)", "Normal market movement (reference)")) + " (%):<input type='number' step='0.01' name='autoVolBase' value='" + String(autoVolatilityBaseline1mStdPct, 2) + "' min='0.01' max='1.0'></label>";
-    html += "<div class='info'>" + String(getText("Dit is wat het systeem beschouwt als \"normale\" 1-minuut beweging. Afwijkingen hiervan maken de drempels strenger of soepeler.", "This is what the system considers \"normal\" 1-minute movement. Deviations from this make thresholds stricter or more lenient.")) + "</div>";
-    
-    html += "<label>" + String(getText("Minimale gevoeligheid", "Minimum sensitivity")) + ":<input type='number' step='0.1' name='autoVolMin' value='" + String(autoVolatilityMinMultiplier, 1) + "' min='0.1' max='1.0'></label>";
-    html += "<div class='info'>" + String(getText("Voorkomt dat het systeem té gevoelig wordt in extreem rustige markten.", "Prevents the system from becoming too sensitive in extremely quiet markets.")) + "</div>";
-    
-    html += "<label>" + String(getText("Maximale gevoeligheid", "Maximum sensitivity")) + ":<input type='number' step='0.1' name='autoVolMax' value='" + String(autoVolatilityMaxMultiplier, 1) + "' min='1.0' max='3.0'></label>";
-    html += "<div class='info'>" + String(getText("Voorkomt dat het systeem té streng wordt in extreem drukke markten.", "Prevents the system from becoming too strict in extremely busy markets.")) + "</div>";
-    
-    html += "</div>";
-    
-    // ===== SECTIE 5: Cooldowns =====
-    html += "<div class='section-header' data-section='cooldowns'>";
-    html += "<h3>" + String(getText("Cooldowns", "Cooldowns")) + "</h3>";
-    html += "<span class='toggle-icon' id='icon-cooldowns'>&#9654;</span>";
-    html += "</div>";
-    html += "<div class='section-content' id='content-cooldowns'>";
-    html += "<div class='section-desc'>" + String(getText("Minimale tijd tussen alerts van hetzelfde type om spam te voorkomen", "Minimum time between alerts of the same type to prevent spam")) + "</div>";
-    
-    html += "<label>" + String(getText("Wachttijd tussen snelle meldingen", "Wait time between fast notifications")) + " (seconden):<input type='number' name='cd1min' value='" + String(notificationCooldown1MinMs / 1000) + "'></label>";
-    html += "<div class='info'>" + String(getText("Minimale tijd tussen twee snelle (1m) meldingen om spam te voorkomen.", "Minimum time between two fast (1m) notifications to prevent spam.")) + "</div>";
-    
-    html += "<label>" + String(getText("Wachttijd tussen 5m meldingen", "Wait time between 5m notifications")) + " (seconden):<input type='number' name='cd5min' value='" + String(notificationCooldown5MinMs / 1000) + "'></label>";
-    html += "<div class='info'>" + String(getText("Zorgt ervoor dat structurele bewegingen niet te vaak achter elkaar worden gemeld.", "Ensures that structural movements are not reported too frequently in succession.")) + "</div>";
-    
-    html += "<label>" + String(getText("Wachttijd tussen grote bewegingen", "Wait time between large movements")) + " (seconden):<input type='number' name='cd30min' value='" + String(notificationCooldown30MinMs / 1000) + "'></label>";
-    html += "<div class='info'>" + String(getText("Beperkt hoe vaak meldingen over grote marktbewegingen worden verstuurd.", "Limits how often notifications about large market movements are sent.")) + "</div>";
-    
-    html += "</div>";
-    
-    // ===== SECTIE 6: Integratie (MQTT) =====
-    html += "<div class='section-header' data-section='mqtt'>";
-    html += "<h3>" + String(getText("Integratie (MQTT)", "Integration (MQTT)")) + "</h3>";
-    html += "<span class='toggle-icon' id='icon-mqtt'>&#9654;</span>";
-    html += "</div>";
-    html += "<div class='section-content' id='content-mqtt'>";
-    html += "<div class='section-desc'>" + String(getText("MQTT broker configuratie voor Home Assistant integratie", "MQTT broker configuration for Home Assistant integration")) + "</div>";
-    
-    html += "<label>" + String(getText("MQTT server (IP-adres)", "MQTT server (IP address)")) + ":<input type='text' name='mqtthost' value='" + String(mqttHost) + "' maxlength='63'></label>";
-    html += "<div class='info'>" + String(getText("IP-adres van de MQTT broker waar status- en eventdata naartoe worden gestuurd.", "IP address of the MQTT broker where status and event data are sent.")) + "</div>";
-    
-    html += "<label>" + String(getText("MQTT poort", "MQTT port")) + ":<input type='number' name='mqttport' value='" + String(mqttPort) + "' min='1' max='65535'></label>";
-    html += "<div class='info'>" + String(getText("Poortnummer van de MQTT broker (meestal 1883).", "Port number of the MQTT broker (usually 1883).")) + "</div>";
-    
-    html += "<label>" + String(getText("MQTT gebruikersnaam", "MQTT username")) + ":<input type='text' name='mqttuser' value='" + String(mqttUser) + "' maxlength='63'></label>";
-    html += "<div class='info'>" + String(getText("Gebruikersnaam voor toegang tot de MQTT broker.", "Username for access to the MQTT broker.")) + "</div>";
-    
-    html += "<label>" + String(getText("MQTT wachtwoord", "MQTT password")) + ":<input type='password' name='mqttpass' value='" + String(mqttPass) + "' maxlength='63'></label>";
-    html += "<div class='info'>" + String(getText("Wachtwoord voor toegang tot de MQTT broker.", "Password for access to the MQTT broker.")) + "</div>";
-    
-    html += "</div>";
-    
-    html += "<button type='submit'>" + String(getText("Opslaan", "Save")) + "</button></form>";
-    html += "</div>";
-    html += "</body></html>";
-    return html;
+    // Footer
+    sendHtmlFooter();
 }
 
 // ============================================================================
@@ -3140,7 +4246,7 @@ static String getSettingsHTML()
 // Web server handlers
 static void handleRoot()
 {
-    server.send(200, "text/html", getSettingsHTML());
+    renderSettingsHTML();
 }
 
 static void handleSave()
@@ -3322,6 +4428,33 @@ static void handleSave()
     // Smart Confluence Mode settings
     smartConfluenceEnabled = server.hasArg("smartConf");
     
+    // Warm-Start settings
+    warmStartEnabled = server.hasArg("warmStart");
+    if (server.hasArg("ws1mExtra")) {
+        uint8_t val = server.arg("ws1mExtra").toInt();
+        if (val >= 0 && val <= 100) {
+            warmStart1mExtraCandles = val;
+        }
+    }
+    if (server.hasArg("ws5m")) {
+        uint8_t val = server.arg("ws5m").toInt();
+        if (val >= 2 && val <= 200) {
+            warmStart5mCandles = val;
+        }
+    }
+    if (server.hasArg("ws30m")) {
+        uint8_t val = server.arg("ws30m").toInt();
+        if (val >= 2 && val <= 200) {
+            warmStart30mCandles = val;
+        }
+    }
+    if (server.hasArg("ws2h")) {
+        uint8_t val = server.arg("ws2h").toInt();
+        if (val >= 2 && val <= 200) {
+            warmStart2hCandles = val;
+        }
+    }
+    
     // Auto-Volatility Mode settings
     autoVolatilityEnabled = server.hasArg("autoVol");
     if (server.hasArg("autoVolWin")) {
@@ -3363,25 +4496,26 @@ static void handleSave()
         mqttReconnectAttemptCount = 0; // Reset counter bij disconnect
     }
     
-    // Bouw HTML string op zonder vreemde tekens
-    String html = "";
-    html += "<!DOCTYPE html>";
-    html += "<html>";
-    html += "<head>";
-    html += "<meta http-equiv='refresh' content='2;url=/'>";
-    html += "<meta charset='UTF-8'>";
-    html += "<title>Opgeslagen</title>";
-    html += "<style>";
-    html += "body{font-family:Arial;margin:20px;background:#1a1a1a;color:#fff;text-align:center;}";
-    html += "h1{color:#4CAF50;}";
-    html += "</style>";
-    html += "</head>";
-    html += "<body>";
-    html += "<h1>" + String(getText("Instellingen opgeslagen!", "Settings saved!")) + "</h1>";
-    html += "<p>" + String(getText("Terug naar instellingen...", "Returning to settings...")) + "</p>";
-    html += "</body>";
-    html += "</html>";
-    server.send(200, "text/html", html);
+    // Chunked HTML output (geen String in heap)
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "text/html; charset=utf-8", "");
+    
+    server.sendContent(F("<!DOCTYPE html><html><head>"));
+    server.sendContent(F("<meta http-equiv='refresh' content='2;url=/'><meta charset='UTF-8'>"));
+    server.sendContent(F("<title>Opgeslagen</title>"));
+    server.sendContent(F("<style>"));
+    server.sendContent(F("body{font-family:Arial;margin:20px;background:#1a1a1a;color:#fff;text-align:center;}"));
+    server.sendContent(F("h1{color:#4CAF50;}"));
+    server.sendContent(F("</style></head><body>"));
+    
+    // Dynamische tekst via kleine buffer
+    char tmpBuf[128];
+    snprintf(tmpBuf, sizeof(tmpBuf), "<h1>%s</h1>", getText("Instellingen opgeslagen!", "Settings saved!"));
+    server.sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<p>%s</p>", getText("Terug naar instellingen...", "Returning to settings..."));
+    server.sendContent(tmpBuf);
+    
+    server.sendContent(F("</body></html>"));
 }
 
 
@@ -3401,7 +4535,7 @@ static void handleNotFound()
         message += " " + server.argName(i) + ": " + server.arg(i) + "\n";
     }
     server.send(404, "text/plain", message);
-    Serial_println("[WebServer] 404: " + server.uri());
+    Serial_printf(F("[WebServer] 404: %s\n"), server.uri().c_str());
 }
 
 // Handler voor anchor set (aparte route om crashes te voorkomen)
@@ -3422,7 +4556,7 @@ static void handleAnchorSet() {
                     Serial_printf("[Web] Anchor setting queued: %.2f\n", val);
                 }
             } else {
-                Serial_printf("[Web] WARN: Ongeldige anchor waarde opgegeven: '%s'\n", anchorValueStr.c_str());
+                Serial_printf(F("[Web] WARN: Ongeldige anchor waarde opgegeven: '%s'\n"), anchorValueStr.c_str());
             }
         } else {
             // Leeg veld = gebruik huidige prijs
@@ -3431,7 +4565,7 @@ static void handleAnchorSet() {
             // Zet pending flag als laatste (memory barrier effect)
             pendingAnchorSetting.pending = true;
             valid = true;
-            Serial_println("[Web] Anchor setting queued: gebruik huidige prijs");
+            Serial_println(F("[Web] Anchor setting queued: gebruik huidige prijs"));
         }
         
         if (valid) {
@@ -3444,17 +4578,34 @@ static void handleAnchorSet() {
     }
 }
 
+static void handleNtfyReset() {
+    // Genereer standaard topic en sla op
+    generateDefaultNtfyTopic(ntfyTopic, sizeof(ntfyTopic));
+    
+    // Sla op via SettingsStore
+    CryptoMonitorSettings settings = settingsStore.load();
+    safeStrncpy(settings.ntfyTopic, ntfyTopic, sizeof(settings.ntfyTopic));
+    settingsStore.save(settings);
+    
+    Serial_printf(F("[Web] NTFY topic gereset naar standaard: %s\n"), ntfyTopic);
+    
+    // Stuur succes response
+    server.send(200, "text/plain", "OK");
+}
+
 static void setupWebServer()
 {
-    Serial.println("[WebServer] Routes registreren...");
+    Serial.println(F("[WebServer] Routes registreren..."));
     server.on("/", handleRoot);
     Serial.println("[WebServer] Route '/' geregistreerd");
     server.on("/save", HTTP_POST, handleSave);
-    Serial.println("[WebServer] Route '/save' geregistreerd");
+    Serial.println(F("[WebServer] Route '/save' geregistreerd"));
     server.on("/anchor/set", HTTP_POST, handleAnchorSet);
     Serial.println("[WebServer] Route '/anchor/set' geregistreerd");
+    server.on("/ntfy/reset", HTTP_POST, handleNtfyReset);
+    Serial.println(F("[WebServer] Route '/ntfy/reset' geregistreerd"));
     server.onNotFound(handleNotFound); // 404 handler
-    Serial.println("[WebServer] 404 handler geregistreerd");
+    Serial.println(F("[WebServer] 404 handler geregistreerd"));
     server.begin();
     Serial.println("[WebServer] Server gestart");
     // Geoptimaliseerd: gebruik char array i.p.v. String
@@ -3463,8 +4614,121 @@ static void setupWebServer()
     Serial.printf("[WebServer] Gestart op http://%s\n", ipBuffer);
 }
 
-// Parse Binance JSON – very small, avoid ArduinoJson for flash size
-// Geoptimaliseerd: gebruik const char* i.p.v. String om geheugen te besparen
+// Parse Binance JSON - geoptimaliseerd: geen herhaalde allocaties
+// Gebruikt ArduinoJson als beschikbaar, anders handmatige parsing (geen heap allocaties)
+#if USE_ARDUINOJSON
+// Parse Binance JSON met ArduinoJson (geoptimaliseerd: hergebruik StaticJsonDocument)
+// Gebruik stream input waar mogelijk, reset doc per parse, log errors met memory usage
+static bool parsePrice(const char *body, float &out)
+{
+    // Check of body niet leeg is
+    if (body == nullptr || strlen(body) == 0) {
+        return false;
+    }
+    
+    // Reset document voor nieuwe parse (voorkomt oude data)
+    jsonDoc.clear();
+    
+    // Parse JSON (gebruik deserializeJson met string input)
+    DeserializationError error = deserializeJson(jsonDoc, body);
+    
+    if (error) {
+        // Log deserialization error inclusief memory usage voor debug
+        Serial_printf(F("[JSON] DeserializationError: %s (memory: %u bytes, capacity: %u bytes)\n"), 
+                     error.c_str(), jsonDoc.memoryUsage(), jsonDoc.capacity());
+        return false;
+    }
+    
+    // Extract price field
+    if (!jsonDoc.containsKey("price")) {
+        Serial_printf(F("[JSON] Missing 'price' field (memory: %u bytes)\n"), jsonDoc.memoryUsage());
+        return false;
+    }
+    
+    // Get price value (kan string of number zijn)
+    JsonVariant priceVar = jsonDoc["price"];
+    float val = 0.0f;
+    
+    if (priceVar.is<float>()) {
+        val = priceVar.as<float>();
+    } else if (priceVar.is<const char*>()) {
+        // Price is string, parse it
+        const char* priceStr = priceVar.as<const char*>();
+        if (!safeAtof(priceStr, val)) {
+            Serial_printf("[JSON] Failed to parse price string: %s\n", priceStr);
+            return false;
+        }
+    } else {
+        Serial_printf(F("[JSON] Price field is not a valid type\n"));
+        return false;
+    }
+    
+    // Validate that we got a valid price
+    if (!isValidPrice(val)) {
+        Serial_printf("[JSON] Invalid price value: %.2f\n", val);
+        return false;
+    }
+    
+    out = val;
+    return true;
+}
+
+// Parse Binance JSON from stream (voor streaming HTTP responses)
+// Gebruik deserializeJson(doc, stream) met stream input
+static bool parsePriceFromStream(WiFiClient* stream, float &out)
+{
+    if (stream == nullptr) {
+        return false;
+    }
+    
+    // Reset document voor nieuwe parse
+    jsonDoc.clear();
+    
+    // Parse JSON from stream (efficiënter dan eerst volledige string te lezen)
+    DeserializationError error = deserializeJson(jsonDoc, *stream);
+    
+    if (error) {
+        // Log deserialization error inclusief memory usage voor debug
+        Serial_printf(F("[JSON] Stream DeserializationError: %s (memory: %u bytes, capacity: %u bytes)\n"), 
+                     error.c_str(), jsonDoc.memoryUsage(), jsonDoc.capacity());
+        return false;
+    }
+    
+    // Extract price field
+    if (!jsonDoc.containsKey("price")) {
+        Serial_printf("[JSON] Missing 'price' field in stream (memory: %u bytes)\n", jsonDoc.memoryUsage());
+        return false;
+    }
+    
+    // Get price value
+    JsonVariant priceVar = jsonDoc["price"];
+    float val = 0.0f;
+    
+    if (priceVar.is<float>()) {
+        val = priceVar.as<float>();
+    } else if (priceVar.is<const char*>()) {
+        const char* priceStr = priceVar.as<const char*>();
+        if (!safeAtof(priceStr, val)) {
+            Serial_printf(F("[JSON] Failed to parse price string from stream: %s\n"), priceStr);
+            return false;
+        }
+    } else {
+        Serial_printf("[JSON] Price field is not a valid type in stream\n");
+        return false;
+    }
+    
+    // Validate that we got a valid price
+    if (!isValidPrice(val)) {
+        Serial_printf(F("[JSON] Invalid price value from stream: %.2f\n"), val);
+        return false;
+    }
+    
+    out = val;
+    return true;
+}
+#else
+// Fallback: handmatige JSON parsing (geen heap allocaties, geen ArduinoJson dependency)
+// Geoptimaliseerd: gebruik const char* i.p.v. String, geen herhaalde allocaties
 static bool parsePrice(const char *body, float &out)
 {
     // Check of body niet leeg is
@@ -3486,7 +4750,7 @@ static bool parsePrice(const char *body, float &out)
     if (priceLen == 0 || priceLen > 20) // Max 20 karakters voor prijs (veiligheidscheck)
         return false;
     
-    // Extract price string
+    // Extract price string (gebruik stack buffer, geen heap allocatie)
     char priceStr[32];
     if (priceLen >= sizeof(priceStr)) {
         return false;
@@ -3507,6 +4771,7 @@ static bool parsePrice(const char *body, float &out)
     out = val;
     return true;
 }
+#endif
 
 // Calculate average of array (optimized: single loop)
 static float calculateAverage(float *array, uint8_t size, bool filled)
@@ -3545,6 +4810,35 @@ static int32_t getRingBufferIndexAgo(uint32_t currentIndex, uint32_t positionsAg
 static uint32_t getLastWrittenIndex(uint32_t currentIndex, uint32_t bufferSize)
 {
     return (currentIndex == 0) ? (bufferSize - 1) : (currentIndex - 1);
+}
+
+// Helper: Calculate percentage of SOURCE_LIVE entries in the last windowMinutes of minuteAverages
+// Returns percentage (0-100) of entries that are SOURCE_LIVE
+static uint8_t calcLivePctMinuteAverages(uint16_t windowMinutes)
+{
+    if (windowMinutes == 0 || windowMinutes > MINUTES_FOR_30MIN_CALC) {
+        return 0;
+    }
+    
+    uint8_t availableMinutes = minuteArrayFilled ? MINUTES_FOR_30MIN_CALC : minuteIndex;
+    if (availableMinutes < windowMinutes) {
+        return 0;  // Niet genoeg data beschikbaar
+    }
+    
+    // Tel hoeveel van de laatste windowMinutes entries SOURCE_LIVE zijn
+    uint16_t liveCount = 0;
+    for (uint16_t i = 1; i <= windowMinutes; i++) {
+        // Bereken index N posities terug vanaf huidige write positie
+        int32_t idx = getRingBufferIndexAgo(minuteIndex, i, MINUTES_FOR_30MIN_CALC);
+        if (idx >= 0 && idx < MINUTES_FOR_30MIN_CALC) {
+            if (minuteAveragesSource[idx] == SOURCE_LIVE) {
+                liveCount++;
+            }
+        }
+    }
+    
+    // Bereken percentage (0-100)
+    return (liveCount * 100) / windowMinutes;
 }
 
 // Find min and max values in secondPrices array
@@ -4280,6 +5574,7 @@ static void addPriceToSecondArray(float price)
     }
     
     secondPrices[secondIndex] = price;
+    secondPricesSource[secondIndex] = SOURCE_LIVE;  // Mark as live data
     secondIndex = (secondIndex + 1) % SECONDS_PER_MINUTE;
     if (secondIndex == 0)
     {
@@ -4294,10 +5589,19 @@ static void addPriceToSecondArray(float price)
     }
     
     fiveMinutePrices[fiveMinuteIndex] = price;
+    fiveMinutePricesSource[fiveMinuteIndex] = SOURCE_LIVE;  // Mark as live data
     fiveMinuteIndex = (fiveMinuteIndex + 1) % SECONDS_PER_5MINUTES;
     if (fiveMinuteIndex == 0)
     {
         fiveMinuteArrayFilled = true;
+    }
+    
+    // Update warm-start status periodiek (elke 10 seconden)
+    static unsigned long lastStatusUpdate = 0;
+    unsigned long now = millis();
+    if (now - lastStatusUpdate > 10000) {  // Elke 10 seconden
+        updateWarmStartStatus();
+        lastStatusUpdate = now;
     }
 }
 
@@ -4330,9 +5634,13 @@ static void updateMinuteAverage()
     
     // Sla op in minute array
     minuteAverages[minuteIndex] = minuteAvg;
+    minuteAveragesSource[minuteIndex] = SOURCE_LIVE;  // Mark as live data
     minuteIndex = (minuteIndex + 1) % MINUTES_FOR_30MIN_CALC;
     if (minuteIndex == 0)
         minuteArrayFilled = true;
+    
+    // Update warm-start status na elke minuut update
+    updateWarmStartStatus();
 }
 
 // ============================================================================
@@ -4344,7 +5652,7 @@ static void fetchPrice()
 {
     // Controleer eerst of WiFi verbonden is
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[API] WiFi niet verbonden, skip fetch");
+        Serial.println(F("[API] WiFi niet verbonden, skip fetch"));
         return;
     }
     
@@ -4365,19 +5673,19 @@ static void fetchPrice()
         Serial.printf("[API] WARN -> %s leeg response (tijd: %lu ms) - mogelijk timeout of netwerkprobleem\n", binanceSymbol, fetchTime);
         // Gebruik laatste bekende prijs als fallback (al ingesteld als fetched = prices[0])
     } else if (!parsePrice(responseBuffer, fetched)) {
-        Serial.printf("[API] ERR -> %s parse gefaald\n", binanceSymbol);
+        Serial.printf(F("[API] ERR -> %s parse gefaald\n"), binanceSymbol);
     } else {
         // Succesvol opgehaald (alleen loggen bij langzame calls > 1200ms)
         if (fetchTime > 1200) {
-            Serial.printf("[API] OK -> %s %.2f (tijd: %lu ms) - langzaam\n", binanceSymbol, fetched, fetchTime);
+            Serial.printf(F("[API] OK -> %s %.2f (tijd: %lu ms) - langzaam\n"), binanceSymbol, fetched, fetchTime);
         }
         
-        // Neem mutex voor data updates (timeout aangepast per platform)
-        // CYD heeft meer rendering overhead, dus iets kortere timeout om UI task meer kans te geven
+        // Neem mutex voor data updates (timeout verhoogd om mutex conflicts te verminderen)
+        // API task heeft prioriteit: verhoogde timeout om mutex te krijgen zelfs als UI bezig is
         #ifdef PLATFORM_TTGO
-        const TickType_t apiMutexTimeout = pdMS_TO_TICKS(300); // TTGO: 300ms
+        const TickType_t apiMutexTimeout = pdMS_TO_TICKS(500); // TTGO: 500ms
         #else
-        const TickType_t apiMutexTimeout = pdMS_TO_TICKS(200); // CYD/ESP32-S3: 200ms voor snellere UI updates
+        const TickType_t apiMutexTimeout = pdMS_TO_TICKS(400); // CYD/ESP32-S3: 400ms voor betere mutex acquisitie
         #endif
         
         // Geoptimaliseerd: betere mutex timeout handling met retry logica
@@ -4420,11 +5728,27 @@ static void fetchPrice()
             // Calculate returns for 1 minute, 5 minutes, 30 minutes, and 2 hours
             float ret_1m = calculateReturn1Minute();   // Percentage verandering laatste 1 minuut
             float ret_5m = calculateReturn5Minutes();  // Percentage verandering laatste 5 minuten
-            float ret_30m = calculateReturn30Minutes(); // Percentage verandering laatste 30 minuten
+            ret_30m = calculateReturn30Minutes(); // Percentage verandering laatste 30 minuten (update global)
             ret_2h = calculateReturn2Hours();
             
-            // Bepaal trend state op basis van 2h return
-            trendState = determineTrendState(ret_2h, ret_30m);
+            // Update live availability flags: gebaseerd op data beschikbaarheid EN percentage live data
+            // hasRet30mLive: true zodra er minimaal 30 minuten data is EN ≥80% daarvan SOURCE_LIVE is
+            uint8_t availableMinutes = minuteArrayFilled ? MINUTES_FOR_30MIN_CALC : minuteIndex;
+            uint8_t livePct30 = calcLivePctMinuteAverages(30);
+            hasRet30mLive = (availableMinutes >= 30 && livePct30 >= 80);
+            
+            // hasRet2hLive: true zodra er minimaal 120 minuten data is EN ≥80% daarvan SOURCE_LIVE is
+            uint8_t livePct120 = calcLivePctMinuteAverages(120);
+            hasRet2hLive = (availableMinutes >= 120 && livePct120 >= 80);
+            
+            // Update combined flags: beschikbaar vanuit warm-start OF live data
+            hasRet2h = hasRet2hWarm || hasRet2hLive;
+            hasRet30m = hasRet30mWarm || hasRet30mLive;
+            
+            // Bepaal trend state op basis van 2h return (alleen als beide flags true zijn)
+            if (hasRet2h && hasRet30m) {
+                trendState = determineTrendState(ret_2h, ret_30m);
+            }
             
             // Check trend change en stuur notificatie indien nodig
             checkTrendChange(ret_30m);
@@ -4476,11 +5800,11 @@ static void fetchPrice()
             // Geoptimaliseerd: log alleen bij meerdere opeenvolgende timeouts
             mutexTimeoutCount++;
             if (mutexTimeoutCount == 1 || mutexTimeoutCount % 10 == 0) {
-                Serial.printf("[API] WARN -> %s mutex timeout (count: %lu)\n", binanceSymbol, mutexTimeoutCount);
+                Serial.printf(F("[API] WARN -> %s mutex timeout (count: %lu)\n"), binanceSymbol, mutexTimeoutCount);
             }
             // Fallback: update prijs zonder mutex als timeout te vaak voorkomt (alleen voor noodgeval)
             if (mutexTimeoutCount > 50) {
-                Serial.printf("[API] CRIT -> %s mutex timeout te vaak, mogelijk deadlock!\n", binanceSymbol);
+                Serial.printf(F("[API] CRIT -> %s mutex timeout te vaak, mogelijk deadlock!\n"), binanceSymbol);
                 mutexTimeoutCount = 0; // Reset counter
             }
         }
@@ -4572,7 +5896,7 @@ void updateUI()
 {
     // Veiligheid: controleer of chart en dataSeries bestaan
     if (chart == nullptr || dataSeries == nullptr) {
-        Serial_println("[UI] WARN: Chart of dataSeries is null, skip update");
+        Serial_println(F("[UI] WARN: Chart of dataSeries is null, skip update"));
         return;
     }
     
@@ -4592,6 +5916,9 @@ void updateUI()
     updateHeaderSection();
     updatePriceCardsSection(hasNewPriceData);
     updateFooter();
+    
+    // Heap telemetry na LVGL update (optioneel, alleen periodiek)
+    // logHeapTelemetry("lvgl");  // Uitgecommentarieerd om spam te voorkomen
 }
 
 // ============================================================================
@@ -4672,6 +5999,10 @@ static void updateChartRange(int32_t currentPrice)
     lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, minRange, maxRange);
 }
 
+// Cache variabelen voor datum/tijd labels (lokaal voor deze functie)
+static char lastDateText[11] = {0};  // Cache voor date label
+static char lastTimeText[9] = {0};   // Cache voor time label
+
 // Helper functie om datum/tijd labels bij te werken
 static void updateDateTimeLabels()
 {
@@ -4689,7 +6020,12 @@ static void updateDateTimeLabels()
             char dateStr[11]; // dd-mm-yyyy + null terminator = 11 karakters
             strftime(dateStr, sizeof(dateStr), "%d-%m-%Y", &timeinfo);
             #endif
-            lv_label_set_text(chartDateLabel, dateStr);
+            // Update alleen als datum veranderd is
+            if (strcmp(lastDateText, dateStr) != 0) {
+                strncpy(lastDateText, dateStr, sizeof(lastDateText) - 1);
+                lastDateText[sizeof(lastDateText) - 1] = '\0';
+                lv_label_set_text(chartDateLabel, dateStr);
+            }
         }
     }
     
@@ -4700,7 +6036,12 @@ static void updateDateTimeLabels()
         {
             char timeStr[9];
             strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
-            lv_label_set_text(chartTimeLabel, timeStr);
+            // Update alleen als tijd veranderd is
+            if (strcmp(lastTimeText, timeStr) != 0) {
+                strncpy(lastTimeText, timeStr, sizeof(lastTimeText) - 1);
+                lastTimeText[sizeof(lastTimeText) - 1] = '\0';
+                lv_label_set_text(chartTimeLabel, timeStr);
+            }
         }
     }
 }
@@ -4710,43 +6051,145 @@ static void updateTrendLabel()
 {
     if (trendLabel == nullptr) return;
     
-    if (ret_2h != 0.0f && (minuteArrayFilled || minuteIndex >= 120))
+    // Toon trend alleen als beide availability flags true zijn
+    if (hasRet2h && hasRet30m)
     {
         const char* trendText = "";
         lv_color_t trendColor = lv_palette_main(LV_PALETTE_GREY);
         
+        // Bepaal of data uit warm-start of live komt
+        bool isFromWarmStart = (hasRet2hWarm && hasRet30mWarm) && !(hasRet2hLive && hasRet30mLive);
+        bool isFromLive = (hasRet2hLive && hasRet30mLive);
+        
         switch (trendState) {
             case TREND_UP:
                 trendText = getText("OMHOOG", "UP");
-                trendColor = lv_palette_main(LV_PALETTE_GREEN);
+                if (isFromWarmStart) {
+                    trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
+                } else if (isFromLive) {
+                    trendColor = lv_palette_main(LV_PALETTE_GREEN); // Groen voor live UP
+                } else {
+                    trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs als fallback
+                }
                 break;
             case TREND_DOWN:
                 trendText = getText("OMLAAG", "DOWN");
-                trendColor = lv_palette_main(LV_PALETTE_RED);
+                if (isFromWarmStart) {
+                    trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
+                } else if (isFromLive) {
+                    trendColor = lv_palette_main(LV_PALETTE_RED); // Rood voor live DOWN
+                } else {
+                    trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs als fallback
+                }
                 break;
             case TREND_SIDEWAYS:
             default:
-                trendText = getText("ZIJWAARTS", "SIDEWAYS");
-                trendColor = lv_palette_main(LV_PALETTE_GREY);
+                trendText = getText("VLAK", "SIDEWAYS");
+                if (isFromWarmStart) {
+                    trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
+                } else if (isFromLive) {
+                    trendColor = lv_palette_main(LV_PALETTE_BLUE); // Blauw voor live SIDEWAYS
+                } else {
+                    trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs als fallback
+                }
                 break;
         }
         
+        // Geen "-warm" tekst meer - kleur geeft status aan
         lv_label_set_text(trendLabel, trendText);
         lv_obj_set_style_text_color(trendLabel, trendColor, 0);
     }
     else
     {
+        // Toon specifiek wat ontbreekt: 30m of 2h
         uint8_t availableMinutes = minuteArrayFilled ? MINUTES_FOR_30MIN_CALC : minuteIndex;
-        uint8_t minutesNeeded = (availableMinutes < 120) ? (120 - availableMinutes) : 0;
+        char waitText[24];
         
-        if (minutesNeeded > 0) {
-            char waitText[16];
-            getTrendWaitText(waitText, sizeof(waitText), minutesNeeded);
-            lv_label_set_text(trendLabel, waitText);
+        if (!hasRet30m) {
+            // Warm-up 30m: toon status alleen als warm-start NIET succesvol was
+            // Als warm-start succesvol was maar hasRet30m nog false, toon dan warm-start status
+            if (hasRet30mWarm) {
+                // Warm-start heeft 30m data, maar hasRet30m is nog false (mogelijk bug, toon "--")
+                lv_label_set_text(trendLabel, "--");
+                lv_obj_set_style_text_color(trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+                return;
+            }
+            
+            // Warm-start was niet succesvol: bereken minuten nodig voor 30m window met ≥80% live
+            uint8_t livePct30 = calcLivePctMinuteAverages(30);
+            
+            if (availableMinutes < 30) {
+                // Nog niet genoeg data: toon minuten tot 30
+                uint8_t minutesNeeded = 30 - availableMinutes;
+                if (language == 1) {
+                    snprintf(waitText, sizeof(waitText), "Warm-up 30m %um", minutesNeeded);
+                } else {
+                    snprintf(waitText, sizeof(waitText), "Warm-up 30m %um", minutesNeeded);
+                }
+            } else if (livePct30 < 80) {
+                // Genoeg data maar niet genoeg live: toon percentage live
+                if (language == 1) {
+                    snprintf(waitText, sizeof(waitText), "Warm-up 30m %u%%", livePct30);
+                } else {
+                    snprintf(waitText, sizeof(waitText), "Warm-up 30m %u%%", livePct30);
+                }
+            } else {
+                // Zou niet moeten voorkomen (livePct30 >= 80 maar hasRet30m is false)
+                lv_label_set_text(trendLabel, "--");
+                lv_obj_set_style_text_color(trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+                return;
+            }
+        } else if (!hasRet2h) {
+            // Warm-up 2h: bereken minuten nodig voor 120m window met ≥80% live
+            uint8_t livePct120 = calcLivePctMinuteAverages(120);
+            
+            if (availableMinutes < 120) {
+                // Nog niet genoeg data: toon minuten tot 120
+                uint8_t minutesNeeded = 120 - availableMinutes;
+                if (language == 1) {
+                    snprintf(waitText, sizeof(waitText), "Warm-up 2h %um", minutesNeeded);
+                } else {
+                    snprintf(waitText, sizeof(waitText), "Warm-up 2h %um", minutesNeeded);
+                }
+            } else if (livePct120 < 80) {
+                // Genoeg data maar niet genoeg live: toon percentage live
+                if (language == 1) {
+                    snprintf(waitText, sizeof(waitText), "Warm-up 2h %u%%", livePct120);
+                } else {
+                    snprintf(waitText, sizeof(waitText), "Warm-up 2h %u%%", livePct120);
+                }
+            } else {
+                // Zou niet moeten voorkomen (livePct120 >= 80 maar hasRet2h is false)
+                lv_label_set_text(trendLabel, "--");
+                lv_obj_set_style_text_color(trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+                return;
+            }
         } else {
+            // Beide ontbreken (zou niet moeten voorkomen, maar fallback)
             lv_label_set_text(trendLabel, "--");
+            lv_obj_set_style_text_color(trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            return;
         }
+        
+        lv_label_set_text(trendLabel, waitText);
         lv_obj_set_style_text_color(trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    }
+    
+    // Update warm-start status label (rechts bovenin chart)
+    if (warmStartStatusLabel != nullptr) {
+        char warmStartText[16];
+        if (warmStartStatus == WARMING_UP) {
+            snprintf(warmStartText, sizeof(warmStartText), "DATA%u%%", warmStartStats.warmUpProgress);
+        } else if (warmStartStatus == LIVE_COLD) {
+            snprintf(warmStartText, sizeof(warmStartText), "COLD");
+        } else {
+            snprintf(warmStartText, sizeof(warmStartText), "LIVE");
+        }
+        lv_label_set_text(warmStartStatusLabel, warmStartText);
+        lv_color_t statusColor = (warmStartStatus == WARMING_UP) ? lv_palette_main(LV_PALETTE_ORANGE) :
+                                  (warmStartStatus == LIVE_COLD) ? lv_palette_main(LV_PALETTE_BLUE) :
+                                  lv_palette_main(LV_PALETTE_BLUE);
+        lv_obj_set_style_text_color(warmStartStatusLabel, statusColor, 0);
     }
 }
 
@@ -4789,7 +6232,12 @@ static void updateBTCEURCard(bool hasNewData)
         lv_label_set_text(priceTitle[0], "BTCEUR");
     }
     
-    lv_label_set_text_fmt(priceLbl[0], "%.2f", prices[0]);
+    // Update price label alleen als waarde veranderd is (cache check)
+    if (priceLbl[0] != nullptr && (lastPriceLblValue != prices[0] || lastPriceLblValue < 0.0f)) {
+        snprintf(priceLblBuffer, sizeof(priceLblBuffer), "%.2f", prices[0]);
+        lv_label_set_text(priceLbl[0], priceLblBuffer);
+        lastPriceLblValue = prices[0];
+    }
     
     // Stel tekstkleur in op basis van nieuwe data: blauw bij nieuwe data, grijs bij oude data
     if (priceLbl[0] != nullptr) {
@@ -4813,17 +6261,37 @@ static void updateBTCEURCard(bool hasNewData)
         if (anchorActive && anchorPrice > 0.0f) {
             // Gebruik dynamische take profit waarde
             float takeProfitPrice = anchorPrice * (1.0f + effAnchorUI.takeProfitPct / 100.0f);
-            lv_label_set_text_fmt(anchorMaxLabel, "%.2f", takeProfitPrice);
+            // Update alleen als waarde veranderd is
+            if (lastAnchorMaxValue != takeProfitPrice || lastAnchorMaxValue < 0.0f) {
+                snprintf(anchorMaxLabelBuffer, sizeof(anchorMaxLabelBuffer), "%.2f", takeProfitPrice);
+                lv_label_set_text(anchorMaxLabel, anchorMaxLabelBuffer);
+                lastAnchorMaxValue = takeProfitPrice;
+            }
         } else {
-            lv_label_set_text(anchorMaxLabel, "");
+            // Update alleen als label niet leeg is
+            if (strlen(anchorMaxLabelBuffer) > 0) {
+                anchorMaxLabelBuffer[0] = '\0';
+                lv_label_set_text(anchorMaxLabel, "");
+                lastAnchorMaxValue = -1.0f;
+            }
         }
     }
     
     if (anchorLabel != nullptr) {
         if (anchorActive && anchorPrice > 0.0f) {
-            lv_label_set_text_fmt(anchorLabel, "%.2f", anchorPrice);
+            // Update alleen als waarde veranderd is
+            if (lastAnchorValue != anchorPrice || lastAnchorValue < 0.0f) {
+                snprintf(anchorLabelBuffer, sizeof(anchorLabelBuffer), "%.2f", anchorPrice);
+                lv_label_set_text(anchorLabel, anchorLabelBuffer);
+                lastAnchorValue = anchorPrice;
+            }
         } else {
-            lv_label_set_text(anchorLabel, "");
+            // Update alleen als label niet leeg is
+            if (strlen(anchorLabelBuffer) > 0) {
+                anchorLabelBuffer[0] = '\0';
+                lv_label_set_text(anchorLabel, "");
+                lastAnchorValue = -1.0f;
+            }
         }
     }
     
@@ -4831,9 +6299,19 @@ static void updateBTCEURCard(bool hasNewData)
         if (anchorActive && anchorPrice > 0.0f) {
             // Gebruik dynamische max loss waarde
             float stopLossPrice = anchorPrice * (1.0f + effAnchorUI.maxLossPct / 100.0f);
-            lv_label_set_text_fmt(anchorMinLabel, "%.2f", stopLossPrice);
+            // Update alleen als waarde veranderd is
+            if (lastAnchorMinValue != stopLossPrice || lastAnchorMinValue < 0.0f) {
+                snprintf(anchorMinLabelBuffer, sizeof(anchorMinLabelBuffer), "%.2f", stopLossPrice);
+                lv_label_set_text(anchorMinLabel, anchorMinLabelBuffer);
+                lastAnchorMinValue = stopLossPrice;
+            }
         } else {
-            lv_label_set_text(anchorMinLabel, "");
+            // Update alleen als label niet leeg is
+            if (strlen(anchorMinLabelBuffer) > 0) {
+                anchorMinLabelBuffer[0] = '\0';
+                lv_label_set_text(anchorMinLabel, "");
+                lastAnchorMinValue = -1.0f;
+            }
         }
     }
     #else
@@ -4841,21 +6319,47 @@ static void updateBTCEURCard(bool hasNewData)
         if (anchorActive && anchorPrice > 0.0f) {
             // Toon dynamische take profit waarde (effectief percentage)
             float takeProfitPrice = anchorPrice * (1.0f + effAnchorUI.takeProfitPct / 100.0f);
-            lv_label_set_text_fmt(anchorMaxLabel, "+%.2f%% %.2f", effAnchorUI.takeProfitPct, takeProfitPrice);
+            // Update alleen als waarde veranderd is
+            if (lastAnchorMaxValue != takeProfitPrice || lastAnchorMaxValue < 0.0f) {
+                snprintf(anchorMaxLabelBuffer, sizeof(anchorMaxLabelBuffer), "+%.2f%% %.2f", effAnchorUI.takeProfitPct, takeProfitPrice);
+                lv_label_set_text(anchorMaxLabel, anchorMaxLabelBuffer);
+                lastAnchorMaxValue = takeProfitPrice;
+            }
         } else {
-            lv_label_set_text(anchorMaxLabel, "");
+            // Update alleen als label niet leeg is
+            if (strlen(anchorMaxLabelBuffer) > 0) {
+                anchorMaxLabelBuffer[0] = '\0';
+                lv_label_set_text(anchorMaxLabel, "");
+                lastAnchorMaxValue = -1.0f;
+            }
         }
     }
     
     if (anchorLabel != nullptr) {
         if (anchorActive && anchorPrice > 0.0f && prices[0] > 0.0f) {
             float anchorPct = ((prices[0] - anchorPrice) / anchorPrice) * 100.0f;
-            lv_label_set_text_fmt(anchorLabel, "%c%.2f%% %.2f",
-                                  anchorPct >= 0 ? '+' : '-', fabsf(anchorPct), anchorPrice);
+            // Update alleen als waarde veranderd is (check zowel anchorPrice als anchorPct)
+            float currentValue = anchorPrice + anchorPct;  // Combinatie voor cache check
+            if (lastAnchorValue != currentValue || lastAnchorValue < 0.0f) {
+                snprintf(anchorLabelBuffer, sizeof(anchorLabelBuffer), "%c%.2f%% %.2f",
+                         anchorPct >= 0 ? '+' : '-', fabsf(anchorPct), anchorPrice);
+                lv_label_set_text(anchorLabel, anchorLabelBuffer);
+                lastAnchorValue = currentValue;
+            }
         } else if (anchorActive && anchorPrice > 0.0f) {
-            lv_label_set_text_fmt(anchorLabel, "%.2f", anchorPrice);
+            // Update alleen als waarde veranderd is
+            if (lastAnchorValue != anchorPrice || lastAnchorValue < 0.0f) {
+                snprintf(anchorLabelBuffer, sizeof(anchorLabelBuffer), "%.2f", anchorPrice);
+                lv_label_set_text(anchorLabel, anchorLabelBuffer);
+                lastAnchorValue = anchorPrice;
+            }
         } else {
-            lv_label_set_text(anchorLabel, "");
+            // Update alleen als label niet leeg is
+            if (strlen(anchorLabelBuffer) > 0) {
+                anchorLabelBuffer[0] = '\0';
+                lv_label_set_text(anchorLabel, "");
+                lastAnchorValue = -1.0f;
+            }
         }
     }
     
@@ -4863,9 +6367,19 @@ static void updateBTCEURCard(bool hasNewData)
         if (anchorActive && anchorPrice > 0.0f) {
             // Toon dynamische max loss waarde (effectief percentage)
             float stopLossPrice = anchorPrice * (1.0f + effAnchorUI.maxLossPct / 100.0f);
-            lv_label_set_text_fmt(anchorMinLabel, "%.2f%% %.2f", effAnchorUI.maxLossPct, stopLossPrice);
+            // Update alleen als waarde veranderd is
+            if (lastAnchorMinValue != stopLossPrice || lastAnchorMinValue < 0.0f) {
+                snprintf(anchorMinLabelBuffer, sizeof(anchorMinLabelBuffer), "%.2f%% %.2f", effAnchorUI.maxLossPct, stopLossPrice);
+                lv_label_set_text(anchorMinLabel, anchorMinLabelBuffer);
+                lastAnchorMinValue = stopLossPrice;
+            }
         } else {
-            lv_label_set_text(anchorMinLabel, "");
+            // Update alleen als label niet leeg is
+            if (strlen(anchorMinLabelBuffer) > 0) {
+                anchorMinLabelBuffer[0] = '\0';
+                lv_label_set_text(anchorMinLabel, "");
+                lastAnchorMinValue = -1.0f;
+            }
         }
     }
     #endif
@@ -4885,9 +6399,26 @@ static void updateAveragePriceCard(uint8_t index)
     
     if (priceTitle[index] != nullptr) {
         if (hasData && pct != 0.0f) {
-            lv_label_set_text_fmt(priceTitle[index], "%s  %c%.2f%%", symbols[index], pct >= 0 ? '+' : '-', fabsf(pct));
+            // Format nieuwe tekst
+            char newText[64];
+            snprintf(newText, sizeof(newText), "%s  %c%.2f%%", symbols[index], pct >= 0 ? '+' : '-', fabsf(pct));
+            // Update alleen als tekst veranderd is
+            if (strcmp(lastPriceTitleText[index], newText) != 0) {
+                strncpy(priceTitleBuffer[index], newText, sizeof(priceTitleBuffer[index]) - 1);
+                priceTitleBuffer[index][sizeof(priceTitleBuffer[index]) - 1] = '\0';
+                strncpy(lastPriceTitleText[index], newText, sizeof(lastPriceTitleText[index]) - 1);
+                lastPriceTitleText[index][sizeof(lastPriceTitleText[index]) - 1] = '\0';
+                lv_label_set_text(priceTitle[index], priceTitleBuffer[index]);
+            }
         } else {
-            lv_label_set_text(priceTitle[index], symbols[index]);
+            // Update alleen als tekst veranderd is
+            if (strcmp(lastPriceTitleText[index], symbols[index]) != 0) {
+                strncpy(priceTitleBuffer[index], symbols[index], sizeof(priceTitleBuffer[index]) - 1);
+                priceTitleBuffer[index][sizeof(priceTitleBuffer[index]) - 1] = '\0';
+                strncpy(lastPriceTitleText[index], symbols[index], sizeof(lastPriceTitleText[index]) - 1);
+                lastPriceTitleText[index][sizeof(lastPriceTitleText[index]) - 1] = '\0';
+                lv_label_set_text(priceTitle[index], priceTitleBuffer[index]);
+            }
         }
     }
     
@@ -4899,15 +6430,41 @@ static void updateAveragePriceCard(uint8_t index)
         if (minVal > 0.0f && maxVal > 0.0f)
         {
             float diff = maxVal - minVal;
-            lv_label_set_text_fmt(price1MinMaxLabel, "%.2f", maxVal);
-            lv_label_set_text_fmt(price1MinDiffLabel, "%.2f", diff);
-            lv_label_set_text_fmt(price1MinMinLabel, "%.2f", minVal);
+            // Update alleen als waarden veranderd zijn
+            if (lastPrice1MinMaxValue != maxVal || lastPrice1MinMaxValue < 0.0f) {
+                snprintf(price1MinMaxLabelBuffer, sizeof(price1MinMaxLabelBuffer), "%.2f", maxVal);
+                lv_label_set_text(price1MinMaxLabel, price1MinMaxLabelBuffer);
+                lastPrice1MinMaxValue = maxVal;
+            }
+            if (lastPrice1MinDiffValue != diff || lastPrice1MinDiffValue < 0.0f) {
+                snprintf(price1MinDiffLabelBuffer, sizeof(price1MinDiffLabelBuffer), "%.2f", diff);
+                lv_label_set_text(price1MinDiffLabel, price1MinDiffLabelBuffer);
+                lastPrice1MinDiffValue = diff;
+            }
+            if (lastPrice1MinMinValue != minVal || lastPrice1MinMinValue < 0.0f) {
+                snprintf(price1MinMinLabelBuffer, sizeof(price1MinMinLabelBuffer), "%.2f", minVal);
+                lv_label_set_text(price1MinMinLabel, price1MinMinLabelBuffer);
+                lastPrice1MinMinValue = minVal;
+            }
         }
         else
         {
-            lv_label_set_text(price1MinMaxLabel, "--");
-            lv_label_set_text(price1MinDiffLabel, "--");
-            lv_label_set_text(price1MinMinLabel, "--");
+            // Update alleen als labels niet "--" zijn
+            if (strcmp(price1MinMaxLabelBuffer, "--") != 0) {
+                strcpy(price1MinMaxLabelBuffer, "--");
+                lv_label_set_text(price1MinMaxLabel, "--");
+                lastPrice1MinMaxValue = -1.0f;
+            }
+            if (strcmp(price1MinDiffLabelBuffer, "--") != 0) {
+                strcpy(price1MinDiffLabelBuffer, "--");
+                lv_label_set_text(price1MinDiffLabel, "--");
+                lastPrice1MinDiffValue = -1.0f;
+            }
+            if (strcmp(price1MinMinLabelBuffer, "--") != 0) {
+                strcpy(price1MinMinLabelBuffer, "--");
+                lv_label_set_text(price1MinMinLabel, "--");
+                lastPrice1MinMinValue = -1.0f;
+            }
         }
     }
     
@@ -4919,15 +6476,41 @@ static void updateAveragePriceCard(uint8_t index)
         if (minVal > 0.0f && maxVal > 0.0f)
         {
             float diff = maxVal - minVal;
-            lv_label_set_text_fmt(price30MinMaxLabel, "%.2f", maxVal);
-            lv_label_set_text_fmt(price30MinDiffLabel, "%.2f", diff);
-            lv_label_set_text_fmt(price30MinMinLabel, "%.2f", minVal);
+            // Update alleen als waarden veranderd zijn
+            if (lastPrice30MinMaxValue != maxVal || lastPrice30MinMaxValue < 0.0f) {
+                snprintf(price30MinMaxLabelBuffer, sizeof(price30MinMaxLabelBuffer), "%.2f", maxVal);
+                lv_label_set_text(price30MinMaxLabel, price30MinMaxLabelBuffer);
+                lastPrice30MinMaxValue = maxVal;
+            }
+            if (lastPrice30MinDiffValue != diff || lastPrice30MinDiffValue < 0.0f) {
+                snprintf(price30MinDiffLabelBuffer, sizeof(price30MinDiffLabelBuffer), "%.2f", diff);
+                lv_label_set_text(price30MinDiffLabel, price30MinDiffLabelBuffer);
+                lastPrice30MinDiffValue = diff;
+            }
+            if (lastPrice30MinMinValue != minVal || lastPrice30MinMinValue < 0.0f) {
+                snprintf(price30MinMinLabelBuffer, sizeof(price30MinMinLabelBuffer), "%.2f", minVal);
+                lv_label_set_text(price30MinMinLabel, price30MinMinLabelBuffer);
+                lastPrice30MinMinValue = minVal;
+            }
         }
         else
         {
-            lv_label_set_text(price30MinMaxLabel, "--");
-            lv_label_set_text(price30MinDiffLabel, "--");
-            lv_label_set_text(price30MinMinLabel, "--");
+            // Update alleen als labels niet "--" zijn
+            if (strcmp(price30MinMaxLabelBuffer, "--") != 0) {
+                strcpy(price30MinMaxLabelBuffer, "--");
+                lv_label_set_text(price30MinMaxLabel, "--");
+                lastPrice30MinMaxValue = -1.0f;
+            }
+            if (strcmp(price30MinDiffLabelBuffer, "--") != 0) {
+                strcpy(price30MinDiffLabelBuffer, "--");
+                lv_label_set_text(price30MinDiffLabel, "--");
+                lastPrice30MinDiffValue = -1.0f;
+            }
+            if (strcmp(price30MinMinLabelBuffer, "--") != 0) {
+                strcpy(price30MinMinLabelBuffer, "--");
+                lv_label_set_text(price30MinMinLabel, "--");
+                lastPrice30MinMinValue = -1.0f;
+            }
         }
     }
     
@@ -4937,7 +6520,12 @@ static void updateAveragePriceCard(uint8_t index)
     }
     else if (averagePrices[index] > 0.0f)
     {
-        lv_label_set_text_fmt(priceLbl[index], "%.2f", averagePrices[index]);
+        // Update alleen als waarde veranderd is
+        if (lastPriceLblValueArray[index] != averagePrices[index] || lastPriceLblValueArray[index] < 0.0f) {
+            snprintf(priceLblBufferArray[index], sizeof(priceLblBufferArray[index]), "%.2f", averagePrices[index]);
+            lv_label_set_text(priceLbl[index], priceLblBufferArray[index]);
+            lastPriceLblValueArray[index] = averagePrices[index];
+        }
     }
     else
     {
@@ -5018,10 +6606,20 @@ static void updateFooter()
         
         freeRAM = heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024;
         
-        lv_label_set_text_fmt(lblFooterLine1, "%ddBm", rssi);
+        // Update alleen als RSSI veranderd is
+        if (lastRssiValue != rssi || lastRssiValue == -999) {
+            snprintf(footerRssiBuffer, sizeof(footerRssiBuffer), "%ddBm", rssi);
+            lv_label_set_text(lblFooterLine1, footerRssiBuffer);
+            lastRssiValue = rssi;
+        }
         
         if (ramLabel != nullptr) {
-            lv_label_set_text_fmt(ramLabel, "%ukB", freeRAM);
+            // Update alleen als RAM waarde veranderd is (afgerond op kB)
+            if (lastRamValue != freeRAM || lastRamValue == 0) {
+                snprintf(footerRamBuffer, sizeof(footerRamBuffer), "%ukB", freeRAM);
+                lv_label_set_text(ramLabel, footerRamBuffer);
+                lastRamValue = freeRAM;
+            }
         }
     }
     
@@ -5080,6 +6678,14 @@ static void createChart()
     lv_obj_set_style_text_align(trendLabel, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_align(trendLabel, LV_ALIGN_TOP_LEFT, -4, -6);
     lv_label_set_text(trendLabel, "--");
+    
+    // Warm-start status label (rechts bovenin chart, zelfde hoogte als trend)
+    warmStartStatusLabel = lv_label_create(chart);
+    lv_obj_set_style_text_font(warmStartStatusLabel, FONT_SIZE_TREND_VOLATILITY, 0);
+    lv_obj_set_style_text_color(warmStartStatusLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_align(warmStartStatusLabel, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(warmStartStatusLabel, LV_ALIGN_TOP_RIGHT, 4, -6);
+    lv_label_set_text(warmStartStatusLabel, "--");
     
     volatilityLabel = lv_label_create(chart);
     lv_obj_set_style_text_font(volatilityLabel, FONT_SIZE_TREND_VOLATILITY, 0);
@@ -5348,7 +6954,7 @@ static void createFooter()
     lv_obj_set_style_text_font(chartVersionLabel, FONT_SIZE_FOOTER, 0);
     lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
     lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_text_fmt(chartVersionLabel, "%s", VERSION_STRING);
+    lv_label_set_text(chartVersionLabel, VERSION_STRING);
     lv_obj_align(chartVersionLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
     
     if (WiFi.status() == WL_CONNECTED) {
@@ -5371,7 +6977,7 @@ static void createFooter()
     lv_obj_set_style_text_font(chartVersionLabel, FONT_SIZE_FOOTER, 0);
     lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
     lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_text_fmt(chartVersionLabel, "%s", VERSION_STRING);
+    lv_label_set_text(chartVersionLabel, VERSION_STRING);
     lv_obj_align(chartVersionLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
     
     if (WiFi.status() == WL_CONNECTED) {
@@ -5418,7 +7024,7 @@ static void createFooter()
     lv_obj_set_style_text_font(chartVersionLabel, FONT_SIZE_FOOTER, 0);
     lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
     lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_text_fmt(chartVersionLabel, "%s", VERSION_STRING);
+    lv_label_set_text(chartVersionLabel, VERSION_STRING);
     lv_obj_align(chartVersionLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
     #endif
 }
@@ -5531,6 +7137,10 @@ void checkButton() {
 static void setupSerialAndDevice()
 {
     // Load settings from Preferences
+    // Initialize SettingsStore
+    settingsStore.begin();
+    
+    // Load settings
     loadSettings();
     Serial.begin(115200);
     DEV_DEVICE_INIT();
@@ -5587,33 +7197,141 @@ static void setupLVGL()
 
     uint32_t screenWidth = gfx->width();
     uint32_t screenHeight = gfx->height();
-    // Buffer grootte - platform-specifiek
-    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI)
-    // TTGO/ESP32-S3: 30 regels voor RAM besparing
-    uint32_t bufSize = screenWidth * 30;
+    
+    // Detecteer PSRAM beschikbaarheid
+    bool psramAvailable = hasPSRAM();
+    
+    // Bepaal useDoubleBuffer: board-aware
+    bool useDoubleBuffer;
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        // CYD zonder PSRAM: force single buffer (geen double buffering)
+        useDoubleBuffer = false;  // Altijd false voor CYD zonder PSRAM
+    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
+        // ESP32-S3: double buffer alleen als PSRAM beschikbaar is
+        useDoubleBuffer = psramAvailable;
+    #elif defined(PLATFORM_TTGO)
+        // TTGO: double buffer alleen als PSRAM beschikbaar is
+        useDoubleBuffer = psramAvailable;
     #else
-    // CYD: 40 regels (zoals in originele CYD code)
-    uint32_t bufSize = screenWidth * 40;
+        // Fallback: double buffer alleen met PSRAM
+        useDoubleBuffer = psramAvailable;
     #endif
-
-    lv_color_t *disp_draw_buf = (lv_color_t *)heap_caps_malloc(bufSize * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (!disp_draw_buf)
-    {
-        // remove MALLOC_CAP_INTERNAL flag try again
-        disp_draw_buf = (lv_color_t *)heap_caps_malloc(bufSize * 2, MALLOC_CAP_8BIT);
-    }
-    if (!disp_draw_buf)
-    {
-        Serial_println("LVGL disp_draw_buf allocate failed!");
-        while (true)
-        {
-            /* no need to continue */
+    
+    // Bepaal buffer lines per board (compile-time instelbaar voor CYD)
+    uint8_t bufLines;
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        // CYD zonder PSRAM: compile-time instelbaar (default 4, kan 1/2/4 zijn voor testen)
+        // Na geheugenoptimalisaties kunnen we meer buffer gebruiken voor betere performance
+        #ifndef CYD_BUF_LINES_NO_PSRAM
+        #define CYD_BUF_LINES_NO_PSRAM 4  // Default: 4 regels (was 1->2->4, verhoogd na geheugenoptimalisaties)
+        #endif
+        if (psramAvailable) {
+            bufLines = 40;  // CYD met PSRAM: 40 regels
+        } else {
+            bufLines = CYD_BUF_LINES_NO_PSRAM;  // CYD zonder PSRAM: compile-time instelbaar
         }
+    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
+        // ESP32-S3 met PSRAM: 30 regels (of fallback kleiner als geen PSRAM)
+        if (psramAvailable) {
+            bufLines = 30;
+        } else {
+            bufLines = 2;  // ESP32-S3 zonder PSRAM: 2 regels
+        }
+    #elif defined(PLATFORM_TTGO)
+        // TTGO: 30 regels met PSRAM, 2 zonder
+        if (psramAvailable) {
+            bufLines = 30;
+        } else {
+            bufLines = 2;
+        }
+    #else
+        // Fallback
+        bufLines = psramAvailable ? 30 : 2;
+    #endif
+    
+    uint32_t bufSize = screenWidth * bufLines;
+    uint8_t numBuffers = useDoubleBuffer ? 2 : 1;  // 1 of 2 buffers afhankelijk van useDoubleBuffer
+    size_t bufSizeBytes = bufSize * sizeof(lv_color_t) * numBuffers;
+    
+    const char* bufferLocation;
+    uint32_t freeHeapBefore = ESP.getFreeHeap();
+    size_t largestFreeBlockBefore = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    
+    // Bepaal board naam voor logging
+    const char* boardName;
+    #if defined(PLATFORM_CYD24)
+        boardName = "CYD24";
+    #elif defined(PLATFORM_CYD28)
+        boardName = "CYD28";
+    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
+        boardName = "ESP32-S3";
+    #elif defined(PLATFORM_TTGO)
+        boardName = "TTGO";
+    #else
+        boardName = "Unknown";
+    #endif
+    
+    // Alloceer buffer één keer bij init (niet herhaald)
+    if (disp_draw_buf == nullptr) {
+        if (psramAvailable) {
+            // Met PSRAM: probeer eerst SPIRAM allocatie
+            disp_draw_buf = (lv_color_t *)heap_caps_malloc(bufSizeBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (disp_draw_buf) {
+                bufferLocation = "SPIRAM";
+            } else {
+                // Fallback naar INTERNAL+DMA als SPIRAM alloc faalt
+                Serial.println("[LVGL] SPIRAM allocatie gefaald, valt terug op INTERNAL+DMA");
+                bufferLocation = "INTERNAL+DMA (fallback)";
+                disp_draw_buf = (lv_color_t *)heap_caps_malloc(bufSizeBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+            }
+        } else {
+            // Zonder PSRAM: gebruik INTERNAL+DMA geheugen (geen DEFAULT)
+            bufferLocation = "INTERNAL+DMA";
+            disp_draw_buf = (lv_color_t *)heap_caps_malloc(bufSizeBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        }
+        
+        if (!disp_draw_buf) {
+            Serial.printf("[LVGL] FATAL: Draw buffer allocatie gefaald! Vereist: %u bytes\n", bufSizeBytes);
+            Serial.printf("[LVGL] Free heap: %u bytes, Largest free block: %u bytes\n", 
+                         ESP.getFreeHeap(), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+            while (true) {
+                /* no need to continue */
+            }
+        }
+        
+        disp_draw_buf_size = bufSizeBytes;
+        
+        // Uitgebreide logging bij boot
+        uint32_t freeHeapAfter = ESP.getFreeHeap();
+        size_t largestFreeBlockAfter = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        Serial.printf("[LVGL] Board: %s, Display: %ux%u pixels\n", boardName, screenWidth, screenHeight);
+        Serial.printf("[LVGL] PSRAM: %s, useDoubleBuffer: %s\n", 
+                     psramAvailable ? "yes" : "no", useDoubleBuffer ? "true" : "false");
+        Serial.printf("[LVGL] Draw buffer: %u lines, %u pixels, %u bytes (%u buffer%s)\n", 
+                     bufLines, bufSize, bufSizeBytes, numBuffers, numBuffers == 1 ? "" : "s");
+        Serial.printf("[LVGL] Buffer locatie: %s\n", bufferLocation);
+        Serial.printf("[LVGL] Heap: %u -> %u bytes free, Largest block: %u -> %u bytes\n",
+                     freeHeapBefore, freeHeapAfter, largestFreeBlockBefore, largestFreeBlockAfter);
+    } else {
+        Serial.println(F("[LVGL] WARNING: Draw buffer al gealloceerd! (herhaalde allocatie voorkomen)"));
     }
 
     disp = lv_display_create(screenWidth, screenHeight);
     lv_display_set_flush_cb(disp, my_disp_flush);
-    lv_display_set_buffers(disp, disp_draw_buf, NULL, bufSize * 2, LV_DISPLAY_RENDER_MODE_PARTIAL);
+    
+    // LVGL buffer setup: single of double buffering
+    // LVGL 9.0+ verwacht buffer size in BYTES, niet pixels
+    size_t bufSizePixels = bufSize;  // Aantal pixels in buffer
+    size_t bufSizeBytesPerBuffer = bufSizePixels * sizeof(lv_color_t);  // Bytes per buffer
+    
+    if (useDoubleBuffer) {
+        // Double buffering: beide buffers in dezelfde allocatie
+        // bufSizeBytes is al berekend als bufSize * sizeof(lv_color_t) * 2
+        lv_display_set_buffers(disp, disp_draw_buf, NULL, bufSizeBytes, LV_DISPLAY_RENDER_MODE_PARTIAL);
+    } else {
+        // Single buffering: alleen eerste buffer gebruiken (size in bytes)
+        lv_display_set_buffers(disp, disp_draw_buf, NULL, bufSizeBytesPerBuffer, LV_DISPLAY_RENDER_MODE_PARTIAL);
+    }
 }
 
 static void setupWatchdog()
@@ -5650,14 +7368,14 @@ static void setupWiFiEventHandlers()
         switch(event) {
             case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
                 if (wifiInitialized) {
-                    Serial.println("[WiFi] Verbinding verbroken");
+                    Serial.println(F("[WiFi] Verbinding verbroken"));
                     wifiReconnectEnabled = true;
                     lastReconnectAttempt = 0;
                     reconnectAttemptCount = 0; // Reset reconnect counter
                 }
                 break;
             case ARDUINO_EVENT_WIFI_STA_CONNECTED:
-                Serial.println("[WiFi] Verbonden met AP");
+                Serial.println(F("[WiFi] Verbonden met AP"));
                 break;
             case ARDUINO_EVENT_WIFI_STA_GOT_IP:
                 // Geoptimaliseerd: gebruik char array i.p.v. String
@@ -5693,10 +7411,49 @@ static void setupMutex()
     // Maak mutex VOOR we het gebruiken (moet eerst aangemaakt worden)
     dataMutex = xSemaphoreCreateMutex();
     if (dataMutex == NULL) {
-        Serial.println("[Error] Kon mutex niet aanmaken!");
+        Serial.println(F("[Error] Kon mutex niet aanmaken!"));
     } else {
         Serial.println("[FreeRTOS] Mutex aangemaakt");
     }
+}
+
+// Alloceer grote arrays dynamisch voor CYD zonder PSRAM om DRAM overflow te voorkomen
+static void allocateDynamicArrays()
+{
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+    // Voor CYD zonder PSRAM: alloceer arrays dynamisch
+    if (!hasPSRAM()) {
+        // Alloceer fiveMinutePrices arrays
+        fiveMinutePrices = (float *)heap_caps_malloc(SECONDS_PER_5MINUTES * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        fiveMinutePricesSource = (DataSource *)heap_caps_malloc(SECONDS_PER_5MINUTES * sizeof(DataSource), MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        
+        // Alloceer minuteAverages arrays
+        minuteAverages = (float *)heap_caps_malloc(MINUTES_FOR_30MIN_CALC * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        minuteAveragesSource = (DataSource *)heap_caps_malloc(MINUTES_FOR_30MIN_CALC * sizeof(DataSource), MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        
+        if (!fiveMinutePrices || !fiveMinutePricesSource || !minuteAverages || !minuteAveragesSource) {
+            Serial.println(F("[Memory] FATAL: Dynamische array allocatie gefaald!"));
+            Serial.printf("[Memory] Free heap: %u bytes\n", ESP.getFreeHeap());
+            while (true) {
+                /* no need to continue */
+            }
+        }
+        
+        // Initialiseer arrays naar 0
+        for (uint16_t i = 0; i < SECONDS_PER_5MINUTES; i++) {
+            fiveMinutePrices[i] = 0.0f;
+            fiveMinutePricesSource[i] = SOURCE_LIVE;
+        }
+        for (uint8_t i = 0; i < MINUTES_FOR_30MIN_CALC; i++) {
+            minuteAverages[i] = 0.0f;
+            minuteAveragesSource[i] = SOURCE_LIVE;
+        }
+        
+        Serial.printf("[Memory] Dynamische arrays gealloceerd: fiveMinutePrices=%u bytes, minuteAverages=%u bytes\n",
+                     SECONDS_PER_5MINUTES * sizeof(float) + SECONDS_PER_5MINUTES * sizeof(DataSource),
+                     MINUTES_FOR_30MIN_CALC * sizeof(float) + MINUTES_FOR_30MIN_CALC * sizeof(DataSource));
+    }
+    #endif
 }
 
 static void startFreeRTOSTasks()
@@ -5759,8 +7516,27 @@ void setup()
     setupWiFiEventHandlers();
     setupMutex();  // Mutex moet vroeg aangemaakt worden, maar tasks starten later
     
+    // Alloceer dynamische arrays voor CYD zonder PSRAM (moet voor initialisatie)
+    allocateDynamicArrays();
+    
+    // Initialize source tracking arrays (default: all LIVE, wordt overschreven door warm-start)
+    for (uint8_t i = 0; i < SECONDS_PER_MINUTE; i++) {
+        secondPricesSource[i] = SOURCE_LIVE;
+    }
+    for (uint16_t i = 0; i < SECONDS_PER_5MINUTES; i++) {
+        fiveMinutePricesSource[i] = SOURCE_LIVE;
+    }
+    for (uint8_t i = 0; i < MINUTES_FOR_30MIN_CALC; i++) {
+        minuteAveragesSource[i] = SOURCE_LIVE;
+    }
+    
     // WiFi connection and initial data fetch (maakt tijdelijk UI aan)
     wifiConnectionAndFetchPrice();
+    
+    // Warm-start: Vul buffers met Binance historische data (als WiFi verbonden is)
+    if (WiFi.status() == WL_CONNECTED && warmStartEnabled) {
+        performWarmStart();
+    }
     
     Serial_println("Setup done");
     fetchPrice();
@@ -5768,10 +7544,13 @@ void setup()
     // Build main UI (verwijdert WiFi UI en bouwt hoofd UI)
     buildUI();
     
-    // Force LVGL to render immediately after UI creation (CYD 2.4 work-around)
-    #ifdef PLATFORM_CYD24
+    // Force LVGL to render immediately after UI creation
+    // CYD 2.4 en CYD 2.8 (zonder PSRAM, single buffering): gebruik lv_refr_now() voor directe rendering
+    // CYD boards hebben geen PSRAM, dus altijd single buffering
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
     if (disp != NULL) {
         lv_refr_now(disp);
+        Serial.println(F("[LVGL] Forced immediate refresh (lv_refr_now) voor CYD zonder PSRAM"));
     }
     #else
     // Voor andere platforms, roep timer handler aan om scherm te renderen
@@ -5894,7 +7673,7 @@ static bool setupWiFiConnection()
             connected = true;
             wifiReconnectEnabled = false;
             wifiInitialized = true;
-            Serial.println("[WiFi] Succesvol verbonden");
+            Serial.println(F("[WiFi] Succesvol verbonden"));
         } else {
             Serial.println("[WiFi] Verbinding timeout");
         }
@@ -6129,7 +7908,7 @@ void apiTask(void *parameter)
     static uint32_t callCount = 0;
     static uint32_t missedCallCount = 0;
     
-    Serial.println("[API Task] Gestart op Core 1");
+    Serial.println(F("[API Task] Gestart op Core 1"));
     
     // Wacht tot mutex is aangemaakt
     while (dataMutex == NULL) {
@@ -6185,9 +7964,29 @@ void apiTask(void *parameter)
             Serial.println("[API Task] WiFi weer verbonden");
         }
         
-        // Gebruik vTaskDelayUntil om precieze timing te garanderen
-        // Dit zorgt ervoor dat de volgende call precies na het interval start
-        vTaskDelayUntil(&lastWakeTime, frequency);
+        // Timing fix: update lastWakeTime NA de call om drift te voorkomen
+        // Als call langer duurt dan interval, reset timing en skip volgende call indien nodig
+        unsigned long callEnd = millis();
+        unsigned long callDuration = callEnd - callStart;
+        
+        // Als call langer duurt dan interval, reset timing om opstapeling te voorkomen
+        if (callDuration >= UPDATE_API_INTERVAL) {
+            // Call duurde langer dan interval - reset timing
+            // Bereken hoeveel tijd over is tot volgende interval
+            unsigned long timeUntilNextInterval = UPDATE_API_INTERVAL - (callDuration % UPDATE_API_INTERVAL);
+            if (timeUntilNextInterval < 50) {
+                // Te weinig tijd over - skip deze cycle en wacht tot volgende interval
+                lastWakeTime = xTaskGetTickCount();
+                vTaskDelay(pdMS_TO_TICKS(UPDATE_API_INTERVAL - 50)); // Wacht bijna volledige interval
+            } else {
+                // Genoeg tijd over - wacht resterende tijd
+                lastWakeTime = xTaskGetTickCount();
+                vTaskDelay(pdMS_TO_TICKS(timeUntilNextInterval));
+            }
+        } else {
+            // Normale timing: gebruik vTaskDelayUntil voor precieze interval timing
+            vTaskDelayUntil(&lastWakeTime, frequency);
+        }
     }
 }
 
@@ -6231,13 +8030,13 @@ void uiTask(void *parameter)
             lastLvglTime = currentTime;
         }
         
-        // Geoptimaliseerd: betere mutex timeout handling met retry logica
-        // Neem mutex voor data lezen (timeout verhoogd voor CYD om haperingen te voorkomen)
-        // CYD heeft grotere buffer en meer rendering overhead, dus iets langere timeout
+        // Geoptimaliseerd: betere mutex timeout handling
+        // UI task heeft lagere prioriteit: kortere timeout zodat API task voorrang krijgt
+        // Als mutex niet beschikbaar is, skip deze update (UI kan volgende keer opnieuw proberen)
         #ifdef PLATFORM_TTGO
-        const TickType_t mutexTimeout = pdMS_TO_TICKS(50); // TTGO: korte timeout
+        const TickType_t mutexTimeout = pdMS_TO_TICKS(30); // TTGO: korte timeout
         #else
-        const TickType_t mutexTimeout = pdMS_TO_TICKS(100); // CYD/ESP32-S3: langere timeout voor betere grafiek updates
+        const TickType_t mutexTimeout = pdMS_TO_TICKS(50); // CYD/ESP32-S3: korte timeout zodat API task voorrang krijgt
         #endif
         
         static uint32_t uiMutexTimeoutCount = 0;
@@ -6340,6 +8139,9 @@ void uiTask(void *parameter)
         #if HAS_PHYSICAL_BUTTON
         checkButton();
         #endif
+        
+        // Periodic heap telemetry check (elke 60 seconden)
+        checkHeapTelemetry();
         
         // Yield aan andere tasks om IDLE task tijd te geven
         vTaskDelay(1); // Geef 1 tick (10ms) aan andere tasks

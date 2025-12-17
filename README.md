@@ -26,6 +26,7 @@ A unified Crypto Monitor for different ESP32 display platforms: TTGO T-Display, 
 - **Trend-Adaptive Anchors**: Dynamic anchor thresholds based on trend
 - **Smart Confluence Mode**: Combined alerts when multiple timeframes align
 - **Auto-Volatility Mode**: Automatic threshold adjustment based on volatility
+- **Warm-Start with Binance historical data**: Fill buffers on boot with historical data for immediately usable trend and volatility indications
 
 ## TL;DR – Reading alerts at a glance
 
@@ -264,6 +265,59 @@ The alert system uses a structured decision tree to generate alerts. Below is th
             v
 [ END → wait for next candle ]
 ```
+
+## Warm-Start Sizing
+
+The warm-start mechanism fills buffers on boot with Binance historical data for immediately usable trend and volatility indications.
+
+### Configuration Parameters
+
+- **warmStartEnabled** (default: true): Enable/disable warm-start
+- **warmStart1mExtraCandles** (default: 15): Extra 1m candles on top of volatility window
+- **warmStart5mCandles** (default: 12): Number of 5m candles (12 = 1 hour)
+- **warmStart30mCandles** (default: 8): Number of 30m candles (8 = 4 hours)
+- **warmStart2hCandles** (default: 6): Number of 2h candles (6 = 12 hours)
+
+### Dynamic Sizing
+
+- **1m candles**: `warmStart1mCandles = volatilityWindowMinutes + warmStart1mExtraCandles`
+  - Clamped between 30-200 candles
+- **Other timeframes**: Clamped between 2-200 candles
+
+### Status Modes
+
+- **FULL**: All timeframes successfully loaded
+- **PARTIAL**: Partially loaded (some timeframes failed)
+- **FAILED**: All timeframes failed
+- **DISABLED**: Warm-start disabled
+
+### Status Display
+
+- **WARMING_UP**: Buffers still contain Binance data
+- **LIVE**: Fully on live data
+- **LIVE(COLD)**: Live data but warm-start failed (cold start)
+
+### Warm-up Progress
+
+The system automatically calculates the percentage of LIVE data in buffers:
+- Volatility LIVE: ≥80% of secondPrices buffer is LIVE
+- Trend LIVE: ≥80% of minuteAverages buffer is LIVE
+- Warm-up progress: Average of both percentages
+
+Status is visible:
+- In web interface: "Current Status" box with warm-start info and progress
+- On display: Right top of chart block (same height as trend text)
+  - "WXX%" during warming up (orange)
+  - "LIVE" when fully live (green)
+  - "COLD" on cold start (red)
+
+### Memory Efficiency
+
+The warm-start mechanism is optimized for memory efficiency:
+- Returns-only parsing: only last closes are stored
+- 1m: only last 60 closes (for buffer)
+- 5m/30m: only last 2 closes (for ret calculation)
+- 2h: only first and last close (for ret_2h calculation)
 
 ### Important Notes
 
