@@ -1,9 +1,11 @@
 # Crypto Monitor Refactoring Plan
 
-**Versie:** 1.0  
-**Datum:** 2024  
+**Versie:** 2.0 (bijgewerkt met nieuwe strategie)  
+**Datum:** 2025-12-18  
 **Doel:** Code refactoren naar modulaire structuur voor betere stabiliteit en overzichtelijkheid  
 **Principe:** Alle functionaliteit behouden, ongebruikte code verwijderen, stap-voor-stap met werkende code na elke stap
+
+**Belangrijk:** Fase 4 gebruikt een nieuwe incrementele strategie (zie `FASE4_NIEUWE_STRATEGIE.md`) met veel kleinere stapjes om crashes te voorkomen.
 
 ---
 
@@ -111,24 +113,45 @@ UNIFIED-LVGL9-Crypto_Monitor/
 ---
 
 ### Fase 4: Data Management Modules
+**Status:** 🔄 In uitvoering (NIEUWE STRATEGIE)
+**Belangrijk:** Zie `FASE4_NIEUWE_STRATEGIE.md` voor volledige gedetailleerde strategie
+
+**Reden voor nieuwe strategie:** Eerdere poging was te complex en veroorzaakte crashes. Nieuwe aanpak gebruikt veel kleinere, geïsoleerde stapjes met test na elke stap.
+
+**Principe:** Één kleine wijziging per stap, test na elke stap, parallel implementatie eerst, geen functionaliteit verliezen.
+
+#### Stap 4.1: ApiClient Module (NIEUWE AANPAK - 8 sub-stappen)
+**Status:** 🔄 In uitvoering (stap 4.1.7 voltooid, 4.1.8 te doen)
+
+**Sub-stappen (incrementeel):**
+- [x] 4.1.1: Maak ApiClient module structuur (geen integratie)
+- [x] 4.1.2: Verplaats httpGET() naar ApiClient (parallel, niet vervangen)
+- [x] 4.1.3: Test ApiClient::httpGET() parallel
+- [x] 4.1.4: Vervang één httpGET() call
+- [x] 4.1.5: Vervang alle httpGET() calls
+- [x] 4.1.6: Verplaats parsePrice() naar ApiClient
+- [x] 4.1.7: Verplaats fetchBinancePrice() logica (hoog-niveau method)
+- [ ] 4.1.8: Cleanup oude code (verwijder oude httpGET() en parsePrice())
+
+**Verwachte output:** ApiClient module, alle API calls gebruiken ApiClient
+
+#### Stap 4.2: PriceData Module (NIEUWE AANPAK - 11 sub-stappen)
 **Status:** ⏳ Te starten
 
-#### Stap 4.1: ApiClient Module
-- [ ] Maak `src/ApiClient/ApiClient.h` en `.cpp`
-- [ ] Verplaats `fetchPrice()`, `httpGET()` functionaliteit
-- [ ] Verplaats Binance API specifieke code
-- [ ] Test: API calls werken nog
+**Sub-stappen (incrementeel):** Zie `FASE4_NIEUWE_STRATEGIE.md` voor volledige lijst
+- [ ] 4.2.1: Maak PriceData module structuur
+- [ ] 4.2.2: Verplaats array declaraties (parallel)
+- [ ] 4.2.3: Verplaats addPriceToSecondArray() (parallel)
+- [ ] 4.2.4: Vervang één addPriceToSecondArray() call
+- [ ] 4.2.5: Verplaats state variabelen
+- [ ] 4.2.6: Vervang directe array access in één functie
+- [ ] 4.2.7: Herhaal voor andere functies (incrementally)
+- [ ] 4.2.8: Verplaats calculateReturn functies
+- [ ] 4.2.9: Verplaats fiveMinutePrices en minuteAverages
+- [ ] 4.2.10: Dynamische allocatie voor CYD (optioneel, later)
+- [ ] 4.2.11: Cleanup oude code
 
-**Verwachte output:** ApiClient module
-
-#### Stap 4.2: PriceData Module
-- [ ] Maak `src/PriceData/PriceData.h` en `.cpp`
-- [ ] Verplaats prijs arrays (`secondPrices`, `fiveMinutePrices`, `minuteAverages`)
-- [ ] Verplaats `addPriceToSecondArray()`, `updateMinuteAverage()`
-- [ ] Verplaats return berekeningen (`calculateReturn1Minute()`, etc.)
-- [ ] Test: Prijs data en returns werken nog
-
-**Verwachte output:** PriceData module
+**Verwachte output:** PriceData module, alle data management via PriceData
 
 #### Stap 4.3: Cleanup Data Code
 - [ ] Verwijder oude data code uit hoofdbestand
@@ -378,3 +401,5 @@ UNIFIED-LVGL9-Crypto_Monitor/
 ---
 
 **Laatste update:** Plan aangemaakt
+
+

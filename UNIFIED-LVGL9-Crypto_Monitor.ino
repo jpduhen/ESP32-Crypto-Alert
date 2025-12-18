@@ -53,8 +53,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 86
-#define VERSION_STRING "3.86"
+#define VERSION_MINOR 87
+#define VERSION_STRING "3.87"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -568,6 +568,10 @@ WebServer server(80);
 // SettingsStore instance
 SettingsStore settingsStore;
 
+// ApiClient instance (Fase 4.1.3: voor parallel testen)
+#include "src/ApiClient/ApiClient.h"
+ApiClient apiClient;
+
 // MQTT configuratie (instelbaar via web interface)
 static char mqttHost[64] = MQTT_HOST_DEFAULT;    // MQTT broker IP
 static uint16_t mqttPort = MQTT_PORT_DEFAULT;    // MQTT poort
@@ -642,142 +646,7 @@ static const uint8_t MAX_MQTT_RECONNECT_ATTEMPTS = 3; // Max aantal reconnect po
 // ============================================================================
 // HTTP and API Functions
 // ============================================================================
-
-// Simple HTTP GET – returns body in buffer, returns true on success
-// Geoptimaliseerd: gebruik char array i.p.v. String om geheugenfragmentatie te voorkomen
-// bufferSize moet groot genoeg zijn voor de response (minimaal 256 bytes aanbevolen)
-// Retry logic: probeer opnieuw bij tijdelijke fouten (timeout, connection refused/lost)
-static bool httpGET(const char *url, char *buffer, size_t bufferSize, uint32_t timeoutMs = HTTP_TIMEOUT_MS)
-{
-    if (buffer == nullptr || bufferSize == 0) {
-        Serial_printf(F("[HTTP] Invalid buffer parameters\n"));
-        return false;
-    }
-    
-    buffer[0] = '\0'; // Initialize buffer
-    
-    const uint8_t MAX_RETRIES = 1; // Max 1 retry (2 pogingen totaal) - verminderd voor snellere failure
-    const uint32_t RETRY_DELAY_MS = 100; // 100ms delay tussen retries - verlaagd voor betere timing
-    
-    for (uint8_t attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        HTTPClient http;
-        http.setTimeout(timeoutMs);
-        http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS); // Sneller falen bij connect problemen
-        // Connection reuse uitgeschakeld - veroorzaakte eerder problemen
-        // Bij retries altijd false voor betrouwbaarheid
-        http.setReuse(false);
-        
-        unsigned long requestStart = millis();
-        
-        if (!http.begin(url))
-        {
-            http.end();
-            if (attempt == MAX_RETRIES) {
-                Serial_printf(F("[HTTP] http.begin() gefaald na %d pogingen voor: %s\n"), attempt + 1, url);
-                return false;
-            }
-            // Retry bij begin failure
-            delay(RETRY_DELAY_MS);
-            continue;
-        }
-        
-        int code = http.GET();
-        unsigned long requestTime = millis() - requestStart;
-        
-        if (code == 200)
-        {
-            // Get response size first
-            int contentLength = http.getSize();
-            if (contentLength > 0 && (size_t)contentLength >= bufferSize) {
-                Serial_printf(F("[HTTP] Response te groot: %d bytes (buffer: %zu bytes)\n"), contentLength, bufferSize);
-                http.end();
-                return false;
-            }
-            
-            // Read response into buffer
-            WiFiClient *stream = http.getStreamPtr();
-            if (stream != nullptr) {
-                size_t bytesRead = 0;
-                while (stream->available() && bytesRead < bufferSize - 1) {
-                    int c = stream->read();
-                    if (c < 0) break;
-                    buffer[bytesRead++] = (char)c;
-                }
-                buffer[bytesRead] = '\0';
-                
-                // Performance monitoring: log langzame calls
-                // Normale calls zijn < 500ms, langzaam is > 1000ms
-                if (requestTime > 1000) {
-                    Serial_printf(F("[HTTP] Langzame response: %lu ms (poging %d)\n"), requestTime, attempt + 1);
-                }
-            } else {
-                // Fallback: stream niet beschikbaar, gebruik getString() maar kopieer direct naar buffer
-                // Dit voorkomt String fragmentatie door direct naar buffer te kopiëren
-                String payload = http.getString();
-                size_t len = payload.length();
-                if (len >= bufferSize) {
-                    Serial_printf(F("[HTTP] Response te groot: %zu bytes (buffer: %zu bytes)\n"), len, bufferSize);
-                    http.end();
-                    return false;
-                }
-                strncpy(buffer, payload.c_str(), bufferSize - 1);
-                buffer[bufferSize - 1] = '\0';
-            }
-            
-            http.end();
-            if (attempt > 0) {
-                Serial_printf(F("[HTTP] Succes na retry (poging %d/%d)\n"), attempt + 1, MAX_RETRIES + 1);
-            }
-            // Heap telemetry na HTTP fetch (optioneel, alleen bij belangrijke requests)
-            // logHeapTelemetry("http");  // Uitgecommentarieerd om spam te voorkomen
-            return true;
-        }
-        else
-        {
-            // Check of dit een retry-waardige fout is
-            bool shouldRetry = false;
-            if (code == HTTPC_ERROR_CONNECTION_REFUSED || code == HTTPC_ERROR_CONNECTION_LOST) {
-                shouldRetry = true;
-                Serial_printf(F("[HTTP] Connectie probleem: code=%d, tijd=%lu ms (poging %d/%d)\n"), code, requestTime, attempt + 1, MAX_RETRIES + 1);
-            } else if (code == HTTPC_ERROR_READ_TIMEOUT) {
-                shouldRetry = true;
-                Serial_printf(F("[HTTP] Read timeout na %lu ms (poging %d/%d)\n"), requestTime, attempt + 1, MAX_RETRIES + 1);
-            } else if (code == HTTPC_ERROR_SEND_HEADER_FAILED || code == HTTPC_ERROR_SEND_PAYLOAD_FAILED) {
-                // Send failures kunnen tijdelijk zijn - retry waardig
-                shouldRetry = true;
-                Serial_printf(F("[HTTP] Send failure: code=%d, tijd=%lu ms (poging %d/%d)\n"), code, requestTime, attempt + 1, MAX_RETRIES + 1);
-            } else if (code < 0) {
-                // Andere HTTPClient error codes - retry alleen bij network errors
-                shouldRetry = (code == HTTPC_ERROR_CONNECTION_REFUSED || 
-                              code == HTTPC_ERROR_CONNECTION_LOST || 
-                              code == HTTPC_ERROR_READ_TIMEOUT ||
-                              code == HTTPC_ERROR_SEND_HEADER_FAILED ||
-                              code == HTTPC_ERROR_SEND_PAYLOAD_FAILED);
-                if (!shouldRetry) {
-                    Serial_printf(F("[HTTP] Error code=%d, tijd=%lu ms (geen retry)\n"), code, requestTime);
-                } else {
-                    Serial_printf(F("[HTTP] Error code=%d, tijd=%lu ms (poging %d/%d)\n"), code, requestTime, attempt + 1, MAX_RETRIES + 1);
-                }
-            } else {
-                // HTTP error codes (4xx, 5xx) - geen retry
-                Serial_printf(F("[HTTP] GET gefaald: code=%d, tijd=%lu ms (geen retry)\n"), code, requestTime);
-            }
-            
-            http.end();
-            
-            // Retry bij tijdelijke fouten
-            if (shouldRetry && attempt < MAX_RETRIES) {
-                delay(RETRY_DELAY_MS);
-                continue;
-            }
-            
-            // Geen retry meer mogelijk of niet-retry-waardige fout
-            return false;
-        }
-    }
-    
-    return false;
-}
+// Oude httpGET() en parsePrice() functies zijn verwijderd - nu via ApiClient module
 
 // ============================================================================
 // Warm-Start: Binance Klines Functions
@@ -4614,164 +4483,7 @@ static void setupWebServer()
     Serial.printf("[WebServer] Gestart op http://%s\n", ipBuffer);
 }
 
-// Parse Binance JSON - geoptimaliseerd: geen herhaalde allocaties
-// Gebruikt ArduinoJson als beschikbaar, anders handmatige parsing (geen heap allocaties)
-#if USE_ARDUINOJSON
-// Parse Binance JSON met ArduinoJson (geoptimaliseerd: hergebruik StaticJsonDocument)
-// Gebruik stream input waar mogelijk, reset doc per parse, log errors met memory usage
-static bool parsePrice(const char *body, float &out)
-{
-    // Check of body niet leeg is
-    if (body == nullptr || strlen(body) == 0) {
-        return false;
-    }
-    
-    // Reset document voor nieuwe parse (voorkomt oude data)
-    jsonDoc.clear();
-    
-    // Parse JSON (gebruik deserializeJson met string input)
-    DeserializationError error = deserializeJson(jsonDoc, body);
-    
-    if (error) {
-        // Log deserialization error inclusief memory usage voor debug
-        Serial_printf(F("[JSON] DeserializationError: %s (memory: %u bytes, capacity: %u bytes)\n"), 
-                     error.c_str(), jsonDoc.memoryUsage(), jsonDoc.capacity());
-        return false;
-    }
-    
-    // Extract price field
-    if (!jsonDoc.containsKey("price")) {
-        Serial_printf(F("[JSON] Missing 'price' field (memory: %u bytes)\n"), jsonDoc.memoryUsage());
-        return false;
-    }
-    
-    // Get price value (kan string of number zijn)
-    JsonVariant priceVar = jsonDoc["price"];
-    float val = 0.0f;
-    
-    if (priceVar.is<float>()) {
-        val = priceVar.as<float>();
-    } else if (priceVar.is<const char*>()) {
-        // Price is string, parse it
-        const char* priceStr = priceVar.as<const char*>();
-        if (!safeAtof(priceStr, val)) {
-            Serial_printf("[JSON] Failed to parse price string: %s\n", priceStr);
-            return false;
-        }
-    } else {
-        Serial_printf(F("[JSON] Price field is not a valid type\n"));
-        return false;
-    }
-    
-    // Validate that we got a valid price
-    if (!isValidPrice(val)) {
-        Serial_printf("[JSON] Invalid price value: %.2f\n", val);
-        return false;
-    }
-    
-    out = val;
-    return true;
-}
-
-// Parse Binance JSON from stream (voor streaming HTTP responses)
-// Gebruik deserializeJson(doc, stream) met stream input
-static bool parsePriceFromStream(WiFiClient* stream, float &out)
-{
-    if (stream == nullptr) {
-        return false;
-    }
-    
-    // Reset document voor nieuwe parse
-    jsonDoc.clear();
-    
-    // Parse JSON from stream (efficiënter dan eerst volledige string te lezen)
-    DeserializationError error = deserializeJson(jsonDoc, *stream);
-    
-    if (error) {
-        // Log deserialization error inclusief memory usage voor debug
-        Serial_printf(F("[JSON] Stream DeserializationError: %s (memory: %u bytes, capacity: %u bytes)\n"), 
-                     error.c_str(), jsonDoc.memoryUsage(), jsonDoc.capacity());
-        return false;
-    }
-    
-    // Extract price field
-    if (!jsonDoc.containsKey("price")) {
-        Serial_printf("[JSON] Missing 'price' field in stream (memory: %u bytes)\n", jsonDoc.memoryUsage());
-        return false;
-    }
-    
-    // Get price value
-    JsonVariant priceVar = jsonDoc["price"];
-    float val = 0.0f;
-    
-    if (priceVar.is<float>()) {
-        val = priceVar.as<float>();
-    } else if (priceVar.is<const char*>()) {
-        const char* priceStr = priceVar.as<const char*>();
-        if (!safeAtof(priceStr, val)) {
-            Serial_printf(F("[JSON] Failed to parse price string from stream: %s\n"), priceStr);
-            return false;
-        }
-    } else {
-        Serial_printf("[JSON] Price field is not a valid type in stream\n");
-        return false;
-    }
-    
-    // Validate that we got a valid price
-    if (!isValidPrice(val)) {
-        Serial_printf(F("[JSON] Invalid price value from stream: %.2f\n"), val);
-        return false;
-    }
-    
-    out = val;
-    return true;
-}
-#else
-// Fallback: handmatige JSON parsing (geen heap allocaties, geen ArduinoJson dependency)
-// Geoptimaliseerd: gebruik const char* i.p.v. String, geen herhaalde allocaties
-static bool parsePrice(const char *body, float &out)
-{
-    // Check of body niet leeg is
-    if (body == nullptr || strlen(body) == 0)
-        return false;
-    
-    const char *priceStart = strstr(body, "\"price\":\"");
-    if (priceStart == nullptr)
-        return false;
-    
-    priceStart += 9; // skip to first digit after "price":""
-    
-    const char *priceEnd = strchr(priceStart, '"');
-    if (priceEnd == nullptr)
-        return false;
-    
-    // Valideer lengte
-    size_t priceLen = priceEnd - priceStart;
-    if (priceLen == 0 || priceLen > 20) // Max 20 karakters voor prijs (veiligheidscheck)
-        return false;
-    
-    // Extract price string (gebruik stack buffer, geen heap allocatie)
-    char priceStr[32];
-    if (priceLen >= sizeof(priceStr)) {
-        return false;
-    }
-    strncpy(priceStr, priceStart, priceLen);
-    priceStr[priceLen] = '\0';
-    
-    // Convert to float
-    float val;
-    if (!safeAtof(priceStr, val)) {
-        return false;
-    }
-    
-    // Validate that we got a valid price
-    if (!isValidPrice(val))
-        return false;
-    
-    out = val;
-    return true;
-}
-#endif
+// Parse Binance JSON functies zijn verwijderd - nu via ApiClient::parseBinancePrice()
 
 // Calculate average of array (optimized: single loop)
 static float calculateAverage(float *array, uint8_t size, bool filled)
@@ -5660,20 +5372,14 @@ static void fetchPrice()
     float fetched = prices[0]; // Start met huidige waarde als fallback
     bool ok = false;
 
-    // Geoptimaliseerd: gebruik char array i.p.v. String concatenatie om geheugenfragmentatie te voorkomen
-    char url[128];
-    char responseBuffer[512]; // Buffer voor API response (Binance responses zijn klein, ~100 bytes)
-    snprintf(url, sizeof(url), "%s%s", BINANCE_API, binanceSymbol);
-    
-    bool httpSuccess = httpGET(url, responseBuffer, sizeof(responseBuffer), HTTP_TIMEOUT_MS);
+    // Fase 4.1.7: Gebruik hoog-niveau fetchBinancePrice() method
+    bool httpSuccess = apiClient.fetchBinancePrice(binanceSymbol, fetched);
     unsigned long fetchTime = millis() - fetchStart;
     
-    if (!httpSuccess || strlen(responseBuffer) == 0) {
+    if (!httpSuccess) {
         // Leeg response - kan komen door timeout of netwerkproblemen
         Serial.printf("[API] WARN -> %s leeg response (tijd: %lu ms) - mogelijk timeout of netwerkprobleem\n", binanceSymbol, fetchTime);
         // Gebruik laatste bekende prijs als fallback (al ingesteld als fetched = prices[0])
-    } else if (!parsePrice(responseBuffer, fetched)) {
-        Serial.printf(F("[API] ERR -> %s parse gefaald\n"), binanceSymbol);
     } else {
         // Succesvol opgehaald (alleen loggen bij langzame calls > 1200ms)
         if (fetchTime > 1200) {
@@ -7139,6 +6845,9 @@ static void setupSerialAndDevice()
     // Load settings from Preferences
     // Initialize SettingsStore
     settingsStore.begin();
+    
+    // Fase 4.1.3: Initialize ApiClient (voor parallel testen)
+    apiClient.begin();
     
     // Load settings
     loadSettings();

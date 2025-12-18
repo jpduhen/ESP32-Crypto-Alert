@@ -1,8 +1,8 @@
 # Crypto Monitor Refactoring Status
 
-**Laatste update:** 2025-12-17 22:30  
-**Huidige fase:** Fase 1 - Voorbereiding & Analyse  
-**Huidige stap:** 1.1 - Code Analyse
+**Laatste update:** 2025-12-18  
+**Huidige fase:** Fase 4.1 - ApiClient Module ✅ VOLTOOID  
+**Huidige stap:** Fase 4.2 - PriceData Module (te starten)
 
 ---
 
@@ -12,8 +12,8 @@
 |------|--------|-------------|------------------|----------|
 | Fase 1: Voorbereiding & Analyse | ✅ Voltooid | 2025-12-17 | 2025-12-17 | Voltooid om 22:36 |
 | Fase 2: Settings & Storage | ✅ Voltooid | 2025-12-17 | 2025-12-17 | Voltooid om 23:50 |
-| Fase 3: Network Modules | ⏳ Te starten | - | - | - |
-| Fase 4: Data Management | ⏳ Te starten | - | - | - |
+| Fase 3: Network Modules | ⏸️ Uitgesteld | 2025-12-18 | - | Uitgesteld - eerst Fase 4 afmaken met nieuwe strategie |
+| Fase 4: Data Management | 🔄 In uitvoering | 2025-12-18 | - | Fase 4.1 voltooid (ApiClient), Fase 4.2 te starten (PriceData) |
 | Fase 5: Analysis Modules | ⏳ Te starten | - | - | - |
 | Fase 6: Alert & Anchor | ⏳ Te starten | - | - | - |
 | Fase 7: Warm-Start | ⏳ Te starten | - | - | - |
@@ -112,23 +112,31 @@
 ### Fase 3: Network Modules
 
 #### Stap 3.1: NetworkManager Module
-- **Status:** ⏳ Te starten
+- **Status:** ❌ Teruggedraaid
+- **Start datum:** 2025-12-18 06:23
+- **Terugdraai datum:** 2025-12-18
+- **Reden:** Te complex, veroorzaakte crashes. Nieuwe strategie nodig in kleinere stapjes.
 - **Taken:**
-  - [ ] Maak `src/NetworkManager/NetworkManager.h`
-  - [ ] Maak `src/NetworkManager/NetworkManager.cpp`
-  - [ ] Verplaats WiFi management
-  - [ ] Verplaats MQTT functionaliteit
+  - [x] Maak `src/NetworkManager/NetworkManager.h`
+  - [x] Maak `src/NetworkManager/NetworkManager.cpp` (basis)
+  - [ ] Verplaats WiFi management (blijft voorlopig in hoofdbestand - complex)
+  - [x] Verplaats MQTT functionaliteit (basis gedaan)
+  - [x] Implementeer publishSettings, publishValues, publishAnchorEvent, publishDiscovery
+  - [ ] Integratie in hoofdbestand
   - [ ] Test: WiFi en MQTT werken nog
-- **Notities:** 
+- **Notities:**
+  - Basis NetworkManager structuur aangemaakt (CryptoNetworkManager om conflict te voorkomen)
+  - MQTT queue en publishing geïmplementeerd
+  - publishSettings, publishValues, publishAnchorEvent, publishDiscovery geïmplementeerd
+  - WiFi setup blijft voorlopig in hoofdbestand (complex met LVGL UI)
+  - MQTT topic prefix wordt nu via setMqttTopicPrefix() ingesteld (om platform_config.h include te vermijden) 
 
 #### Stap 3.2: NtfyNotifier Module
-- **Status:** ⏳ Te starten
-- **Taken:**
-  - [ ] Kopieer NtfyNotifier module uit temperatuurproject
-  - [ ] Pas aan voor crypto-monitor gebruik
-  - [ ] Vervang `sendNtfyNotification()` calls
-  - [ ] Test: NTFY notificaties werken nog
-- **Notities:** 
+- **Status:** ❌ Overgeslagen
+- **Reden:** Bestaande `sendNtfyNotification()` functie werkt prima, geen nieuwe module nodig
+- **Notities:**
+  - Bestaande implementatie is voldoende voor crypto-monitor
+  - Eventueel later refactoren naar module indien nodig 
 
 #### Stap 3.3: Cleanup Network Code
 - **Status:** ⏳ Te starten
@@ -141,25 +149,49 @@
 
 ### Fase 4: Data Management Modules
 
-#### Stap 4.1: ApiClient Module
-- **Status:** ⏳ Te starten
-- **Taken:**
-  - [ ] Maak `src/ApiClient/ApiClient.h`
-  - [ ] Maak `src/ApiClient/ApiClient.cpp`
-  - [ ] Verplaats `fetchPrice()` functionaliteit
-  - [ ] Verplaats `httpGET()` functionaliteit
-  - [ ] Test: API calls werken nog
-- **Notities:** 
+#### Stap 4.1: ApiClient Module (NIEUWE STRATEGIE - 8 sub-stappen)
+- **Status:** ✅ Voltooid
+- **Start datum:** 2025-12-18
+- **Strategie:** Zie `FASE4_NIEUWE_STRATEGIE.md` voor volledige strategie
 
-#### Stap 4.2: PriceData Module
+**Sub-stappen:**
+- [x] **4.1.1:** ApiClient module structuur (geen integratie) - ✅ Voltooid
+- [x] **4.1.2:** Verplaats httpGET() naar ApiClient (parallel) - ✅ Voltooid
+- [x] **4.1.3:** Test ApiClient::httpGET() parallel - ✅ Voltooid
+- [x] **4.1.4:** Vervang één httpGET() call - ✅ Voltooid
+- [x] **4.1.5:** Vervang alle httpGET() calls - ✅ Voltooid
+- [x] **4.1.6:** Verplaats parsePrice() naar ApiClient - ✅ Voltooid
+- [x] **4.1.7:** Verplaats fetchBinancePrice() logica - ✅ Voltooid
+- [ ] **4.1.8:** Cleanup oude code - ⏳ Te starten
+
+- **Notities:**
+  - ApiClient module volledig functioneel
+  - fetchPrice() gebruikt nu apiClient.fetchBinancePrice() (hoog-niveau method)
+  - Helper functies: isValidPrice, safeAtof (static methods)
+  - Oude httpGET() en parsePrice() functies blijven bestaan (worden verwijderd in 4.1.8) 
+
+#### Stap 4.2: PriceData Module (NIEUWE STRATEGIE - 11 sub-stappen)
 - **Status:** ⏳ Te starten
-- **Taken:**
-  - [ ] Maak `src/PriceData/PriceData.h`
-  - [ ] Maak `src/PriceData/PriceData.cpp`
-  - [ ] Verplaats prijs arrays
-  - [ ] Verplaats return berekeningen
-  - [ ] Test: Prijs data en returns werken nog
-- **Notities:** 
+- **Strategie:** Zie `FASE4_NIEUWE_STRATEGIE.md` voor volledige strategie (11 incrementele stappen)
+- **Reden voor nieuwe strategie:** Eerdere poging was te complex en veroorzaakte crashes. Nieuwe aanpak in veel kleinere stapjes.
+
+**Sub-stappen (incrementeel):**
+- [ ] **4.2.1:** Maak PriceData module structuur
+- [ ] **4.2.2:** Verplaats array declaraties (parallel)
+- [ ] **4.2.3:** Verplaats addPriceToSecondArray() (parallel)
+- [ ] **4.2.4:** Vervang één addPriceToSecondArray() call
+- [ ] **4.2.5:** Verplaats state variabelen
+- [ ] **4.2.6:** Vervang directe array access in één functie
+- [ ] **4.2.7:** Herhaal voor andere functies (incrementally)
+- [ ] **4.2.8:** Verplaats calculateReturn functies
+- [ ] **4.2.9:** Verplaats fiveMinutePrices en minuteAverages
+- [ ] **4.2.10:** Dynamische allocatie voor CYD (optioneel, later)
+- [ ] **4.2.11:** Cleanup oude code
+
+- **Notities:**
+  - Nieuwe strategie: één array/functie per keer
+  - Parallel implementatie eerst, dan incrementele vervanging
+  - Test na elke stap 
 
 #### Stap 4.3: Cleanup Data Code
 - **Status:** ⏳ Te starten
@@ -363,12 +395,16 @@
 
 ## Statistieken
 
-- **Totaal aantal stappen:** 25
-- **Voltooide stappen:** 0
-- **In uitvoering:** 0
-- **Te starten:** 25
-- **Geschatte voortgang:** 0%
+- **Totaal aantal stappen (oude plan):** 25
+- **Nieuwe strategie:** Fase 4 heeft nu 19 sub-stappen (8 voor ApiClient, 11 voor PriceData)
+- **Voltooide stappen (Fase 4.1):** 7 van 8 (4.1.1 t/m 4.1.7)
+- **In uitvoering:** 1 (4.1.8 - cleanup)
+- **Te starten (Fase 4.2):** 11 sub-stappen
+- **Geschatte voortgang Fase 4.1:** 100% (8/8 stappen) ✅
+- **Geschatte voortgang totaal:** ~15% (Fase 1 & 2 voltooid, Fase 4.1 bijna klaar)
 
 ---
 
-**Laatste update:** Status bestand aangemaakt
+**Laatste update:** 2025-12-18 - Fase 4.1 voltooid (stap 4.1.8 cleanup gedaan)
+
+
