@@ -119,32 +119,33 @@
 - **Doel:** Eén functie gemigreerd
 
 ### Stap 4.2.7: Herhaal voor andere functies (incrementally)
-- [ ] Herhaal stap 4.2.6 voor elke functie die arrays gebruikt
-- [ ] Test na elke functie
-- [ ] **Doel:** Alle functies gemigreerd
+- [x] Herhaal stap 4.2.6 voor elke functie die arrays gebruikt
+- [x] Test na elke functie
+- [x] **Doel:** Alle functies gemigreerd ✅
 
 ### Stap 4.2.8: Verplaats calculateReturn functies
-- [ ] Verplaats `calculateReturn1Minute()` naar PriceData
-- [ ] Vervang calls één voor één
-- [ ] **Test:** Returns worden correct berekend
-- **Doel:** Return berekeningen gemodulariseerd
+- [x] Verplaats `calculateReturn1Minute()` naar PriceData
+- [x] Vervang calls één voor één
+- [x] **Test:** Returns worden correct berekend ✅
+- **Doel:** Return berekeningen gemodulariseerd ✅
 
 ### Stap 4.2.9: Verplaats fiveMinutePrices en minuteAverages
-- [ ] Herhaal proces voor `fiveMinutePrices[]` en `minuteAverages[]`
-- [ ] Eén array per keer
-- [ ] **Test:** Elke array werkt nog
-- **Doel:** Alle arrays gemodulariseerd
+- [x] Herhaal proces voor `fiveMinutePrices[]` en `minuteAverages[]`
+- [x] Eén array per keer
+- [x] **Test:** Elke array werkt nog ✅
+- **Doel:** Alle arrays gemodulariseerd ✅
 
 ### Stap 4.2.10: Dynamische allocatie voor CYD (optioneel, later)
 - [ ] Alleen als nodig voor geheugen optimalisatie
 - [ ] Test grondig op CYD platform
 - **Doel:** Geheugen optimalisatie
+- **Status:** Optioneel, later te doen
 
 ### Stap 4.2.11: Cleanup oude code
-- [ ] Verwijder oude array declaraties
-- [ ] Verwijder oude functies
-- [ ] **Test:** Alles werkt nog
-- **Doel:** Oude code verwijderd
+- [x] Verwijder oude array declaraties
+- [x] Verwijder oude functies
+- [x] **Test:** Alles werkt nog ✅
+- **Doel:** Oude code verwijderd ✅
 
 ---
 
@@ -191,4 +192,5 @@ Voor elke stap:
 
 ---
 
-**Laatste update:** 2025-12-18 (na terugdraaien Fase 3 & 4)
+**Laatste update:** 2025-12-18 - Fase 4.2 voltooid (alle stappen behalve 4.2.10 - optioneel)
+

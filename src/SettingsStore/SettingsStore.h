@@ -140,3 +140,4 @@ private:
 };
 
 #endif // SETTINGSSTORE_H
+

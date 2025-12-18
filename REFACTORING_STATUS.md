@@ -1,8 +1,8 @@
 # Crypto Monitor Refactoring Status
 
 **Laatste update:** 2025-12-18  
-**Huidige fase:** Fase 4.1 - ApiClient Module ✅ VOLTOOID  
-**Huidige stap:** Fase 4.2 - PriceData Module (te starten)
+**Huidige fase:** Fase 4 - Data Management Modules 🔄 IN UITVOERING  
+**Huidige stap:** Fase 4.2 - PriceData Module ✅ VOLTOOID (behalve 4.2.10 - optioneel)
 
 ---
 
@@ -13,7 +13,7 @@
 | Fase 1: Voorbereiding & Analyse | ✅ Voltooid | 2025-12-17 | 2025-12-17 | Voltooid om 22:36 |
 | Fase 2: Settings & Storage | ✅ Voltooid | 2025-12-17 | 2025-12-17 | Voltooid om 23:50 |
 | Fase 3: Network Modules | ⏸️ Uitgesteld | 2025-12-18 | - | Uitgesteld - eerst Fase 4 afmaken met nieuwe strategie |
-| Fase 4: Data Management | 🔄 In uitvoering | 2025-12-18 | - | Fase 4.1 voltooid (ApiClient), Fase 4.2 te starten (PriceData) |
+| Fase 4: Data Management | 🔄 In uitvoering | 2025-12-18 | - | Fase 4.1 voltooid (ApiClient), Fase 4.2 voltooid (PriceData) |
 | Fase 5: Analysis Modules | ⏳ Te starten | - | - | - |
 | Fase 6: Alert & Anchor | ⏳ Te starten | - | - | - |
 | Fase 7: Warm-Start | ⏳ Te starten | - | - | - |
@@ -176,22 +176,31 @@
 - **Reden voor nieuwe strategie:** Eerdere poging was te complex en veroorzaakte crashes. Nieuwe aanpak in veel kleinere stapjes.
 
 **Sub-stappen (incrementeel):**
-- [ ] **4.2.1:** Maak PriceData module structuur
-- [ ] **4.2.2:** Verplaats array declaraties (parallel)
-- [ ] **4.2.3:** Verplaats addPriceToSecondArray() (parallel)
+- [x] **4.2.1:** Maak PriceData module structuur - ✅ Voltooid
+- [x] **4.2.2:** Verplaats array declaraties (parallel) - ✅ Voltooid
+- [x] **4.2.3:** Verplaats addPriceToSecondArray() (parallel) - ✅ Voltooid
 - [ ] **4.2.4:** Vervang één addPriceToSecondArray() call
 - [ ] **4.2.5:** Verplaats state variabelen
-- [ ] **4.2.6:** Vervang directe array access in één functie
+- [x] **4.2.6:** Vervang directe array access in één functie - ✅ Voltooid
 - [ ] **4.2.7:** Herhaal voor andere functies (incrementally)
 - [ ] **4.2.8:** Verplaats calculateReturn functies
-- [ ] **4.2.9:** Verplaats fiveMinutePrices en minuteAverages
+- [x] **4.2.9:** Verplaats fiveMinutePrices en minuteAverages - ✅ Voltooid
 - [ ] **4.2.10:** Dynamische allocatie voor CYD (optioneel, later)
-- [ ] **4.2.11:** Cleanup oude code
+- [x] **4.2.11:** Cleanup oude code - ✅ Voltooid
 
 - **Notities:**
   - Nieuwe strategie: één array/functie per keer
   - Parallel implementatie eerst, dan incrementele vervanging
-  - Test na elke stap 
+  - Test na elke stap
+  - **4.2.1 voltooid:** PriceData.h en PriceData.cpp aangemaakt, DataSource enum verplaatst, instance aangemaakt
+  - **4.2.2 voltooid:** Arrays toegevoegd aan PriceData als private members (parallel, oude arrays blijven bestaan)
+  - **4.2.3 voltooid:** addPriceToSecondArray() verplaatst naar PriceData (parallel, gebruikt nog globale variabelen via extern)
+  - **4.2.4 voltooid:** Eerste call vervangen in fetchPrice() - gebruikt nu priceData.addPriceToSecondArray()
+  - **4.2.5 voltooid:** State variabelen (secondIndex, secondArrayFilled, fiveMinuteIndex, fiveMinuteArrayFilled) verplaatst naar PriceData als private members
+  - **4.2.6 voltooid:** Getters toegevoegd, calculateReturn1Minute() gebruikt nu PriceData getters
+  - **4.2.7 voltooid:** findMinMaxInSecondPrices(), calculateLinearTrend1Minute(), en updateWarmStartStatus() gebruiken nu PriceData getters
+  - **4.2.8 voltooid:** calculateReturn1Minute() verplaatst naar PriceData als publieke methode, wrapper functie in .ino voor backward compatibility
+  - **4.2.8 voltooid:** calculateReturn1Minute() verplaatst naar PriceData als publieke methode, wrapper functie in .ino voor backward compatibility 
 
 #### Stap 4.3: Cleanup Data Code
 - **Status:** ⏳ Te starten
@@ -397,14 +406,16 @@
 
 - **Totaal aantal stappen (oude plan):** 25
 - **Nieuwe strategie:** Fase 4 heeft nu 19 sub-stappen (8 voor ApiClient, 11 voor PriceData)
-- **Voltooide stappen (Fase 4.1):** 7 van 8 (4.1.1 t/m 4.1.7)
-- **In uitvoering:** 1 (4.1.8 - cleanup)
-- **Te starten (Fase 4.2):** 11 sub-stappen
+- **Voltooide stappen (Fase 4.1):** 8 van 8 (4.1.1 t/m 4.1.8) ✅
+- **Voltooide stappen (Fase 4.2):** 10 van 11 (4.2.1 t/m 4.2.9, 4.2.11) ✅
+- **Optioneel (Fase 4.2.10):** Dynamische allocatie voor CYD (later)
 - **Geschatte voortgang Fase 4.1:** 100% (8/8 stappen) ✅
-- **Geschatte voortgang totaal:** ~15% (Fase 1 & 2 voltooid, Fase 4.1 bijna klaar)
+- **Geschatte voortgang Fase 4.2:** 91% (10/11 stappen, 1 optioneel) ✅
+- **Geschatte voortgang totaal:** ~25% (Fase 1, 2, 4.1 en 4.2 voltooid)
 
 ---
 
-**Laatste update:** 2025-12-18 - Fase 4.1 voltooid (stap 4.1.8 cleanup gedaan)
+**Laatste update:** 2025-12-18 - Fase 4.2 voltooid (PriceData module gemodulariseerd, versie 3.88)
+
 
 

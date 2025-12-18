@@ -29,6 +29,9 @@
 // SettingsStore module
 #include "src/SettingsStore/SettingsStore.h"
 
+// PriceData module (Fase 4.2.1: voor DataSource enum)
+#include "src/PriceData/PriceData.h"
+
 // ArduinoJson support (optioneel - als library niet beschikbaar is, gebruik handmatige parsing)
 // Probeer ArduinoJson te includen - als het niet beschikbaar is, gebruik handmatige parsing
 #define USE_ARDUINOJSON 0  // Standaard uit, wordt gezet naar 1 als ArduinoJson beschikbaar is
@@ -53,8 +56,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 87
-#define VERSION_STRING "3.87"
+#define VERSION_MINOR 88
+#define VERSION_STRING "3.88"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -246,11 +249,6 @@ static float downtrendMaxLossMultiplier = DOWNTREND_MAX_LOSS_MULTIPLIER_DEFAULT;
 static float downtrendTakeProfitMultiplier = DOWNTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT;
 
 // Warm-Start: Data source tracking
-enum DataSource {
-    SOURCE_BINANCE,  // Data van Binance historische klines
-    SOURCE_LIVE      // Data van live API calls
-};
-
 // Warm-Start: System status
 enum WarmStartStatus {
     WARMING_UP,  // Buffers bevatten nog Binance data
@@ -455,38 +453,42 @@ static StaticJsonDocument<256> jsonDoc;  // Hergebruik voor alle JSON parsing
 
 // Price history for calculating returns and moving averages
 // Array van 60 posities voor laatste 60 seconden (1 minuut)
-static float secondPrices[SECONDS_PER_MINUTE];
-static DataSource secondPricesSource[SECONDS_PER_MINUTE];  // Source tracking per sample
-static uint8_t secondIndex = 0;
-static bool secondArrayFilled = false;
+// Fase 4.2.3: static verwijderd tijdelijk voor parallelle implementatie (wordt later weer static)
+float secondPrices[SECONDS_PER_MINUTE];
+DataSource secondPricesSource[SECONDS_PER_MINUTE];  // Source tracking per sample
+uint8_t secondIndex = 0;
+bool secondArrayFilled = false;
 static bool newPriceDataAvailable = false;  // Flag om aan te geven of er nieuwe prijsdata is voor grafiek update
 
 // Array van 300 posities voor laatste 300 seconden (5 minuten) - voor ret_5m berekening
 // Voor CYD zonder PSRAM: dynamisch alloceren om DRAM overflow te voorkomen
+// Fase 4.2.3: static verwijderd tijdelijk voor parallelle implementatie
 #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-static float *fiveMinutePrices = nullptr;  // Dynamisch gealloceerd voor CYD zonder PSRAM
-static DataSource *fiveMinutePricesSource = nullptr;  // Dynamisch gealloceerd
+float *fiveMinutePrices = nullptr;  // Dynamisch gealloceerd voor CYD zonder PSRAM
+DataSource *fiveMinutePricesSource = nullptr;  // Dynamisch gealloceerd
 #else
-static float fiveMinutePrices[SECONDS_PER_5MINUTES];
-static DataSource fiveMinutePricesSource[SECONDS_PER_5MINUTES];  // Source tracking per sample
+float fiveMinutePrices[SECONDS_PER_5MINUTES];
+DataSource fiveMinutePricesSource[SECONDS_PER_5MINUTES];  // Source tracking per sample
 #endif
-static uint16_t fiveMinuteIndex = 0;
-static bool fiveMinuteArrayFilled = false;
+uint16_t fiveMinuteIndex = 0;
+bool fiveMinuteArrayFilled = false;
 
 // Array van 120 posities voor laatste 120 minuten (2 uur)
 // Elke minuut wordt het gemiddelde van de 60 seconden opgeslagen
 // We hebben 60 posities nodig om het gemiddelde van laatste 30 minuten te vergelijken
 // met het gemiddelde van de 30 minuten daarvoor (maar we houden 120 voor buffer)
 // Voor CYD zonder PSRAM: dynamisch alloceren om DRAM overflow te voorkomen
+// Fase 4.2.9: static verwijderd zodat PriceData getters deze kunnen gebruiken
 #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-static float *minuteAverages = nullptr;  // Dynamisch gealloceerd voor CYD zonder PSRAM
-static DataSource *minuteAveragesSource = nullptr;  // Dynamisch gealloceerd
+float *minuteAverages = nullptr;  // Dynamisch gealloceerd voor CYD zonder PSRAM
+DataSource *minuteAveragesSource = nullptr;  // Dynamisch gealloceerd
 #else
-static float minuteAverages[MINUTES_FOR_30MIN_CALC];
-static DataSource minuteAveragesSource[MINUTES_FOR_30MIN_CALC];  // Source tracking per sample
+float minuteAverages[MINUTES_FOR_30MIN_CALC];
+DataSource minuteAveragesSource[MINUTES_FOR_30MIN_CALC];  // Source tracking per sample
 #endif
-static uint8_t minuteIndex = 0;
-static bool minuteArrayFilled = false;
+// Fase 4.2.9: static verwijderd zodat PriceData getters deze kunnen gebruiken
+uint8_t minuteIndex = 0;
+bool minuteArrayFilled = false;
 static unsigned long lastMinuteUpdate = 0;
 static float firstMinuteAverage = 0.0f; // Eerste minuut gemiddelde prijs als basis voor 30-min berekening
 
@@ -568,9 +570,12 @@ WebServer server(80);
 // SettingsStore instance
 SettingsStore settingsStore;
 
-// ApiClient instance (Fase 4.1.3: voor parallel testen)
+// ApiClient instance (Fase 4.1 voltooid)
 #include "src/ApiClient/ApiClient.h"
 ApiClient apiClient;
+
+// PriceData instance (Fase 4.2.1: module structuur aangemaakt)
+PriceData priceData;
 
 // MQTT configuratie (instelbaar via web interface)
 static char mqttHost[64] = MQTT_HOST_DEFAULT;    // MQTT broker IP
@@ -1119,8 +1124,10 @@ static WarmStartMode performWarmStart()
             fiveMinutePrices[s] = lastPrice;
             fiveMinutePricesSource[s] = SOURCE_BINANCE;
         }
-        fiveMinuteIndex = SECONDS_PER_5MINUTES;
-        fiveMinuteArrayFilled = true;
+            fiveMinuteIndex = SECONDS_PER_5MINUTES;
+            fiveMinuteArrayFilled = true;
+            // Fase 4.2.5: Synchroniseer PriceData state na warm-start
+            priceData.syncStateFromGlobals();
         warmStartStats.loaded5m = count5m;
         warmStartStats.warmStartOk5m = true;
     } else {
@@ -1292,7 +1299,8 @@ static WarmStartMode performWarmStart()
 }
 
 // Update warm-start status: check of systeem volledig LIVE is en bereken progress
-static void updateWarmStartStatus()
+// Fase 4.2.3: static verwijderd tijdelijk voor parallelle implementatie
+void updateWarmStartStatus()
 {
     if (warmStartStatus == LIVE || warmStartStatus == LIVE_COLD) {
         warmStartStats.warmUpProgress = 100;
@@ -1303,30 +1311,40 @@ static void updateWarmStartStatus()
     uint8_t volatilityLivePct = 0;
     uint8_t trendLivePct = 0;
     
+    // Fase 4.2.7: Gebruik PriceData getters (parallel, arrays blijven globaal)
     // Check volatiliteit: percentage LIVE in secondPrices buffer
-    if (secondArrayFilled) {
+    DataSource* sources = priceData.getSecondPricesSource();
+    bool arrayFilled = priceData.getSecondArrayFilled();
+    uint8_t index = priceData.getSecondIndex();
+    
+    if (arrayFilled) {
         uint8_t liveCount = 0;
         for (uint8_t i = 0; i < SECONDS_PER_MINUTE; i++) {
-            if (secondPricesSource[i] == SOURCE_LIVE) {
+            if (sources[i] == SOURCE_LIVE) {
                 liveCount++;
             }
         }
         volatilityLivePct = (liveCount * 100) / SECONDS_PER_MINUTE;
-    } else if (secondIndex > 0) {
+    } else if (index > 0) {
         uint8_t liveCount = 0;
-        for (uint8_t i = 0; i < secondIndex; i++) {
-            if (secondPricesSource[i] == SOURCE_LIVE) {
+        for (uint8_t i = 0; i < index; i++) {
+            if (sources[i] == SOURCE_LIVE) {
                 liveCount++;
             }
         }
-        volatilityLivePct = (liveCount * 100) / secondIndex;
+        volatilityLivePct = (liveCount * 100) / index;
     }
     
+    // Fase 4.2.9: Gebruik PriceData getters (parallel, arrays blijven globaal)
     // Check trend: percentage LIVE in minuteAverages buffer
+    DataSource* minuteSources = priceData.getMinuteAveragesSource();
+    bool minuteArrayFilled = priceData.getMinuteArrayFilled();
+    uint8_t minuteIndex = priceData.getMinuteIndex();
+    
     if (minuteArrayFilled) {
         uint8_t liveCount = 0;
         for (uint8_t i = 0; i < MINUTES_FOR_30MIN_CALC; i++) {
-            if (minuteAveragesSource[i] == SOURCE_LIVE) {
+            if (minuteSources[i] == SOURCE_LIVE) {
                 liveCount++;
             }
         }
@@ -1334,7 +1352,7 @@ static void updateWarmStartStatus()
     } else if (minuteIndex > 0) {
         uint8_t liveCount = 0;
         for (uint8_t i = 0; i < minuteIndex; i++) {
-            if (minuteAveragesSource[i] == SOURCE_LIVE) {
+            if (minuteSources[i] == SOURCE_LIVE) {
                 liveCount++;
             }
         }
@@ -1501,7 +1519,8 @@ static bool isValidPrice(float price)
 }
 
 // Helper: Validate if two prices are valid
-static bool areValidPrices(float price1, float price2)
+// Fase 4.2.8: static verwijderd zodat PriceData.cpp deze functie kan aanroepen
+bool areValidPrices(float price1, float price2)
 {
     return isValidPrice(price1) && isValidPrice(price2);
 }
@@ -4486,7 +4505,8 @@ static void setupWebServer()
 // Parse Binance JSON functies zijn verwijderd - nu via ApiClient::parseBinancePrice()
 
 // Calculate average of array (optimized: single loop)
-static float calculateAverage(float *array, uint8_t size, bool filled)
+// Fase 4.2.8: static verwijderd zodat PriceData.cpp deze functie kan aanroepen
+float calculateAverage(float *array, uint8_t size, bool filled)
 {
     float sum = 0.0f;
     uint8_t count = 0;
@@ -4509,7 +4529,8 @@ static float calculateAverage(float *array, uint8_t size, bool filled)
 
 // Helper: Calculate ringbuffer index N positions ago from current write position
 // Returns safe index in range [0, size) or -1 if invalid
-static int32_t getRingBufferIndexAgo(uint32_t currentIndex, uint32_t positionsAgo, uint32_t bufferSize)
+// Fase 4.2.8: static verwijderd zodat PriceData.cpp deze functie kan aanroepen
+int32_t getRingBufferIndexAgo(uint32_t currentIndex, uint32_t positionsAgo, uint32_t bufferSize)
 {
     if (positionsAgo >= bufferSize) return -1;
     // Safe modulo calculation: (currentIndex - positionsAgo + bufferSize * 2) % bufferSize
@@ -4519,20 +4540,26 @@ static int32_t getRingBufferIndexAgo(uint32_t currentIndex, uint32_t positionsAg
 }
 
 // Helper: Get last written index in ringbuffer (currentIndex points to next write position)
-static uint32_t getLastWrittenIndex(uint32_t currentIndex, uint32_t bufferSize)
+// Fase 4.2.8: static verwijderd zodat PriceData.cpp deze functie kan aanroepen
+uint32_t getLastWrittenIndex(uint32_t currentIndex, uint32_t bufferSize)
 {
     return (currentIndex == 0) ? (bufferSize - 1) : (currentIndex - 1);
 }
 
 // Helper: Calculate percentage of SOURCE_LIVE entries in the last windowMinutes of minuteAverages
 // Returns percentage (0-100) of entries that are SOURCE_LIVE
+// Fase 4.2.9: Gebruik PriceData getters (parallel, arrays blijven globaal)
 static uint8_t calcLivePctMinuteAverages(uint16_t windowMinutes)
 {
     if (windowMinutes == 0 || windowMinutes > MINUTES_FOR_30MIN_CALC) {
         return 0;
     }
     
-    uint8_t availableMinutes = minuteArrayFilled ? MINUTES_FOR_30MIN_CALC : minuteIndex;
+    bool arrayFilled = priceData.getMinuteArrayFilled();
+    uint8_t index = priceData.getMinuteIndex();
+    DataSource* sources = priceData.getMinuteAveragesSource();
+    
+    uint8_t availableMinutes = arrayFilled ? MINUTES_FOR_30MIN_CALC : index;
     if (availableMinutes < windowMinutes) {
         return 0;  // Niet genoeg data beschikbaar
     }
@@ -4541,9 +4568,9 @@ static uint8_t calcLivePctMinuteAverages(uint16_t windowMinutes)
     uint16_t liveCount = 0;
     for (uint16_t i = 1; i <= windowMinutes; i++) {
         // Bereken index N posities terug vanaf huidige write positie
-        int32_t idx = getRingBufferIndexAgo(minuteIndex, i, MINUTES_FOR_30MIN_CALC);
+        int32_t idx = getRingBufferIndexAgo(index, i, MINUTES_FOR_30MIN_CALC);
         if (idx >= 0 && idx < MINUTES_FOR_30MIN_CALC) {
-            if (minuteAveragesSource[idx] == SOURCE_LIVE) {
+            if (sources[idx] == SOURCE_LIVE) {
                 liveCount++;
             }
         }
@@ -4556,25 +4583,30 @@ static uint8_t calcLivePctMinuteAverages(uint16_t windowMinutes)
 // Find min and max values in secondPrices array
 static void findMinMaxInSecondPrices(float &minVal, float &maxVal)
 {
+    // Fase 4.2.7: Gebruik PriceData getters (parallel, arrays blijven globaal)
     minVal = 0.0f;
     maxVal = 0.0f;
     
-    if (!secondArrayFilled && secondPrices[0] == 0.0f)
+    float* prices = priceData.getSecondPrices();
+    bool arrayFilled = priceData.getSecondArrayFilled();
+    uint8_t index = priceData.getSecondIndex();
+    
+    if (!arrayFilled && prices[0] == 0.0f)
         return;
     
-    uint8_t count = secondArrayFilled ? SECONDS_PER_MINUTE : secondIndex;
+    uint8_t count = arrayFilled ? SECONDS_PER_MINUTE : index;
     if (count == 0)
         return;
     
-    minVal = secondPrices[0];
-    maxVal = secondPrices[0];
+    minVal = prices[0];
+    maxVal = prices[0];
     
     for (uint8_t i = 1; i < count; i++)
     {
-        if (isValidPrice(secondPrices[i]))
+        if (isValidPrice(prices[i]))
         {
-            if (secondPrices[i] < minVal) minVal = secondPrices[i];
-            if (secondPrices[i] > maxVal) maxVal = secondPrices[i];
+            if (prices[i] < minVal) minVal = prices[i];
+            if (prices[i] > maxVal) maxVal = prices[i];
         }
     }
 }
@@ -4655,8 +4687,9 @@ static float calculateReturnGeneric(
     // Calculate average for display (if requested)
     if (averagePriceIndex < 3) {
         if (averagePriceIndex == 1) {
+            // Fase 4.2.7: Gebruik PriceData getters (parallel, arrays blijven globaal)
             // For 1m: use calculateAverage helper
-            averagePrices[1] = calculateAverage(secondPrices, SECONDS_PER_MINUTE, secondArrayFilled);
+            averagePrices[1] = calculateAverage(priceData.getSecondPrices(), SECONDS_PER_MINUTE, priceData.getSecondArrayFilled());
         } else if (averagePriceIndex == 2) {
             // For 30m: calculate average of last 30 minutes (handled separately in calculateReturn30Minutes)
             // This is a placeholder - actual calculation is done in the wrapper function
@@ -4667,29 +4700,24 @@ static float calculateReturnGeneric(
     return ((priceNow - priceXAgo) / priceXAgo) * 100.0f;
 }
 
+// Fase 4.2.8: calculateReturn1Minute() verplaatst naar PriceData
+// Wrapper functie voor backward compatibility
 static float calculateReturn1Minute()
 {
-    float ret = calculateReturnGeneric(
-        secondPrices,
-        SECONDS_PER_MINUTE,
-        secondIndex,
-        secondArrayFilled,
-        VALUES_FOR_1MIN_RETURN,
-        "[Ret1m]",
-        10000,  // Log every 10 seconds
-        1       // Update averagePrices[1]
-    );
-    return ret;
+    // Fase 4.2.8: Gebruik PriceData::calculateReturn1Minute()
+    extern float averagePrices[];
+    return priceData.calculateReturn1Minute(averagePrices);
 }
 
 // Calculate 5-minute return: price now vs 5 minutes ago
+// Fase 4.2.9: Gebruik PriceData getters (parallel, arrays blijven globaal)
 static float calculateReturn5Minutes()
 {
     return calculateReturnGeneric(
-        fiveMinutePrices,
+        priceData.getFiveMinutePrices(),
         SECONDS_PER_5MINUTES,
-        fiveMinuteIndex,
-        fiveMinuteArrayFilled,
+        priceData.getFiveMinuteIndex(),
+        priceData.getFiveMinuteArrayFilled(),
         VALUES_FOR_5MIN_RETURN,
         "[Ret5m]",
         30000,  // Log every 30 seconds
@@ -4698,17 +4726,20 @@ static float calculateReturn5Minutes()
 }
 
 // Calculate 30-minute return: price now vs 30 minutes ago (using minute averages)
+// Fase 4.2.9: Gebruik PriceData getters (parallel, arrays blijven globaal)
 static float calculateReturn30Minutes()
 {
     // Need at least 30 minutes of history
-    uint8_t availableMinutes = minuteArrayFilled ? MINUTES_FOR_30MIN_CALC : minuteIndex;
+    bool arrayFilled = priceData.getMinuteArrayFilled();
+    uint8_t index = priceData.getMinuteIndex();
+    uint8_t availableMinutes = arrayFilled ? MINUTES_FOR_30MIN_CALC : index;
     if (availableMinutes < 30)
     {
         static uint32_t lastLogTime = 0;
         uint32_t now = millis();
         if (now - lastLogTime > 60000) {
             Serial_printf("[Ret30m] Wachten op data: minuteIndex=%u (nodig: 30, available=%u)\n", 
-                         minuteIndex, availableMinutes);
+                         index, availableMinutes);
             lastLogTime = now;
         }
         averagePrices[2] = 0.0f;
@@ -4717,17 +4748,22 @@ static float calculateReturn30Minutes()
     
     // Use generic function for return calculation
     float ret = calculateReturnGeneric(
-        minuteAverages,
+        priceData.getMinuteAverages(),
         MINUTES_FOR_30MIN_CALC,
-        minuteIndex,
-        minuteArrayFilled,
+        index,
+        arrayFilled,
         30,  // 30 minutes ago
         "[Ret30m]",
         60000,  // Log every 60 seconds
         255     // Don't update averagePrices here (we do it manually below)
     );
     
+    // Fase 4.2.9: Gebruik PriceData getters (parallel, arrays blijven globaal)
     // Calculate average of last 30 minutes for display (specific to 30m calculation)
+    float* averages = priceData.getMinuteAverages();
+    bool minuteArrayFilled = priceData.getMinuteArrayFilled();
+    uint8_t minuteIndex = priceData.getMinuteIndex();
+    
     float last30Sum = 0.0f;
     uint8_t last30Count = 0;
     for (uint8_t i = 0; i < 30; i++)
@@ -4744,9 +4780,9 @@ static float calculateReturn30Minutes()
             if (idx_temp < 0) break;
             idx = (uint8_t)idx_temp;
         }
-        if (isValidPrice(minuteAverages[idx]))
+        if (isValidPrice(averages[idx]))
         {
-            last30Sum += minuteAverages[idx];
+            last30Sum += averages[idx];
             last30Count++;
         }
     }
@@ -4768,8 +4804,13 @@ static float calculateReturn30Minutes()
 // Positieve waarde = stijgende trend, negatieve waarde = dalende trend
 static float calculateLinearTrend1Minute()
 {
+    // Fase 4.2.7: Gebruik PriceData getters (parallel, arrays blijven globaal)
     // We hebben minimaal 2 punten nodig voor een trend
-    uint8_t count = secondArrayFilled ? SECONDS_PER_MINUTE : secondIndex;
+    float* prices = priceData.getSecondPrices();
+    bool arrayFilled = priceData.getSecondArrayFilled();
+    uint8_t index = priceData.getSecondIndex();
+    
+    uint8_t count = arrayFilled ? SECONDS_PER_MINUTE : index;
     if (count < 2)
     {
         averagePrices[1] = 0.0f;
@@ -4777,7 +4818,7 @@ static float calculateLinearTrend1Minute()
     }
     
     // Bereken gemiddelde prijs voor weergave
-    float currentAvg = calculateAverage(secondPrices, SECONDS_PER_MINUTE, secondArrayFilled);
+    float currentAvg = calculateAverage(prices, SECONDS_PER_MINUTE, arrayFilled);
     averagePrices[1] = currentAvg;
     
     // Lineaire regressie: y = a + b*x
@@ -4793,7 +4834,7 @@ static float calculateLinearTrend1Minute()
     // Loop door alle beschikbare punten
     for (uint8_t i = 0; i < count; i++)
     {
-        float price = secondPrices[i];
+        float price = prices[i];
         if (price > 0.0f)
         {
             float x = (float)i; // Tijd index (0 tot count-1)
@@ -5084,10 +5125,15 @@ static float calculate30MinutePct()
 }
 
 // ret_2h: prijs nu vs 120 minuten (2 uur) geleden (gebruik minuteAverages)
+// Fase 4.2.9: Gebruik PriceData getters (parallel, arrays blijven globaal)
 // Calculate 2-hour return: price now vs 120 minutes ago
 static float calculateReturn2Hours()
 {
-    uint8_t availableMinutes = minuteArrayFilled ? MINUTES_FOR_30MIN_CALC : minuteIndex;
+    bool arrayFilled = priceData.getMinuteArrayFilled();
+    uint8_t index = priceData.getMinuteIndex();
+    float* averages = priceData.getMinuteAverages();
+    
+    uint8_t availableMinutes = arrayFilled ? MINUTES_FOR_30MIN_CALC : index;
     if (availableMinutes < 120)
     {
         return 0.0f;
@@ -5095,32 +5141,32 @@ static float calculateReturn2Hours()
     
     // Get current price (last minute average)
     uint8_t lastMinuteIdx;
-    if (!minuteArrayFilled)
+    if (!arrayFilled)
     {
-        if (minuteIndex == 0) return 0.0f;
-        lastMinuteIdx = minuteIndex - 1;
+        if (index == 0) return 0.0f;
+        lastMinuteIdx = index - 1;
     }
     else
     {
-        lastMinuteIdx = getLastWrittenIndex(minuteIndex, MINUTES_FOR_30MIN_CALC);
+        lastMinuteIdx = getLastWrittenIndex(index, MINUTES_FOR_30MIN_CALC);
     }
-    float priceNow = minuteAverages[lastMinuteIdx];
+    float priceNow = averages[lastMinuteIdx];
     
     // Get price 120 minutes ago
     uint8_t idx120mAgo;
-    if (!minuteArrayFilled)
+    if (!arrayFilled)
     {
-        if (minuteIndex < 120) return 0.0f;
-        idx120mAgo = minuteIndex - 120;
+        if (index < 120) return 0.0f;
+        idx120mAgo = index - 120;
     }
     else
     {
-        int32_t idx120mAgo_temp = getRingBufferIndexAgo(minuteIndex, 120, MINUTES_FOR_30MIN_CALC);
+        int32_t idx120mAgo_temp = getRingBufferIndexAgo(index, 120, MINUTES_FOR_30MIN_CALC);
         if (idx120mAgo_temp < 0) return 0.0f;
         idx120mAgo = (uint8_t)idx120mAgo_temp;
     }
     
-    float price120mAgo = minuteAverages[idx120mAgo];
+    float price120mAgo = averages[idx120mAgo];
     
     // Validate prices
     if (price120mAgo <= 0.0f || priceNow <= 0.0f)
@@ -5269,60 +5315,16 @@ static void findMinMaxInLast30Minutes(float &minVal, float &maxVal)
 
 // Add price to second array (called every second)
 // Geoptimaliseerd: bounds checking toegevoegd voor robuustheid
-static void addPriceToSecondArray(float price)
-{
-    // Validate input
-    if (!isValidPrice(price))
-    {
-        Serial_printf("[Array] WARN: Ongeldige prijs in addPriceToSecondArray: %.2f\n", price);
-        return;
-    }
-    
-    // Bounds check voor secondPrices array
-    if (secondIndex >= SECONDS_PER_MINUTE)
-    {
-        Serial_printf("[Array] ERROR: secondIndex buiten bereik: %u >= %u\n", secondIndex, SECONDS_PER_MINUTE);
-        secondIndex = 0; // Reset naar veilige waarde
-    }
-    
-    secondPrices[secondIndex] = price;
-    secondPricesSource[secondIndex] = SOURCE_LIVE;  // Mark as live data
-    secondIndex = (secondIndex + 1) % SECONDS_PER_MINUTE;
-    if (secondIndex == 0)
-    {
-        secondArrayFilled = true;
-    }
-    
-    // Ook toevoegen aan 5-minuten buffer met bounds checking
-    if (fiveMinuteIndex >= SECONDS_PER_5MINUTES)
-    {
-        Serial_printf("[Array] ERROR: fiveMinuteIndex buiten bereik: %u >= %u\n", fiveMinuteIndex, SECONDS_PER_5MINUTES);
-        fiveMinuteIndex = 0; // Reset naar veilige waarde
-    }
-    
-    fiveMinutePrices[fiveMinuteIndex] = price;
-    fiveMinutePricesSource[fiveMinuteIndex] = SOURCE_LIVE;  // Mark as live data
-    fiveMinuteIndex = (fiveMinuteIndex + 1) % SECONDS_PER_5MINUTES;
-    if (fiveMinuteIndex == 0)
-    {
-        fiveMinuteArrayFilled = true;
-    }
-    
-    // Update warm-start status periodiek (elke 10 seconden)
-    static unsigned long lastStatusUpdate = 0;
-    unsigned long now = millis();
-    if (now - lastStatusUpdate > 10000) {  // Elke 10 seconden
-        updateWarmStartStatus();
-        lastStatusUpdate = now;
-    }
-}
+// Fase 4.2.11: Oude addPriceToSecondArray() functie verwijderd
+// Gebruik nu priceData.addPriceToSecondArray() in plaats daarvan
 
 // Update minute averages (called every minute)
 // Geoptimaliseerd: bounds checking en validatie toegevoegd
 static void updateMinuteAverage()
 {
+    // Fase 4.2.7: Gebruik PriceData getters (parallel, arrays blijven globaal)
     // Bereken gemiddelde van de 60 seconden
-    float minuteAvg = calculateAverage(secondPrices, SECONDS_PER_MINUTE, secondArrayFilled);
+    float minuteAvg = calculateAverage(priceData.getSecondPrices(), SECONDS_PER_MINUTE, priceData.getSecondArrayFilled());
     
     // Valideer gemiddelde
     if (isnan(minuteAvg) || isinf(minuteAvg) || minuteAvg <= 0.0f)
@@ -5420,7 +5422,8 @@ static void fetchPrice()
             }
             
             // Add price to second array (every second)
-            addPriceToSecondArray(fetched);
+            // Fase 4.2.4: Gebruik PriceData::addPriceToSecondArray() (inline implementatie)
+            priceData.addPriceToSecondArray(fetched);
             
             // Update minute average every minute
             unsigned long now = millis();
@@ -6846,8 +6849,12 @@ static void setupSerialAndDevice()
     // Initialize SettingsStore
     settingsStore.begin();
     
-    // Fase 4.1.3: Initialize ApiClient (voor parallel testen)
+    // Fase 4.1: Initialize ApiClient
     apiClient.begin();
+    
+    // Fase 4.2.1: Initialize PriceData (module structuur)
+    // Fase 4.2.5: State variabelen worden geïnitialiseerd in constructor en gesynchroniseerd in begin()
+    priceData.begin();  // begin() synchroniseert state met globale variabelen
     
     // Load settings
     loadSettings();
@@ -7241,6 +7248,9 @@ void setup()
     
     // WiFi connection and initial data fetch (maakt tijdelijk UI aan)
     wifiConnectionAndFetchPrice();
+    
+    // Fase 4.2.5: Synchroniseer PriceData state na warm-start (als warm-start is uitgevoerd)
+    priceData.syncStateFromGlobals();
     
     // Warm-start: Vul buffers met Binance historische data (als WiFi verbonden is)
     if (WiFi.status() == WL_CONNECTED && warmStartEnabled) {
