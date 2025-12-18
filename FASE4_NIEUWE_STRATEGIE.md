@@ -194,3 +194,108 @@ Voor elke stap:
 
 **Laatste update:** 2025-12-18 - Fase 4.2 voltooid (alle stappen behalve 4.2.10 - optioneel)
 
+---
+
+## Lessons Learned & Best Practices
+
+### 1. Incrementele Aanpak is Cruciaal
+- **Probleem:** Eerste poging met grote stappen veroorzaakte crashes en was moeilijk te debuggen
+- **Oplossing:** Nieuwe strategie met veel kleinere, geïsoleerde stapjes
+- **Resultaat:** Elke stap was testbaar en reversibel
+- **Tip:** Breek grote refactoring op in stappen van max 50-100 regels code
+
+### 2. Parallel Implementatie Pattern
+- **Wat:** Nieuwe code naast oude code implementeren, dan geleidelijk vervangen
+- **Voordelen:** 
+  - Oude code blijft werken tijdens ontwikkeling
+  - Makkelijk terug te draaien als iets misgaat
+  - Stap-voor-stap testen mogelijk
+- **Voorbeeld:** `addPriceToSecondArray()` eerst in PriceData geïmplementeerd, oude functie pas later verwijderd
+
+### 3. Static Keyword Problemen
+- **Probleem:** `static` variabelen/functies zijn niet extern linkbaar
+- **Symptomen:** Linker errors zoals "undefined reference" of "declared extern and later static"
+- **Oplossing:** 
+  - Verwijder `static` van variabelen die door modules gebruikt worden
+  - Verwijder `static` van helper functies die door modules worden aangeroepen
+  - Gebruik forward declarations in headers waar nodig
+- **Checklist:** Controleer altijd of helper functies `static` zijn voordat je ze vanuit modules aanroept
+
+### 4. Forward Declarations voor Circular Dependencies
+- **Probleem:** Headers kunnen elkaar niet direct includen
+- **Oplossing:** Gebruik forward declarations (`extern`, `class X;`, etc.)
+- **Voorbeeld:** `PriceData.h` gebruikt `extern float secondPrices[]` i.p.v. directe include
+- **Tip:** Forward declarations in headers, echte includes in .cpp bestanden
+
+### 5. Getter Pattern voor Overgang
+- **Wat:** Getters toevoegen die pointers naar globale arrays retourneren
+- **Voordelen:**
+  - Code kan geleidelijk migreren naar getters
+  - Arrays kunnen later verplaatst worden zonder alle code te wijzigen
+  - Testbaar op elk moment
+- **Voorbeeld:** `priceData.getSecondPrices()` retourneert pointer naar globale array
+
+### 6. Testen na Elke Stap
+- **Cruciaal:** Compileer en test na elke stap
+- **Voorkomt:** Dat problemen zich opstapelen
+- **Methode:** 
+  - Compileer na elke wijziging
+  - Test runtime functionaliteit
+  - Fix problemen direct, niet later
+- **Tip:** Gebruik git commits na elke werkende stap voor easy rollback
+
+### 7. Helper Functies Extern Maken
+- **Probleem:** Helper functies zoals `getRingBufferIndexAgo()` waren `static`
+- **Oplossing:** Verwijder `static` zodat modules ze kunnen aanroepen
+- **Alternatief:** Verplaats helpers naar een utility module
+- **Checklist:** 
+  - [ ] Zijn alle helper functies die modules gebruiken niet `static`?
+  - [ ] Zijn forward declarations correct?
+
+### 8. Incrementele Vervanging
+- **Wat:** Eén functie per keer vervangen, niet alles tegelijk
+- **Voordelen:**
+  - Makkelijker te debuggen
+  - Duidelijke voortgang
+  - Minder risico op crashes
+- **Voorbeeld:** Eerst `calculateReturn1Minute()` vervangen, dan pas andere return functies
+
+### 9. Documentatie Tijdens Refactoring
+- **Wat:** Comments toevoegen met fase/stap nummers
+- **Voordelen:**
+  - Duidelijk welke code bij welke stap hoort
+  - Makkelijk te vinden wat nog moet gebeuren
+  - Geschiedenis blijft zichtbaar
+- **Voorbeeld:** `// Fase 4.2.8: calculateReturn1Minute() verplaatst naar PriceData`
+
+### 10. State Synchronisatie
+- **Probleem:** State variabelen verplaatst naar module, maar warm-start code wijzigt nog globale state
+- **Oplossing:** `syncStateFromGlobals()` methode om state te synchroniseren
+- **Tip:** Roep sync aan na operaties die globale state kunnen wijzigen (zoals warm-start)
+
+### 11. Null Pointer Checks
+- **Belangrijk:** Altijd null pointer checks voor dynamisch gealloceerde arrays
+- **Vooral:** Op CYD platforms zonder PSRAM
+- **Voorbeeld:** Check `if (fiveMinutePrices == nullptr)` voordat je gebruikt
+
+### 12. Bounds Checking
+- **Probleem:** Array index kan out-of-bounds zijn na warm-start
+- **Oplossing:** Bounds checks in functies die arrays gebruiken
+- **Tip:** Log warnings maar reset naar veilige waarde i.p.v. crash
+
+---
+
+## Checklist voor Toekomstige Refactoring Stappen
+
+Voor elke nieuwe refactoring stap:
+
+- [ ] **Plan:** Is de stap klein genoeg (< 100 regels)?
+- [ ] **Parallel:** Kan ik nieuwe code naast oude implementeren?
+- [ ] **Static Check:** Zijn helper functies niet `static`?
+- [ ] **Forward Declarations:** Zijn dependencies correct gedeclareerd?
+- [ ] **Getters:** Kan ik getters gebruiken voor overgang?
+- [ ] **Test:** Compileert en werkt de code na deze stap?
+- [ ] **Documentatie:** Zijn comments met fase/stap nummers toegevoegd?
+- [ ] **Git Commit:** Is er een commit na deze werkende stap?
+- [ ] **Rollback Plan:** Weet ik hoe ik terug kan als iets misgaat?
+

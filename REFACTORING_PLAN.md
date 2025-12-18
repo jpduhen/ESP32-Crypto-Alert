@@ -400,7 +400,26 @@ UNIFIED-LVGL9-Crypto_Monitor/
 
 ---
 
-**Laatste update:** Plan aangemaakt
+**Laatste update:** 2025-12-18 - Lessons learned toegevoegd na voltooiing Fase 4.2
+
+---
+
+## Lessons Learned (na Fase 4.1 & 4.2)
+
+Zie `FASE4_NIEUWE_STRATEGIE.md` voor uitgebreide lessons learned. Belangrijkste punten:
+
+1. **Incrementele aanpak werkt** - Kleine stapjes (< 100 regels) zijn beter dan grote refactoring
+2. **Parallel implementatie** - Nieuwe code naast oude, dan geleidelijk vervangen
+3. **Static keyword problemen** - Verwijder `static` van helpers die modules gebruiken
+4. **Test na elke stap** - Compileer en test direct, niet later
+5. **Getter pattern** - Gebruik getters voor geleidelijke migratie
+6. **Forward declarations** - Voorkom circular dependencies
+7. **Documentatie tijdens refactoring** - Comments met fase/stap nummers
+8. **State synchronisatie** - Sync state na operaties die globale state wijzigen
+9. **Null pointer checks** - Altijd checks voor dynamische arrays
+10. **Bounds checking** - Check array bounds, vooral na warm-start
+
+Zie `FASE4_NIEUWE_STRATEGIE.md` voor volledige details en checklist.
 
 
 

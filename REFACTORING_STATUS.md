@@ -417,5 +417,34 @@
 
 **Laatste update:** 2025-12-18 - Fase 4.2 voltooid (PriceData module gemodulariseerd, versie 3.88)
 
+---
+
+## Belangrijke Lessen & Tips voor Volgende Fasen
+
+Zie `FASE4_NIEUWE_STRATEGIE.md` voor uitgebreide lessons learned. Belangrijkste aandachtspunten:
+
+### ✅ Wat Goed Werkt:
+- **Incrementele aanpak** - Kleine stapjes (< 100 regels) zijn veel veiliger
+- **Parallel implementatie** - Nieuwe code naast oude, dan geleidelijk vervangen
+- **Getter pattern** - Getters maken geleidelijke migratie mogelijk
+- **Test na elke stap** - Compileer en test direct, voorkom opstapeling van problemen
+
+### ⚠️ Veelvoorkomende Problemen:
+- **Static keyword** - Verwijder `static` van helpers die modules gebruiken
+- **Forward declarations** - Gebruik `extern` en forward declarations voor dependencies
+- **State synchronisatie** - Sync state na warm-start of andere globale wijzigingen
+- **Null pointer checks** - Altijd checks voor dynamische arrays (CYD platforms)
+
+### 📋 Checklist voor Elke Nieuwe Stap:
+1. Is de stap klein genoeg (< 100 regels)?
+2. Kan ik parallel implementeren (nieuw naast oud)?
+3. Zijn helper functies niet `static`?
+4. Zijn forward declarations correct?
+5. Compileert en werkt de code na deze stap?
+6. Zijn comments met fase/stap nummers toegevoegd?
+7. Is er een git commit na deze werkende stap?
+
+Zie `FASE4_NIEUWE_STRATEGIE.md` voor volledige details en uitgebreide checklist.
+
 
 
