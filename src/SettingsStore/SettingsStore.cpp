@@ -450,3 +450,5 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     prefs.end();
 }
 
+
+

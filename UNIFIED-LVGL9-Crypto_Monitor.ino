@@ -32,6 +32,15 @@
 // PriceData module (Fase 4.2.1: voor DataSource enum)
 #include "src/PriceData/PriceData.h"
 
+// TrendDetector module (Fase 5.1: voor TrendState enum en trend detection)
+#include "src/TrendDetector/TrendDetector.h"
+
+// VolatilityTracker module (Fase 5.2: voor VolatilityState enum en volatiliteit berekeningen)
+#include "src/VolatilityTracker/VolatilityTracker.h"
+
+// AlertEngine module (Fase 6.1: voor alert detection en notificaties)
+#include "src/AlertEngine/AlertEngine.h"
+
 // ArduinoJson support (optioneel - als library niet beschikbaar is, gebruik handmatige parsing)
 // Probeer ArduinoJson te includen - als het niet beschikbaar is, gebruik handmatige parsing
 #define USE_ARDUINOJSON 0  // Standaard uit, wordt gezet naar 1 als ArduinoJson beschikbaar is
@@ -56,8 +65,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 88
-#define VERSION_STRING "3.88"
+#define VERSION_MINOR 90
+#define VERSION_STRING "3.90"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -224,29 +233,33 @@ SemaphoreHandle_t dataMutex = NULL;
 // Symbols array - eerste element wordt dynamisch ingesteld via binanceSymbol
 static char symbolsArray[SYMBOL_COUNT][16] = {"BTCEUR", SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL};
 static const char *symbols[SYMBOL_COUNT] = {symbolsArray[0], symbolsArray[1], symbolsArray[2]};
-static float prices[SYMBOL_COUNT] = {0};
-static float openPrices[SYMBOL_COUNT] = {0};
+// Fase 6.1: AlertEngine module gebruikt deze variabele (extern declaration in AlertEngine.cpp)
+float prices[SYMBOL_COUNT] = {0};
+// Fase 6.2: AnchorSystem module gebruikt deze variabele (extern declaration in AnchorSystem.cpp)
+float openPrices[SYMBOL_COUNT] = {0};
 static float averagePrices[SYMBOL_COUNT] = {0}; // Gemiddelde prijzen voor 1 min en 30 min
 
 
 // Anchor price (referentie prijs voor koop/verkoop tracking)
-static float anchorPrice = 0.0f;
-static float anchorMax = 0.0f;  // Hoogste prijs sinds anchor
-static float anchorMin = 0.0f;  // Laagste prijs sinds anchor
-static unsigned long anchorTime = 0;
-static bool anchorActive = false;
-static bool anchorNotificationPending = false;  // Flag voor pending anchor set notificatie
-static float anchorTakeProfit = ANCHOR_TAKE_PROFIT_DEFAULT;  // Take profit threshold (%)
-static float anchorMaxLoss = ANCHOR_MAX_LOSS_DEFAULT;        // Max loss threshold (%)
-static bool anchorTakeProfitSent = false;  // Flag om te voorkomen dat take profit meerdere keren wordt verzonden
-static bool anchorMaxLossSent = false;    // Flag om te voorkomen dat max loss meerdere keren wordt verzonden
+// Fase 6.2: AnchorSystem module gebruikt deze variabelen (extern declarations in AnchorSystem.cpp)
+float anchorPrice = 0.0f;
+float anchorMax = 0.0f;  // Hoogste prijs sinds anchor
+float anchorMin = 0.0f;  // Laagste prijs sinds anchor
+unsigned long anchorTime = 0;
+bool anchorActive = false;
+static bool anchorNotificationPending = false;  // Flag voor pending anchor set notificatie (alleen UI)
+float anchorTakeProfit = ANCHOR_TAKE_PROFIT_DEFAULT;  // Take profit threshold (%)
+float anchorMaxLoss = ANCHOR_MAX_LOSS_DEFAULT;        // Max loss threshold (%)
+bool anchorTakeProfitSent = false;  // Flag om te voorkomen dat take profit meerdere keren wordt verzonden
+bool anchorMaxLossSent = false;    // Flag om te voorkomen dat max loss meerdere keren wordt verzonden
 
 // Trend-adaptive anchor settings
-static bool trendAdaptiveAnchorsEnabled = TREND_ADAPTIVE_ANCHORS_ENABLED_DEFAULT;
-static float uptrendMaxLossMultiplier = UPTREND_MAX_LOSS_MULTIPLIER_DEFAULT;
-static float uptrendTakeProfitMultiplier = UPTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT;
-static float downtrendMaxLossMultiplier = DOWNTREND_MAX_LOSS_MULTIPLIER_DEFAULT;
-static float downtrendTakeProfitMultiplier = DOWNTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT;
+// Fase 6.2: AnchorSystem module gebruikt deze variabelen (extern declarations in AnchorSystem.cpp)
+bool trendAdaptiveAnchorsEnabled = TREND_ADAPTIVE_ANCHORS_ENABLED_DEFAULT;
+float uptrendMaxLossMultiplier = UPTREND_MAX_LOSS_MULTIPLIER_DEFAULT;
+float uptrendTakeProfitMultiplier = UPTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT;
+float downtrendMaxLossMultiplier = DOWNTREND_MAX_LOSS_MULTIPLIER_DEFAULT;
+float downtrendTakeProfitMultiplier = DOWNTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT;
 
 // Warm-Start: Data source tracking
 // Warm-Start: System status
@@ -279,47 +292,18 @@ struct WarmStartStats {
 };
 
 // Trend detection
-enum TrendState {
-    TREND_UP,
-    TREND_DOWN,
-    TREND_SIDEWAYS
-};
+// Fase 5.1: TrendState enum verplaatst naar TrendDetector.h
+// Forward declaration voor backward compatibility
+#include "src/TrendDetector/TrendDetector.h"
 
-// Dynamische anchor configuratie op basis van trend
-struct AnchorConfigEffective {
-    float maxLossPct;      // Effectieve max loss percentage (negatief)
-    float takeProfitPct;   // Effectieve take profit percentage (positief)
-};
+// Fase 6.2: AnchorConfigEffective struct verplaatst naar AnchorSystem.h
+// Deze struct is nu gedefinieerd in src/AnchorSystem/AnchorSystem.h
 
 // Smart Confluence Mode: State structs voor recente events
-enum EventDirection {
-    EVENT_UP,
-    EVENT_DOWN,
-    EVENT_NONE
-};
+// Fase 6.1.1: EventDirection enum en event structs verplaatst naar AlertEngine.h
+// Deze worden nu geïncludeerd via AlertEngine.h
 
-struct LastOneMinuteEvent {
-    EventDirection direction;
-    unsigned long timestamp;
-    float magnitude;  // |ret_1m|
-    bool usedInConfluence;  // Flag om te voorkomen dat dit event dubbel wordt gebruikt
-};
-
-struct LastFiveMinuteEvent {
-    EventDirection direction;
-    unsigned long timestamp;
-    float magnitude;  // |ret_5m|
-    bool usedInConfluence;  // Flag om te voorkomen dat dit event dubbel wordt gebruikt
-};
-
-// Auto-Volatility Mode: Struct voor effective thresholds
-struct EffectiveThresholds {
-    float spike1m;
-    float move5m;
-    float move30m;
-    float volFactor;
-    float stdDev;
-};
+// Fase 5.2: EffectiveThresholds struct verplaatst naar VolatilityTracker.h (al geïncludeerd boven)
 
 static float ret_2h = 0.0f;  // 2-hour return percentage
 static float ret_30m = 0.0f;  // 30-minute return percentage (calculated from minuteAverages or warm-start data)
@@ -330,40 +314,46 @@ static bool hasRet30mLive = false;  // Flag: ret_30m kan worden berekend uit liv
 // Combined flags: beschikbaar vanuit warm-start OF live data
 static bool hasRet2h = false;  // hasRet2hWarm || hasRet2hLive
 static bool hasRet30m = false;  // hasRet30mWarm || hasRet30mLive
-static TrendState trendState = TREND_SIDEWAYS;  // Current trend state
-static TrendState previousTrendState = TREND_SIDEWAYS;  // Previous trend state (voor change detection)
+// Fase 5.3.17: Globale variabelen voor backward compatibility - modules zijn source of truth
+// Deze variabelen worden gesynchroniseerd met TrendDetector module na elke update
+// TODO: In toekomstige fase kunnen deze verwijderd worden zodra alle code volledig gemigreerd is
+TrendState trendState = TREND_SIDEWAYS;  // Current trend state (backward compatibility)
+TrendState previousTrendState = TREND_SIDEWAYS;  // Previous trend state (backward compatibility)
 static float trendThreshold = TREND_THRESHOLD_DEFAULT;  // Trend threshold (%)
 
-// Volatiliteit detection
-enum VolatilityState {
-    VOLATILITY_LOW,      // Rustig: < 0.05%
-    VOLATILITY_MEDIUM,  // Gemiddeld: 0.05% - 0.15%
-    VOLATILITY_HIGH     // Volatiel: >= 0.15%
-};
-static float abs1mReturns[VOLATILITY_LOOKBACK_MINUTES];  // Array voor absolute 1m returns
-static uint8_t volatilityIndex = 0;  // Index voor circulaire buffer
-static bool volatilityArrayFilled = false;  // Flag om aan te geven of array gevuld is
-static VolatilityState volatilityState = VOLATILITY_MEDIUM;  // Current volatility state
-static float volatilityLowThreshold = VOLATILITY_LOW_THRESHOLD_DEFAULT;  // Low threshold (%)
-static float volatilityHighThreshold = VOLATILITY_HIGH_THRESHOLD_DEFAULT;  // High threshold (%)
-static unsigned long lastTrendChangeNotification = 0;  // Timestamp van laatste trend change notificatie
+// Fase 5.2: VolatilityState enum verplaatst naar VolatilityTracker.h (al geïncludeerd boven)
+// Fase 5.3.17: Globale variabelen voor backward compatibility - modules zijn source of truth
+// Deze variabelen worden gesynchroniseerd met VolatilityTracker module na elke update
+// TODO: In toekomstige fase kunnen deze verwijderd worden zodra alle code volledig gemigreerd is
+float abs1mReturns[VOLATILITY_LOOKBACK_MINUTES];  // Array voor absolute 1m returns
+uint8_t volatilityIndex = 0;  // Index voor circulaire buffer
+bool volatilityArrayFilled = false;  // Flag om aan te geven of array gevuld is
+VolatilityState volatilityState = VOLATILITY_MEDIUM;  // Current volatility state (backward compatibility)
+float volatilityLowThreshold = VOLATILITY_LOW_THRESHOLD_DEFAULT;  // Low threshold (%)
+float volatilityHighThreshold = VOLATILITY_HIGH_THRESHOLD_DEFAULT;  // High threshold (%)
+unsigned long lastTrendChangeNotification = 0;  // Timestamp van laatste trend change notificatie (backward compatibility)
 
 // Smart Confluence Mode state
-static bool smartConfluenceEnabled = SMART_CONFLUENCE_ENABLED_DEFAULT;
-static LastOneMinuteEvent last1mEvent = {EVENT_NONE, 0, 0.0f, false};
-static LastFiveMinuteEvent last5mEvent = {EVENT_NONE, 0, 0.0f, false};
-static unsigned long lastConfluenceAlert = 0;  // Timestamp van laatste confluence alert (cooldown)
+// Fase 6.1: AlertEngine module gebruikt deze variabele (extern declaration in AlertEngine.cpp)
+bool smartConfluenceEnabled = SMART_CONFLUENCE_ENABLED_DEFAULT;
+// Fase 6.1: AlertEngine module gebruikt deze variabelen (extern declarations in AlertEngine.cpp)
+LastOneMinuteEvent last1mEvent = {EVENT_NONE, 0, 0.0f, false};
+LastFiveMinuteEvent last5mEvent = {EVENT_NONE, 0, 0.0f, false};
+unsigned long lastConfluenceAlert = 0;  // Timestamp van laatste confluence alert (cooldown)
 
+// Fase 5.2: static verwijderd zodat VolatilityTracker module deze variabelen kan gebruiken
 // Auto-Volatility Mode state
-static bool autoVolatilityEnabled = AUTO_VOLATILITY_ENABLED_DEFAULT;
-static uint8_t autoVolatilityWindowMinutes = AUTO_VOLATILITY_WINDOW_MINUTES_DEFAULT;
-static float autoVolatilityBaseline1mStdPct = AUTO_VOLATILITY_BASELINE_1M_STD_PCT_DEFAULT;
-static float autoVolatilityMinMultiplier = AUTO_VOLATILITY_MIN_MULTIPLIER_DEFAULT;
-static float autoVolatilityMaxMultiplier = AUTO_VOLATILITY_MAX_MULTIPLIER_DEFAULT;
-static float volatility1mReturns[MAX_VOLATILITY_WINDOW_SIZE];  // Sliding window voor 1m returns
-static uint8_t volatility1mIndex = 0;  // Index voor circulaire buffer
-static bool volatility1mArrayFilled = false;  // Flag om aan te geven of array gevuld is
-static float currentVolFactor = 1.0f;  // Huidige volatility factor
+bool autoVolatilityEnabled = AUTO_VOLATILITY_ENABLED_DEFAULT;
+uint8_t autoVolatilityWindowMinutes = AUTO_VOLATILITY_WINDOW_MINUTES_DEFAULT;
+float autoVolatilityBaseline1mStdPct = AUTO_VOLATILITY_BASELINE_1M_STD_PCT_DEFAULT;
+float autoVolatilityMinMultiplier = AUTO_VOLATILITY_MIN_MULTIPLIER_DEFAULT;
+float autoVolatilityMaxMultiplier = AUTO_VOLATILITY_MAX_MULTIPLIER_DEFAULT;
+// Fase 5.2: static verwijderd zodat VolatilityTracker module deze variabelen kan gebruiken
+float volatility1mReturns[MAX_VOLATILITY_WINDOW_SIZE];  // Sliding window voor 1m returns
+uint8_t volatility1mIndex = 0;  // Index voor circulaire buffer
+bool volatility1mArrayFilled = false;  // Flag om aan te geven of array gevuld is
+// Fase 5.2: static verwijderd zodat VolatilityTracker module deze variabele kan gebruiken
+float currentVolFactor = 1.0f;  // Huidige volatility factor
 static unsigned long lastVolatilityLog = 0;  // Timestamp van laatste volatility log (voor debug)
 #define VOLATILITY_LOG_INTERVAL_MS 300000UL  // Log elke 5 minuten
 
@@ -518,10 +508,12 @@ static uint8_t language = DEFAULT_LANGUAGE;  // 0 = Nederlands, 1 = English
 // Instelbare grenswaarden (worden geladen uit Preferences)
 // Note: ntfyTopic wordt geïnitialiseerd in loadSettings() met unieke ESP32 ID
 static char ntfyTopic[64] = "";  // NTFY topic (max 63 karakters)
-static char binanceSymbol[16] = BINANCE_SYMBOL_DEFAULT;  // Binance symbool (max 15 karakters, bijv. BTCEUR, BTCUSDT)
+// Fase 5.1: static verwijderd zodat TrendDetector module deze variabele kan gebruiken
+char binanceSymbol[16] = BINANCE_SYMBOL_DEFAULT;  // Binance symbool (max 15 karakters, bijv. BTCEUR, BTCUSDT)
 
 // Alert thresholds in struct voor betere organisatie
-static AlertThresholds alertThresholds = {
+// Fase 6.1: AlertEngine module gebruikt deze struct (extern declaration in AlertEngine.cpp)
+AlertThresholds alertThresholds = {
     .spike1m = SPIKE_1M_THRESHOLD_DEFAULT,
     .spike5m = SPIKE_5M_THRESHOLD_DEFAULT,
     .move30m = MOVE_30M_THRESHOLD_DEFAULT,
@@ -534,7 +526,8 @@ static AlertThresholds alertThresholds = {
 };
 
 // Notification cooldowns in struct voor betere organisatie
-static NotificationCooldowns notificationCooldowns = {
+// Fase 6.1: AlertEngine module gebruikt deze struct (extern declaration in AlertEngine.cpp)
+NotificationCooldowns notificationCooldowns = {
     .cooldown1MinMs = NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT,
     .cooldown30MinMs = NOTIFICATION_COOLDOWN_30MIN_MS_DEFAULT,
     .cooldown5MinMs = NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT
@@ -554,15 +547,16 @@ static NotificationCooldowns notificationCooldowns = {
 #define notificationCooldown30MinMs notificationCooldowns.cooldown30MinMs
 #define notificationCooldown5MinMs notificationCooldowns.cooldown5MinMs
 
-static unsigned long lastNotification1Min = 0;
-static unsigned long lastNotification30Min = 0;
-static unsigned long lastNotification5Min = 0;
+// Fase 6.1: AlertEngine module gebruikt deze variabelen (extern declarations in AlertEngine.cpp)
+unsigned long lastNotification1Min = 0;
+unsigned long lastNotification30Min = 0;
+unsigned long lastNotification5Min = 0;
 
 // Max alerts per uur tracking
-static uint8_t alerts1MinThisHour = 0;
-static uint8_t alerts30MinThisHour = 0;
-static uint8_t alerts5MinThisHour = 0;
-static unsigned long hourStartTime = 0; // Starttijd van het huidige uur
+uint8_t alerts1MinThisHour = 0;
+uint8_t alerts30MinThisHour = 0;
+uint8_t alerts5MinThisHour = 0;
+unsigned long hourStartTime = 0; // Starttijd van het huidige uur
 
 // Web server voor instellingen
 WebServer server(80);
@@ -576,6 +570,19 @@ ApiClient apiClient;
 
 // PriceData instance (Fase 4.2.1: module structuur aangemaakt)
 PriceData priceData;
+
+// TrendDetector instance (Fase 5.1: trend detection module)
+TrendDetector trendDetector;
+
+// VolatilityTracker instance (Fase 5.2: volatiliteit tracking module)
+VolatilityTracker volatilityTracker;
+
+// AlertEngine instance (Fase 6.1.1: alert detection module - basis structuur)
+AlertEngine alertEngine;
+
+// AnchorSystem instance (Fase 6.2.1: anchor price tracking module - basis structuur)
+#include "src/AnchorSystem/AnchorSystem.h"
+AnchorSystem anchorSystem;
 
 // MQTT configuratie (instelbaar via web interface)
 static char mqttHost[64] = MQTT_HOST_DEFAULT;    // MQTT broker IP
@@ -1237,9 +1244,13 @@ static WarmStartMode performWarmStart()
     hasRet2h = hasRet2hWarm || hasRet2hLive;
     hasRet30m = hasRet30mWarm || hasRet30mLive;
     
-    // Bepaal trend state op basis van warm-start data
+    // Fase 5.1: Bepaal trend state op basis van warm-start data (gebruik TrendDetector module)
     if (hasRet2h && hasRet30m) {
-        trendState = determineTrendState(ret_2h, ret_30m);
+        extern float trendThreshold;
+        // Fase 5.3.15: Update module eerst, synchroniseer dan globale variabele
+        TrendState newTrendState = trendDetector.determineTrendState(ret_2h, ret_30m, trendThreshold);
+        trendDetector.setTrendState(newTrendState);  // Update TrendDetector state
+        trendState = newTrendState;  // Synchroniseer globale variabele
     }
     
     // Bepaal mode op basis van successen
@@ -1497,7 +1508,8 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
 // ============================================================================
 
 // Get formatted timestamp string (dd-mm-yyyy hh:mm:ss)
-static void getFormattedTimestamp(char *buffer, size_t bufferSize) {
+// Fase 6.1: AlertEngine module gebruikt deze functie (extern declaration in AlertEngine.cpp)
+void getFormattedTimestamp(char *buffer, size_t bufferSize) {
     struct tm timeinfo;
     if (getLocalTime(&timeinfo)) {
         strftime(buffer, bufferSize, "%d-%m-%Y %H:%M:%S", &timeinfo);
@@ -1513,7 +1525,8 @@ static void getFormattedTimestamp(char *buffer, size_t bufferSize) {
 // ============================================================================
 
 // Helper: Validate if price is valid (not NaN, Inf, or <= 0)
-static bool isValidPrice(float price)
+// Fase 6.2: AnchorSystem module gebruikt deze functie (extern declaration in AnchorSystem.h)
+bool isValidPrice(float price)
 {
     return !isnan(price) && !isinf(price) && price > 0.0f;
 }
@@ -1561,7 +1574,8 @@ static const unsigned long MAX_MUTEX_HOLD_TIME_MS = 2000; // Max 2 seconden hold
 
 // Helper: Safe mutex take with deadlock detection
 // Returns true on success, false on failure
-static bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const char* context)
+// Fase 6.2: AnchorSystem module gebruikt deze functie (extern declaration in AnchorSystem.h)
+bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const char* context)
 {
     if (mutex == nullptr) {
         Serial_printf(F("[Mutex] ERROR: Attempt to take nullptr mutex in %s\n"), context);
@@ -1588,12 +1602,12 @@ static bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const cha
 }
 
 // Helper: Safe mutex give with error handling and deadlock detection
-// Returns true on success, false on failure
-static bool safeMutexGive(SemaphoreHandle_t mutex, const char* context)
+// Fase 6.2: AnchorSystem module gebruikt deze functie (extern declaration in AnchorSystem.h)
+void safeMutexGive(SemaphoreHandle_t mutex, const char* context)
 {
     if (mutex == nullptr) {
         Serial_printf(F("[Mutex] ERROR: Attempt to give nullptr mutex in %s\n"), context);
-        return false;
+        return;
     }
     
     // Check if mutex was held for too long (potential deadlock)
@@ -1609,19 +1623,18 @@ static bool safeMutexGive(SemaphoreHandle_t mutex, const char* context)
     if (result != pdTRUE) {
         Serial_printf(F("[Mutex] ERROR: xSemaphoreGive failed in %s (result=%d)\n"), context, result);
         // Note: This could indicate a mutex leak or double-release
-        return false;
+        return;
     }
     
     // Reset tracking
     mutexTakeTime = 0;
     mutexHolderContext = nullptr;
-    
-    return true;
 }
 
 // Forward declarations
-static void findMinMaxInSecondPrices(float &minVal, float &maxVal);
-static void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
+// Fase 6.1: AlertEngine module gebruikt deze functies (extern declarations in AlertEngine.cpp)
+void findMinMaxInSecondPrices(float &minVal, float &maxVal);
+void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
 static void checkHeapTelemetry();
 
 // ============================================================================
@@ -1691,223 +1704,25 @@ static void checkHeapTelemetry()
 // ============================================================================
 
 // Send notification via NTFY
-static bool sendNotification(const char *title, const char *message, const char *colorTag = nullptr)
+// Fase 5.1: static verwijderd zodat TrendDetector module deze functie kan aanroepen (later verplaatst naar AlertEngine)
+bool sendNotification(const char *title, const char *message, const char *colorTag = nullptr)
 {
     return sendNtfyNotification(title, message, colorTag);
 }
 
-// Check trend change en stuur notificatie indien nodig
-static void checkTrendChange(float ret_30m_value)
-{
-    unsigned long now = millis();
-    
-    // Check of trend state is veranderd
-    if (trendState != previousTrendState)
-    {
-        // Check cooldown: max 1 trend-change notificatie per 10 minuten
-        bool cooldownPassed = (lastTrendChangeNotification == 0 || 
-                               (now - lastTrendChangeNotification >= TREND_CHANGE_COOLDOWN_MS));
-        
-        // Alleen notificeren als cooldown is verstreken en we hebben geldige data
-        if (cooldownPassed && ret_2h != 0.0f && (minuteArrayFilled || minuteIndex >= 120))
-        {
-            const char* fromTrend = "";
-            const char* toTrend = "";
-            const char* colorTag = "";
-            
-            // Bepaal tekst voor vorige trend
-            switch (previousTrendState)
-            {
-                case TREND_UP:
-                    fromTrend = "UP";
-                    break;
-                case TREND_DOWN:
-                    fromTrend = "DOWN";
-                    break;
-                case TREND_SIDEWAYS:
-                default:
-                    fromTrend = "SIDEWAYS";
-                    break;
-            }
-            
-            // Bepaal tekst voor nieuwe trend
-            switch (trendState)
-            {
-                case TREND_UP:
-                    toTrend = "UP";
-                    colorTag = "green_square,📈";
-                    break;
-                case TREND_DOWN:
-                    toTrend = "DOWN";
-                    colorTag = "red_square,📉";
-                    break;
-                case TREND_SIDEWAYS:
-                default:
-                    toTrend = "SIDEWAYS";
-                    colorTag = "grey_square,➡️";
-                    break;
-            }
-            
-            // Bepaal volatiliteit tekst
-            const char* volText = "";
-            switch (volatilityState)
-            {
-                case VOLATILITY_LOW:
-                    volText = "Rustig";
-                    break;
-                case VOLATILITY_MEDIUM:
-                    volText = "Gemiddeld";
-                    break;
-                case VOLATILITY_HIGH:
-                    volText = "Volatiel";
-                    break;
-            }
-            
-            char title[64];
-            char msg[256];
-            snprintf(title, sizeof(title), "%s Trend Change", binanceSymbol);
-            snprintf(msg, sizeof(msg), 
-                     "Trend change: %s → %s\n2h: %+.2f%%\n30m: %+.2f%%\nVol: %s",
-                     fromTrend, toTrend, ret_2h, ret_30m_value, volText);
-            
-            sendNotification(title, msg, colorTag);
-            lastTrendChangeNotification = now;
-            
-            Serial_printf(F("[Trend] Trend change notificatie verzonden: %s → %s (2h: %.2f%%, 30m: %.2f%%, Vol: %s)\n"), 
-                         fromTrend, toTrend, ret_2h, ret_30m_value, volText);
-        }
-        
-        // Update previous trend state
-        previousTrendState = trendState;
-    }
-}
+// Fase 5.3.4: checkTrendChange() wrapper functie verwijderd - alle calls gebruiken nu directe module calls
 
 // ============================================================================
 // Anchor Price Functions
 // ============================================================================
 
-// Bereken effectieve anchor-waarden op basis van trend
-// Basiswaarden worden aangepast:
-// - TREND_UP: meer ruimte voor verlies (1.25x), meer winst (1.10x)
-// Bereken effectieve anchor thresholds op basis van trend (alleen als trend-adaptive enabled is)
-// - TREND_UP: configureerbare multipliers (default: maxLoss * 1.15, takeProfit * 1.2)
-// - TREND_DOWN: configureerbare multipliers (default: maxLoss * 0.85, takeProfit * 0.8)
-// - TREND_SIDEWAYS: basiswaarden (geen aanpassing)
-static AnchorConfigEffective calculateEffectiveAnchorThresholds(TrendState trend, float baseMaxLoss, float baseTakeProfit)
-{
-    AnchorConfigEffective eff;
-    
-    // Als trend-adaptive uit staat, gebruik basiswaarden
-    if (!trendAdaptiveAnchorsEnabled) {
-        eff.maxLossPct = baseMaxLoss;
-        eff.takeProfitPct = baseTakeProfit;
-        return eff;
-    }
-    
-    // Pas multipliers toe op basis van trend
-    switch (trend) {
-        case TREND_UP:
-            eff.maxLossPct = baseMaxLoss * uptrendMaxLossMultiplier;
-            eff.takeProfitPct = baseTakeProfit * uptrendTakeProfitMultiplier;
-            break;
-            
-        case TREND_DOWN:
-            eff.maxLossPct = baseMaxLoss * downtrendMaxLossMultiplier;
-            eff.takeProfitPct = baseTakeProfit * downtrendTakeProfitMultiplier;
-            break;
-            
-        case TREND_SIDEWAYS:
-        default:
-            // Basiswaarden (geen aanpassing)
-            eff.maxLossPct = baseMaxLoss;
-            eff.takeProfitPct = baseTakeProfit;
-            break;
-    }
-    
-    // Clamp waarden om extreme situaties te voorkomen
-    if (eff.maxLossPct < -6.0f) eff.maxLossPct = -6.0f;
-    if (eff.maxLossPct > -1.0f) eff.maxLossPct = -1.0f;
-    if (eff.takeProfitPct < 2.0f) eff.takeProfitPct = 2.0f;
-    if (eff.takeProfitPct > 10.0f) eff.takeProfitPct = 10.0f;
-    
-    return eff;
-}
-
-// Legacy functie voor backward compatibility (gebruikt nu calculateEffectiveAnchorThresholds)
-static AnchorConfigEffective calcEffectiveAnchor(float baseMaxLoss, float baseTakeProfit, TrendState trend)
-{
-    return calculateEffectiveAnchorThresholds(trend, baseMaxLoss, baseTakeProfit);
-}
-
-// Publiceer anchor event naar MQTT
-// Helper functie om anchor in te stellen (thread-safe)
-// anchorValue: de waarde om in te stellen (0.0 = gebruik huidige prijs)
-// shouldUpdateUI: true = update UI direct (alleen vanuit main loop thread), false = skip UI update (voor web/MQTT threads)
-// skipNotifications: true = skip NTFY en MQTT (voor web server thread om crashes te voorkomen), false = stuur notificaties
-// returns: true als succesvol, false als mislukt
-static bool setAnchorPrice(float anchorValue = 0.0f, bool shouldUpdateUI = true, bool skipNotifications = false) {
-    // Kortere timeout voor web server thread om watchdog te voorkomen
-    TickType_t timeout = skipNotifications ? pdMS_TO_TICKS(100) : pdMS_TO_TICKS(500);
-    if (safeMutexTake(dataMutex, timeout, "setAnchorPrice")) {
-        float priceToSet = anchorValue;
-        
-        // Als anchorValue 0 is of ongeldig, gebruik huidige prijs
-        if (priceToSet <= 0.0f || !isValidPrice(priceToSet)) {
-            if (isValidPrice(prices[0])) {
-                priceToSet = prices[0];
-                Serial_printf(F("[Anchor] Gebruik huidige prijs als anchor: %.2f\n"), priceToSet);
-            } else {
-                Serial_println("[Anchor] WARN: Geen geldige prijs beschikbaar voor anchor");
-                safeMutexGive(dataMutex, "setAnchorPrice");
-                return false;
-            }
-        }
-        
-        // Valideer dat de prijs nog steeds geldig is na mutex lock
-        if (!isValidPrice(priceToSet)) {
-            Serial_println("[Anchor] WARN: Prijs ongeldig na validatie");
-            safeMutexGive(dataMutex, "setAnchorPrice");
-            return false;
-        }
-        
-        // Set anchor price (atomisch binnen mutex)
-        anchorPrice = priceToSet;
-        openPrices[0] = priceToSet;
-        anchorMax = priceToSet;  // Initialiseer max/min met anchor prijs
-        anchorMin = priceToSet;
-        anchorTime = millis();
-        anchorActive = true;
-        anchorTakeProfitSent = false;
-        anchorMaxLossSent = false;
-        Serial_printf(F("[Anchor] Anchor set: anchorPrice = %.2f\n"), anchorPrice);
-        
-        safeMutexGive(dataMutex, "setAnchorPrice");
-        
-        // Publiceer anchor event naar MQTT en stuur notificatie alleen als niet overgeslagen
-        // Doe dit BUITEN de mutex om blocking operaties te voorkomen
-        if (!skipNotifications) {
-            publishMqttAnchorEvent(anchorPrice, "anchor_set");
-            
-            // Stuur NTFY notificatie
-            char timestamp[32];
-            getFormattedTimestamp(timestamp, sizeof(timestamp));
-            char title[64];
-            char msg[128];
-            snprintf(title, sizeof(title), "%s Anchor Set", binanceSymbol);
-            snprintf(msg, sizeof(msg), "%s: %.2f EUR", timestamp, priceToSet);
-            sendNotification(title, msg, "white_check_mark");
-        }
-        
-        // Update UI alleen als gevraagd (niet vanuit web/MQTT threads)
-        if (shouldUpdateUI) {
-            updateUI();
-        }
-        
-        return true;
-    }
-    Serial_println("[Anchor] WARN: Mutex timeout bij setAnchorPrice");
-    return false;
-}
+// ============================================================================
+// Anchor Price Functions
+// ============================================================================
+// Fase 6.2: Anchor functionaliteit verplaatst naar AnchorSystem module
+// - calculateEffectiveAnchorThresholds(), calcEffectiveAnchor() → AnchorSystem
+// - setAnchorPrice() → AnchorSystem
+// - checkAnchorAlerts() → AnchorSystem
 
 void publishMqttAnchorEvent(float anchor_price, const char* event_type) {
     if (!mqttConnected) return;
@@ -1950,138 +1765,11 @@ void publishMqttAnchorEvent(float anchor_price, const char* event_type) {
 // ============================================================================
 
 // Bereken standaarddeviatie van 1m returns in het sliding window
-static float calculateStdDev1mReturns()
-{
-    if (!volatility1mArrayFilled && volatility1mIndex == 0) {
-        return 0.0f;  // Geen data beschikbaar
-    }
-    
-    // Gebruik de geconfigureerde window size, maar clamp naar array grootte
-    uint8_t windowSize = (autoVolatilityWindowMinutes > MAX_VOLATILITY_WINDOW_SIZE) ? MAX_VOLATILITY_WINDOW_SIZE : autoVolatilityWindowMinutes;
-    
-    // Validatie: window size moet minimaal 1 zijn
-    if (windowSize == 0) {
-        return 0.0f;
-    }
-    
-    uint8_t count = volatility1mArrayFilled ? windowSize : volatility1mIndex;
-    
-    if (count < 2) {
-        return 0.0f;  // Minimaal 2 samples nodig voor std dev
-    }
-    
-    // Bereken gemiddelde
-    float sum = 0.0f;
-    for (uint8_t i = 0; i < count; i++) {
-        sum += volatility1mReturns[i];
-    }
-    float mean = sum / count;
-    
-    // Bereken variantie
-    float variance = 0.0f;
-    for (uint8_t i = 0; i < count; i++) {
-        float diff = volatility1mReturns[i] - mean;
-        variance += diff * diff;
-    }
-    variance /= (count - 1);  // Sample variance (n-1)
-    
-    // Standaarddeviatie
-    return sqrtf(variance);
-}
-
-// Update sliding window met nieuwe 1m return
-static void updateVolatilityWindow(float ret_1m)
-{
-    if (!autoVolatilityEnabled) return;
-    
-    // Gebruik de geconfigureerde window size, maar clamp naar array grootte
-    uint8_t windowSize = (autoVolatilityWindowMinutes > MAX_VOLATILITY_WINDOW_SIZE) ? MAX_VOLATILITY_WINDOW_SIZE : autoVolatilityWindowMinutes;
-    
-    // Voeg nieuwe return toe aan circulaire buffer
-    volatility1mReturns[volatility1mIndex] = ret_1m;
-    volatility1mIndex++;
-    
-    if (volatility1mIndex >= windowSize) {
-        volatility1mIndex = 0;
-        volatility1mArrayFilled = true;
-    }
-}
-
-// Bereken volatility factor en effective thresholds
-static EffectiveThresholds calculateEffectiveThresholds(float baseSpike1m, float baseMove5m, float baseMove30m)
-{
-    EffectiveThresholds eff;
-    eff.volFactor = 1.0f;
-    eff.stdDev = 0.0f;
-    
-    if (!autoVolatilityEnabled) {
-        // Als disabled, gebruik basiswaarden
-        eff.spike1m = baseSpike1m;
-        eff.move5m = baseMove5m;
-        eff.move30m = baseMove30m;
-        return eff;
-    }
-    
-    // Bereken standaarddeviatie
-    eff.stdDev = calculateStdDev1mReturns();
-    
-    // Als er onvoldoende data is, gebruik volFactor = 1.0
-    // Minimaal 10 samples nodig voor betrouwbare berekening
-    uint8_t windowSize = (autoVolatilityWindowMinutes > MAX_VOLATILITY_WINDOW_SIZE) ? MAX_VOLATILITY_WINDOW_SIZE : autoVolatilityWindowMinutes;
-    uint8_t minSamples = (windowSize < 10) ? windowSize : 10;
-    
-    if (eff.stdDev <= 0.0f || (!volatility1mArrayFilled && volatility1mIndex < minSamples)) {
-        eff.volFactor = 1.0f;
-        eff.spike1m = baseSpike1m;
-        eff.move5m = baseMove5m;
-        eff.move30m = baseMove30m;
-        return eff;
-    }
-    
-    // Bereken volatility factor
-    // Validatie: voorkom deling door nul
-    if (autoVolatilityBaseline1mStdPct <= 0.0f) {
-        eff.volFactor = 1.0f;
-        eff.spike1m = baseSpike1m;
-        eff.move5m = baseMove5m;
-        eff.move30m = baseMove30m;
-        return eff;
-    }
-    
-    float rawVolFactor = eff.stdDev / autoVolatilityBaseline1mStdPct;
-    
-    // Clamp tussen min en max (validatie)
-    eff.volFactor = rawVolFactor;
-    if (eff.volFactor < autoVolatilityMinMultiplier) {
-        eff.volFactor = autoVolatilityMinMultiplier;
-    }
-    if (eff.volFactor > autoVolatilityMaxMultiplier) {
-        eff.volFactor = autoVolatilityMaxMultiplier;
-    }
-    
-    // Validatie: voorkom negatieve of nul thresholds
-    if (eff.volFactor <= 0.0f) {
-        eff.volFactor = 1.0f;
-    }
-    
-    // Update globale volFactor voor logging
-    currentVolFactor = eff.volFactor;
-    
-    // Bereken effective thresholds
-    eff.spike1m = baseSpike1m * eff.volFactor;
-    eff.move5m = baseMove5m * sqrtf(eff.volFactor);  // sqrt voor langere timeframes
-    eff.move30m = baseMove30m * sqrtf(eff.volFactor);
-    
-    // Validatie: voorkom negatieve thresholds (safety check)
-    if (eff.spike1m < 0.0f) eff.spike1m = baseSpike1m;
-    if (eff.move5m < 0.0f) eff.move5m = baseMove5m;
-    if (eff.move30m < 0.0f) eff.move30m = baseMove30m;
-    
-    return eff;
-}
+// Fase 5.3.11: Alle wrapper functies verwijderd - alle calls gebruiken nu directe module calls
 
 // Log volatility status (voor debug)
-static void logVolatilityStatus(const EffectiveThresholds& eff)
+// Fase 6.1: AlertEngine module gebruikt deze functie (extern declaration in AlertEngine.cpp)
+void logVolatilityStatus(const EffectiveThresholds& eff)
 {
     if (!autoVolatilityEnabled) return;
     
@@ -2099,519 +1787,15 @@ static void logVolatilityStatus(const EffectiveThresholds& eff)
 // Smart Confluence Mode: ConfluenceDetector Module
 // ============================================================================
 
-// Helper: Check if two events are within confluence time window
-static bool eventsWithinTimeWindow(unsigned long timestamp1, unsigned long timestamp2, unsigned long now)
-{
-    if (timestamp1 == 0 || timestamp2 == 0) return false;
-    unsigned long timeDiff = (timestamp1 > timestamp2) ? (timestamp1 - timestamp2) : (timestamp2 - timestamp1);
-    return (timeDiff <= CONFLUENCE_TIME_WINDOW_MS);
-}
-
-// Helper: Check if 30m trend supports the direction (UP/DOWN)
-static bool trendSupportsDirection(EventDirection direction)
-{
-    if (direction == EVENT_UP) {
-        // UP-confluence: 30m trend moet UP zijn of op zijn minst niet sterk DOWN
-        return (trendState == TREND_UP || trendState == TREND_SIDEWAYS);
-    } else if (direction == EVENT_DOWN) {
-        // DOWN-confluence: 30m trend moet DOWN zijn of op zijn minst niet sterk UP
-        return (trendState == TREND_DOWN || trendState == TREND_SIDEWAYS);
-    }
-    return false;
-}
-
-// Check for confluence and send combined alert if found
-// Returns true if confluence was found and alert sent, false otherwise
-static bool checkAndSendConfluenceAlert(unsigned long now, float ret_30m)
-{
-    if (!smartConfluenceEnabled) return false;
-    
-    // Check if we have valid 1m and 5m events
-    if (last1mEvent.direction == EVENT_NONE || last5mEvent.direction == EVENT_NONE) {
-        return false;
-    }
-    
-    // Check if events are already used in confluence
-    if (last1mEvent.usedInConfluence || last5mEvent.usedInConfluence) {
-        return false;
-    }
-    
-    // Check if events are within time window
-    if (!eventsWithinTimeWindow(last1mEvent.timestamp, last5mEvent.timestamp, now)) {
-        return false;
-    }
-    
-    // Check if both events are in the same direction
-    if (last1mEvent.direction != last5mEvent.direction) {
-        return false;
-    }
-    
-    // Check if 30m trend supports the direction
-    if (!trendSupportsDirection(last1mEvent.direction)) {
-        return false;
-    }
-    
-    // Check cooldown (prevent spam)
-    if (lastConfluenceAlert > 0 && (now - lastConfluenceAlert) < CONFLUENCE_TIME_WINDOW_MS) {
-        return false;
-    }
-    
-    // Confluence detected! Send combined alert
-    EventDirection direction = last1mEvent.direction;
-    const char* directionText = (direction == EVENT_UP) ? "UP" : "DOWN";
-    const char* trendText = "";
-    switch (trendState) {
-        case TREND_UP: trendText = "UP"; break;
-        case TREND_DOWN: trendText = "DOWN"; break;
-        case TREND_SIDEWAYS: trendText = "SIDEWAYS"; break;
-    }
-    
-    char timestamp[32];
-    getFormattedTimestamp(timestamp, sizeof(timestamp));
-    char title[80];
-    snprintf(title, sizeof(title), "%s Confluence Alert (1m+5m+Trend)", binanceSymbol);
-    
-    char msg[320];
-    if (direction == EVENT_UP) {
-        snprintf(msg, sizeof(msg),
-                 "Confluence %s gedetecteerd!\n\n"
-                 "1m: +%.2f%%\n"
-                 "5m: +%.2f%%\n"
-                 "30m Trend: %s (%.2f%%)\n\n"
-                 "Prijs %s: %.2f",
-                 directionText,
-                 last1mEvent.magnitude,
-                 last5mEvent.magnitude,
-                 trendText, ret_30m,
-                 timestamp, prices[0]);
-    } else {
-        snprintf(msg, sizeof(msg),
-                 "Confluence %s gedetecteerd!\n\n"
-                 "1m: %.2f%%\n"
-                 "5m: %.2f%%\n"
-                 "30m Trend: %s (%.2f%%)\n\n"
-                 "Prijs %s: %.2f",
-                 directionText,
-                 -last1mEvent.magnitude,
-                 -last5mEvent.magnitude,
-                 trendText, ret_30m,
-                 timestamp, prices[0]);
-    }
-    
-    const char* colorTag = (direction == EVENT_UP) ? "green_square,📈" : "red_square,📉";
-    sendNotification(title, msg, colorTag);
-    
-    // Mark events as used
-    last1mEvent.usedInConfluence = true;
-    last5mEvent.usedInConfluence = true;
-    lastConfluenceAlert = now;
-    
-    Serial_printf(F("[Confluence] Alert verzonden: 1m=%.2f%%, 5m=%.2f%%, trend=%s, ret_30m=%.2f%%\n"),
-                  (direction == EVENT_UP ? last1mEvent.magnitude : -last1mEvent.magnitude),
-                  (direction == EVENT_UP ? last5mEvent.magnitude : -last5mEvent.magnitude),
-                  trendText, ret_30m);
-    
-    return true;
-}
-
-// Update 1m event state (gebruikt effective threshold voor consistentie)
-static void update1mEvent(float ret_1m, unsigned long timestamp, float effectiveSpike1mThreshold)
-{
-    if (!smartConfluenceEnabled) return;
-    
-    float absRet1m = fabsf(ret_1m);
-    if (absRet1m >= effectiveSpike1mThreshold) {
-        last1mEvent.direction = (ret_1m > 0) ? EVENT_UP : EVENT_DOWN;
-        last1mEvent.timestamp = timestamp;
-        last1mEvent.magnitude = absRet1m;
-        last1mEvent.usedInConfluence = false;  // Reset flag when new event occurs
-    }
-}
-
-// Update 5m event state (gebruikt effective threshold voor consistentie)
-static void update5mEvent(float ret_5m, unsigned long timestamp, float effectiveMove5mThreshold)
-{
-    if (!smartConfluenceEnabled) return;
-    
-    float absRet5m = fabsf(ret_5m);
-    // Check for 5m move alert threshold (effective threshold)
-    if (absRet5m >= effectiveMove5mThreshold) {
-        last5mEvent.direction = (ret_5m > 0) ? EVENT_UP : EVENT_DOWN;
-        last5mEvent.timestamp = timestamp;
-        last5mEvent.magnitude = absRet5m;
-        last5mEvent.usedInConfluence = false;  // Reset flag when new event occurs
-    }
-}
-
-// Check anchor take profit / max loss alerts
-static void checkAnchorAlerts()
-{
-    if (!anchorActive || !isValidPrice(anchorPrice) || !isValidPrice(prices[0])) {
-        return; // Geen actieve anchor of geen prijs data
-    }
-    
-    // Bereken dynamische anchor-waarden op basis van trend
-    AnchorConfigEffective effAnchor = calculateEffectiveAnchorThresholds(trendState, anchorMaxLoss, anchorTakeProfit);
-    
-    // Bereken percentage verandering t.o.v. anchor
-    float anchorPct = ((prices[0] - anchorPrice) / anchorPrice) * 100.0f;
-    
-    // Helper: get trend name
-    const char* trendName = "";
-    switch (trendState) {
-        case TREND_UP: trendName = "UP"; break;
-        case TREND_DOWN: trendName = "DOWN"; break;
-        case TREND_SIDEWAYS: trendName = "SIDEWAYS"; break;
-    }
-    
-    // Check take profit met dynamische waarde
-    if (!anchorTakeProfitSent && anchorPct >= effAnchor.takeProfitPct) {
-        char timestamp[32];
-        getFormattedTimestamp(timestamp, sizeof(timestamp));
-        char title[64];
-        char msg[320];
-        snprintf(title, sizeof(title), "%s Take Profit", binanceSymbol);
-        
-        // Toon trend en effective thresholds in notificatie
-        if (trendAdaptiveAnchorsEnabled) {
-            snprintf(msg, sizeof(msg), 
-                     "Take profit bereikt: +%.2f%%\nTrend: %s, Threshold (eff.): +%.2f%% (basis: +%.2f%%)\nAnchor: %.2f EUR\nPrijs %s: %.2f EUR\nWinst: +%.2f EUR",
-                     anchorPct, trendName, effAnchor.takeProfitPct, anchorTakeProfit, anchorPrice, timestamp, prices[0], prices[0] - anchorPrice);
-        } else {
-            snprintf(msg, sizeof(msg), 
-                     "Take profit bereikt: +%.2f%%\nThreshold: +%.2f%%\nAnchor: %.2f EUR\nPrijs %s: %.2f EUR\nWinst: +%.2f EUR",
-                     anchorPct, effAnchor.takeProfitPct, anchorPrice, timestamp, prices[0], prices[0] - anchorPrice);
-        }
-        sendNotification(title, msg, "green_square,💰");
-        anchorTakeProfitSent = true;
-        Serial_printf(F("[Anchor] Take profit notificatie verzonden: %.2f%% (threshold: %.2f%%, basis: %.2f%%, trend: %s, anchor: %.2f, prijs: %.2f)\n"), 
-                     anchorPct, effAnchor.takeProfitPct, anchorTakeProfit, trendName, anchorPrice, prices[0]);
-        
-        // Publiceer take profit event naar MQTT
-        publishMqttAnchorEvent(anchorPrice, "take_profit");
-    }
-    
-    // Check max loss met dynamische waarde
-    if (!anchorMaxLossSent && anchorPct <= effAnchor.maxLossPct) {
-        char timestamp[32];
-        getFormattedTimestamp(timestamp, sizeof(timestamp));
-        char title[64];
-        char msg[320];
-        snprintf(title, sizeof(title), "%s Max Loss", binanceSymbol);
-        
-        // Toon trend en effective thresholds in notificatie
-        if (trendAdaptiveAnchorsEnabled) {
-            snprintf(msg, sizeof(msg), 
-                     "Max loss bereikt: %.2f%%\nTrend: %s, Threshold (eff.): %.2f%% (basis: %.2f%%)\nAnchor: %.2f EUR\nPrijs %s: %.2f EUR\nVerlies: %.2f EUR",
-                     anchorPct, trendName, effAnchor.maxLossPct, anchorMaxLoss, anchorPrice, timestamp, prices[0], prices[0] - anchorPrice);
-        } else {
-            snprintf(msg, sizeof(msg), 
-                     "Max loss bereikt: %.2f%%\nThreshold: %.2f%%\nAnchor: %.2f EUR\nPrijs %s: %.2f EUR\nVerlies: %.2f EUR",
-                     anchorPct, effAnchor.maxLossPct, anchorPrice, timestamp, prices[0], prices[0] - anchorPrice);
-        }
-        sendNotification(title, msg, "red_square,⚠️");
-        anchorMaxLossSent = true;
-        Serial_printf(F("[Anchor] Max loss notificatie verzonden: %.2f%% (threshold: %.2f%%, basis: %.2f%%, trend: %s, anchor: %.2f, prijs: %.2f)\n"), 
-                     anchorPct, effAnchor.maxLossPct, anchorMaxLoss, trendName, anchorPrice, prices[0]);
-        
-        // Publiceer max loss event naar MQTT
-        publishMqttAnchorEvent(anchorPrice, "max_loss");
-    }
-}
-
-// Check thresholds and send notifications if needed
-// ret_1m: percentage verandering laatste 1 minuut
-// ret_5m: percentage verandering laatste 5 minuten (voor filtering)
-// ret_30m: percentage verandering laatste 30 minuten
-// Helper: Check if cooldown has passed and hourly limit is OK
-static bool checkAlertConditions(unsigned long now, unsigned long& lastNotification, unsigned long cooldownMs, 
-                                  uint8_t& alertsThisHour, uint8_t maxAlertsPerHour, const char* alertType)
-{
-    bool cooldownPassed = (lastNotification == 0 || (now - lastNotification >= cooldownMs));
-    bool hourlyLimitOk = (alertsThisHour < maxAlertsPerHour);
-    
-    if (!hourlyLimitOk) {
-        Serial_printf("[Notify] %s gedetecteerd maar max alerts per uur bereikt (%d/%d)\n", 
-                     alertType, alertsThisHour, maxAlertsPerHour);
-    }
-    
-    return cooldownPassed && hourlyLimitOk;
-}
-
-// Helper: Determine color tag based on return value and threshold
-static const char* determineColorTag(float ret, float threshold, float strongThreshold)
-{
-    float absRet = fabsf(ret);
-    if (ret > 0) {
-        // Stijging: blauw voor normale (🔼), paars voor strong threshold (⏫️)
-        return (absRet >= strongThreshold) ? "purple_square,⏫️" : "blue_square,🔼";
-    } else {
-        // Daling: oranje voor normale (🔽), rood voor strong threshold (⏬️)
-        return (absRet >= strongThreshold) ? "red_square,⏬️" : "orange_square,🔽";
-    }
-}
-
-// Helper: Format notification message with timestamp, price, and min/max
-static void formatNotificationMessage(char* msg, size_t msgSize, float ret, const char* direction, 
-                                       float minVal, float maxVal)
-{
-    char timestamp[32];
-    getFormattedTimestamp(timestamp, sizeof(timestamp));
-    
-    if (ret >= 0) {
-        snprintf(msg, msgSize, 
-                "%s UP %s: +%.2f%%\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
-                direction, direction, ret, timestamp, prices[0], maxVal, minVal);
-    } else {
-        snprintf(msg, msgSize, 
-                "%s DOWN %s: %.2f%%\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
-                direction, direction, ret, timestamp, prices[0], maxVal, minVal);
-    }
-}
-
-// Helper: Send alert notification with all checks
-static bool sendAlertNotification(float ret, float threshold, float strongThreshold, 
-                                   unsigned long now, unsigned long& lastNotification, 
-                                   unsigned long cooldownMs, uint8_t& alertsThisHour, 
-                                   uint8_t maxAlertsPerHour, const char* alertType, 
-                                   const char* direction, float minVal, float maxVal)
-{
-    if (!checkAlertConditions(now, lastNotification, cooldownMs, alertsThisHour, maxAlertsPerHour, alertType)) {
-        return false;
-    }
-    
-    char msg[256];
-    formatNotificationMessage(msg, sizeof(msg), ret, direction, minVal, maxVal);
-    
-    const char* colorTag = determineColorTag(ret, threshold, strongThreshold);
-    
-    char title[64];
-    snprintf(title, sizeof(title), "%s %s Alert", binanceSymbol, alertType);
-    
-    sendNotification(title, msg, colorTag);
-    lastNotification = now;
-    alertsThisHour++;
-        Serial_printf(F("[Notify] %s notificatie verstuurd (%d/%d dit uur)\n"), alertType, alertsThisHour, maxAlertsPerHour);
-    
-    return true;
-}
-
-static void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
-{
-    unsigned long now = millis();
-    
-    // Update volatility window met nieuwe 1m return (Auto-Volatility Mode)
-    if (ret_1m != 0.0f) {
-        updateVolatilityWindow(ret_1m);
-    }
-    
-    // Bereken effective thresholds (Auto-Volatility Mode)
-    EffectiveThresholds effThresh = calculateEffectiveThresholds(spike1mThreshold, move5mAlertThreshold, move30mThreshold);
-    
-    // Log volatility status (voor debug)
-    logVolatilityStatus(effThresh);
-    
-    // Reset tellers elk uur
-    if (hourStartTime == 0 || (now - hourStartTime >= 3600000UL)) { // 1 uur = 3600000 ms
-        alerts1MinThisHour = 0;
-        alerts30MinThisHour = 0;
-        alerts5MinThisHour = 0;
-        hourStartTime = now;
-        Serial_printf(F("[Notify] Uur-tellers gereset\n"));
-    }
-    
-    // ===== 1-MINUUT SPIKE ALERT =====
-    // Voorwaarde: |ret_1m| >= effectiveSpike1mThreshold EN |ret_5m| >= spike5mThreshold in dezelfde richting
-    if (ret_1m != 0.0f && ret_5m != 0.0f)
-    {
-        float absRet1m = fabsf(ret_1m);
-        float absRet5m = fabsf(ret_5m);
-        
-        // Check of beide in dezelfde richting zijn (beide positief of beide negatief)
-        bool sameDirection = ((ret_1m > 0 && ret_5m > 0) || (ret_1m < 0 && ret_5m < 0));
-        
-        // Threshold check: ret_1m >= effectiveSpike1mThreshold EN ret_5m >= spike5mThreshold
-        bool spikeDetected = (absRet1m >= effThresh.spike1m) && (absRet5m >= spike5mThreshold) && sameDirection;
-        
-        // Update 1m event state voor Smart Confluence Mode
-        if (spikeDetected) {
-            update1mEvent(ret_1m, now, effThresh.spike1m);
-        }
-        
-        // Debug logging alleen bij spike detectie
-        if (spikeDetected) {
-            Serial_printf(F("[Notify] 1m spike: ret_1m=%.2f%%, ret_5m=%.2f%%\n"), ret_1m, ret_5m);
-            
-            // Check for confluence first (Smart Confluence Mode)
-            bool confluenceFound = false;
-            if (smartConfluenceEnabled) {
-                confluenceFound = checkAndSendConfluenceAlert(now, ret_30m);
-            }
-            
-            // Als confluence werd gevonden, skip individuele alert
-            if (confluenceFound) {
-                Serial_printf(F("[Notify] 1m spike onderdrukt (gebruikt in confluence alert)\n"));
-            } else {
-                // Check of dit event al gebruikt is in confluence (suppress individuele alert)
-                if (smartConfluenceEnabled && last1mEvent.usedInConfluence) {
-                    Serial_printf(F("[Notify] 1m spike onderdrukt (al gebruikt in confluence)\n"));
-                } else {
-                    // Bereken min en max uit secondPrices buffer
-                    float minVal, maxVal;
-                    findMinMaxInSecondPrices(minVal, maxVal);
-                    
-                    // Format message with 5m info
-                    char timestamp[32];
-                    getFormattedTimestamp(timestamp, sizeof(timestamp));
-                    char msg[256];
-                    if (ret_1m >= 0) {
-                        snprintf(msg, sizeof(msg), 
-                                 "1m UP spike: +%.2f%% (5m: +%.2f%%)\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
-                                 ret_1m, ret_5m, timestamp, prices[0], maxVal, minVal);
-                    } else {
-                        snprintf(msg, sizeof(msg), 
-                                 "1m DOWN spike: %.2f%% (5m: %.2f%%)\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
-                                 ret_1m, ret_5m, timestamp, prices[0], maxVal, minVal);
-                    }
-                    
-                    const char* colorTag = determineColorTag(ret_1m, effThresh.spike1m, effThresh.spike1m * 1.5f);
-                    char title[64];
-                    snprintf(title, sizeof(title), "%s 1m Spike Alert", binanceSymbol);
-                    
-                    if (checkAlertConditions(now, lastNotification1Min, notificationCooldown1MinMs, 
-                                             alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR, "1m spike")) {
-                        sendNotification(title, msg, colorTag);
-                        lastNotification1Min = now;
-                        alerts1MinThisHour++;
-                        Serial_printf(F("[Notify] 1m spike notificatie verstuurd (%d/%d dit uur)\n"), alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR);
-                    }
-                }
-            }
-        }
-    }
-    
-    // ===== 30-MINUTEN TREND MOVE ALERT =====
-    // Voorwaarde: |ret_30m| >= effectiveMove30mThreshold EN |ret_5m| >= move5mThreshold in dezelfde richting
-    if (ret_30m != 0.0f && ret_5m != 0.0f)
-    {
-        float absRet30m = fabsf(ret_30m);
-        float absRet5m = fabsf(ret_5m);
-        
-        // Check of beide in dezelfde richting zijn
-        bool sameDirection = ((ret_30m > 0 && ret_5m > 0) || (ret_30m < 0 && ret_5m < 0));
-        
-        // Threshold check: ret_30m >= effectiveMove30mThreshold EN ret_5m >= move5mThreshold
-        // Note: move5mThreshold is de filter threshold, niet de alert threshold
-        bool moveDetected = (absRet30m >= effThresh.move30m) && (absRet5m >= move5mThreshold) && sameDirection;
-        
-        // Debug logging alleen bij move detectie
-        if (moveDetected) {
-            Serial_printf(F("[Notify] 30m move: ret_30m=%.2f%%, ret_5m=%.2f%%\n"), ret_30m, ret_5m);
-            
-            // Bereken min en max uit laatste 30 minuten van minuteAverages buffer
-            float minVal, maxVal;
-            findMinMaxInLast30Minutes(minVal, maxVal);
-            
-            // Format message with 5m info
-            char timestamp[32];
-            getFormattedTimestamp(timestamp, sizeof(timestamp));
-            char msg[256];
-            if (ret_30m >= 0) {
-                snprintf(msg, sizeof(msg), 
-                         "30m UP move: +%.2f%% (5m: +%.2f%%)\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
-                         ret_30m, ret_5m, timestamp, prices[0], maxVal, minVal);
-            } else {
-                snprintf(msg, sizeof(msg), 
-                         "30m DOWN move: %.2f%% (5m: %.2f%%)\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
-                         ret_30m, ret_5m, timestamp, prices[0], maxVal, minVal);
-            }
-            
-            const char* colorTag = determineColorTag(ret_30m, effThresh.move30m, effThresh.move30m * 1.5f);
-            char title[64];
-            snprintf(title, sizeof(title), "%s 30m Move Alert", binanceSymbol);
-            
-            if (checkAlertConditions(now, lastNotification30Min, notificationCooldown30MinMs, 
-                                     alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR, "30m move")) {
-                sendNotification(title, msg, colorTag);
-                lastNotification30Min = now;
-                alerts30MinThisHour++;
-                Serial_printf(F("[Notify] 30m move notificatie verstuurd (%d/%d dit uur)\n"), alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR);
-            }
-        }
-    }
-    
-    // ===== 5-MINUTEN MOVE ALERT =====
-    // Voorwaarde: |ret_5m| >= effectiveMove5mThreshold
-    if (ret_5m != 0.0f)
-    {
-        float absRet5m = fabsf(ret_5m);
-        
-        // Threshold check: ret_5m >= effectiveMove5mThreshold
-        bool move5mDetected = (absRet5m >= effThresh.move5m);
-        
-        // Update 5m event state voor Smart Confluence Mode
-        if (move5mDetected) {
-            update5mEvent(ret_5m, now, effThresh.move5m);
-        }
-        
-        // Debug logging alleen bij move detectie
-        if (move5mDetected) {
-            Serial_printf(F("[Notify] 5m move: ret_5m=%.2f%%\n"), ret_5m);
-            
-            // Check for confluence first (Smart Confluence Mode)
-            bool confluenceFound = false;
-            if (smartConfluenceEnabled) {
-                confluenceFound = checkAndSendConfluenceAlert(now, ret_30m);
-            }
-            
-            // Als confluence werd gevonden, skip individuele alert
-            if (confluenceFound) {
-                Serial_printf(F("[Notify] 5m move onderdrukt (gebruikt in confluence alert)\n"));
-            } else {
-                // Check of dit event al gebruikt is in confluence (suppress individuele alert)
-                if (smartConfluenceEnabled && last5mEvent.usedInConfluence) {
-                    Serial_printf(F("[Notify] 5m move onderdrukt (al gebruikt in confluence)\n"));
-                } else {
-                    // Bereken min en max uit fiveMinutePrices buffer
-                    float minVal = fiveMinutePrices[0];
-                    float maxVal = fiveMinutePrices[0];
-                    for (int i = 1; i < SECONDS_PER_5MINUTES; i++) {
-                        if (fiveMinutePrices[i] > 0.0f) {
-                            if (fiveMinutePrices[i] < minVal || minVal <= 0.0f) minVal = fiveMinutePrices[i];
-                            if (fiveMinutePrices[i] > maxVal || maxVal <= 0.0f) maxVal = fiveMinutePrices[i];
-                        }
-                    }
-                    
-                    // Format message
-                    char timestamp[32];
-                    getFormattedTimestamp(timestamp, sizeof(timestamp));
-                    char msg[256];
-                    if (ret_5m >= 0) {
-                        snprintf(msg, sizeof(msg), 
-                                 "5m UP move: +%.2f%%\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
-                                 ret_5m, timestamp, prices[0], maxVal, minVal);
-                    } else {
-                        snprintf(msg, sizeof(msg), 
-                                 "5m DOWN move: %.2f%%\nPrijs %s: %.2f\nTop: %.2f Dal: %.2f", 
-                                 ret_5m, timestamp, prices[0], maxVal, minVal);
-                    }
-                    
-                    const char* colorTag = determineColorTag(ret_5m, effThresh.move5m, effThresh.move5m * 1.5f);
-                    char title[64];
-                    snprintf(title, sizeof(title), "%s 5m Move Alert", binanceSymbol);
-                    
-                    if (checkAlertConditions(now, lastNotification5Min, notificationCooldown5MinMs, 
-                                             alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR, "5m move")) {
-                        sendNotification(title, msg, colorTag);
-                        lastNotification5Min = now;
-                        alerts5MinThisHour++;
-                        Serial_printf(F("[Notify] 5m move notificatie verstuurd (%d/%d dit uur)\n"), alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR);
-                    }
-                }
-            }
-        }
-    }
-}
+// ============================================================================
+// Alert & Anchor Functions
+// ============================================================================
+// Fase 6.1: Alert functionaliteit verplaatst naar AlertEngine module
+// - checkAndNotify(), checkAlertConditions(), determineColorTag() → AlertEngine
+// - formatNotificationMessage(), sendAlertNotification() → AlertEngine
+// - update1mEvent(), update5mEvent(), checkAndSendConfluenceAlert() → AlertEngine
+// Fase 6.2: Anchor functionaliteit verplaatst naar AnchorSystem module
+// - checkAnchorAlerts() → AnchorSystem
 
 // Language translation function
 // Returns the appropriate text based on the selected language
@@ -3802,8 +2986,10 @@ static void renderSettingsHTML()
         if (isValidPrice(prices[0])) {
             currentPrice = prices[0];
         }
-        currentTrend = trendState;
-        currentVol = volatilityState;
+        // Fase 5.3.14: Gebruik TrendDetector module getter i.p.v. globale variabele
+        currentTrend = trendDetector.getTrendState();
+        // Fase 5.3.13: Gebruik VolatilityTracker module getter i.p.v. globale variabele
+        currentVol = volatilityTracker.getVolatilityState();
         currentAnchorActive = anchorActive;
         if (anchorActive && isValidPrice(anchorPrice)) {
             currentAnchorPrice = anchorPrice;
@@ -4581,7 +3767,8 @@ static uint8_t calcLivePctMinuteAverages(uint16_t windowMinutes)
 }
 
 // Find min and max values in secondPrices array
-static void findMinMaxInSecondPrices(float &minVal, float &maxVal)
+// Fase 6.1: AlertEngine module gebruikt deze functie (extern declaration in AlertEngine.cpp)
+void findMinMaxInSecondPrices(float &minVal, float &maxVal)
 {
     // Fase 4.2.7: Gebruik PriceData getters (parallel, arrays blijven globaal)
     minVal = 0.0f;
@@ -5182,96 +4369,15 @@ static float calculateReturn2Hours()
 // Trend Detection Functions
 // ============================================================================
 
-// Bepaal trend state op basis van 2h return en optioneel 30m return
-// Bepaal trend state op basis van 2h return en 30m return
-// TREND_UP: 2h >= +trendThreshold EN 30m >= 0 (beide voorwaarden moeten waar zijn)
-// TREND_DOWN: 2h <= -trendThreshold EN 30m <= 0 (beide voorwaarden moeten waar zijn)
-// TREND_SIDEWAYS: anders
-static TrendState determineTrendState(float ret_2h_value, float ret_30m_value)
-{
-    if (ret_2h_value >= trendThreshold && ret_30m_value >= 0.0f)
-    {
-        return TREND_UP;
-    }
-    else if (ret_2h_value <= -trendThreshold && ret_30m_value <= 0.0f)
-    {
-        return TREND_DOWN;
-    }
-    else
-    {
-        return TREND_SIDEWAYS;
-    }
-}
+// Fase 5.3.3: determineTrendState() wrapper functie verwijderd - alle calls gebruiken nu trendDetector.determineTrendState()
 
 // Voeg absolute 1m return toe aan volatiliteit buffer (wordt elke minuut aangeroepen)
 // Geoptimaliseerd: bounds checking en validatie toegevoegd
-static void addAbs1mReturnToVolatilityBuffer(float abs_ret_1m)
-{
-    // Zorg dat het absoluut is
-    if (abs_ret_1m < 0.0f) abs_ret_1m = -abs_ret_1m;
-    
-    // Valideer input
-    if (isnan(abs_ret_1m) || isinf(abs_ret_1m))
-    {
-        Serial_printf("[Array] WARN: Ongeldige abs_ret_1m: %.2f\n", abs_ret_1m);
-        return;
-    }
-    
-    // Bounds check voor abs1mReturns array
-    if (volatilityIndex >= VOLATILITY_LOOKBACK_MINUTES)
-    {
-        Serial_printf("[Array] ERROR: volatilityIndex buiten bereik: %u >= %u\n", volatilityIndex, VOLATILITY_LOOKBACK_MINUTES);
-        volatilityIndex = 0; // Reset naar veilige waarde
-    }
-    
-    abs1mReturns[volatilityIndex] = abs_ret_1m;
-    volatilityIndex = (volatilityIndex + 1) % VOLATILITY_LOOKBACK_MINUTES;
-    
-    if (volatilityIndex == 0)
-    {
-        volatilityArrayFilled = true;
-    }
-}
-
-// Bereken gemiddelde van absolute 1m returns over laatste 60 minuten
-static float calculateAverageAbs1mReturn()
-{
-    uint8_t count = volatilityArrayFilled ? VOLATILITY_LOOKBACK_MINUTES : volatilityIndex;
-    
-    if (count == 0)
-    {
-        return 0.0f;
-    }
-    
-    float sum = 0.0f;
-    for (uint8_t i = 0; i < count; i++)
-    {
-        sum += abs1mReturns[i];
-    }
-    
-    return sum / count;
-}
-
-// Bepaal volatiliteit state op basis van gemiddelde absolute 1m return
-static VolatilityState determineVolatilityState(float avg_abs_1m)
-{
-    // Volatiliteit bepaling (geoptimaliseerd: LOW < 0.05%, HIGH >= 0.15%)
-    if (avg_abs_1m < volatilityLowThreshold)
-    {
-        return VOLATILITY_LOW;  // Rustig: < 0.05%
-    }
-    else if (avg_abs_1m < volatilityHighThreshold)
-    {
-        return VOLATILITY_MEDIUM;  // Gemiddeld: 0.05% - 0.15%
-    }
-    else
-    {
-        return VOLATILITY_HIGH;  // Volatiel: >= 0.15%
-    }
-}
+// Fase 5.3.11: Alle wrapper functies verwijderd - alle calls gebruiken nu directe module calls
 
 // Find min and max values in last 30 minutes of minuteAverages array
-static void findMinMaxInLast30Minutes(float &minVal, float &maxVal)
+// Fase 6.1: AlertEngine module gebruikt deze functie (extern declaration in AlertEngine.cpp)
+void findMinMaxInLast30Minutes(float &minVal, float &maxVal)
 {
     minVal = 0.0f;
     maxVal = 0.0f;
@@ -5412,13 +4518,9 @@ static void fetchPrice()
             prices[0] = fetched;
             
             // Update anchor min/max als anchor actief is
+            // Fase 6.2.7: Gebruik AnchorSystem module i.p.v. directe globale variabele updates
             if (anchorActive && anchorPrice > 0.0f) {
-                if (fetched > anchorMax) {
-                    anchorMax = fetched;
-                }
-                if (fetched < anchorMin) {
-                    anchorMin = fetched;
-                }
+                anchorSystem.updateAnchorMinMax(fetched);
             }
             
             // Add price to second array (every second)
@@ -5454,25 +4556,46 @@ static void fetchPrice()
             hasRet2h = hasRet2hWarm || hasRet2hLive;
             hasRet30m = hasRet30mWarm || hasRet30mLive;
             
-            // Bepaal trend state op basis van 2h return (alleen als beide flags true zijn)
+            // Fase 5.1: Bepaal trend state op basis van 2h return (gebruik TrendDetector module)
             if (hasRet2h && hasRet30m) {
-                trendState = determineTrendState(ret_2h, ret_30m);
+                extern float trendThreshold;
+                // Fase 5.3.15: Update module eerst, synchroniseer dan globale variabele
+                TrendState newTrendState = trendDetector.determineTrendState(ret_2h, ret_30m, trendThreshold);
+                trendDetector.setTrendState(newTrendState);  // Update TrendDetector state
+                trendState = newTrendState;  // Synchroniseer globale variabele
             }
             
             // Check trend change en stuur notificatie indien nodig
-            checkTrendChange(ret_30m);
+            // Fase 5.3.2: Directe module call i.p.v. wrapper
+            extern float ret_2h;
+            extern bool minuteArrayFilled;
+            extern uint8_t minuteIndex;
+            trendDetector.checkTrendChange(ret_30m, ret_2h, minuteArrayFilled, minuteIndex);
+            // Update globale trendState en previousTrendState voor backward compatibility
+            extern TrendState trendState;
+            extern TrendState previousTrendState;
+            trendState = trendDetector.getTrendState();
+            previousTrendState = trendDetector.getPreviousTrendState();
             
             // Update volatiliteit buffer elke minuut met absolute 1m return
+            // Fase 5.3.5: Directe module call i.p.v. wrapper
             if (minuteUpdate && ret_1m != 0.0f)
             {
                 float abs_ret_1m = fabsf(ret_1m);
-                addAbs1mReturnToVolatilityBuffer(abs_ret_1m);
+                volatilityTracker.addAbs1mReturnToVolatilityBuffer(abs_ret_1m);
                 
                 // Bereken gemiddelde en bepaal volatiliteit state
-                float avg_abs_1m = calculateAverageAbs1mReturn();
+                // Fase 5.2: Gebruik VolatilityTracker module
+                float avg_abs_1m = volatilityTracker.calculateAverageAbs1mReturn();
+                // Fase 5.2: Gebruik VolatilityTracker module
                 if (avg_abs_1m > 0.0f)
                 {
-                    volatilityState = determineVolatilityState(avg_abs_1m);
+                    extern float volatilityLowThreshold;
+                    extern float volatilityHighThreshold;
+                    // Fase 5.3.15: Update module eerst, synchroniseer dan globale variabele
+                    VolatilityState newVolatilityState = volatilityTracker.determineVolatilityState(avg_abs_1m, volatilityLowThreshold, volatilityHighThreshold);
+                    volatilityTracker.setVolatilityState(newVolatilityState);  // Update VolatilityTracker state
+                    volatilityState = newVolatilityState;  // Synchroniseer globale variabele
                 }
             }
             
@@ -5490,10 +4613,12 @@ static void fetchPrice()
             }
             
             // Check thresholds and send notifications if needed (met ret_5m voor extra filtering)
-            checkAndNotify(ret_1m, ret_5m, ret_30m);
+            // Fase 6.1.11: Gebruik AlertEngine module i.p.v. globale functie
+            alertEngine.checkAndNotify(ret_1m, ret_5m, ret_30m);
             
             // Check anchor take profit / max loss alerts
-            checkAnchorAlerts();
+            // Fase 6.2.7: Gebruik AnchorSystem module i.p.v. globale functie
+            anchorSystem.checkAnchorAlerts();
             
             // Touchscreen anchor set functionaliteit verwijderd - gebruik nu fysieke knop
             
@@ -5770,7 +4895,9 @@ static void updateTrendLabel()
         bool isFromWarmStart = (hasRet2hWarm && hasRet30mWarm) && !(hasRet2hLive && hasRet30mLive);
         bool isFromLive = (hasRet2hLive && hasRet30mLive);
         
-        switch (trendState) {
+        // Fase 5.3.14: Gebruik TrendDetector module getter i.p.v. globale variabele
+        TrendState currentTrend = trendDetector.getTrendState();
+        switch (currentTrend) {
             case TREND_UP:
                 trendText = getText("OMHOOG", "UP");
                 if (isFromWarmStart) {
@@ -5910,7 +5037,9 @@ static void updateVolatilityLabel()
     const char* volText = "";
     lv_color_t volColor = lv_palette_main(LV_PALETTE_GREY);
     
-    switch (volatilityState) {
+    // Fase 5.3.14: Gebruik VolatilityTracker module getter i.p.v. globale variabele
+    VolatilityState currentVol = volatilityTracker.getVolatilityState();
+    switch (currentVol) {
         case VOLATILITY_LOW:
             volText = getText("RUSTIG", "CALM");
             volColor = lv_palette_main(LV_PALETTE_GREEN);
@@ -5962,7 +5091,10 @@ static void updateBTCEURCard(bool hasNewData)
     // Bereken dynamische anchor-waarden op basis van trend voor UI weergave
     AnchorConfigEffective effAnchorUI;
     if (anchorActive && anchorPrice > 0.0f) {
-        effAnchorUI = calcEffectiveAnchor(anchorMaxLoss, anchorTakeProfit, trendState);
+        // Fase 5.3.14: Gebruik TrendDetector module getter i.p.v. globale variabele
+        TrendState currentTrend = trendDetector.getTrendState();
+        // Fase 6.2.7: Gebruik AnchorSystem module i.p.v. globale functie
+        effAnchorUI = anchorSystem.calcEffectiveAnchor(anchorMaxLoss, anchorTakeProfit, currentTrend);
     }
     
     #ifdef PLATFORM_TTGO
@@ -6820,7 +5952,8 @@ void checkButton() {
         }
         
         // Gebruik helper functie om anchor in te stellen (gebruikt huidige prijs als default)
-        if (setAnchorPrice(0.0f)) {
+        // Fase 6.2.7: Gebruik AnchorSystem module i.p.v. globale functie
+        if (anchorSystem.setAnchorPrice(0.0f)) {
             // Update UI (this will also take the mutex internally)
             updateUI();
         } else {
@@ -6855,6 +5988,18 @@ static void setupSerialAndDevice()
     // Fase 4.2.1: Initialize PriceData (module structuur)
     // Fase 4.2.5: State variabelen worden geïnitialiseerd in constructor en gesynchroniseerd in begin()
     priceData.begin();  // begin() synchroniseert state met globale variabelen
+    
+    // Fase 5.1: Initialize TrendDetector (trend detection module)
+    trendDetector.begin();  // begin() synchroniseert state met globale variabelen
+    
+    // Fase 5.2: Initialize VolatilityTracker (volatiliteit tracking module)
+    volatilityTracker.begin();  // begin() synchroniseert state met globale variabelen
+    
+    // Fase 6.1: Initialize AlertEngine (alert detection module)
+    alertEngine.begin();
+    
+    // Fase 6.2.6: Initialiseer AnchorSystem module
+    anchorSystem.begin();  // begin() synchroniseert state met globale variabelen
     
     // Load settings
     loadSettings();
@@ -7842,7 +6987,8 @@ void uiTask(void *parameter)
             float valueToSet = useCurrentPrice ? 0.0f : anchorValueToSet;
             // Verwerk vanuit uiTask - dit is veilig omdat we in de main loop thread zijn
             // Gebruik skipNotifications=true om blocking operaties te voorkomen
-            if (setAnchorPrice(valueToSet, true, true)) {
+            // Fase 6.2.7: Gebruik AnchorSystem module i.p.v. globale functie
+            if (anchorSystem.setAnchorPrice(valueToSet, true, true)) {
                 lastAnchorSetTime = now; // Thread-safe write (uiTask is single-threaded voor deze variabele)
                 Serial_printf("[UI Task] Anchor set asynchroon: %.2f\n", 
                     useCurrentPrice ? 0.0f : anchorValueToSet);

@@ -145,3 +145,5 @@ float PriceData::calculateReturn1Minute(float* averagePrices) {
     return ((priceNow - priceXAgo) / priceXAgo) * 100.0f;
 }
 
+
+

@@ -283,6 +283,42 @@ Voor elke stap:
 - **Oplossing:** Bounds checks in functies die arrays gebruiken
 - **Tip:** Log warnings maar reset naar veilige waarde i.p.v. crash
 
+### 13. Enum en Struct Verplaatsing
+- **Probleem:** Enums en structs die door meerdere modules gebruikt worden moeten op de juiste plek staan
+- **Oplossing:** 
+  - Verplaats enum/struct naar de module die het primair gebruikt
+  - Andere modules gebruiken forward declarations of includes
+  - Bijvoorbeeld: `VolatilityState` in `VolatilityTracker.h`, `TrendDetector` gebruikt via include
+- **Voorbeeld:** `VolatilityState` enum verplaatst van `.ino` naar `VolatilityTracker.h`, `TrendDetector.cpp` include `VolatilityTracker.h`
+- **Tip:** Als een enum door meerdere modules gebruikt wordt, kies de module die het primair beheert
+
+### 14. Wrapper Functies voor Backward Compatibility
+- **Wat:** Oude functies omzetten naar wrappers die nieuwe module aanroepen
+- **Voordelen:**
+  - Bestaande code blijft werken zonder grote wijzigingen
+  - Geleidelijke migratie mogelijk
+  - Makkelijk te testen
+- **Voorbeeld:** `static void checkTrendChange()` wordt wrapper die `trendDetector.checkTrendChange()` aanroept
+- **Tip:** Wrappers kunnen ook globale state synchroniseren voor backward compatibility
+
+### 15. State Synchronisatie in Beide Richtingen
+- **Probleem:** State kan zowel in module als globaal worden gewijzigd
+- **Oplossing:** 
+  - Module methods synchroniseren state van globaal naar module (bij start)
+  - Module methods updaten ook globale state na wijzigingen (voor backward compatibility)
+  - `syncStateFromGlobals()` methode voor expliciete synchronisatie
+- **Voorbeeld:** `TrendDetector::checkTrendChange()` synchroniseert eerst state, werkt, en update dan beide
+- **Tip:** Documenteer duidelijk welke state de "source of truth" is tijdens parallel implementatie
+
+### 16. Meerdere Systemen in Één Module
+- **Probleem:** Soms zijn er meerdere gerelateerde systemen (bijv. oude en nieuwe volatility systeem)
+- **Oplossing:** 
+  - Beide systemen in dezelfde module onderbrengen
+  - Duidelijke scheiding tussen systemen in de module
+  - Beide systemen kunnen naast elkaar bestaan
+- **Voorbeeld:** `VolatilityTracker` bevat zowel oude systeem (60 min lookback) als nieuwe (auto-volatility sliding window)
+- **Tip:** Documenteer welke functies bij welk systeem horen
+
 ---
 
 ## Checklist voor Toekomstige Refactoring Stappen
@@ -298,4 +334,5 @@ Voor elke nieuwe refactoring stap:
 - [ ] **Documentatie:** Zijn comments met fase/stap nummers toegevoegd?
 - [ ] **Git Commit:** Is er een commit na deze werkende stap?
 - [ ] **Rollback Plan:** Weet ik hoe ik terug kan als iets misgaat?
+
 

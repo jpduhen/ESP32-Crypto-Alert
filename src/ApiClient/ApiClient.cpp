@@ -254,3 +254,5 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
     return parseBinancePrice(responseBuffer, out);
 }
 
+
+
