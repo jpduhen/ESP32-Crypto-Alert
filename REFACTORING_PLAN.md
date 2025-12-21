@@ -219,7 +219,9 @@ UNIFIED-LVGL9-Crypto_Monitor/
 ---
 
 ### Fase 7: Warm-Start Module
-**Status:** ⏳ Te starten
+**Status:** ⏸️ Nu overslaan, later uitvoeren
+
+**Notitie:** Warm-start functionaliteit blijft voorlopig in de hoofdcode. Er is een WarmStartWrapper module toegevoegd voor status/logging/settings, maar de volledige migratie wordt uitgesteld.
 
 #### Stap 7.1: WarmStart Module
 - [ ] Maak `src/WarmStart/WarmStart.h` en `.cpp`

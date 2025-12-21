@@ -41,6 +41,12 @@
 // AlertEngine module (Fase 6.1: voor alert detection en notificaties)
 #include "src/AlertEngine/AlertEngine.h"
 
+// Memory module (M1: heap telemetry voor geheugenfragmentatie audit)
+#include "src/Memory/HeapMon.h"
+
+// Net module (M2: streaming HTTP fetch zonder String allocaties)
+#include "src/Net/HttpFetch.h"
+
 // ArduinoJson support (optioneel - als library niet beschikbaar is, gebruik handmatige parsing)
 // Probeer ArduinoJson te includen - als het niet beschikbaar is, gebruik handmatige parsing
 #define USE_ARDUINOJSON 0  // Standaard uit, wordt gezet naar 1 als ArduinoJson beschikbaar is
@@ -65,8 +71,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 90
-#define VERSION_STRING "3.90"
+#define VERSION_MINOR 91
+#define VERSION_STRING "3.91"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -92,16 +98,18 @@
 // --- API Configuration ---
 #define BINANCE_API "https://api.binance.com/api/v3/ticker/price?symbol="  // Binance API endpoint
 #define BINANCE_SYMBOL_DEFAULT "BTCEUR"  // Default Binance symbol
-#define HTTP_TIMEOUT_MS 1200  // HTTP timeout (1200ms = 80% van API interval 1500ms, voorkomt timing opstapeling)
-#define HTTP_CONNECT_TIMEOUT_MS 1000  // Connect timeout (1000ms voor snellere failure bij connect problemen)
+// T1: Verhoogde connect/read timeouts voor betere stabiliteit
+#define HTTP_CONNECT_TIMEOUT_MS 4000  // Connect timeout (4000ms)
+#define HTTP_READ_TIMEOUT_MS 4000     // Read timeout (4000ms)
+#define HTTP_TIMEOUT_MS HTTP_READ_TIMEOUT_MS  // Backward compatibility: totale timeout = read timeout
 
 // --- Chart Configuration ---
 #define PRICE_RANGE 200         // The range of price for the chart, adjust as needed
-#define POINTS_TO_CHART 60      // Number of points on the chart (60 points = ~1.5 minutes at 1500ms API interval)
+#define POINTS_TO_CHART 60      // Number of points on the chart (60 points = 2 minutes at 2000ms API interval)
 
 // --- Timing Configuration ---
 #define UPDATE_UI_INTERVAL 1000   // UI update in ms (elke seconde)
-#define UPDATE_API_INTERVAL 1500   // API update in ms (verhoogd naar 1500ms voor betere stabiliteit bij langzame netwerken)
+#define UPDATE_API_INTERVAL 2000   // API update in ms (verhoogd naar 2000ms voor betere stabiliteit bij retries en langzame netwerken)
 #define UPDATE_WEB_INTERVAL 5000  // Web interface update in ms (elke 5 seconden)
 #define RECONNECT_INTERVAL 60000  // WiFi reconnect interval (60 seconden tussen reconnect pogingen)
 #define MQTT_RECONNECT_INTERVAL 5000  // MQTT reconnect interval (5 seconden)
@@ -195,9 +203,9 @@
 #define MINUTES_FOR_30MIN_CALC 120
 
 // --- Return Calculation Configuration ---
-// Aantal waarden nodig voor return berekeningen gebaseerd op UPDATE_API_INTERVAL (1500ms)
-// 1 minuut = 60000ms / 1500ms = 40 waarden
-// 5 minuten = 300000ms / 1500ms = 200 waarden
+// Aantal waarden nodig voor return berekeningen gebaseerd op UPDATE_API_INTERVAL (2000ms)
+// 1 minuut = 60000ms / 2000ms = 30 waarden
+// 5 minuten = 300000ms / 2000ms = 150 waarden
 #define VALUES_FOR_1MIN_RETURN ((60000UL) / (UPDATE_API_INTERVAL))
 #define VALUES_FOR_5MIN_RETURN ((300000UL) / (UPDATE_API_INTERVAL))
 
@@ -230,6 +238,10 @@ static lv_obj_t *priceLbl[SYMBOL_COUNT];
 
 // FreeRTOS mutex voor data synchronisatie tussen cores
 SemaphoreHandle_t dataMutex = NULL;
+
+// S0: FreeRTOS mutex voor netwerk/HTTP operaties (voorkomt gelijktijdige HTTPClient allocaties)
+SemaphoreHandle_t gNetMutex = NULL;
+
 // Symbols array - eerste element wordt dynamisch ingesteld via binanceSymbol
 static char symbolsArray[SYMBOL_COUNT][16] = {"BTCEUR", SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL};
 static const char *symbols[SYMBOL_COUNT] = {symbolsArray[0], symbolsArray[1], symbolsArray[2]};
@@ -262,34 +274,9 @@ float downtrendMaxLossMultiplier = DOWNTREND_MAX_LOSS_MULTIPLIER_DEFAULT;
 float downtrendTakeProfitMultiplier = DOWNTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT;
 
 // Warm-Start: Data source tracking
-// Warm-Start: System status
-enum WarmStartStatus {
-    WARMING_UP,  // Buffers bevatten nog Binance data
-    LIVE,        // Volledig op live data
-    LIVE_COLD    // Live data maar warm-start gefaald (cold start)
-};
-
-// Warm-Start: Mode
-enum WarmStartMode {
-    WS_MODE_FULL,     // Alle timeframes succesvol geladen
-    WS_MODE_PARTIAL,  // Gedeeltelijk geladen (sommige timeframes gefaald)
-    WS_MODE_FAILED,   // Alle timeframes gefaald
-    WS_MODE_DISABLED  // Warm-start uitgeschakeld
-};
-
-// Warm-Start: Statistics struct
-struct WarmStartStats {
-    uint16_t loaded1m;      // Aantal 1m candles geladen
-    uint16_t loaded5m;      // Aantal 5m candles geladen
-    uint16_t loaded30m;     // Aantal 30m candles geladen
-    uint16_t loaded2h;      // Aantal 2h candles geladen
-    bool warmStartOk1m;     // 1m warm-start succesvol
-    bool warmStartOk5m;     // 5m warm-start succesvol
-    bool warmStartOk30m;    // 30m warm-start succesvol
-    bool warmStartOk2h;     // 2h warm-start succesvol
-    WarmStartMode mode;     // Warm-start mode
-    uint8_t warmUpProgress; // Warm-up progress percentage (0-100)
-};
+// Warm-Start: Enums en structs zijn nu gedefinieerd in WarmStart.h
+// WarmStart module (Fase 7.2: wrapper voor status/logging/settings)
+#include "src/WarmStart/WarmStart.h"
 
 // Trend detection
 // Fase 5.1: TrendState enum verplaatst naar TrendDetector.h
@@ -395,9 +382,15 @@ static unsigned long lastHeapTelemetryLog = 0;   // Timestamp van laatste heap t
 static const unsigned long HEAP_TELEMETRY_INTERVAL_MS = 60000UL; // Elke 60 seconden
 
 // Static buffers voor hot paths (voorkomt String allocaties)
-static char httpResponseBuffer[512];  // Buffer voor HTTP responses (httpGET, sendNtfyNotification)
+static char httpResponseBuffer[512];  // Buffer voor HTTP responses (NTFY, etc.)
 static char notificationMsgBuffer[512];  // Buffer voor notification messages
 static char notificationTitleBuffer[128];  // Buffer voor notification titles
+
+// M2: Globale herbruikbare buffer voor HTTP responses (voorkomt String allocaties)
+// Note: Niet static zodat ApiClient.cpp er toegang toe heeft via extern declaratie in ApiClient.h
+// Verkleind van 2048 naar 512 bytes (genoeg voor price responses, ~100 bytes)
+char gApiResp[512];     // Buffer voor API price responses (M2: streaming)
+// gKlinesResp verwijderd: fetchBinanceKlines gebruikt streaming parsing met binanceStreamBuffer
 
 // Streaming buffer voor Binance klines parsing (geen grote heap allocaties)
 static char binanceStreamBuffer[1024];  // Fixed-size buffer voor chunked JSON parsing
@@ -564,6 +557,9 @@ WebServer server(80);
 // SettingsStore instance
 SettingsStore settingsStore;
 
+// WarmStartWrapper instance (Fase 7.2: wrapper voor status/logging/settings)
+static WarmStartWrapper warmWrap;
+
 // ApiClient instance (Fase 4.1 voltooid)
 #include "src/ApiClient/ApiClient.h"
 ApiClient apiClient;
@@ -727,6 +723,9 @@ static int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t
         return -1;
     }
     
+    // M1: Heap telemetry vóór URL build
+    logHeap("KLINES_URL_BUILD");
+    
     // Build URL
     char url[256];
     int urlLen = snprintf(url, sizeof(url), "%s?symbol=%s&interval=%s&limit=%u", 
@@ -735,27 +734,69 @@ static int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t
         return -1;
     }
     
-    // Streaming HTTP request: parse direct van stream
+    // M1: Heap telemetry vóór HTTP GET
+    logHeap("KLINES_GET_PRE");
+    
+    // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
+    netMutexLock("fetchBinanceKlines");
+    
+    int result = -1;
     HTTPClient http;
-    http.setTimeout(WARM_START_TIMEOUT_MS);
+    
+    // S2: do-while(0) patroon voor consistente cleanup
+    do {
+        // N1: Expliciete connect/read timeout settings
     http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+        http.setTimeout(WARM_START_TIMEOUT_MS > HTTP_READ_TIMEOUT_MS ? WARM_START_TIMEOUT_MS : HTTP_READ_TIMEOUT_MS);
     http.setReuse(false);
+        
+        unsigned long requestStart = millis();
+    
+        // N2: Voeg User-Agent header toe VOOR http.begin() om Cloudflare blocking te voorkomen
+        // Headers moeten worden toegevoegd voordat de verbinding wordt geopend
+        http.addHeader(F("User-Agent"), F("ESP32-CryptoMonitor/1.0"));
+        http.addHeader(F("Accept"), F("application/json"));
     
     if (!http.begin(url)) {
-        http.end();
-        return -1;
+            Serial.println(F("[Klines] http.begin() gefaald"));
+            break;
     }
     
     int code = http.GET();
+        unsigned long requestTime = millis() - requestStart;
+        
+        // M1: Heap telemetry na HTTP GET
+        logHeap("KLINES_GET_POST");
+        
     if (code != 200) {
-        http.end();
-        return -1;
+            // N1: Betere error logging met errorToString en fase detectie
+            if (code < 0) {
+                // Detecteer fase: connect timeout vs read timeout
+                const char* phase = "unknown";
+                if (code == HTTPC_ERROR_CONNECTION_REFUSED || 
+                    code == HTTPC_ERROR_CONNECTION_LOST) {
+                    phase = "connect";
+                } else if (code == HTTPC_ERROR_READ_TIMEOUT) {
+                    phase = "read";
+                } else if (code == HTTPC_ERROR_SEND_HEADER_FAILED || 
+                          code == HTTPC_ERROR_SEND_PAYLOAD_FAILED) {
+                    phase = "send";
+                }
+                
+                // T2: Gebruik errorToString voor leesbare error messages (deterministisch, geen mojibake)
+                String localErr = http.errorToString(code);
+                Serial.printf(F("[Klines] HTTP error (code=%d, fase=%s, tijd=%lu ms, error=%s)\n"), 
+                              code, phase, requestTime, localErr.c_str());
+            } else {
+                Serial.printf(F("[Klines] HTTP status code=%d, tijd=%lu ms\n"), code, requestTime);
+            }
+            break;
     }
     
     WiFiClient* stream = http.getStreamPtr();
     if (stream == nullptr) {
-        http.end();
-        return -1;
+            Serial.println(F("[Klines] Stream pointer is null"));
+            break;
     }
     
     // Streaming JSON parser: gebruik fixed-size buffer voor chunked reading
@@ -794,6 +835,9 @@ static int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t
     unsigned long lastDataTime = millis();
     const unsigned long DATA_TIMEOUT_MS = 2000;
     
+    // M1: Heap telemetry vóór JSON parse
+    logHeap("KLINES_PARSE_PRE");
+    
     // Parse streaming JSON
     // Continue zolang stream connected/available OF er nog data in buffer is
     while (stream->connected() || stream->available() || (bufferPos < bufferLen)) {
@@ -801,10 +845,11 @@ static int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t
         if ((millis() - parseStartTime) > PARSE_TIMEOUT_MS) {
             break;
         }
-        // Feed watchdog periodiek (alleen elke seconde)
+        // Feed watchdog periodiek (alleen elke seconde) en update LVGL spinner
         if ((millis() - lastWatchdogFeed) >= WATCHDOG_FEED_INTERVAL) {
             yield();
             delay(0);
+            lv_timer_handler();  // Update spinner animatie tijdens warm-start
             lastWatchdogFeed = millis();
         }
         
@@ -946,11 +991,13 @@ static int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t
     }
     
 parse_done:
-    http.end();
+    // M1: Heap telemetry na JSON parse
+    logHeap("KLINES_PARSE_POST");
     
-    // Als buffer gewrapped is, herschik naar chronologische volgorde
-    // Memory efficient: gebruik alleen kleine temp buffer of heap voor grote buffers
+    // Bereken resultaat
     int storedCount = bufferFilled ? (int)maxCount : writeIdx;
+    result = storedCount;  // S2: Zet result voordat do-while eindigt
+    
     if (bufferFilled && writeIdx > 0) {
         // Buffer is gewrapped: [writeIdx..maxCount-1, 0..writeIdx-1] -> [0..maxCount-1]
         // Voor kleine buffers: gebruik stack temp (max 60)
@@ -1012,7 +1059,20 @@ parse_done:
         }
     }
     
-    return storedCount;
+    } while(0);
+    
+    // C2: ALTIJD cleanup (ook bij code<0, code!=200, parse error)
+    // Hard close: http.end() + client.stop() voor volledige cleanup
+    http.end();
+    WiFiClient* stream = http.getStreamPtr();
+    if (stream != nullptr) {
+        stream->stop();
+    }
+    
+    // C2: Geef netwerk mutex vrij (met debug logging)
+    netMutexUnlock("fetchBinanceKlines");
+    
+    return result;
 }
 
 // Helper: Clamp waarde tussen min en max
@@ -1051,6 +1111,9 @@ static void logHeapTelemetry(const char* context);
 // Returns: WarmStartMode (FULL/PARTIAL/FAILED/DISABLED)
 static WarmStartMode performWarmStart()
 {
+    // M1: Heap telemetry vóór warm-start
+    logHeap("WARMSTART_PRE");
+    
     // Initialize stats
     warmStartStats = {0, 0, 0, 0, false, false, false, false, WS_MODE_DISABLED, 0};
     
@@ -1101,7 +1164,9 @@ static WarmStartMode performWarmStart()
     // 1. Vul 1m buffer voor volatiliteit (returns-only: alleen laatste closes nodig)
     // Memory efficient: alleen laatste SECONDS_PER_MINUTE closes bewaren
     float temp1mPrices[SECONDS_PER_MINUTE];  // Alleen laatste 60 nodig
+    lv_timer_handler();  // Update spinner animatie vóór fetch
     int count1m = fetchBinanceKlines(binanceSymbol, "1m", req1mCandles, temp1mPrices, nullptr, SECONDS_PER_MINUTE);
+    lv_timer_handler();  // Update spinner animatie na fetch
     if (count1m > 0) {
         // Vul secondPrices buffer (gebruik laatste count1m candles, max SECONDS_PER_MINUTE)
         int copyCount = (count1m < SECONDS_PER_MINUTE) ? count1m : SECONDS_PER_MINUTE;
@@ -1122,7 +1187,9 @@ static WarmStartMode performWarmStart()
     
     // 2. Vul 5m buffer (returns-only: alleen laatste 2 closes nodig)
     float temp5mPrices[2];
+    lv_timer_handler();  // Update spinner animatie vóór fetch
     int count5m = fetchBinanceKlines(binanceSymbol, "5m", req5mCandles, temp5mPrices, nullptr, 2);
+    lv_timer_handler();  // Update spinner animatie na fetch
     if (count5m >= 2) {
         // Interpoleer laatste 2 candles naar fiveMinutePrices buffer
         // Elke 5m candle = 300 seconden, gebruik laatste candle voor hele buffer
@@ -1154,8 +1221,11 @@ static WarmStartMode performWarmStart()
             Serial_printf(F("[WarmStart] 30m retry %d/%d...\n"), retry, maxRetries30m - 1);
             yield();
             delay(500);  // Korte delay tussen retries
+            lv_timer_handler();  // Update spinner animatie
         }
+        lv_timer_handler();  // Update spinner animatie vóór fetch
         count30m = fetchBinanceKlines(binanceSymbol, "30m", req30mCandles, temp30mPrices, nullptr, 2);
+        lv_timer_handler();  // Update spinner animatie na fetch
         if (count30m >= 2) {
             break;  // Succes, stop retries
         }
@@ -1194,9 +1264,10 @@ static WarmStartMode performWarmStart()
         }
     }
     
-    // Feed watchdog
+    // Feed watchdog en update LVGL (spinner animatie)
     yield();
     delay(0);
+    lv_timer_handler();
     
     // 4. Initieer 2h trend berekening
     // Retry-logica: probeer maximaal 3 keer als eerste poging faalt
@@ -1208,8 +1279,11 @@ static WarmStartMode performWarmStart()
             Serial_printf(F("[WarmStart] 2h retry %d/%d...\n"), retry, maxRetries2h - 1);
             yield();
             delay(500);  // Korte delay tussen retries
+            lv_timer_handler();  // Update spinner animatie
         }
+        lv_timer_handler();  // Update spinner animatie vóór fetch
         count2h = fetchBinanceKlines(binanceSymbol, "2h", req2hCandles, temp2hPrices, nullptr, 2);
+        lv_timer_handler();  // Update spinner animatie na fetch
         if (count2h >= 2) {
             break;  // Succes, stop retries
         }
@@ -1253,24 +1327,38 @@ static WarmStartMode performWarmStart()
         trendState = newTrendState;  // Synchroniseer globale variabele
     }
     
-    // Bepaal mode op basis van successen
-    int successCount = (warmStartStats.warmStartOk1m ? 1 : 0) +
-                       (warmStartStats.warmStartOk5m ? 1 : 0) +
-                       (warmStartStats.warmStartOk30m ? 1 : 0) +
-                       (warmStartStats.warmStartOk2h ? 1 : 0);
+    // Bepaal mode op basis van score: ok1m, ok5m, ok30m, ok2h
+    // FULL: alle true (alle timeframes succesvol geladen)
+    // PARTIAL: ok1m true maar >=1 van de others false (1m OK maar 5m/30m/2h niet volledig)
+    // FAILED: ok1m false (1m gefaald, others ook false)
+    bool ok1m = warmStartStats.warmStartOk1m;
+    bool ok5m = warmStartStats.warmStartOk5m;
+    bool ok30m = warmStartStats.warmStartOk30m;
+    bool ok2h = warmStartStats.warmStartOk2h;
     
-    if (successCount == 4) {
+    if (ok1m && ok5m && ok30m && ok2h) {
+        // Alle timeframes succesvol geladen
         warmStartStats.mode = WS_MODE_FULL;
         warmStartStatus = WARMING_UP;
-    } else if (successCount > 0) {
+    } else if (ok1m) {
+        // 1m OK maar minstens één van 5m/30m/2h gefaald
         warmStartStats.mode = WS_MODE_PARTIAL;
         warmStartStatus = WARMING_UP;
     } else {
+        // 1m gefaald (en others ook false)
         warmStartStats.mode = WS_MODE_FAILED;
         warmStartStatus = LIVE_COLD;
     }
     
-    // Compacte boot log regel
+    // Log score voor debugging
+    Serial_printf(F("[WarmStart] Score: 1m=%d 5m=%d 30m=%d 2h=%d -> mode=%s\n"),
+                  ok1m ? 1 : 0, ok5m ? 1 : 0, ok30m ? 1 : 0, ok2h ? 1 : 0,
+                  (warmStartStats.mode == WS_MODE_FULL) ? "FULL" :
+                  (warmStartStats.mode == WS_MODE_PARTIAL) ? "PARTIAL" :
+                  (warmStartStats.mode == WS_MODE_FAILED) ? "FAILED" : "DISABLED");
+    
+    // Compacte boot log regel (gedetailleerde logging gebeurt in WarmStartWrapper)
+    // Deze regel blijft voor backward compatibility en snelle boot overview
     const char* modeStr = (warmStartStats.mode == WS_MODE_FULL) ? "FULL" :
                           (warmStartStats.mode == WS_MODE_PARTIAL) ? "PARTIAL" :
                           (warmStartStats.mode == WS_MODE_FAILED) ? "FAILED" : "DISABLED";
@@ -1285,13 +1373,13 @@ static WarmStartMode performWarmStart()
     Serial.print(F(" (mode="));
     Serial.print(modeStr);
     Serial.print(F(", hasRet2h="));
-    Serial.print(hasRet2hWarm ? 1 : 0);
-    Serial.print(F("/"));
-    Serial.print(hasRet2hLive ? 1 : 0);
+    Serial.print(hasRet2h ? 1 : 0);  // Combined flag (warm || live)
     Serial.print(F(", hasRet30m="));
-    Serial.print(hasRet30mWarm ? 1 : 0);
-    Serial.print(F("/"));
-    Serial.print(hasRet30mLive ? 1 : 0);
+    Serial.print(hasRet30m ? 1 : 0);  // Combined flag (warm || live)
+    Serial.print(F(", ret2h="));
+    Serial.print(ret_2h, 3);
+    Serial.print(F(", ret30m="));
+    Serial.print(ret_30m, 3);
     Serial.println(F(")"));
     Serial.flush();
     
@@ -1303,8 +1391,8 @@ static WarmStartMode performWarmStart()
         Serial.println(F("[WarmStart] Warm-start gefaald, ga door als cold start (LIVE_COLD)"));
     }
     
-    // Heap telemetry na warm-start
-    logHeapTelemetry("warm-start");
+    // M1: Heap telemetry na warm-start (gebruik nieuwe logHeap i.p.v. oude logHeapTelemetry)
+    // logHeapTelemetry("warm-start");  // Vervangen door logHeap("WARMSTART_POST") bovenaan functie
     
     return warmStartStats.mode;
 }
@@ -1432,25 +1520,29 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
     Serial_printf(F("[Notify] Ntfy Title: %s\n"), title);
     Serial_printf(F("[Notify] Ntfy Message: %s\n"), message);
     
-    HTTPClient http;
-    http.setTimeout(5000);
-    http.setReuse(false); // Voorkom connection reuse problemen
+    // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
+    netMutexLock("sendNtfyNotification");
     
-    if (!http.begin(url))
-    {
+    bool ok = false;
+    HTTPClient http;
+    
+    // S2: do-while(0) patroon voor consistente cleanup
+    do {
+        // S2: Expliciete timeout settings
+    http.setTimeout(5000);
+        http.setReuse(false);
+    
+        if (!http.begin(url)) {
         Serial_println(F("[Notify] Ntfy HTTP begin gefaald"));
-        http.end();
-        return false;
+            break;
     }
     
     http.addHeader("Title", title);
     http.addHeader("Priority", "high");
     
     // Voeg kleur tag toe als opgegeven
-    if (colorTag != nullptr && strlen(colorTag) > 0)
-    {
-        if (strlen(colorTag) <= 64) // Valideer lengte
-        {
+        if (colorTag != nullptr && strlen(colorTag) > 0) {
+            if (strlen(colorTag) <= 64) { // Valideer lengte
             http.addHeader(F("Tags"), colorTag);
             Serial_printf(F("[Notify] Ntfy Tag: %s\n"), colorTag);
         }
@@ -1461,8 +1553,7 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
     
     // Haal response alleen op bij succes (bespaar geheugen)
     // Gebruik static buffer i.p.v. String om fragmentatie te voorkomen
-    if (code == 200 || code == 201)
-    {
+        if (code == 200 || code == 201) {
         WiFiClient* stream = http.getStreamPtr();
         if (stream != nullptr) {
             size_t totalLen = 0;
@@ -1475,32 +1566,57 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
                 Serial_printf(F("[Notify] Ntfy response: %s\n"), httpResponseBuffer);
             }
         } else {
-            // Fallback: gebruik getString() maar kopieer direct naar buffer
-            String response = http.getString();
-            if (response.length() > 0) {
-                size_t len = response.length();
-                if (len < sizeof(httpResponseBuffer)) {
-                    strncpy(httpResponseBuffer, response.c_str(), sizeof(httpResponseBuffer) - 1);
-                    httpResponseBuffer[sizeof(httpResponseBuffer) - 1] = '\0';
+                // M2: Fallback: stream niet beschikbaar, lees response body direct
+                // Voor POST responses kunnen we niet httpGetToBuffer() gebruiken
+                // In plaats daarvan lezen we de response body in chunks
+                size_t totalLen = 0;
+                const size_t CHUNK_SIZE = 256;
+                while (http.connected() && totalLen < (sizeof(httpResponseBuffer) - 1)) {
+                    size_t remaining = sizeof(httpResponseBuffer) - 1 - totalLen;
+                    size_t chunkSize = (remaining < CHUNK_SIZE) ? remaining : CHUNK_SIZE;
+                    
+                    // Probeer response body te lezen (POST response)
+                    WiFiClient* client = http.getStreamPtr();
+                    if (client == nullptr) {
+                        break;
+                    }
+                    
+                    size_t bytesRead = client->readBytes((uint8_t*)(httpResponseBuffer + totalLen), chunkSize);
+                    if (bytesRead == 0) {
+                        if (!client->available()) {
+                            break;
+                        }
+                        delay(10);
+                        continue;
+                    }
+                    totalLen += bytesRead;
+                }
+                httpResponseBuffer[totalLen] = '\0';
+                if (totalLen > 0) {
                     Serial_printf(F("[Notify] Ntfy response: %s\n"), httpResponseBuffer);
                 }
             }
-        }
-    }
-    
-    http.end();
-    
-    bool result = (code == 200 || code == 201);
-    if (result)
-    {
+            
         Serial_printf(F("[Notify] Ntfy bericht succesvol verstuurd! (code: %d)\n"), code);
-    }
-    else
-    {
+            ok = true;
+        } else {
+            // S2: Log zonder String concatenatie
         Serial_printf(F("[Notify] Ntfy fout bij versturen (code: %d)\n"), code);
     }
+    } while(0);
     
-    return result;
+    // C2: ALTIJD cleanup (ook bij code<0, code!=200, parse error)
+    // Hard close: http.end() + client.stop() voor volledige cleanup
+    http.end();
+    WiFiClient* stream = http.getStreamPtr();
+    if (stream != nullptr) {
+        stream->stop();
+    }
+    
+    // C2: Geef netwerk mutex vrij (met debug logging)
+    netMutexUnlock("sendNtfyNotification");
+    
+    return ok;
 }
 
 // ============================================================================
@@ -1629,6 +1745,35 @@ void safeMutexGive(SemaphoreHandle_t mutex, const char* context)
     // Reset tracking
     mutexTakeTime = 0;
     mutexHolderContext = nullptr;
+}
+
+// C2: Helper functies voor netwerk mutex met debug logging (task name/core id)
+// Niet static zodat andere modules (ApiClient, HttpFetch) ze kunnen gebruiken
+void netMutexLock(const char* taskName)
+{
+    if (gNetMutex == NULL) {
+        Serial.printf(F("[NetMutex] WARN: gNetMutex is NULL, HTTP operatie zonder mutex (by %s)\n"), taskName);
+        return;
+    }
+    
+    // C2: Debug logging met task name en core id
+    BaseType_t coreId = xPortGetCoreID();
+    Serial.printf(F("[NetMutex] lock by %s (core %d)\n"), taskName, coreId);
+    
+    xSemaphoreTake(gNetMutex, portMAX_DELAY);
+}
+
+void netMutexUnlock(const char* taskName)
+{
+    if (gNetMutex == NULL) {
+        return;
+    }
+    
+    // C2: Debug logging met task name en core id
+    BaseType_t coreId = xPortGetCoreID();
+    Serial.printf(F("[NetMutex] unlock by %s (core %d)\n"), taskName, coreId);
+    
+    xSemaphoreGive(gNetMutex);
 }
 
 // Forward declarations
@@ -3320,11 +3465,17 @@ static void renderSettingsHTML()
 // Web server handlers
 static void handleRoot()
 {
+    // M1: Rate-limited heap telemetry in web server (alleen bij "/")
+    logHeap("WEB_ROOT");
+    
     renderSettingsHTML();
 }
 
 static void handleSave()
 {
+    // M1: Rate-limited heap telemetry in web server (alleen bij "/save")
+    logHeap("WEB_SAVE");
+    
     // Handle language setting
     if (server.hasArg("language")) {
         uint8_t newLanguage = server.arg("language").toInt();
@@ -3615,6 +3766,8 @@ static void handleNotFound()
 // Handler voor anchor set (aparte route om crashes te voorkomen)
 // Gebruikt een queue om asynchroon te verwerken vanuit main loop
 // Thread-safe: schrijft naar volatile variabelen die worden gelezen vanuit uiTask
+// C1: Network-safe anchor-set handler (geen HTTPS in web thread)
+// Zet alleen flags, verwerking gebeurt in apiTask waar HTTPS calls al zijn
 static void handleAnchorSet() {
     if (server.hasArg("value")) {
         String anchorValueStr = server.arg("value");
@@ -3624,7 +3777,7 @@ static void handleAnchorSet() {
         if (anchorValueStr.length() > 0) {
             float val;
             if (safeAtof(anchorValueStr.c_str(), val) && val > 0.0f && isValidPrice(val)) {
-                // Valide waarde - zet in queue voor asynchrone verwerking
+                // Valide waarde - zet in queue voor asynchrone verwerking in apiTask
                 valid = queueAnchorSetting(val, false);
                 if (valid) {
                     Serial_printf("[Web] Anchor setting queued: %.2f\n", val);
@@ -3633,15 +3786,14 @@ static void handleAnchorSet() {
                 Serial_printf(F("[Web] WARN: Ongeldige anchor waarde opgegeven: '%s'\n"), anchorValueStr.c_str());
             }
         } else {
-            // Leeg veld = gebruik huidige prijs
-            pendingAnchorSetting.value = 0.0f;
-            pendingAnchorSetting.useCurrentPrice = true;
-            // Zet pending flag als laatste (memory barrier effect)
-            pendingAnchorSetting.pending = true;
-            valid = true;
+            // Leeg veld = gebruik huidige prijs (wordt opgehaald in apiTask)
+            valid = queueAnchorSetting(0.0f, true);
+            if (valid) {
             Serial_println(F("[Web] Anchor setting queued: gebruik huidige prijs"));
+            }
         }
         
+        // C1: Return HTTP 200 direct (geen Binance fetch hier, gebeurt in apiTask)
         if (valid) {
             server.send(200, "text/plain", "OK");
         } else {
@@ -4738,11 +4890,12 @@ void updateUI()
     int32_t p = (int32_t)lroundf(prices[symbolIndexToChart] * 100.0f);
     
     // Bepaal of er nieuwe data is op basis van timestamp
+    // Bij 2000ms interval + retries kan call tot ~3000ms duren, dus marge van 3000ms
     unsigned long currentTime = millis();
     bool hasNewPriceData = false;
     if (lastApiMs > 0) {
         unsigned long timeSinceLastApi = (currentTime >= lastApiMs) ? (currentTime - lastApiMs) : (ULONG_MAX - lastApiMs + currentTime);
-        hasNewPriceData = (timeSinceLastApi < 2500);
+        hasNewPriceData = (timeSinceLastApi < 3000);  // 2000ms interval + 1000ms marge voor retries
     }
     
     // Update UI sections
@@ -6269,10 +6422,16 @@ static void setupWiFiEventHandlers()
 
 static void setupMutex()
 {
-    // Maak mutex VOOR we het gebruiken (moet eerst aangemaakt worden)
+    // Maak mutexen VOOR we ze gebruiken (moeten eerst aangemaakt worden)
     dataMutex = xSemaphoreCreateMutex();
     if (dataMutex == NULL) {
-        Serial.println(F("[Error] Kon mutex niet aanmaken!"));
+        Serial.println(F("[Error] Kon dataMutex niet aanmaken!"));
+    }
+    
+    // S0: Maak netwerk mutex voor HTTP operaties
+    gNetMutex = xSemaphoreCreateMutex();
+    if (gNetMutex == NULL) {
+        Serial.println(F("[Error] Kon gNetMutex niet aanmaken!"));
     } else {
         Serial.println("[FreeRTOS] Mutex aangemaakt");
     }
@@ -6319,6 +6478,9 @@ static void allocateDynamicArrays()
 
 static void startFreeRTOSTasks()
 {
+    // M1: Heap telemetry vóór startFreeRTOSTasks
+    logHeap("TASKS_START_PRE");
+    
     // FreeRTOS Tasks voor multi-core processing
     // ESP32-S3 heeft mogelijk meer stack ruimte nodig
     #if defined(PLATFORM_ESP32S3_SUPERMINI)
@@ -6365,6 +6527,9 @@ static void startFreeRTOSTasks()
     );
 
     Serial.println("[FreeRTOS] Tasks gestart op Core 1 (API) en Core 0 (UI/Web)");
+    
+    // M1: Heap telemetry na startFreeRTOSTasks
+    logHeap("TASKS_START_POST");
 }
 
 void setup()
@@ -6397,9 +6562,36 @@ void setup()
     // Fase 4.2.5: Synchroniseer PriceData state na warm-start (als warm-start is uitgevoerd)
     priceData.syncStateFromGlobals();
     
+    // Fase 7.2: Bind WarmStartWrapper dependencies
+    CryptoMonitorSettings currentSettings;
+    currentSettings.warmStartEnabled = warmStartEnabled;
+    currentSettings.warmStart1mExtraCandles = warmStart1mExtraCandles;
+    currentSettings.warmStart5mCandles = warmStart5mCandles;
+    currentSettings.warmStart30mCandles = warmStart30mCandles;
+    currentSettings.warmStart2hCandles = warmStart2hCandles;
+    warmWrap.bindSettings(&currentSettings);
+    warmWrap.bindLogger(&Serial);
+    
+    // Fase 7.2b: Warm-start exclusiviteit
+    // Warm-start is de enige schrijver tijdens setup (tasks bestaan nog niet, geen race conditions mogelijk)
     // Warm-start: Vul buffers met Binance historische data (als WiFi verbonden is)
     if (WiFi.status() == WL_CONNECTED && warmStartEnabled) {
-        performWarmStart();
+        warmWrap.beginRun();
+        
+        // Bereken requested counts (voor logging)
+        bool psramAvailable = hasPSRAM();
+        uint16_t req1mCandles = calculate1mCandles();
+        uint16_t max5m = psramAvailable ? 24 : 12;
+        uint16_t max30m = psramAvailable ? 12 : 6;
+        uint16_t max2h = psramAvailable ? 8 : 4;
+        uint16_t req5mCandles = clampUint16(warmStart5mCandles, 2, max5m);
+        uint16_t req30mCandles = clampUint16(warmStart30mCandles, 2, max30m);
+        uint16_t req2hCandles = clampUint16(warmStart2hCandles, 2, max2h);
+        
+        WarmStartMode mode = performWarmStart();
+        warmWrap.endRun(mode, warmStartStats, warmStartStatus, 
+                       ret_2h, ret_30m, hasRet2h, hasRet30m,
+                       req1mCandles, req5mCandles, req30mCandles, req2hCandles);
     }
     
     Serial_println("Setup done");
@@ -6424,7 +6616,26 @@ void setup()
     }
     #endif
     
-    // Start FreeRTOS tasks NA buildUI() zodat UI elementen bestaan
+    // Fase 7.2b: Minimale guard: controleer arrays vóór tasks starten
+    // Warm-start is de enige schrijver tijdens setup (tasks bestaan nog niet)
+    // Deze check voorkomt dat tasks starten met ongeldige arrays
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+    if (!hasPSRAM()) {
+        if (fiveMinutePrices == nullptr || fiveMinutePricesSource == nullptr ||
+            minuteAverages == nullptr || minuteAveragesSource == nullptr) {
+            Serial.println(F("[FATAL] Arrays niet gealloceerd vóór task start!"));
+            Serial.printf("[Memory] Free heap: %u bytes\n", ESP.getFreeHeap());
+            while (true) {
+                delay(1000);
+                yield();
+                Serial.println(F("[FATAL] Waiting for reset..."));
+            }
+        }
+    }
+    #endif
+    
+    // Start FreeRTOS tasks NA buildUI() en NA warm-start
+    // Warm-start heeft exclusieve toegang tijdens setup (geen race conditions mogelijk)
     startFreeRTOSTasks();
 }
 
@@ -6766,11 +6977,7 @@ void wifiConnectionAndFetchPrice()
 // FreeRTOS Task: API calls op Core 1 (elke 1.3 seconde)
 void apiTask(void *parameter)
 {
-    TickType_t lastWakeTime = xTaskGetTickCount();
-    const TickType_t frequency = pdMS_TO_TICKS(UPDATE_API_INTERVAL);
-    static unsigned long lastCallTime = 0;
-    static uint32_t callCount = 0;
-    static uint32_t missedCallCount = 0;
+    const uint32_t apiIntervalMs = UPDATE_API_INTERVAL;
     
     Serial.println(F("[API Task] Gestart op Core 1"));
     
@@ -6786,38 +6993,46 @@ void apiTask(void *parameter)
     }
     
     Serial.println("[API Task] WiFi verbonden, start API calls");
-    lastCallTime = millis();
+    
+    // M1: Rate-limited heap telemetry (elke 60s)
+    static unsigned long lastHeapLog = 0;
+    const unsigned long HEAP_LOG_INTERVAL_MS = 60000;  // 60 seconden
     
     for (;;)
     {
-        unsigned long callStart = millis();
-        callCount++;
+        uint32_t t0 = millis();
         
-        // Detecteer gemiste calls (als er meer dan 1.3x interval tussen calls zit)
-        if (lastCallTime > 0) {
-            unsigned long timeSinceLastCall = callStart - lastCallTime;
-            if (timeSinceLastCall > (UPDATE_API_INTERVAL * 130) / 100) {
-                missedCallCount++;
-                Serial.printf("[API Task] WARN: Gemiste call! Gap: %lu ms (interval: %d ms)\n", 
-                             timeSinceLastCall, UPDATE_API_INTERVAL);
-            }
+        // M1: Rate-limited heap telemetry in apiTask (elke 60s)
+        if ((t0 - lastHeapLog) >= HEAP_LOG_INTERVAL_MS) {
+            logHeap("API_TASK_LOOP");
+            lastHeapLog = t0;
         }
-        lastCallTime = callStart;
         
         // Controleer WiFi status voordat we een request doet
         if (WiFi.status() == WL_CONNECTED) {
+            // Voer 1 API call uit
             fetchPrice();
             
-            // Waarschuwing alleen bij echte problemen (call duurt langer dan 1.1x interval)
-            unsigned long callDuration = millis() - callStart;
-            if (callDuration > (UPDATE_API_INTERVAL * 110) / 100) {
-                Serial.printf("[API Task] WARN: Call #%lu duurde %lu ms (langer dan 110%% van interval %d ms)\n", 
-                             callCount, callDuration, UPDATE_API_INTERVAL);
-            }
-            
-            // Log statistieken alleen bij problemen of elke 5 minuten
-            if (missedCallCount > 0 && callCount % 60 == 0) {
-                Serial.printf("[API Task] Stats: %lu calls, %lu gemist\n", callCount, missedCallCount);
+            // C1: Verwerk pending anchor setting (network-safe: gebeurt in apiTask waar HTTPS calls al zijn)
+            if (pendingAnchorSetting.pending) {
+                // Thread-safe: kopieer waarde lokaal om race conditions te voorkomen
+                float anchorValueToSet = pendingAnchorSetting.value;
+                bool useCurrentPrice = pendingAnchorSetting.useCurrentPrice;
+                // Reset flag direct om dubbele verwerking te voorkomen
+                pendingAnchorSetting.pending = false;
+                
+                // Bepaal waarde: gebruik zojuist opgehaalde prijs als useCurrentPrice, anders opgegeven waarde
+                float valueToSet = useCurrentPrice ? 0.0f : anchorValueToSet;
+                
+                // C1: Gebruik AnchorSystem module om anchor in te stellen (skipNotifications=true om blocking te voorkomen)
+                if (anchorSystem.setAnchorPrice(valueToSet, false, true)) {
+                    // C1: Persist settings na succesvolle anchor set
+                    saveSettings();
+                    Serial_printf(F("[API Task] Anchor updated via pending request: %.2f\n"), 
+                                 useCurrentPrice ? prices[0] : anchorValueToSet);
+                } else {
+                    Serial_println(F("[API Task] WARN: Kon anchor niet instellen (pending request) - mutex timeout of geen prijs beschikbaar"));
+                }
             }
         } else {
             Serial.println("[API Task] WiFi verbinding verloren, wachten op reconnect...");
@@ -6828,29 +7043,18 @@ void apiTask(void *parameter)
             Serial.println("[API Task] WiFi weer verbonden");
         }
         
-        // Timing fix: update lastWakeTime NA de call om drift te voorkomen
-        // Als call langer duurt dan interval, reset timing en skip volgende call indien nodig
-        unsigned long callEnd = millis();
-        unsigned long callDuration = callEnd - callStart;
+        // Duration-aware timing: wacht (interval - callDuration)
+        uint32_t dur = millis() - t0;
+        uint32_t waitMs = (apiIntervalMs > dur) ? (apiIntervalMs - dur) : 0;
         
-        // Als call langer duurt dan interval, reset timing om opstapeling te voorkomen
-        if (callDuration >= UPDATE_API_INTERVAL) {
-            // Call duurde langer dan interval - reset timing
-            // Bereken hoeveel tijd over is tot volgende interval
-            unsigned long timeUntilNextInterval = UPDATE_API_INTERVAL - (callDuration % UPDATE_API_INTERVAL);
-            if (timeUntilNextInterval < 50) {
-                // Te weinig tijd over - skip deze cycle en wacht tot volgende interval
-                lastWakeTime = xTaskGetTickCount();
-                vTaskDelay(pdMS_TO_TICKS(UPDATE_API_INTERVAL - 50)); // Wacht bijna volledige interval
-            } else {
-                // Genoeg tijd over - wacht resterende tijd
-                lastWakeTime = xTaskGetTickCount();
-                vTaskDelay(pdMS_TO_TICKS(timeUntilNextInterval));
-            }
-        } else {
-            // Normale timing: gebruik vTaskDelayUntil voor precieze interval timing
-            vTaskDelayUntil(&lastWakeTime, frequency);
+        // WARN alleen bij echte overload (dur > apiIntervalMs)
+        if (dur > apiIntervalMs) {
+            Serial.printf("[API Task] WARN: Call duurde %lu ms (langer dan interval %lu ms)\n", 
+                         dur, apiIntervalMs);
         }
+        
+        // Wacht tot volgende interval
+        vTaskDelay(pdMS_TO_TICKS(waitMs));
     }
 }
 
@@ -6943,62 +7147,7 @@ void uiTask(void *parameter)
             loopCount = 0;
         }
         
-        // Verwerk pending anchor setting (asynchroon vanuit web server/MQTT)
-        // Thread-safe: kopieer waarde lokaal om race conditions te voorkomen
-        bool hasPendingAnchor = false;
-        float anchorValueToSet = 0.0f;
-        bool useCurrentPrice = false;
-        
-        // Thread-safe check: volatile variabelen worden atomisch gelezen op ESP32
-        // Voorkom te snelle opeenvolgende anchor sets met cooldown (handelt millis() wrap correct af)
-        unsigned long now = millis();
-        unsigned long lastSet = lastAnchorSetTime; // Lokale kopie voor thread-safety
-        
-        // Check cooldown: (now - lastSet) werkt correct zelfs bij millis() wrap
-        // Als lastSet > now, dan is er een wrap geweest en moeten we doorlaten
-        bool cooldownExpired = (lastSet == 0) || 
-                               (now >= lastSet && (now - lastSet) >= ANCHOR_SET_COOLDOWN_MS) ||
-                               (now < lastSet); // millis() wrap case
-        
-        if (pendingAnchorSetting.pending) {
-            if (cooldownExpired) {
-                // Kopieer waarden atomisch (ESP32 garandeert atomic read van 32-bit floats)
-                // Lees eerst value en useCurrentPrice, dan reset pending flag
-                // Dit voorkomt dat we een incomplete state lezen
-                anchorValueToSet = pendingAnchorSetting.value;
-                useCurrentPrice = pendingAnchorSetting.useCurrentPrice;
-                // Reset flag direct om dubbele verwerking te voorkomen
-                pendingAnchorSetting.pending = false;
-                hasPendingAnchor = true;
-            } else {
-                // Te snel na vorige set - wacht nog even (behoud pending flag)
-                unsigned long remaining = (lastSet == 0) ? ANCHOR_SET_COOLDOWN_MS :
-                    (now >= lastSet) ? (ANCHOR_SET_COOLDOWN_MS - (now - lastSet)) : ANCHOR_SET_COOLDOWN_MS;
-                static unsigned long lastLogTime = 0;
-                // Log alleen elke 5 seconden om spam te voorkomen
-                if (now - lastLogTime > 5000) {
-                    Serial_printf("[UI Task] Anchor set cooldown actief: %lu ms (pending request wordt bewaard)\n", remaining);
-                    lastLogTime = now;
-                }
-            }
-        }
-        
-        if (hasPendingAnchor) {
-            float valueToSet = useCurrentPrice ? 0.0f : anchorValueToSet;
-            // Verwerk vanuit uiTask - dit is veilig omdat we in de main loop thread zijn
-            // Gebruik skipNotifications=true om blocking operaties te voorkomen
-            // Fase 6.2.7: Gebruik AnchorSystem module i.p.v. globale functie
-            if (anchorSystem.setAnchorPrice(valueToSet, true, true)) {
-                lastAnchorSetTime = now; // Thread-safe write (uiTask is single-threaded voor deze variabele)
-                Serial_printf("[UI Task] Anchor set asynchroon: %.2f\n", 
-                    useCurrentPrice ? 0.0f : anchorValueToSet);
-            } else {
-                // Fout bij instellen - log maar probeer niet opnieuw (voorkomt infinite retries)
-                // De cooldown voorkomt dat we te snel opnieuw proberen
-                Serial_println("[UI Task] WARN: Kon anchor niet instellen (asynchroon) - mutex timeout of geen prijs beschikbaar");
-                // Note: pending flag is al gereset, dus dit wordt niet opnieuw geprobeerd tot nieuwe request
-            }
-        }
+        // C1: Anchor verwerking verplaatst naar apiTask (network-safe: gebeurt waar HTTPS calls al zijn)
         
         // Check physical button (alleen voor TTGO)
         #if HAS_PHYSICAL_BUTTON

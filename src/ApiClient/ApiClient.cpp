@@ -1,13 +1,18 @@
 #include "ApiClient.h"
+#include "../Memory/HeapMon.h"
+#include "../Net/HttpFetch.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
-// Constructor - leeg voor nu
+// Constructor - initialiseer persistent clients
 ApiClient::ApiClient() {
-    // Leeg - structuur alleen
+    // N2: Persistent clients worden automatisch geïnitialiseerd
 }
 
-// Begin - leeg voor nu
+// Begin - configureer persistent clients voor keep-alive
 void ApiClient::begin() {
-    // Leeg - structuur alleen
+    // N2: Configureer HTTPClient voor keep-alive (connection reuse)
+    // setReuse(true) wordt per call gedaan in httpGETInternal en fetchBinancePrice
 }
 
 // Public HTTP GET method
@@ -18,6 +23,7 @@ bool ApiClient::httpGET(const char *url, char *buffer, size_t bufferSize, uint32
 
 // Private HTTP GET implementation
 // Fase 4.1.2: Kopie van oude httpGET() functie voor verificatie
+// S0: Wrapped met gNetMutex voor thread-safe HTTP operaties
 bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize, uint32_t timeoutMs)
 {
     if (buffer == nullptr || bufferSize == 0) {
@@ -27,127 +33,189 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
     
     buffer[0] = '\0'; // Initialize buffer
     
-    const uint8_t MAX_RETRIES = 1; // Max 1 retry (2 pogingen totaal) - verminderd voor snellere failure
-    const uint32_t RETRY_DELAY_MS = 100; // 100ms delay tussen retries - verlaagd voor betere timing
+    // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
+    netMutexLock("ApiClient::httpGETInternal");
     
+    const uint8_t MAX_RETRIES = 1; // Max 1 retry (2 pogingen totaal) - verminderd voor snellere failure
+    // T1: Backoff retry delays: 250ms voor eerste retry, 500ms voor tweede retry
+    const uint32_t RETRY_DELAYS[] = {250, 500}; // Backoff delays in ms
+    
+    bool result = false;
     for (uint8_t attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        HTTPClient http;
-        http.setTimeout(timeoutMs);
-        http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS_DEFAULT); // Sneller falen bij connect problemen
-        // Connection reuse uitgeschakeld - veroorzaakte eerder problemen
-        // Bij retries altijd false voor betrouwbaarheid
-        http.setReuse(false);
+        // N2: Gebruik persistent HTTPClient voor keep-alive
+        HTTPClient& http = httpClient;
+        
+        // T1: Expliciete connect/read timeout settings (verhoogd naar 4000ms)
+        // Gebruik timeoutMs als read timeout, connect timeout is altijd 4000ms
+        http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS_DEFAULT);
+        http.setTimeout(timeoutMs > 0 ? timeoutMs : HTTP_READ_TIMEOUT_MS_DEFAULT);
+        // N2: Enable connection reuse voor keep-alive
+        http.setReuse(true);
         
         unsigned long requestStart = millis();
+        bool attemptOk = false;
+        bool shouldRetry = false;  // S2: Flag voor retry logica (buiten do-while)
+        int lastCode = 0;  // S2: Bewaar code voor retry logica
         
-        if (!http.begin(url))
-        {
-            http.end();
-            if (attempt == MAX_RETRIES) {
-                Serial.printf(F("[HTTP] http.begin() gefaald na %d pogingen voor: %s\n"), attempt + 1, url);
-                return false;
+        // S2: do-while(0) patroon voor consistente cleanup per attempt
+        do {
+            // N2: Reset client state voor nieuwe request (belangrijk voor keep-alive)
+            // Als vorige request gefaald is of verbinding niet meer geldig, reset client
+            if (http.connected()) {
+                http.end();  // Sluit vorige verbinding als die nog open is
             }
-            // Retry bij begin failure
-            delay(RETRY_DELAY_MS);
-            continue;
-        }
+            
+            // N2: Gebruik persistent WiFiClient voor keep-alive
+            if (!http.begin(wifiClient, url)) {
+            if (attempt == MAX_RETRIES) {
+                    // S2: Log zonder String concatenatie
+                    Serial.printf(F("[HTTP] http.begin() gefaald na %d pogingen voor URL: %s\n"), attempt + 1, url);
+                }
+                shouldRetry = (attempt < MAX_RETRIES);  // Retry bij begin failure
+                break;
+            }
+            
+            // N2: Voeg User-Agent header toe om Cloudflare blocking te voorkomen
+            http.addHeader(F("User-Agent"), F("ESP32-CryptoMonitor/1.0"));
+            http.addHeader(F("Accept"), F("application/json"));
+            
+            // M1: Heap telemetry vóór HTTP GET (intern)
+            logHeap("HTTP_GET_PRE");
         
         int code = http.GET();
         unsigned long requestTime = millis() - requestStart;
-        
-        if (code == 200)
-        {
+            lastCode = code;  // S2: Bewaar voor retry logica
+            
+            // M1: Heap telemetry na HTTP GET (intern)
+            logHeap("HTTP_GET_POST");
+            
+            if (code != 200) {
+                // S2: Check retry-waardige fouten
+                if (code == HTTPC_ERROR_CONNECTION_REFUSED || code == HTTPC_ERROR_CONNECTION_LOST) {
+                    shouldRetry = true;
+                } else if (code == HTTPC_ERROR_READ_TIMEOUT) {
+                    shouldRetry = true;
+                } else if (code == HTTPC_ERROR_SEND_HEADER_FAILED || code == HTTPC_ERROR_SEND_PAYLOAD_FAILED) {
+                    shouldRetry = true;
+                } else if (code < 0) {
+                    // Andere HTTPClient error codes - retry alleen bij network errors
+                    shouldRetry = (code == HTTPC_ERROR_CONNECTION_REFUSED || 
+                                  code == HTTPC_ERROR_CONNECTION_LOST || 
+                                  code == HTTPC_ERROR_READ_TIMEOUT ||
+                                  code == HTTPC_ERROR_SEND_HEADER_FAILED ||
+                                  code == HTTPC_ERROR_SEND_PAYLOAD_FAILED);
+                }
+                
+                // N1: Betere error logging met errorToString en fase detectie
+                if (code < 0) {
+                    // Detecteer fase: connect timeout vs read timeout
+                    const char* phase = "unknown";
+                    if (code == HTTPC_ERROR_CONNECTION_REFUSED || 
+                        code == HTTPC_ERROR_CONNECTION_LOST) {
+                        phase = "connect";
+                    } else if (code == HTTPC_ERROR_READ_TIMEOUT) {
+                        phase = "read";
+                    } else if (code == HTTPC_ERROR_SEND_HEADER_FAILED || 
+                              code == HTTPC_ERROR_SEND_PAYLOAD_FAILED) {
+                        phase = "send";
+                    }
+                    
+                    // T2: Gebruik errorToString voor leesbare error messages (deterministisch, geen mojibake)
+                    String localErr = http.errorToString(code);
+                    Serial.printf(F("[HTTP] HTTP error (code=%d, fase=%s, tijd=%lu ms, poging %d/%d, error=%s)\n"), 
+                                  code, phase, requestTime, attempt + 1, MAX_RETRIES + 1, localErr.c_str());
+                } else {
+                    Serial.printf(F("[HTTP] Status code=%d, tijd=%lu ms, poging %d/%d\n"), 
+                                  code, requestTime, attempt + 1, MAX_RETRIES + 1);
+                }
+                
+                // S2: Break uit do-while voor cleanup, retry logica gebeurt hieronder
+                break;
+            }
+            
             // Get response size first
             int contentLength = http.getSize();
             if (contentLength > 0 && (size_t)contentLength >= bufferSize) {
                 Serial.printf(F("[HTTP] Response te groot: %d bytes (buffer: %zu bytes)\n"), contentLength, bufferSize);
-                http.end();
-                return false;
+                break;
             }
             
-            // Read response into buffer
+            // M2: Read response body via streaming (vervangt getString() fallback)
+            // M1: Heap telemetry vóór body read
+            logHeap("HTTP_BODY_READ_PRE");
+            
+            // Read response into buffer via streaming
             WiFiClient *stream = http.getStreamPtr();
-            if (stream != nullptr) {
+            if (stream == nullptr) {
+                Serial.println(F("[HTTP] Stream pointer is null"));
+                break;
+            }
+            
                 size_t bytesRead = 0;
-                while (stream->available() && bytesRead < bufferSize - 1) {
-                    int c = stream->read();
-                    if (c < 0) break;
-                    buffer[bytesRead++] = (char)c;
+            const size_t CHUNK_SIZE = 256;  // Lees in chunks
+            
+            // Read in chunks: continue zolang stream connected/available
+            while (http.connected() && bytesRead < (bufferSize - 1)) {
+                size_t remaining = bufferSize - 1 - bytesRead;
+                size_t chunkSize = (remaining < CHUNK_SIZE) ? remaining : CHUNK_SIZE;
+                
+                size_t n = stream->readBytes((uint8_t*)(buffer + bytesRead), chunkSize);
+                if (n == 0) {
+                    if (!stream->available()) {
+                        break;
+                    }
+                    delay(10);  // Wacht kort op meer data
+                    continue;
+                }
+                bytesRead += n;
                 }
                 buffer[bytesRead] = '\0';
                 
                 // Performance monitoring: log langzame calls
-                // Normale calls zijn < 500ms, langzaam is > 1000ms
                 if (requestTime > 1000) {
-                    Serial.printf(F("[HTTP] Langzame response: %lu ms (poging %d)\n"), requestTime, attempt + 1);
-                }
-            } else {
-                // Fallback: stream niet beschikbaar, gebruik getString() maar kopieer direct naar buffer
-                // Dit voorkomt String fragmentatie door direct naar buffer te kopiëren
-                String payload = http.getString();
-                size_t len = payload.length();
-                if (len >= bufferSize) {
-                    Serial.printf(F("[HTTP] Response te groot: %zu bytes (buffer: %zu bytes)\n"), len, bufferSize);
-                    http.end();
-                    return false;
-                }
-                strncpy(buffer, payload.c_str(), bufferSize - 1);
-                buffer[bufferSize - 1] = '\0';
+                Serial.printf(F("[HTTP] Langzame response: %lu ms\n"), requestTime);
             }
             
-            http.end();
+            // M1: Heap telemetry na body read
+            logHeap("HTTP_BODY_READ_POST");
+            
+            attemptOk = true;
+            result = true;
+        } while(0);
+        
+        // C2: ALTIJD cleanup (ook bij succes) - HTTPClient op ESP32 vereist dit voor correcte reset
+        // Hard close: http.end() + client.stop() voor volledige cleanup
+        http.end();
+        WiFiClient* stream = http.getStreamPtr();
+        if (stream != nullptr) {
+            stream->stop();
+        }
+        
+        // S2: Succes - stop retries
+        if (attemptOk) {
             if (attempt > 0) {
                 Serial.printf(F("[HTTP] Succes na retry (poging %d/%d)\n"), attempt + 1, MAX_RETRIES + 1);
             }
-            // Heap telemetry na HTTP fetch (optioneel, alleen bij belangrijke requests)
-            // logHeapTelemetry("http");  // Uitgecommentarieerd om spam te voorkomen
-            return true;
+            break;
         }
-        else
-        {
-            // Check of dit een retry-waardige fout is
-            bool shouldRetry = false;
-            if (code == HTTPC_ERROR_CONNECTION_REFUSED || code == HTTPC_ERROR_CONNECTION_LOST) {
-                shouldRetry = true;
-                Serial.printf(F("[HTTP] Connectie probleem: code=%d, tijd=%lu ms (poging %d/%d)\n"), code, requestTime, attempt + 1, MAX_RETRIES + 1);
-            } else if (code == HTTPC_ERROR_READ_TIMEOUT) {
-                shouldRetry = true;
-                Serial.printf(F("[HTTP] Read timeout na %lu ms (poging %d/%d)\n"), requestTime, attempt + 1, MAX_RETRIES + 1);
-            } else if (code == HTTPC_ERROR_SEND_HEADER_FAILED || code == HTTPC_ERROR_SEND_PAYLOAD_FAILED) {
-                // Send failures kunnen tijdelijk zijn - retry waardig
-                shouldRetry = true;
-                Serial.printf(F("[HTTP] Send failure: code=%d, tijd=%lu ms (poging %d/%d)\n"), code, requestTime, attempt + 1, MAX_RETRIES + 1);
-            } else if (code < 0) {
-                // Andere HTTPClient error codes - retry alleen bij network errors
-                shouldRetry = (code == HTTPC_ERROR_CONNECTION_REFUSED || 
-                              code == HTTPC_ERROR_CONNECTION_LOST || 
-                              code == HTTPC_ERROR_READ_TIMEOUT ||
-                              code == HTTPC_ERROR_SEND_HEADER_FAILED ||
-                              code == HTTPC_ERROR_SEND_PAYLOAD_FAILED);
-                if (!shouldRetry) {
-                    Serial.printf(F("[HTTP] Error code=%d, tijd=%lu ms (geen retry)\n"), code, requestTime);
-                } else {
-                    Serial.printf(F("[HTTP] Error code=%d, tijd=%lu ms (poging %d/%d)\n"), code, requestTime, attempt + 1, MAX_RETRIES + 1);
-                }
-            } else {
-                // HTTP error codes (4xx, 5xx) - geen retry
-                Serial.printf(F("[HTTP] GET gefaald: code=%d, tijd=%lu ms (geen retry)\n"), code, requestTime);
-            }
-            
-            http.end();
-            
-            // Retry bij tijdelijke fouten
+        
+        // T1: Retry logica met backoff delays (alleen bij retry-waardige fouten en als attempt < MAX_RETRIES)
             if (shouldRetry && attempt < MAX_RETRIES) {
-                delay(RETRY_DELAY_MS);
+            uint32_t backoffDelay = (attempt < sizeof(RETRY_DELAYS)/sizeof(RETRY_DELAYS[0])) ? RETRY_DELAYS[attempt] : 500;
+            Serial.printf(F("[HTTP] Retry %d/%d na %lu ms backoff\n"), attempt + 1, MAX_RETRIES, backoffDelay);
+            delay(backoffDelay);  // T1: Backoff delay tussen retries
                 continue;
             }
             
             // Geen retry meer mogelijk of niet-retry-waardige fout
-            return false;
+        result = false;
+        break;
         }
-    }
     
-    return false;
+    // C2: Geef netwerk mutex vrij (met debug logging)
+    netMutexUnlock("ApiClient::httpGETInternal");
+    
+    return result;
 }
 
 // Parse Binance price from JSON response
@@ -230,29 +298,206 @@ bool ApiClient::safeAtof(const char* str, float& out)
     return true;
 }
 
+// S1: Streaming JSON parsing helper (gebruikt ArduinoJson als beschikbaar)
+// Parse price direct van WiFiClient stream zonder body buffer
+// S2: Gebruikt do-while(0) patroon voor consistente cleanup
+bool ApiClient::parseBinancePriceFromStream(WiFiClient* stream, float& out)
+{
+    if (stream == nullptr) {
+        return false;
+    }
+    
+    bool ok = false;
+    
+    #if USE_ARDUINOJSON_STREAMING
+    // Gebruik ArduinoJson voor streaming parsing (geen heap allocaties)
+    StaticJsonDocument<256> doc;  // 256 bytes is ruim voldoende voor Binance price response (~100 bytes)
+    DeserializationError error = deserializeJson(doc, *stream);
+    
+    if (error) {
+        Serial.printf(F("[HTTP] JSON parse error: %s\n"), error.c_str());
+        return false;
+    }
+    
+    // Extract price field
+    if (!doc.containsKey("price")) {
+        Serial.println(F("[HTTP] JSON missing 'price' field"));
+        return false;
+    }
+    
+    const char* priceStr = doc["price"];
+    if (priceStr == nullptr) {
+        Serial.println(F("[HTTP] JSON 'price' field is null"));
+        return false;
+    }
+    
+    // Convert to float
+    float val;
+    if (!safeAtof(priceStr, val)) {
+        return false;
+    }
+    
+    // Validate price
+    if (!isValidPrice(val)) {
+        return false;
+    }
+    
+    out = val;
+    ok = true;
+    #else
+    // Fallback: handmatige parsing (als ArduinoJson niet beschikbaar is)
+    // Lees response in kleine chunks en parse handmatig
+    char buffer[128];  // Stack buffer voor kleine responses
+    size_t bytesRead = 0;
+    const size_t MAX_READ = sizeof(buffer) - 1;
+    
+    // Lees response body in chunks
+    while (stream->available() && bytesRead < MAX_READ) {
+        size_t n = stream->readBytes((uint8_t*)(buffer + bytesRead), MAX_READ - bytesRead);
+        if (n == 0) {
+            if (!stream->available()) {
+                break;
+            }
+            delay(10);
+            continue;
+        }
+        bytesRead += n;
+    }
+    buffer[bytesRead] = '\0';
+    
+    // Parse met bestaande handmatige parser
+    ok = parseBinancePrice(buffer, out);
+    #endif
+    
+    return ok;
+}
+
 // High-level method: Fetch Binance price for a symbol
 // Fase 4.1.7: Combineert httpGET + parseBinancePrice
+// S1: Gebruikt nu streaming JSON parsing (geen buffer allocatie)
+// S2: Gebruikt do-while(0) patroon voor consistente cleanup
 bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
 {
     if (symbol == nullptr || strlen(symbol) == 0) {
         return false;
     }
     
+    // M1: Heap telemetry vóór URL build
+    logHeap("API_URL_BUILD");
+    
     // Build Binance API URL
     char url[128];
     snprintf(url, sizeof(url), "https://api.binance.com/api/v3/ticker/price?symbol=%s", symbol);
     
-    // Fetch response
-    char responseBuffer[512]; // Buffer voor API response (Binance responses zijn klein, ~100 bytes)
-    bool httpSuccess = httpGET(url, responseBuffer, sizeof(responseBuffer), HTTP_TIMEOUT_MS_DEFAULT);
+    // M1: Heap telemetry vóór HTTP GET
+    logHeap("API_GET_PRE");
     
-    if (!httpSuccess || strlen(responseBuffer) == 0) {
-        return false;
+    // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
+    netMutexLock("ApiClient::fetchBinancePrice");
+    
+    bool ok = false;
+    // Gebruik lokaal HTTPClient object (zoals fetchBinanceKlines doet) - persistent client geeft HTTP 400
+    HTTPClient http;
+    
+    // S2: do-while(0) patroon voor consistente cleanup
+    do {
+        // T1: Expliciete connect/read timeout settings (verhoogd naar 4000ms)
+        http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS_DEFAULT);
+        http.setTimeout(HTTP_READ_TIMEOUT_MS_DEFAULT);
+        // Geen keep-alive voor nu (lokaal object, zoals fetchBinanceKlines)
+        http.setReuse(false);
+        
+        // N2: Voeg User-Agent header toe VOOR http.begin() om Cloudflare blocking te voorkomen
+        // Headers moeten worden toegevoegd voordat de verbinding wordt geopend
+        http.addHeader(F("User-Agent"), F("ESP32-CryptoMonitor/1.0"));
+        http.addHeader(F("Accept"), F("application/json"));
+        
+        unsigned long requestStart = millis();
+        
+        // Normale URL flow (zoals voorheen, zonder DNS cache)
+        Serial.printf(F("[API] Fetching price from: %s\n"), url);
+        if (!http.begin(url)) {
+            Serial.printf(F("[API] http.begin() gefaald voor URL: %s\n"), url);
+            break;
+        }
+        
+        int code = http.GET();
+        unsigned long requestTime = millis() - requestStart;
+        
+        // M1: Heap telemetry na HTTP GET
+        logHeap("API_GET_POST");
+        
+        if (code != 200) {
+            // N1: Betere error logging met errorToString en fase detectie
+            if (code < 0) {
+                // Detecteer fase: connect timeout vs read timeout
+                const char* phase = "unknown";
+                if (code == HTTPC_ERROR_CONNECTION_REFUSED || 
+                    code == HTTPC_ERROR_CONNECTION_LOST) {
+                    phase = "connect";
+                } else if (code == HTTPC_ERROR_READ_TIMEOUT) {
+                    phase = "read";
+                } else if (code == HTTPC_ERROR_SEND_HEADER_FAILED || 
+                          code == HTTPC_ERROR_SEND_PAYLOAD_FAILED) {
+                    phase = "send";
+                }
+                
+                // T2: Gebruik errorToString voor leesbare error messages (deterministisch, geen mojibake)
+                String localErr = http.errorToString(code);
+                Serial.printf(F("[API] HTTP error (code=%d, fase=%s, tijd=%lu ms, error=%s)\n"), 
+                              code, phase, requestTime, localErr.c_str());
+            } else {
+                // N2: Log ook response body bij HTTP 400 voor debugging
+                if (code == 400) {
+                    WiFiClient* errorStream = http.getStreamPtr();
+                    if (errorStream != nullptr && errorStream->available()) {
+                        char errorBuf[256];
+                        size_t errorLen = errorStream->readBytes((uint8_t*)errorBuf, sizeof(errorBuf) - 1);
+                        errorBuf[errorLen] = '\0';
+                        Serial.printf(F("[API] HTTP 400 response body: %s\n"), errorBuf);
+                    }
+                }
+                Serial.printf(F("[API] HTTP status code=%d, tijd=%lu ms\n"), code, requestTime);
+            }
+            break;
+        }
+        
+        // S1: Parse direct van stream (geen body buffer)
+        WiFiClient* stream = http.getStreamPtr();
+        if (stream == nullptr) {
+            Serial.println(F("[API] Stream pointer is null"));
+            break;
+        }
+        
+        // M1: Heap telemetry vóór JSON parse
+        logHeap("API_PARSE_PRE");
+        
+        // Parse price from stream
+        if (!parseBinancePriceFromStream(stream, out)) {
+            Serial.println(F("[API] JSON parse failed"));
+            break;
+        }
+        
+        // M1: Heap telemetry na JSON parse
+        logHeap("API_PARSE_POST");
+        
+        ok = true;
+    } while(0);
+    
+    // C2: ALTIJD cleanup (ook bij succes) - HTTPClient op ESP32 vereist dit voor correcte reset
+    // Hard close: http.end() + client.stop() voor volledige cleanup
+    http.end();
+    WiFiClient* stream = http.getStreamPtr();
+    if (stream != nullptr) {
+        stream->stop();
     }
     
-    // Parse price from response
-    return parseBinancePrice(responseBuffer, out);
+    // C2: Geef netwerk mutex vrij (met debug logging)
+    netMutexUnlock("ApiClient::fetchBinancePrice");
+    
+    return ok;
 }
+
 
 
 

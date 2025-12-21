@@ -58,7 +58,7 @@ extern float calculateAverage(float *array, uint8_t size, bool filled);
 
 // Forward declaration voor macro (moet in .ino blijven)
 #ifndef VALUES_FOR_1MIN_RETURN
-#define VALUES_FOR_1MIN_RETURN 40  // Fallback: 60000 / 1500
+#define VALUES_FOR_1MIN_RETURN 30  // Fallback: 60000 / 2000
 #endif
 
 // Forward declaration voor Serial_printf macro
