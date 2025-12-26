@@ -73,9 +73,9 @@
 // ============================================================================
 
 // --- Version and Build Configuration ---
-#define VERSION_MAJOR 3
-#define VERSION_MINOR 98
-#define VERSION_STRING "3.98"
+#define VERSION_MAJOR 4
+#define VERSION_MINOR 0
+#define VERSION_STRING "4.00"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging

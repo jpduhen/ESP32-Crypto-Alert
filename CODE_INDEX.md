@@ -1,18 +1,86 @@
 # Code Index - UNIFIED-LVGL9-Crypto_Monitor
 
-**Versie:** 3.82  
+**Versie:** 4.00  
 **Platform:** ESP32 (TTGO T-Display, CYD 2.4/2.8, ESP32-S3 Super Mini)  
-**Laatste update:** Warm-start optimalisaties, mutex/API timing verbeteringen, trend kleuren
+**Laatste update:** 2025-12-26 - Fase 10 voltooid (FreeRTOS Task Refactoring), modulaire architectuur
 
 ---
 
 ## 1. Modules & Bestanden
 
 ### Hoofdbestand
-- **`UNIFIED-LVGL9-Crypto_Monitor.ino`** (8169 regels)
-  - Monolithische structuur met alle functionaliteit
+- **`UNIFIED-LVGL9-Crypto_Monitor.ino`**
+  - Setup/loop en FreeRTOS task orchestration
   - Platform-selectie via `platform_config.h`
   - FreeRTOS multi-task architectuur
+  - Orchestrator functies voor module integratie
+
+### Module Structuur
+De codebase is gerefactord naar een modulaire architectuur:
+
+#### Core Modules
+- **`src/SettingsStore/`** - Persistent storage (Preferences/NVS)
+  - `SettingsStore.h` / `SettingsStore.cpp`
+  - Settings loading/saving functionaliteit
+
+- **`src/ApiClient/`** - Binance API communicatie
+  - `ApiClient.h` / `ApiClient.cpp`
+  - HTTP GET requests, JSON parsing, streaming parsing
+
+- **`src/PriceData/`** - Prijs data management & returns
+  - `PriceData.h` / `PriceData.cpp`
+  - Array management (secondPrices, fiveMinutePrices, minuteAverages)
+  - Return calculations (1m, 5m, 30m, 2h)
+
+#### Analysis Modules
+- **`src/TrendDetector/`** - Trend detection & state
+  - `TrendDetector.h` / `TrendDetector.cpp`
+  - Trend state determination (UP/DOWN/SIDEWAYS)
+  - Trend change detection
+
+- **`src/VolatilityTracker/`** - Volatiliteit berekeningen
+  - `VolatilityTracker.h` / `VolatilityTracker.cpp`
+  - Volatility state determination (LOW/MEDIUM/HIGH)
+  - Auto-volatility threshold calculation
+
+#### Alert & Anchor Modules
+- **`src/AlertEngine/`** - Alert detection & notificaties
+  - `AlertEngine.h` / `AlertEngine.cpp`
+  - Alert condition checking
+  - Smart Confluence detection
+  - Notification sending
+
+- **`src/AnchorSystem/`** - Anchor price tracking
+  - `AnchorSystem.h` / `AnchorSystem.cpp`
+  - Anchor price management
+  - Anchor alert detection
+  - Trend-adaptive anchor thresholds
+
+#### UI & Web Modules
+- **`src/UIController/`** - LVGL UI management
+  - `UIController.h` / `UIController.cpp`
+  - UI building and updates
+  - Chart rendering
+  - Button handling
+
+- **`src/WebServer/`** - Web interface
+  - `WebServer.h` / `WebServer.cpp`
+  - HTML generation
+  - Web handlers (root, save, anchor, ntfy reset)
+
+#### Utility Modules
+- **`src/WarmStart/`** - Warm-start functionaliteit
+  - `WarmStart.h` / `WarmStart.cpp`
+  - Binance historical data fetching
+  - Buffer initialization
+
+- **`src/Memory/`** - Heap telemetry
+  - `HeapMon.h` / `HeapMon.cpp`
+  - Heap monitoring and logging
+
+- **`src/Net/`** - Network utilities
+  - `HttpFetch.h` / `HttpFetch.cpp`
+  - Streaming HTTP fetch
 
 ### Configuratiebestanden
 - **`platform_config.h`** - Platform-specifieke defines (TTGO, CYD24, CYD28, ESP32-S3 Super Mini)
@@ -175,22 +243,23 @@ struct AnchorSetting {
 
 ## 3. Hoofd Dataflow
 
-### Data Acquisition Flow
+### Data Acquisition Flow (Modulair)
 ```
 [Boot] → [WiFi Connect] → [Warm-Start (optioneel)] → [API Task Start]
     ↓
 [API Task (Core 1)] - Elke 1500ms:
-    ├─ fetchPrice() → Binance API
-    ├─ addPriceToSecondArray() → secondPrices[60]
+    ├─ apiClient.fetchBinancePrice() → Binance API
+    ├─ priceData.addPriceToSecondArray() → secondPrices[60]
     ├─ updateMinuteAverage() → minuteAverages[120]
-    ├─ calculateReturn1Minute() → ret_1m
+    ├─ priceData.calculateReturn1Minute() → ret_1m
     ├─ calculateReturn5Minutes() → ret_5m
     ├─ calculateReturn30Minutes() → ret_30m
     ├─ calculateReturn2Hours() → ret_2h
-    ├─ determineTrendState() → trendState
-    ├─ updateVolatilityWindow() → volatility1mReturns[]
-    ├─ calculateEffectiveThresholds() → EffectiveThresholds
-    └─ checkAndNotify() → Alert Engine
+    ├─ trendDetector.determineTrendState() → trendState
+    ├─ volatilityTracker.addAbs1mReturnToVolatilityBuffer() → volatility1mReturns[]
+    ├─ volatilityTracker.calculateEffectiveThresholds() → EffectiveThresholds
+    ├─ alertEngine.checkAndNotify() → Alert Engine
+    └─ anchorSystem.checkAnchorAlerts() → Anchor alerts
 ```
 
 ### Price Buffer Management
@@ -212,18 +281,18 @@ ret_30m = (avgLast30min - avgPrev30min) / avgPrev30min * 100
 ret_2h  = (priceNow - price120mAgo) / price120mAgo * 100
 ```
 
-### Trend Detection Flow
+### Trend Detection Flow (Modulair)
 ```
 ret_2h + ret_30m
     ↓
-determineTrendState():
+trendDetector.determineTrendState():
     - ret_2h >= +1.30% AND ret_30m >= 0 → TREND_UP
     - ret_2h <= -1.30% AND ret_30m <= 0 → TREND_DOWN
     - else → TREND_SIDEWAYS
     ↓
-trendState (global)
+trendDetector.getTrendState() → trendState (global, backward compatibility)
     ↓
-checkTrendChange() → Notificatie bij wijziging
+trendDetector.checkTrendChange() → Notificatie bij wijziging
 ```
 
 ### Alert Engine Flow
@@ -530,31 +599,43 @@ Totaal RAM gebruik: ~30-50KB (zonder PSRAM)
 
 ---
 
-## 7. Belangrijke Functies
+## 7. Belangrijke Functies (Modulair)
 
-### Price Management
-- `addPriceToSecondArray()` - Voeg prijs toe aan 1m buffer
-- `updateMinuteAverage()` - Bereken minuut gemiddelde
-- `calculateReturn1Minute()` - 1m return berekening
-- `calculateReturn5Minutes()` - 5m return berekening
-- `calculateReturn30Minutes()` - 30m return berekening
-- `calculateReturn2Hours()` - 2h return berekening
+### Price Management (PriceData Module)
+- `priceData.addPriceToSecondArray()` - Voeg prijs toe aan 1m buffer
+- `updateMinuteAverage()` - Bereken minuut gemiddelde (nog globaal, gebruikt PriceData getters)
+- `priceData.calculateReturn1Minute()` - 1m return berekening
+- `calculateReturn5Minutes()` - 5m return berekening (wrapper, gebruikt PriceData getters)
+- `calculateReturn30Minutes()` - 30m return berekening (wrapper, gebruikt PriceData getters)
+- `calculateReturn2Hours()` - 2h return berekening (gebruikt PriceData getters)
 
-### Trend & Volatiliteit
-- `determineTrendState()` - Bepaal trend (UP/DOWN/SIDEWAYS)
-- `checkTrendChange()` - Trend change notificatie
-- `calculateStdDev1mReturns()` - Volatiliteit berekening
-- `calculateEffectiveThresholds()` - Auto-Volatility thresholds
+### Trend Detection (TrendDetector Module)
+- `trendDetector.determineTrendState()` - Bepaal trend (UP/DOWN/SIDEWAYS)
+- `trendDetector.checkTrendChange()` - Trend change notificatie
+- `trendDetector.getTrendState()` - Get current trend state
+- `trendDetector.getPreviousTrendState()` - Get previous trend state
 
-### Alert System
-- `checkAndNotify()` - Hoofd alert detection functie
-- `checkAndSendConfluenceAlert()` - Smart Confluence detection
-- `checkAnchorAlerts()` - Anchor monitoring
-- `update1mEvent()` / `update5mEvent()` - Event state tracking
+### Volatiliteit (VolatilityTracker Module)
+- `volatilityTracker.addAbs1mReturnToVolatilityBuffer()` - Voeg 1m return toe aan buffer
+- `volatilityTracker.calculateAverageAbs1mReturn()` - Bereken gemiddelde absolute 1m return
+- `volatilityTracker.determineVolatilityState()` - Bepaal volatiliteit state (LOW/MEDIUM/HIGH)
+- `volatilityTracker.calculateEffectiveThresholds()` - Auto-Volatility thresholds
 
-### Warm-Start
-- `performWarmStart()` - Hoofd warm-start functie
-- `fetchBinanceKlines()` - Binance API klines fetch
+### Alert System (AlertEngine Module)
+- `alertEngine.checkAndNotify()` - Hoofd alert detection functie
+- `alertEngine.checkAndSendConfluenceAlert()` - Smart Confluence detection
+- `alertEngine.update1mEvent()` / `alertEngine.update5mEvent()` - Event state tracking
+- `alertEngine.checkAlertConditions()` - Check individuele alert condities
+
+### Anchor System (AnchorSystem Module)
+- `anchorSystem.setAnchorPrice()` - Stel anchor prijs in
+- `anchorSystem.checkAnchorAlerts()` - Anchor monitoring
+- `anchorSystem.calculateEffectiveAnchorThresholds()` - Trend-adaptive thresholds
+- `anchorSystem.updateAnchorMinMax()` - Update min/max prijzen
+
+### Warm-Start (WarmStart Module)
+- `warmWrap.performWarmStart()` - Hoofd warm-start functie (via wrapper)
+- `warmWrap.fetchBinanceKlines()` - Binance API klines fetch (via wrapper)
 - `updateWarmStartStatus()` - Warm-up progress berekening
 - `hasPSRAM()` - PSRAM detectie
 
@@ -725,6 +806,133 @@ Totaal RAM gebruik: ~30-50KB (zonder PSRAM)
 - **API timing logica** - Betere handling van lange calls, voorkomt opstapeling
 
 ### UI Verbeteringen
+
+---
+
+## 11. Module Interfaces
+
+### SettingsStore Module
+**Location**: `src/SettingsStore/`
+
+**Public Methods**:
+- `void begin()` - Initialize Preferences
+- `bool loadSettings(CryptoMonitorSettings& settings)` - Load settings from NVS
+- `bool saveSettings(const CryptoMonitorSettings& settings)` - Save settings to NVS
+
+**Structs**:
+- `CryptoMonitorSettings` - All configurable settings
+- `AlertThresholds` - Alert threshold values
+- `NotificationCooldowns` - Notification cooldown periods
+
+### ApiClient Module
+**Location**: `src/ApiClient/`
+
+**Public Methods**:
+- `void begin()` - Initialize (empty for now)
+- `bool httpGET(const char* url, char* buffer, size_t bufferSize, uint32_t timeoutMs)` - HTTP GET request
+- `bool fetchBinancePrice(const char* symbol, float& out)` - Fetch Binance price (high-level)
+- `static bool parseBinancePrice(const char* body, float& out)` - Parse JSON response
+
+### PriceData Module
+**Location**: `src/PriceData/`
+
+**Public Methods**:
+- `void begin()` - Initialize arrays
+- `void addPriceToSecondArray(float price)` - Add price to 1m buffer
+- `float calculateReturn1Minute(float* averagePrices)` - Calculate 1m return
+- `const float* getSecondPrices()` - Get second prices array
+- `const float* getFiveMinutePrices()` - Get 5m prices array
+- `const float* getMinuteAverages()` - Get minute averages array
+- `uint16_t getSecondIndex()`, `getFiveMinuteIndex()`, `getMinuteIndex()` - Get indices
+- `bool getSecondArrayFilled()`, `getFiveMinuteArrayFilled()`, `getMinuteArrayFilled()` - Get fill status
+
+### TrendDetector Module
+**Location**: `src/TrendDetector/`
+
+**Public Methods**:
+- `void begin()` - Initialize
+- `TrendState determineTrendState(float ret_2h, float ret_30m, float threshold)` - Determine trend
+- `void checkTrendChange(float ret_30m, float ret_2h, bool minuteArrayFilled, uint8_t minuteIndex)` - Check for trend changes
+- `TrendState getTrendState()` - Get current trend state
+- `TrendState getPreviousTrendState()` - Get previous trend state
+- `void setTrendState(TrendState state)` - Set trend state
+
+### VolatilityTracker Module
+**Location**: `src/VolatilityTracker/`
+
+**Public Methods**:
+- `void begin()` - Initialize volatility buffer
+- `void addAbs1mReturnToVolatilityBuffer(float absReturn)` - Add 1m return to buffer
+- `float calculateAverageAbs1mReturn()` - Calculate average absolute 1m return
+- `VolatilityState determineVolatilityState(float avgAbsReturn, float lowThreshold, float highThreshold)` - Determine volatility state
+- `void calculateEffectiveThresholds(float base1m, float base5m, float base30m, float volatilityFactor, float& out1m, float& out5m, float& out30m)` - Calculate auto-volatility thresholds
+- `VolatilityState getVolatilityState()` - Get current volatility state
+- `void setVolatilityState(VolatilityState state)` - Set volatility state
+
+### AlertEngine Module
+**Location**: `src/AlertEngine/`
+
+**Public Methods**:
+- `void begin()` - Initialize
+- `void checkAndNotify(float ret_1m, float ret_5m, float ret_30m)` - Main alert detection
+- `void checkAndSendConfluenceAlert(float ret_1m, float ret_5m, float ret_30m)` - Smart Confluence detection
+- `void update1mEvent(float ret_1m)` - Update 1m event state
+- `void update5mEvent(float ret_5m)` - Update 5m event state
+- `bool checkAlertConditions(float ret, float threshold, const char* alertType)` - Check individual alert conditions
+
+### AnchorSystem Module
+**Location**: `src/AnchorSystem/`
+
+**Public Methods**:
+- `void begin()` - Initialize
+- `bool setAnchorPrice(float price, bool useCurrentPrice, bool skipNotifications)` - Set anchor price
+- `void checkAnchorAlerts()` - Check anchor alerts (take profit/max loss)
+- `void calculateEffectiveAnchorThresholds(float baseTP, float baseML, float& outTP, float& outML)` - Calculate trend-adaptive thresholds
+- `void updateAnchorMinMax(float currentPrice)` - Update min/max prices
+- `float getAnchorPrice()`, `getAnchorMin()`, `getAnchorMax()` - Get anchor values
+- `bool getAnchorActive()` - Get anchor active status
+
+### UIController Module
+**Location**: `src/UIController/`
+
+**Public Methods**:
+- `void setupLVGL()` - Initialize LVGL
+- `void buildUI()` - Build UI elements
+- `void updateUI()` - Update all UI elements
+- `void updateChartSection()` - Update chart section
+- `void updateTrendLabel()` - Update trend label
+- `void updateVolatilityLabel()` - Update volatility label
+- `void checkButton()` - Check physical button
+
+### WebServer Module
+**Location**: `src/WebServer/`
+
+**Public Methods**:
+- `void begin()` - Initialize (empty for now)
+- `void setupWebServer()` - Setup web server routes
+- `void handleClient()` - Handle web client requests
+- `void handleRoot()` - Root handler (settings page)
+- `void handleSave()` - Save handler (save settings)
+- `void handleAnchorSet()` - Anchor set handler
+- `void handleNtfyReset()` - NTFY reset handler
+- `void renderSettingsHTML()` - Generate HTML
+
+### WarmStart Module
+**Location**: `src/WarmStart/`
+
+**Public Methods**:
+- `void begin()` - Initialize
+- `WarmStartMode performWarmStart(...)` - Perform warm-start
+- `bool fetchBinanceKlines(...)` - Fetch Binance historical data
+- `void updateWarmStartStatus(...)` - Update warm-start status
+
+### Memory/HeapMon Module
+**Location**: `src/Memory/`
+
+**Public Methods**:
+- `HeapSnap snapHeap()` - Take heap snapshot
+- `void logHeap(const char* tag)` - Log heap telemetry (rate-limited)
+- `void resetRateLimit(const char* tag)` - Reset rate limit for tag
 - **Trend kleuren aangepast**:
   - Grijs: data uit warm-start
   - Blauw: live data + SIDEWAYS

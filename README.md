@@ -28,6 +28,34 @@ A unified Crypto Monitor for different ESP32 display platforms: TTGO T-Display, 
 - **Auto-Volatility Mode**: Automatic threshold adjustment based on volatility
 - **Warm-Start with Binance historical data**: Fill buffers on boot with historical data for immediately usable trend and volatility indications
 
+## Architecture
+
+The codebase uses a modular architecture for better maintainability and organization:
+
+### Core Modules
+- **SettingsStore**: Persistent storage (Preferences/NVS)
+- **ApiClient**: Binance API communication
+- **PriceData**: Price data management & return calculations
+
+### Analysis Modules
+- **TrendDetector**: Trend detection & state management
+- **VolatilityTracker**: Volatility calculations & state management
+
+### Alert & Anchor Modules
+- **AlertEngine**: Alert detection & notifications
+- **AnchorSystem**: Anchor price tracking & alerts
+
+### UI & Web Modules
+- **UIController**: LVGL UI management
+- **WebServer**: Web interface & handlers
+
+### Utility Modules
+- **WarmStart**: Historical data fetching on boot
+- **Memory/HeapMon**: Heap telemetry & monitoring
+- **Net/HttpFetch**: Network utilities
+
+See `CODE_INDEX.md` for detailed module documentation.
+
 ## TL;DR – Reading alerts at a glance
 
 **Confluence Alert** = highest priority
