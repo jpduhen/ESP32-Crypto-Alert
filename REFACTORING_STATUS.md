@@ -1,8 +1,8 @@
 # Crypto Monitor Refactoring Status
 
-**Laatste update:** 2025-01-XX (Versie 3.96 - Fase 8 voltooid)  
-**Huidige fase:** Fase 9 - Web Interface Module ⏳ TE STARTEN  
-**Huidige stap:** Fase 8 voltooid ✅, volgende: Fase 9 - Web Interface Module
+**Laatste update:** 2025-12-26 15:00 (Versie 3.98 - Fase 9 voltooid)  
+**Huidige fase:** Fase 10 - FreeRTOS Task Refactoring ⏳ TE STARTEN  
+**Huidige stap:** Fase 9 voltooid ✅, volgende: Fase 10 - FreeRTOS Task Refactoring
 
 ---
 
@@ -18,7 +18,7 @@
 | Fase 6: Alert & Anchor | ✅ Voltooid | 2025-12-19 | 2025-12-19 | Fase 6.1 voltooid (AlertEngine), Fase 6.2 voltooid (AnchorSystem), Fase 6.3 voltooid (Cleanup) |
 | Fase 7: Warm-Start | ⏳ Te starten | - | - | Opgedeeld in 6 stappen met 25 sub-stappen |
 | Fase 8: UI Module | ✅ Voltooid | 2025-01-XX | 2025-01-XX | Alle stappen 8.1-8.11 voltooid (versie 3.96) |
-| Fase 9: Web Interface | ⏳ Te starten | - | - | - |
+| Fase 9: Web Interface | ✅ Voltooid | 2025-12-26 | 2025-12-26 | Fase 9.1 voltooid (WebServer), Fase 9.2 voltooid (Cleanup) |
 | Fase 10: FreeRTOS Tasks | ⏳ Te starten | - | - | - |
 | Fase 11: Cleanup & Optimalisatie | ⏳ Te starten | - | - | - |
 
@@ -634,21 +634,34 @@
 ### Fase 9: Web Interface Module
 
 #### Stap 9.1: WebServer Module
-- **Status:** ⏳ Te starten
+- **Status:** ✅ Voltooid
+- **Start datum:** 2025-12-26
+- **Voltooiing datum:** 2025-12-26
 - **Taken:**
-  - [ ] Maak `src/WebServer/WebServer.h`
-  - [ ] Maak `src/WebServer/WebServer.cpp`
-  - [ ] Verplaats web server setup
-  - [ ] Verplaats HTML generatie
-  - [ ] Test: Web interface werkt nog
+  - [x] Maak `src/WebServer/WebServer.h`
+  - [x] Maak `src/WebServer/WebServer.cpp`
+  - [x] Verplaats web server setup
+  - [x] Verplaats HTML generatie functies (sendHtmlHeader, sendHtmlFooter, sendInputRow, etc.)
+  - [x] Verplaats renderSettingsHTML()
+  - [x] Verplaats web handlers (handleRoot, handleSave, handleNotFound, handleAnchorSet, handleNtfyReset)
+  - [x] Test: Web interface werkt nog
 - **Notities:** 
+  - Alle HTML helper functies verplaatst naar WebServerModule
+  - Web handlers verplaatst met juiste extern declarations voor globale variabelen
+  - Macro-definities correct geplaatst na extern declarations
+  - sizeof() calls vervangen door hardcoded sizes voor extern char[] arrays
 
 #### Stap 9.2: Cleanup Web Code
-- **Status:** ⏳ Te starten
+- **Status:** ✅ Voltooid
+- **Start datum:** 2025-12-26
+- **Voltooiing datum:** 2025-12-26
 - **Taken:**
-  - [ ] Verwijder oude web code uit hoofdbestand
-  - [ ] Test: Web interface werkt nog
-- **Notities:** 
+  - [x] Verwijder oude handleNotFound() uit hoofdbestand
+  - [x] Cleanup "Web Server Functions" sectie
+  - [x] Test: Web interface werkt nog
+- **Notities:**
+  - Alle oude web code verwijderd uit hoofdbestand
+  - webTask gebruikt nu webServerModule.handleClient() 
 
 ---
 
