@@ -74,8 +74,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 4
-#define VERSION_MINOR 0
-#define VERSION_STRING "4.00"
+#define VERSION_MINOR 1
+#define VERSION_STRING "4.01"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -96,7 +96,11 @@
 #define SCREEN_BRIGHTNESS 255  // Screen brightness (0-255)
 
 // --- Symbol Configuration ---
-#define SYMBOL_COUNT 3  // Number of symbols to track live on Binance
+// SYMBOL_COUNT wordt nu gedefinieerd in platform_config.h (per platform)
+// Hier alleen een fallback als het nog niet gedefinieerd is
+#ifndef SYMBOL_COUNT
+#define SYMBOL_COUNT 3  // Fallback default
+#endif
 
 // --- API Configuration ---
 #define BINANCE_API "https://api.binance.com/api/v3/ticker/price?symbol="  // Binance API endpoint
@@ -250,8 +254,13 @@ SemaphoreHandle_t gNetMutex = NULL;
 
 // Symbols array - eerste element wordt dynamisch ingesteld via binanceSymbol
 // Fase 8: UI data - gebruikt door UIController module
+#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+char symbolsArray[SYMBOL_COUNT][16] = {"BTCEUR", SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL};
+const char *symbols[SYMBOL_COUNT] = {symbolsArray[0], symbolsArray[1], symbolsArray[2], symbolsArray[3]};
+#else
 char symbolsArray[SYMBOL_COUNT][16] = {"BTCEUR", SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL};
 const char *symbols[SYMBOL_COUNT] = {symbolsArray[0], symbolsArray[1], symbolsArray[2]};
+#endif
 // Fase 6.1: AlertEngine module gebruikt deze variabele (extern declaration in AlertEngine.cpp)
 float prices[SYMBOL_COUNT] = {0};
 // Fase 6.2: AnchorSystem module gebruikt deze variabele (extern declaration in AnchorSystem.cpp)
@@ -373,6 +382,9 @@ lv_obj_t *price1MinDiffLabel; // Label voor verschil tussen max en min in 1 min 
 lv_obj_t *price30MinMaxLabel; // Label voor max waarde in 30 min buffer
 lv_obj_t *price30MinMinLabel; // Label voor min waarde in 30 min buffer
 lv_obj_t *price30MinDiffLabel; // Label voor verschil tussen max en min in 30 min buffer
+lv_obj_t *price2HMaxLabel = nullptr; // Label voor max waarde in 2h buffer (alleen CYD, nullptr voor andere platforms)
+lv_obj_t *price2HMinLabel = nullptr; // Label voor min waarde in 2h buffer (alleen CYD, nullptr voor andere platforms)
+lv_obj_t *price2HDiffLabel = nullptr; // Label voor verschil tussen max en min in 2h buffer (alleen CYD, nullptr voor andere platforms)
 lv_obj_t *anchorLabel; // Label voor anchor price info (rechts midden, met percentage verschil)
 lv_obj_t *anchorMaxLabel; // Label voor "Pak winst" (rechts, groen, boven)
 lv_obj_t *anchorMinLabel; // Label voor "Stop loss" (rechts, rood, onder)
@@ -411,18 +423,21 @@ static char binanceStreamBuffer[1024];  // Fixed-size buffer voor chunked JSON p
 
 // LVGL UI buffers en cache (voorkomt herhaalde allocaties en onnodige updates)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
-char priceLblBuffer[32];  // Buffer voor price label (%.2f format)
-char anchorMaxLabelBuffer[32];  // Buffer voor anchor max label
-char anchorLabelBuffer[32];  // Buffer voor anchor label
-char anchorMinLabelBuffer[32];  // Buffer voor anchor min label
+char priceLblBuffer[24];  // Buffer voor price label (%.2f format, max: "12345.67" = ~8 chars)
+char anchorMaxLabelBuffer[24];  // Buffer voor anchor max label (max: "12345.67" = ~8 chars)
+char anchorLabelBuffer[24];  // Buffer voor anchor label (max: "12345.67" = ~8 chars)
+char anchorMinLabelBuffer[24];  // Buffer voor anchor min label (max: "12345.67" = ~8 chars)
 // Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
-char priceTitleBuffer[3][64];  // Buffers voor price titles (3 symbols)
-char price1MinMaxLabelBuffer[32];  // Buffer voor 1m max label
-char price1MinMinLabelBuffer[32];  // Buffer voor 1m min label
-char price1MinDiffLabelBuffer[32];  // Buffer voor 1m diff label
-char price30MinMaxLabelBuffer[32];  // Buffer voor 30m max label
-char price30MinMinLabelBuffer[32];  // Buffer voor 30m min label
-char price30MinDiffLabelBuffer[32];  // Buffer voor 30m diff label
+char priceTitleBuffer[SYMBOL_COUNT][48];  // Buffers voor price titles (max: "30 min  +12.34%" = ~20 chars)
+char price1MinMaxLabelBuffer[20];  // Buffer voor 1m max label (max: "12345.67" = ~8 chars)
+char price1MinMinLabelBuffer[20];  // Buffer voor 1m min label (max: "12345.67" = ~8 chars)
+char price1MinDiffLabelBuffer[20];  // Buffer voor 1m diff label (max: "12345.67" = ~8 chars)
+char price30MinMaxLabelBuffer[20];  // Buffer voor 30m max label (max: "12345.67" = ~8 chars)
+char price30MinMinLabelBuffer[20];  // Buffer voor 30m min label (max: "12345.67" = ~8 chars)
+char price30MinDiffLabelBuffer[20];  // Buffer voor 30m diff label (max: "12345.67" = ~8 chars)
+char price2HMaxLabelBuffer[20];  // Buffer voor 2h max label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
+char price2HMinLabelBuffer[20];  // Buffer voor 2h min label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
+char price2HDiffLabelBuffer[20];  // Buffer voor 2h diff label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
 
 // Cache laatste waarden (alleen updaten als veranderd)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
@@ -437,12 +452,15 @@ float lastPrice1MinDiffValue = -1.0f;  // Cache voor 1m diff
 float lastPrice30MinMaxValue = -1.0f;  // Cache voor 30m max
 float lastPrice30MinMinValue = -1.0f;  // Cache voor 30m min
 float lastPrice30MinDiffValue = -1.0f;  // Cache voor 30m diff
-char lastPriceTitleText[3][64] = {""};  // Cache voor price titles
-char priceLblBufferArray[3][32];  // Buffers voor average price labels (3 symbols)
+float lastPrice2HMaxValue = -1.0f;  // Cache voor 2h max (alleen gebruikt voor CYD platforms)
+float lastPrice2HMinValue = -1.0f;  // Cache voor 2h min (alleen gebruikt voor CYD platforms)
+float lastPrice2HDiffValue = -1.0f;  // Cache voor 2h diff (alleen gebruikt voor CYD platforms)
+char lastPriceTitleText[SYMBOL_COUNT][48] = {""};  // Cache voor price titles (max: "30 min  +12.34%" = ~20 chars)
+char priceLblBufferArray[SYMBOL_COUNT][24];  // Buffers voor average price labels (max: "12345.67" = ~8 chars)
 static char footerRssiBuffer[16];  // Buffer voor footer RSSI
 static char footerRamBuffer[16];  // Buffer voor footer RAM
 // Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
-float lastPriceLblValueArray[3] = {-1.0f, -1.0f, -1.0f};  // Cache voor average price labels
+float lastPriceLblValueArray[SYMBOL_COUNT];  // Cache voor average price labels (geïnitialiseerd in setup)
 static int32_t lastRssiValue = -999;  // Cache voor RSSI
 static uint32_t lastRamValue = 0;  // Cache voor RAM
 // lastDateText en lastTimeText zijn verplaatst naar direct voor updateDateTimeLabels() functie
@@ -1821,6 +1839,9 @@ void netMutexUnlock(const char* taskName)
 // Fase 6.1: AlertEngine module gebruikt deze functies (extern declarations in AlertEngine.cpp)
 void findMinMaxInSecondPrices(float &minVal, float &maxVal);
 void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
+#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+void findMinMaxInLast2Hours(float &minVal, float &maxVal);  // Alleen voor CYD platforms
+#endif
 static void checkHeapTelemetry();
 
 // ============================================================================
@@ -3538,6 +3559,47 @@ static float calculateReturn2Hours()
     float* averages = priceData.getMinuteAverages();
     
     uint8_t availableMinutes = arrayFilled ? MINUTES_FOR_30MIN_CALC : index;
+    
+    // Bereken gemiddelde van beschikbare minuten voor display (voor 2h box)
+    // Dit wordt gedaan ongeacht of er 120 minuten zijn, zodat de waarde getoond kan worden
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+    if (availableMinutes > 0) {
+        float last120Sum = 0.0f;
+        uint8_t last120Count = 0;
+        uint8_t minutesToUse = (availableMinutes < 120) ? availableMinutes : 120;  // Gebruik beschikbare minuten, max 120
+        for (uint8_t i = 0; i < minutesToUse; i++)
+        {
+            uint8_t idx;
+            if (!arrayFilled)
+            {
+                if (i >= index) break;
+                idx = index - 1 - i;
+            }
+            else
+            {
+                int32_t idx_temp = getRingBufferIndexAgo(index, i + 1, MINUTES_FOR_30MIN_CALC);
+                if (idx_temp < 0) break;
+                idx = (uint8_t)idx_temp;
+            }
+            if (isValidPrice(averages[idx]))
+            {
+                last120Sum += averages[idx];
+                last120Count++;
+            }
+        }
+        if (last120Count > 0)
+        {
+            averagePrices[3] = last120Sum / last120Count;
+        }
+        else
+        {
+            averagePrices[3] = 0.0f;
+        }
+    } else {
+        averagePrices[3] = 0.0f;
+    }
+    #endif
+    
     if (availableMinutes < 120)
     {
         return 0.0f;
@@ -3547,7 +3609,12 @@ static float calculateReturn2Hours()
     uint8_t lastMinuteIdx;
     if (!arrayFilled)
     {
-        if (index == 0) return 0.0f;
+        if (index == 0) {
+            #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+            averagePrices[3] = 0.0f;  // Reset voor 2h box
+            #endif
+            return 0.0f;
+        }
         lastMinuteIdx = index - 1;
     }
     else
@@ -3560,13 +3627,17 @@ static float calculateReturn2Hours()
     uint8_t idx120mAgo;
     if (!arrayFilled)
     {
-        if (index < 120) return 0.0f;
+        if (index < 120) {
+            return 0.0f;  // averagePrices[3] is al berekend boven
+        }
         idx120mAgo = index - 120;
     }
     else
     {
         int32_t idx120mAgo_temp = getRingBufferIndexAgo(index, 120, MINUTES_FOR_30MIN_CALC);
-        if (idx120mAgo_temp < 0) return 0.0f;
+        if (idx120mAgo_temp < 0) {
+            return 0.0f;  // averagePrices[3] is al berekend boven
+        }
         idx120mAgo = (uint8_t)idx120mAgo_temp;
     }
     
@@ -3575,7 +3646,7 @@ static float calculateReturn2Hours()
     // Validate prices
     if (price120mAgo <= 0.0f || priceNow <= 0.0f)
     {
-        return 0.0f;
+        return 0.0f;  // averagePrices[3] is al berekend boven
     }
     
     // Return percentage: (now - 120m ago) / 120m ago * 100
@@ -3635,6 +3706,52 @@ void findMinMaxInLast30Minutes(float &minVal, float &maxVal)
         }
     }
 }
+
+#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+// Find min and max values in last 2 hours (120 minutes) of minuteAverages array
+// Alleen voor CYD platforms met 2h box
+void findMinMaxInLast2Hours(float &minVal, float &maxVal)
+{
+    minVal = 0.0f;
+    maxVal = 0.0f;
+    
+    uint8_t availableMinutes = 0;
+    if (!minuteArrayFilled)
+    {
+        availableMinutes = minuteIndex;
+    }
+    else
+    {
+        availableMinutes = MINUTES_FOR_30MIN_CALC;  // 120 minuten
+    }
+    
+    if (availableMinutes == 0)
+        return;
+    
+    // Gebruik laatste 120 minuten (of minder als niet beschikbaar)
+    uint8_t count = (availableMinutes < 120) ? availableMinutes : 120;
+    bool firstValid = false;
+    
+    for (uint8_t i = 1; i <= count; i++)
+    {
+        uint8_t idx = (minuteIndex - i + MINUTES_FOR_30MIN_CALC) % MINUTES_FOR_30MIN_CALC;
+        if (isValidPrice(minuteAverages[idx]))
+        {
+            if (!firstValid)
+            {
+                minVal = minuteAverages[idx];
+                maxVal = minuteAverages[idx];
+                firstValid = true;
+            }
+            else
+            {
+                if (minuteAverages[idx] < minVal) minVal = minuteAverages[idx];
+                if (minuteAverages[idx] > maxVal) maxVal = minuteAverages[idx];
+            }
+        }
+    }
+}
+#endif
 
 // Add price to second array (called every second)
 // Geoptimaliseerd: bounds checking toegevoegd voor robuustheid
@@ -3829,6 +3946,25 @@ void fetchPrice()
             } else {
                 prices[2] = 0.0f; // Reset naar 0 om aan te geven dat er nog geen data is
             }
+            
+            // 2h return voor CYD platforms (index 3)
+            #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+            // Zet prices[3] als er data is (ook als het nog geen 120 minuten zijn)
+            // hasRet2h betekent dat er minimaal 120 minuten data zijn, maar we willen
+            // het percentage ook tonen als er minder data is (maar wel data beschikbaar)
+            extern bool minuteArrayFilled;
+            extern uint8_t minuteIndex;
+            bool hasMinimalData = minuteArrayFilled || minuteIndex > 0;  // Minimaal 1 minuut data
+            if (hasRet2h) {
+                prices[3] = ret_2h;  // Volledige 2h return
+            } else if (hasMinimalData) {
+                // Er is data maar nog geen 120 minuten - bereken return op basis van beschikbare data
+                // Of toon 0.0f als er nog geen return kan worden berekend
+                prices[3] = 0.0f;  // Voorlopig 0.0f totdat er 120 minuten data zijn
+            } else {
+                prices[3] = 0.0f; // Reset naar 0 om aan te geven dat er nog geen data is
+            }
+            #endif
             
             // Check thresholds and send notifications if needed (met ret_5m voor extra filtering)
             // Fase 6.1.11: Gebruik AlertEngine module i.p.v. globale functie
@@ -4520,6 +4656,11 @@ void setup()
     }
     for (uint8_t i = 0; i < MINUTES_FOR_30MIN_CALC; i++) {
         minuteAveragesSource[i] = SOURCE_LIVE;
+    }
+    
+    // Initialize lastPriceLblValueArray (cache voor average price labels)
+    for (uint8_t i = 0; i < SYMBOL_COUNT; i++) {
+        lastPriceLblValueArray[i] = -1.0f;
     }
     
     // WiFi connection and initial data fetch (maakt tijdelijk UI aan)

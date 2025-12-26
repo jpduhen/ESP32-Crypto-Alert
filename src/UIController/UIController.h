@@ -12,10 +12,10 @@ class TrendDetector;
 class VolatilityTracker;
 class AnchorSystem;
 
-// SYMBOL_COUNT constant - definieer alleen als nog niet gedefinieerd
-// Note: .ino definieert dit als #define SYMBOL_COUNT 3, maar header wordt eerder geïncludeerd
+// SYMBOL_COUNT wordt gedefinieerd in platform_config.h (per platform)
+// Hier alleen een fallback als het nog niet gedefinieerd is
 #ifndef SYMBOL_COUNT
-#define SYMBOL_COUNT 3  // Default value (wordt overschreven door .ino als het later wordt gedefinieerd)
+#define SYMBOL_COUNT 3  // Fallback default
 #endif
 
 // UIController class - beheert LVGL UI initialisatie, building en updates

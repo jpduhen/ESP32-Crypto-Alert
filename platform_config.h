@@ -44,7 +44,9 @@
     #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_10
     #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
 #elif defined(PLATFORM_CYD24)
+    #ifndef UICONTROLLER_INCLUDE
     #include "PINS_CYD-ESP32-2432S024.h"
+    #endif
     #define MQTT_TOPIC_PREFIX "cyd24_crypto"
     #define DEVICE_NAME "CYD 2.4 Crypto Monitor"
     #define DEVICE_MODEL "ESP32 CYD 2.4"
@@ -53,25 +55,29 @@
     #define BUTTON_PIN 0
     #define SYMBOL_1MIN_LABEL "1 min"
     #define SYMBOL_30MIN_LABEL "30 min"
+    #define SYMBOL_2H_LABEL "2h"
     #define CHART_WIDTH 240
-    #define CHART_HEIGHT 80
+    #define CHART_HEIGHT 72  // Verkleind van 80 naar 72 (8px kleiner)
     #define CHART_ALIGN_Y 24
-    #define PRICE_BOX_Y_START 112
-    #define FONT_SIZE_TITLE_BTCEUR &lv_font_montserrat_18
-    #define FONT_SIZE_TITLE_OTHER &lv_font_montserrat_18
-    #define FONT_SIZE_PRICE_BTCEUR &lv_font_montserrat_16
-    #define FONT_SIZE_PRICE_OTHER &lv_font_montserrat_16
-    #define FONT_SIZE_ANCHOR &lv_font_montserrat_14
-    #define FONT_SIZE_TREND_VOLATILITY &lv_font_montserrat_14
+    #define PRICE_BOX_Y_START 99  // Aangepast: 24 (chart top) + 72 (chart height) + 3 (spacing) = 99
+    #define FONT_SIZE_TITLE_BTCEUR &lv_font_montserrat_14
+    #define FONT_SIZE_TITLE_OTHER &lv_font_montserrat_12
+    #define FONT_SIZE_PRICE_BTCEUR &lv_font_montserrat_12
+    #define FONT_SIZE_PRICE_OTHER &lv_font_montserrat_12
+    #define FONT_SIZE_ANCHOR &lv_font_montserrat_10
+    #define FONT_SIZE_TREND_VOLATILITY &lv_font_montserrat_12
     #define FONT_SIZE_FOOTER &lv_font_montserrat_12
     #define FONT_SIZE_IP_PREFIX &lv_font_montserrat_14
     #define FONT_SIZE_IP &lv_font_montserrat_12
-    #define FONT_SIZE_CHART_DATE_TIME &lv_font_montserrat_12
-    #define FONT_SIZE_CHART_VERSION &lv_font_montserrat_12
+    #define FONT_SIZE_CHART_DATE_TIME &lv_font_montserrat_10
+    #define FONT_SIZE_CHART_VERSION &lv_font_montserrat_10
     #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_10
-    #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_14
+    #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
+    #define SYMBOL_COUNT 4  // CYD: BTCEUR, 1m, 30m, 2h
 #elif defined(PLATFORM_CYD28)
+    #ifndef UICONTROLLER_INCLUDE
     #include "PINS_CYD-ESP32-2432S028-2USB.h"
+    #endif
     #define MQTT_TOPIC_PREFIX "cyd28_crypto"
     #define DEVICE_NAME "CYD 2.8 Crypto Monitor"
     #define DEVICE_MODEL "ESP32 CYD 2.8"
@@ -80,23 +86,25 @@
     #define BUTTON_PIN 0
     #define SYMBOL_1MIN_LABEL "1 min"
     #define SYMBOL_30MIN_LABEL "30 min"
+    #define SYMBOL_2H_LABEL "2h"
     #define CHART_WIDTH 240
-    #define CHART_HEIGHT 80
+    #define CHART_HEIGHT 72  // Verkleind van 80 naar 72 (8px kleiner)
     #define CHART_ALIGN_Y 24
-    #define PRICE_BOX_Y_START 112  // Terug naar originele waarde
-    #define FONT_SIZE_TITLE_BTCEUR &lv_font_montserrat_18
-    #define FONT_SIZE_TITLE_OTHER &lv_font_montserrat_18
-    #define FONT_SIZE_PRICE_BTCEUR &lv_font_montserrat_16
-    #define FONT_SIZE_PRICE_OTHER &lv_font_montserrat_16
-    #define FONT_SIZE_ANCHOR &lv_font_montserrat_14  // 1 stapje kleiner (was 16)
-    #define FONT_SIZE_TREND_VOLATILITY &lv_font_montserrat_14
+    #define PRICE_BOX_Y_START 99  // Aangepast: 24 (chart top) + 72 (chart height) + 3 (spacing) = 99
+    #define FONT_SIZE_TITLE_BTCEUR &lv_font_montserrat_14
+    #define FONT_SIZE_TITLE_OTHER &lv_font_montserrat_12
+    #define FONT_SIZE_PRICE_BTCEUR &lv_font_montserrat_12
+    #define FONT_SIZE_PRICE_OTHER &lv_font_montserrat_12
+    #define FONT_SIZE_ANCHOR &lv_font_montserrat_10
+    #define FONT_SIZE_TREND_VOLATILITY &lv_font_montserrat_12
     #define FONT_SIZE_FOOTER &lv_font_montserrat_12
     #define FONT_SIZE_IP_PREFIX &lv_font_montserrat_14
     #define FONT_SIZE_IP &lv_font_montserrat_12
-    #define FONT_SIZE_CHART_DATE_TIME &lv_font_montserrat_12
-    #define FONT_SIZE_CHART_VERSION &lv_font_montserrat_12
+    #define FONT_SIZE_CHART_DATE_TIME &lv_font_montserrat_10
+    #define FONT_SIZE_CHART_VERSION &lv_font_montserrat_10
     #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_10
-    #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_14
+    #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
+    #define SYMBOL_COUNT 4  // CYD: BTCEUR, 1m, 30m, 2h
 #elif defined(PLATFORM_ESP32S3_SUPERMINI)
     #include "PINS_ESP32S3_SuperMini_ST7789_154.h"
     #define MQTT_TOPIC_PREFIX "esp32s3_crypto"
@@ -124,8 +132,14 @@
     #define FONT_SIZE_CHART_VERSION &lv_font_montserrat_10
     #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_10
     #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
+    #define SYMBOL_COUNT 3  // TTGO/ESP32-S3: BTCEUR, 1m, 30m
 #else
     #error "Please define PLATFORM_TTGO, PLATFORM_CYD24, PLATFORM_CYD28 or PLATFORM_ESP32S3_SUPERMINI in platform_config.h"
+#endif
+
+// Fallback: als SYMBOL_COUNT nog niet gedefinieerd is, gebruik default 3
+#ifndef SYMBOL_COUNT
+#define SYMBOL_COUNT 3
 #endif
 
 // Helper macros voor conditional compilation

@@ -1165,6 +1165,31 @@ If you don't use MQTT, you can leave the MQTT settings empty in the web interfac
 
 ## Version History
 
+### Version 4.01
+- **2-Hour Box for CYD Platforms**: Added 2-hour (2h) price box for CYD 2.4" and CYD 2.8" platforms
+  - **CYD Only**: 2h box is only displayed on CYD 2.4" and CYD 2.8" (320px screen width)
+  - **Four Boxes**: BTCEUR, 1m, 30m, and 2h boxes are now displayed on CYD platforms
+  - **2h Box Features**:
+    - Percentage return over last 2 hours in the title
+    - Average price of last 2 hours bottom left
+    - Min/Max/Diff values on the right in the box (like 1m and 30m)
+  - **UI Optimizations**:
+    - Chart height reduced from 80px to 72px (8px smaller)
+    - Spacing between chart and BTCEUR box adjusted to 3px (consistent with other boxes)
+    - Font sizes for CYD platforms adjusted to ESP32-S3 values for better space utilization
+    - All four boxes and chart now fit perfectly within 320px screen width
+  - **Data Management**:
+    - `averagePrices[3]` is calculated based on available minutes (max 120)
+    - `prices[3]` contains 2-hour return percentage (ret_2h)
+    - Min/Max/Diff calculation via `findMinMaxInLast2Hours()` function
+- **Code Improvements**:
+  - Removed debug Serial.printf statements
+  - Better error handling for 2h data calculations
+  - Optimized memory usage for CYD platforms
+
+### Version 4.00
+- **Current Version**: Latest stable release
+
 ### Version 3.62
 - **Anchor Value Setting via Web Interface and MQTT**:
   - **Web Interface**: Added "Anchor Value (EUR)" input field with "Set Anchor" button in "Anchor Settings" section

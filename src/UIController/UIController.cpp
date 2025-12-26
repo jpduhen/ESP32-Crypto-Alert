@@ -1,3 +1,18 @@
+// Definieer SYMBOL_COUNT VOORDAT UIController.h wordt geïncludeerd
+// We kunnen platform_config.h niet volledig includen omdat dat multiple definition errors veroorzaakt (gfx/bus)
+// Oplossing: lees alleen de platform define uit platform_config.h door het bestand te parsen
+// of definieer SYMBOL_COUNT direct hier op basis van de platform define
+// 
+// Eenvoudigste oplossing: include platform_config.h maar voorkom dat PINS files worden geïncludeerd
+// door de include statements te conditioneel te maken in platform_config.h zelf
+// OF: maak een kleine header die alleen de platform defines bevat
+
+// Voor nu: probeer platform_config.h te includen maar voorkom de PINS includes
+// door een define te gebruiken die de PINS includes overslaat
+#define UICONTROLLER_INCLUDE  // Flag om aan te geven dat we vanuit UIController includen
+#include "../../platform_config.h"
+#undef UICONTROLLER_INCLUDE
+
 #include "UIController.h"
 #include <lvgl.h>
 #include <Arduino_GFX_Library.h>
@@ -148,8 +163,8 @@ extern float lastAnchorMaxValue;
 extern float lastAnchorValue;
 extern float lastAnchorMinValue;
 // Buffer sizes (gedefinieerd in .ino)
-#define PRICE_LBL_BUFFER_SIZE 32
-#define ANCHOR_LABEL_BUFFER_SIZE 32
+#define PRICE_LBL_BUFFER_SIZE 24
+#define ANCHOR_LABEL_BUFFER_SIZE 24
 extern char priceLblBuffer[PRICE_LBL_BUFFER_SIZE];
 extern char anchorMaxLabelBuffer[ANCHOR_LABEL_BUFFER_SIZE];
 extern char anchorLabelBuffer[ANCHOR_LABEL_BUFFER_SIZE];
@@ -159,18 +174,27 @@ extern bool secondArrayFilled;
 extern float averagePrices[];
 extern void findMinMaxInSecondPrices(float &minVal, float &maxVal);
 extern void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
+#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+extern void findMinMaxInLast2Hours(float &minVal, float &maxVal);
+#endif
 extern lv_obj_t *price1MinMaxLabel;
 extern lv_obj_t *price1MinMinLabel;
 extern lv_obj_t *price1MinDiffLabel;
 extern lv_obj_t *price30MinMaxLabel;
 extern lv_obj_t *price30MinMinLabel;
 extern lv_obj_t *price30MinDiffLabel;
-extern char priceTitleBuffer[3][64];
-extern char price1MinMaxLabelBuffer[32];
-extern char price1MinMinLabelBuffer[32];
-extern char price1MinDiffLabelBuffer[32];
-extern char price30MinMaxLabelBuffer[32];
-extern char price30MinMinLabelBuffer[32];
+extern lv_obj_t *price2HMaxLabel;
+extern lv_obj_t *price2HMinLabel;
+extern lv_obj_t *price2HDiffLabel;
+extern char priceTitleBuffer[SYMBOL_COUNT][48];
+extern char price1MinMaxLabelBuffer[20];
+extern char price1MinMinLabelBuffer[20];
+extern char price1MinDiffLabelBuffer[20];
+extern char price30MinMaxLabelBuffer[20];
+extern char price2HMaxLabelBuffer[20];
+extern char price2HMinLabelBuffer[20];
+extern char price2HDiffLabelBuffer[20];
+extern char price30MinMinLabelBuffer[20];
 extern char price30MinDiffLabelBuffer[32];
 extern float lastPrice1MinMaxValue;
 extern float lastPrice1MinMinValue;
@@ -178,9 +202,12 @@ extern float lastPrice1MinDiffValue;
 extern float lastPrice30MinMaxValue;
 extern float lastPrice30MinMinValue;
 extern float lastPrice30MinDiffValue;
-extern char lastPriceTitleText[3][64];
-extern char priceLblBufferArray[3][32];
-extern float lastPriceLblValueArray[3];
+extern float lastPrice2HMaxValue;
+extern float lastPrice2HMinValue;
+extern float lastPrice2HDiffValue;
+extern char lastPriceTitleText[SYMBOL_COUNT][48];
+extern char priceLblBufferArray[SYMBOL_COUNT][24];
+extern float lastPriceLblValueArray[SYMBOL_COUNT];
 
 // Forward declarations voor globale UI pointers (parallel implementatie - moeten ook geïnitialiseerd worden)
 // Fase 8.4.3: Synchroniseer module pointers met globale pointers voor backward compatibility
@@ -620,6 +647,41 @@ void UIController::createPriceBoxes() {
             lv_label_set_text(price30MinMinLabel, "--");
             lv_obj_align(price30MinMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
         }
+        
+        // Min/Max/Diff labels voor 2h blok (index 3) - alleen voor CYD platforms
+        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        if (i == 3)
+        {
+            // Initialiseer buffers
+            strcpy(price2HMaxLabelBuffer, "--");
+            strcpy(price2HDiffLabelBuffer, "--");
+            strcpy(price2HMinLabelBuffer, "--");
+            
+            price2HMaxLabel = lv_label_create(priceBox[i]);
+            ::price2HMaxLabel = price2HMaxLabel;  // Fase 8.4.3: Synchroniseer
+            lv_obj_set_style_text_font(price2HMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price2HMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
+            lv_obj_set_style_text_align(price2HMaxLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price2HMaxLabel, price2HMaxLabelBuffer);
+            lv_obj_align(price2HMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14);
+            
+            price2HDiffLabel = lv_label_create(priceBox[i]);
+            ::price2HDiffLabel = price2HDiffLabel;  // Fase 8.4.3: Synchroniseer
+            lv_obj_set_style_text_font(price2HDiffLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price2HDiffLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_text_align(price2HDiffLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price2HDiffLabel, price2HDiffLabelBuffer);
+            lv_obj_align(price2HDiffLabel, LV_ALIGN_RIGHT_MID, 0, 0);
+            
+            price2HMinLabel = lv_label_create(priceBox[i]);
+            ::price2HMinLabel = price2HMinLabel;  // Fase 8.4.3: Synchroniseer
+            lv_obj_set_style_text_font(price2HMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price2HMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
+            lv_obj_set_style_text_align(price2HMinLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price2HMinLabel, price2HMinLabelBuffer);
+            lv_obj_align(price2HMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
+        }
+        #endif
     }
 }
 
@@ -1139,17 +1201,35 @@ void UIController::updateAveragePriceCard(uint8_t index)
     float pct = prices[index];
     bool hasData1m = (index == 1) ? secondArrayFilled : true;
     bool hasData30m = (index == 2) ? (minuteArrayFilled || minuteIndex >= 30) : true;
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+    bool hasData2h = (index == 3) ? (minuteArrayFilled || minuteIndex >= 120) : true;
+    bool hasData2hMinimal = (index == 3) ? (minuteIndex > 0) : true;  // Minimaal 1 minuut data nodig
+    bool hasData = (index == 1) ? hasData1m : ((index == 2) ? hasData30m : ((index == 3) ? hasData2hMinimal : true));
+    #else
     bool hasData = (index == 1) ? hasData1m : ((index == 2) ? hasData30m : true);
+    #endif
     
     if (!hasData) {
         pct = 0.0f;
     }
     
     if (::priceTitle[index] != nullptr) {
+        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        // Voor 2h box: toon percentage als er minimaal 1 minuut data is (hasData2hMinimal)
+        // Voor andere boxes: toon alleen als pct != 0.0f
+        bool shouldShowPct = (index == 3) ? (hasData2hMinimal && pct != 0.0f) : (hasData && pct != 0.0f);
+        if (shouldShowPct || (index == 3 && hasData2hMinimal && pct == 0.0f)) {  // Voor 2h box: toon ook 0.00%
+        #else
         if (hasData && pct != 0.0f) {
+        #endif
             // Format nieuwe tekst
-            char newText[64];
-            snprintf(newText, sizeof(newText), "%s  %c%.2f%%", symbols[index], pct >= 0 ? '+' : '-', fabsf(pct));
+            char newText[48];
+            if (pct == 0.0f && index == 3) {
+                // Voor 2h box: toon 0.00% als de return 0 is
+                snprintf(newText, sizeof(newText), "%s  0.00%%", symbols[index]);
+            } else {
+                snprintf(newText, sizeof(newText), "%s  %c%.2f%%", symbols[index], pct >= 0 ? '+' : '-', fabsf(pct));
+            }
             // Update alleen als tekst veranderd is
             if (strcmp(lastPriceTitleText[index], newText) != 0) {
                 strncpy(priceTitleBuffer[index], newText, sizeof(priceTitleBuffer[index]) - 1);
@@ -1262,6 +1342,54 @@ void UIController::updateAveragePriceCard(uint8_t index)
         }
     }
     
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+    if (index == 3 && ::price2HMaxLabel != nullptr && ::price2HMinLabel != nullptr && ::price2HDiffLabel != nullptr)
+    {
+        float minVal, maxVal;
+        findMinMaxInLast2Hours(minVal, maxVal);
+        
+        if (minVal > 0.0f && maxVal > 0.0f)
+        {
+            float diff = maxVal - minVal;
+            // Update alleen als waarden veranderd zijn
+            if (lastPrice2HMaxValue != maxVal || lastPrice2HMaxValue < 0.0f) {
+                snprintf(price2HMaxLabelBuffer, sizeof(price2HMaxLabelBuffer), "%.2f", maxVal);
+                lv_label_set_text(::price2HMaxLabel, price2HMaxLabelBuffer);
+                lastPrice2HMaxValue = maxVal;
+            }
+            if (lastPrice2HDiffValue != diff || lastPrice2HDiffValue < 0.0f) {
+                snprintf(price2HDiffLabelBuffer, sizeof(price2HDiffLabelBuffer), "%.2f", diff);
+                lv_label_set_text(::price2HDiffLabel, price2HDiffLabelBuffer);
+                lastPrice2HDiffValue = diff;
+            }
+            if (lastPrice2HMinValue != minVal || lastPrice2HMinValue < 0.0f) {
+                snprintf(price2HMinLabelBuffer, sizeof(price2HMinLabelBuffer), "%.2f", minVal);
+                lv_label_set_text(::price2HMinLabel, price2HMinLabelBuffer);
+                lastPrice2HMinValue = minVal;
+            }
+        }
+        else
+        {
+            // Update alleen als labels niet "--" zijn
+            if (strcmp(price2HMaxLabelBuffer, "--") != 0) {
+                strcpy(price2HMaxLabelBuffer, "--");
+                lv_label_set_text(::price2HMaxLabel, "--");
+                lastPrice2HMaxValue = -1.0f;
+            }
+            if (strcmp(price2HDiffLabelBuffer, "--") != 0) {
+                strcpy(price2HDiffLabelBuffer, "--");
+                lv_label_set_text(::price2HDiffLabel, "--");
+                lastPrice2HDiffValue = -1.0f;
+            }
+            if (strcmp(price2HMinLabelBuffer, "--") != 0) {
+                strcpy(price2HMinLabelBuffer, "--");
+                lv_label_set_text(::price2HMinLabel, "--");
+                lastPrice2HMinValue = -1.0f;
+            }
+        }
+    }
+    #endif
+    
     if (!hasData)
     {
         lv_label_set_text(::priceLbl[index], "--");
@@ -1277,6 +1405,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
     }
     else
     {
+        // averagePrices[index] is 0.0f of niet gezet
         lv_label_set_text(::priceLbl[index], "--");
     }
 }
@@ -1286,7 +1415,11 @@ void UIController::updateAveragePriceCard(uint8_t index)
 void UIController::updatePriceCardColor(uint8_t index, float pct)
 {
     // Fase 8.6.3: Gebruik globale pointers (synchroniseert met module pointers)
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+    bool hasDataForColor = (index == 0) ? true : ((index == 1) ? secondArrayFilled : ((index == 2) ? (minuteArrayFilled || minuteIndex >= 30) : (minuteArrayFilled || minuteIndex >= 120)));
+    #else
     bool hasDataForColor = (index == 0) ? true : ((index == 1) ? secondArrayFilled : (minuteArrayFilled || minuteIndex >= 30));
+    #endif
     
     if (hasDataForColor && pct != 0.0f)
     {

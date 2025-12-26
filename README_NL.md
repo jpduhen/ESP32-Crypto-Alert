@@ -650,6 +650,15 @@ Het display toont real-time cryptocurrency informatie in een overzichtelijke lay
   - Midden (grijs): Verschil tussen max en min
   - Onder (rood): Min prijs in laatste 30 minuten
 
+**4. 2 Uur Card (alleen CYD 2.4" en 2.8")**
+- **Titel**: "2h"
+- **Percentage**: 2-uur return percentage (prijsverandering t.o.v. 2 uur geleden)
+- **Gemiddelde prijs**: Linksonder in de box (gemiddelde van laatste 2 uur)
+- **Rechts uitgelijnd**:
+  - Boven (groen): Max prijs in laatste 2 uur
+  - Midden (grijs): Verschil tussen max en min
+  - Onder (rood): Min prijs in laatste 2 uur
+
 #### Footer Sectie
 - **CYD**: Toont IP-adres, WiFi signaalsterkte (dBm) en beschikbaar RAM (kB)
   - Voorbeeld: `IP: 192.168.1.50   -45dBm   RAM: 125kB`
@@ -1039,6 +1048,31 @@ MQTT is optioneel en kan ook gebruikt worden met andere systemen zoals:
 Als je MQTT niet gebruikt, kun je de MQTT instellingen leeg laten in de web interface.
 
 ## Versie Geschiedenis
+
+### Versie 4.01
+- **2-uur Box voor CYD Platforms**: Toegevoegd 2-uur (2h) prijs box voor CYD 2.4" en CYD 2.8" platforms
+  - **Alleen voor CYD**: 2h box wordt alleen getoond op CYD 2.4" en CYD 2.8" (320px schermbreedte)
+  - **Vier Boxen**: BTCEUR, 1m, 30m en 2h boxen worden nu getoond op CYD platforms
+  - **2h Box Features**:
+    - Percentage return over laatste 2 uur in de title
+    - Gemiddelde prijs van laatste 2 uur linksonder
+    - Min/Max/Diff waarden rechts in de box (zoals bij 1m en 30m)
+  - **UI Optimalisaties**:
+    - Grafiek hoogte verkleind van 80px naar 72px (8px kleiner)
+    - Spacing tussen grafiek en BTCEUR box aangepast naar 3px (consistent met andere boxen)
+    - Font groottes voor CYD platforms aangepast naar ESP32-S3 waarden voor betere ruimtebenutting
+    - Alle vier boxen en grafiek passen nu perfect binnen 320px schermbreedte
+  - **Data Management**:
+    - `averagePrices[3]` wordt berekend op basis van beschikbare minuten (max 120)
+    - `prices[3]` bevat 2-uur return percentage (ret_2h)
+    - Min/Max/Diff berekening via `findMinMaxInLast2Hours()` functie
+- **Code Verbeteringen**:
+  - Debug Serial.printf statements verwijderd
+  - Betere error handling voor 2h data berekeningen
+  - Geoptimaliseerde memory usage voor CYD platforms
+
+### Versie 4.00
+- **Huidige Versie**: Laatste stabiele release
 
 ### Versie 3.62
 - **Anchor Waarde Instellen via Web Interface en MQTT**:
