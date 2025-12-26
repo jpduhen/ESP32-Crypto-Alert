@@ -72,6 +72,9 @@ public:
     // Fase 8.9: checkButton() naar Module
     void checkButton();
     
+    // Fase 8.10: LVGL Initialisatie naar Module
+    void setupLVGL();
+    
 private:
     // Fase 8.2.1: UI object pointers (parallel - globaal blijft bestaan voor backward compatibility)
     // Note: SYMBOL_COUNT is gedefinieerd in .ino als #define SYMBOL_COUNT 3
@@ -121,6 +124,9 @@ private:
     void createHeaderLabels();
     void createPriceBoxes();
     void createFooter();
+    
+    // Fase 8.11.3: Helper functies (verplaatst vanuit .ino)
+    void updateChartRange(int32_t currentPrice);
     
     // Forward declarations voor interne helpers (worden later geïmplementeerd)
     // Fase 8.3: createHeaderLabels(), createPriceBoxes(), createFooter()

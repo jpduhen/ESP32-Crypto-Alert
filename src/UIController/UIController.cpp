@@ -73,6 +73,12 @@ extern const lv_font_t lv_font_montserrat_14;
 extern void Serial_println(const char*);
 extern void Serial_println(const __FlashStringHelper*);
 extern Arduino_GFX* gfx;
+// Fase 8.10.1: setupLVGL() dependencies
+extern lv_display_t *disp;
+extern lv_color_t *disp_draw_buf;
+extern size_t disp_draw_buf_size;
+extern bool hasPSRAM();
+extern void setDisplayBrigthness();
 
 // Forward declarations voor globale variabelen (worden gebruikt door create functies)
 // Fase 8.3: createChart() dependencies
@@ -82,6 +88,10 @@ extern uint32_t maxRange;
 extern uint32_t minRange;
 extern char ntfyTopic[];
 extern void getDeviceIdFromTopic(const char* topic, char* buffer, size_t bufferSize);
+// Fase 8.11.1: createFooter() dependencies (CYD platforms)
+extern lv_obj_t *lblFooterLine1;
+extern lv_obj_t *lblFooterLine2;
+extern lv_obj_t *ramLabel;
 extern void disableScroll(lv_obj_t *obj);
 extern const char* symbols[];
 // VERSION_STRING is een #define, niet een variabele
@@ -89,6 +99,10 @@ extern const char* symbols[];
 #define VERSION_STRING "3.92"  // Default (wordt overschreven door .ino)
 #endif
 extern void formatIPAddress(IPAddress ip, char* buffer, size_t bufferSize);
+// Fase 8.11.1: createFooter() dependencies (CYD platforms)
+extern lv_obj_t *lblFooterLine1;
+extern lv_obj_t *lblFooterLine2;
+extern lv_obj_t *ramLabel;
 
 // Fase 8.5.2: updateTrendLabel() dependencies
 extern TrendDetector trendDetector;
@@ -188,8 +202,8 @@ extern lv_obj_t *chartTimeLabel;
 extern lv_obj_t *chartBeginLettersLabel;
 // Fase 8.7.1: updateChartSection() dependencies
 extern bool newPriceDataAvailable;
-extern void updateChartRange(int32_t currentPrice);
 extern void safeStrncpy(char *dest, const char *src, size_t destSize);
+// Fase 8.11.3: updateChartRange() is verplaatst naar UIController module (private method)
 // Fase 8.8.1: updateUI() dependencies
 extern uint32_t lastApiMs;
 extern void updateFooter();
@@ -1319,7 +1333,7 @@ void UIController::updateChartSection(int32_t currentPrice, bool hasNewPriceData
     }
     
     // Update chart range
-    updateChartRange(currentPrice);
+    this->updateChartRange(currentPrice);
     
     // Update chart title (CYD displays)
     if (::chartTitle != nullptr) {
@@ -1419,14 +1433,168 @@ void UIController::checkButton()
         // Fase 6.2.7: Gebruik AnchorSystem module i.p.v. globale functie
         if (anchorSystem.setAnchorPrice(0.0f)) {
             // Update UI (this will also take the mutex internally)
-            // Fase 8.8.1: Gebruik module versie
-            updateUI();
+            // Fase 8.8.1: Gebruik module versie (binnen class, gebruik this->)
+            this->updateUI();
         } else {
             Serial.println("[Button] WARN: Kon anchor niet instellen");
         }
     } else {
         // Update lastButtonState voor edge detection
         lastButtonState = buttonState;
+    }
+}
+
+// Fase 8.10.1: setupLVGL() naar Module
+// LVGL display initialisatie
+void UIController::setupLVGL()
+{
+    // init LVGL
+    lv_init();
+
+    // Set a tick source so that LVGL will know how much time elapsed
+    lv_tick_set_cb(millis_cb);
+
+    // register print function for debugging
+#if LV_USE_LOG != 0
+    lv_log_register_print_cb(my_print);
+#endif
+
+    uint32_t screenWidth = gfx->width();
+    uint32_t screenHeight = gfx->height();
+    
+    // Detecteer PSRAM beschikbaarheid
+    bool psramAvailable = hasPSRAM();
+    
+    // Bepaal useDoubleBuffer: board-aware
+    bool useDoubleBuffer;
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        // CYD zonder PSRAM: force single buffer (geen double buffering)
+        useDoubleBuffer = false;  // Altijd false voor CYD zonder PSRAM
+    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
+        // ESP32-S3: double buffer alleen als PSRAM beschikbaar is
+        useDoubleBuffer = psramAvailable;
+    #elif defined(PLATFORM_TTGO)
+        // TTGO: double buffer alleen als PSRAM beschikbaar is
+        useDoubleBuffer = psramAvailable;
+    #else
+        // Fallback: double buffer alleen met PSRAM
+        useDoubleBuffer = psramAvailable;
+    #endif
+    
+    // Bepaal buffer lines per board (compile-time instelbaar voor CYD)
+    uint8_t bufLines;
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        // CYD zonder PSRAM: compile-time instelbaar (default 4, kan 1/2/4 zijn voor testen)
+        // Na geheugenoptimalisaties kunnen we meer buffer gebruiken voor betere performance
+        #ifndef CYD_BUF_LINES_NO_PSRAM
+        #define CYD_BUF_LINES_NO_PSRAM 4  // Default: 4 regels (was 1->2->4, verhoogd na geheugenoptimalisaties)
+        #endif
+        if (psramAvailable) {
+            bufLines = 40;  // CYD met PSRAM: 40 regels
+        } else {
+            bufLines = CYD_BUF_LINES_NO_PSRAM;  // CYD zonder PSRAM: compile-time instelbaar
+        }
+    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
+        // ESP32-S3 met PSRAM: 30 regels (of fallback kleiner als geen PSRAM)
+        if (psramAvailable) {
+            bufLines = 30;
+        } else {
+            bufLines = 2;  // ESP32-S3 zonder PSRAM: 2 regels
+        }
+    #elif defined(PLATFORM_TTGO)
+        // TTGO: 30 regels met PSRAM, 2 zonder
+        if (psramAvailable) {
+            bufLines = 30;
+        } else {
+            bufLines = 2;
+        }
+    #else
+        // Fallback
+        bufLines = psramAvailable ? 30 : 2;
+    #endif
+    
+    uint32_t bufSize = screenWidth * bufLines;
+    uint8_t numBuffers = useDoubleBuffer ? 2 : 1;  // 1 of 2 buffers afhankelijk van useDoubleBuffer
+    size_t bufSizeBytes = bufSize * sizeof(lv_color_t) * numBuffers;
+    
+    const char* bufferLocation;
+    uint32_t freeHeapBefore = ESP.getFreeHeap();
+    size_t largestFreeBlockBefore = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    
+    // Bepaal board naam voor logging
+    const char* boardName;
+    #if defined(PLATFORM_CYD24)
+        boardName = "CYD24";
+    #elif defined(PLATFORM_CYD28)
+        boardName = "CYD28";
+    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
+        boardName = "ESP32-S3";
+    #elif defined(PLATFORM_TTGO)
+        boardName = "TTGO";
+    #else
+        boardName = "Unknown";
+    #endif
+    
+    // Alloceer buffer één keer bij init (niet herhaald)
+    if (disp_draw_buf == nullptr) {
+        if (psramAvailable) {
+            // Met PSRAM: probeer eerst SPIRAM allocatie
+            disp_draw_buf = (lv_color_t *)heap_caps_malloc(bufSizeBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (disp_draw_buf) {
+                bufferLocation = "SPIRAM";
+            } else {
+                // Fallback naar INTERNAL+DMA als SPIRAM alloc faalt
+                Serial.println("[LVGL] SPIRAM allocatie gefaald, valt terug op INTERNAL+DMA");
+                bufferLocation = "INTERNAL+DMA (fallback)";
+                disp_draw_buf = (lv_color_t *)heap_caps_malloc(bufSizeBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+            }
+        } else {
+            // Zonder PSRAM: gebruik INTERNAL+DMA geheugen (geen DEFAULT)
+            bufferLocation = "INTERNAL+DMA";
+            disp_draw_buf = (lv_color_t *)heap_caps_malloc(bufSizeBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        }
+        
+        if (!disp_draw_buf) {
+            Serial.printf("[LVGL] FATAL: Draw buffer allocatie gefaald! Vereist: %u bytes\n", bufSizeBytes);
+            Serial.printf("[LVGL] Free heap: %u bytes, Largest free block: %u bytes\n", 
+                         ESP.getFreeHeap(), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+            while (true) {
+                /* no need to continue */
+            }
+        }
+        
+        disp_draw_buf_size = bufSizeBytes;
+        
+        // Uitgebreide logging bij boot
+        uint32_t freeHeapAfter = ESP.getFreeHeap();
+        size_t largestFreeBlockAfter = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        Serial.printf("[LVGL] Board: %s, Display: %ux%u pixels\n", boardName, screenWidth, screenHeight);
+        Serial.printf("[LVGL] PSRAM: %s, useDoubleBuffer: %s\n", 
+                     psramAvailable ? "yes" : "no", useDoubleBuffer ? "true" : "false");
+        Serial.printf("[LVGL] Draw buffer: %u lines, %u pixels, %u bytes (%u buffer%s)\n", 
+                     bufLines, bufSize, bufSizeBytes, numBuffers, numBuffers == 1 ? "" : "s");
+        Serial.printf("[LVGL] Buffer locatie: %s\n", bufferLocation);
+        Serial.printf("[LVGL] Heap: %u -> %u bytes free, Largest block: %u -> %u bytes\n",
+                     freeHeapBefore, freeHeapAfter, largestFreeBlockBefore, largestFreeBlockAfter);
+    } else {
+        Serial.println(F("[LVGL] WARNING: Draw buffer al gealloceerd! (herhaalde allocatie voorkomen)"));
+    }
+
+    disp = lv_display_create(screenWidth, screenHeight);
+    lv_display_set_flush_cb(disp, my_disp_flush);
+    
+    // LVGL buffer setup: single of double buffering
+    // LVGL 9.0+ verwacht buffer size in BYTES, niet pixels
+    size_t bufSizePixels = bufSize;  // Aantal pixels in buffer
+    size_t bufSizeBytesPerBuffer = bufSizePixels * sizeof(lv_color_t);  // Bytes per buffer
+    
+    if (useDoubleBuffer) {
+        // Double buffering: beide buffers in dezelfde allocatie
+        // bufSizeBytes is al berekend als bufSize * sizeof(lv_color_t) * 2
+        lv_display_set_buffers(disp, disp_draw_buf, NULL, bufSizeBytes, LV_DISPLAY_RENDER_MODE_PARTIAL);
+    } else {
+        // Single buffering: alleen eerste buffer gebruiken (size in bytes)
+        lv_display_set_buffers(disp, disp_draw_buf, NULL, bufSizeBytesPerBuffer, LV_DISPLAY_RENDER_MODE_PARTIAL);
     }
 }
 
@@ -1462,5 +1630,91 @@ void UIController::updatePriceCardsSection(bool hasNewPriceData)
         // Update kleuren
         updatePriceCardColor(i, pct);
     }
+}
+
+// Fase 8.11.3: updateChartRange() verplaatst vanuit .ino naar UIController module
+// Helper functie om chart range te berekenen en bij te werken
+void UIController::updateChartRange(int32_t currentPrice)
+{
+    // Constants (gedefinieerd in .ino)
+    #ifndef PRICE_RANGE
+    #define PRICE_RANGE 200         // The range of price for the chart, adjust as needed
+    #endif
+    #ifndef POINTS_TO_CHART
+    #define POINTS_TO_CHART 60      // Number of points on the chart (60 points = 2 minutes at 2000ms API interval)
+    #endif
+    
+    int32_t chartMin = INT32_MAX;
+    int32_t chartMax = INT32_MIN;
+    int32_t sum = 0;
+    uint16_t count = 0;
+    
+    // Gebruik member pointers i.p.v. globale pointers
+    int32_t *yArray = lv_chart_get_series_y_array(this->chart, this->dataSeries);
+    
+    for (uint16_t i = 0; i < POINTS_TO_CHART; i++)
+    {
+        int32_t val = yArray[i];
+        if (val != LV_CHART_POINT_NONE)
+        {
+            if (val < chartMin) chartMin = val;
+            if (val > chartMax) chartMax = val;
+            sum += val;
+            count++;
+        }
+    }
+    
+    int32_t chartAverage = 0;
+    if (count > 0 && chartMin != INT32_MAX && chartMax != INT32_MIN)
+    {
+        chartAverage = sum / count;
+        
+        if (chartMin == INT32_MAX || chartMax == INT32_MIN || chartMin > chartMax)
+        {
+            chartMin = chartAverage - PRICE_RANGE;
+            chartMax = chartAverage + PRICE_RANGE;
+        }
+        
+        if (chartMin == chartMax)
+        {
+            int32_t minMargin = chartAverage / 100;
+            if (minMargin < 10) minMargin = 10;
+            chartMin = chartMin - minMargin;
+            chartMax = chartMax + minMargin;
+        }
+        
+        int32_t range = chartMax - chartMin;
+        int32_t margin = range / 20;
+        if (margin < 10) margin = 10;
+        
+        // Update globale minRange en maxRange (extern gedeclareerd)
+        minRange = chartMin - margin;
+        maxRange = chartMax + margin;
+        
+        if (currentPrice < minRange) minRange = currentPrice - margin;
+        if (currentPrice > maxRange) maxRange = currentPrice + margin;
+        
+        if (minRange < 0) minRange = 0;
+        if (maxRange < 0) maxRange = 0;
+        if (minRange >= maxRange)
+        {
+            int32_t fallbackMargin = PRICE_RANGE / 20;
+            if (fallbackMargin < 10) fallbackMargin = 10;
+            minRange = chartAverage - PRICE_RANGE - fallbackMargin;
+            maxRange = chartAverage + PRICE_RANGE + fallbackMargin;
+            if (minRange < 0) minRange = 0;
+        }
+    }
+    else
+    {
+        chartAverage = currentPrice;
+        int32_t margin = PRICE_RANGE / 20;
+        if (margin < 10) margin = 10;
+        minRange = currentPrice - PRICE_RANGE - margin;
+        maxRange = currentPrice + PRICE_RANGE + margin;
+    }
+    
+    // Gebruik member pointer i.p.v. globale pointer
+    lv_chart_set_range(this->chart, LV_CHART_AXIS_PRIMARY_Y, minRange, maxRange);
 }
 

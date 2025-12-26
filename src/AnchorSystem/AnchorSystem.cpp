@@ -2,6 +2,7 @@
 
 // Forward declarations voor dependencies (worden later via modules)
 extern float openPrices[];  // Voor setAnchorPrice
+// Fase 8.11.2: updateUI() is verplaatst naar UIController module (header al geïncludeerd via AnchorSystem.h)
 
 // Forward declarations voor Serial macros
 #ifndef Serial_printf
@@ -311,8 +312,9 @@ bool AnchorSystem::setAnchorPrice(float anchorValue, bool shouldUpdateUI, bool s
         }
         
         // Update UI alleen als gevraagd (niet vanuit web/MQTT threads)
+        // Fase 8.11.2: Gebruik module versie
         if (shouldUpdateUI) {
-            updateUI();
+            uiController.updateUI();
         }
         
         return true;

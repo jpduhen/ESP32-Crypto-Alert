@@ -13,7 +13,8 @@ bool isValidPrice(float price);  // Voor price validatie
 bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const char* caller);  // Voor thread-safe operaties
 void safeMutexGive(SemaphoreHandle_t mutex, const char* caller);  // Voor thread-safe operaties
 extern SemaphoreHandle_t dataMutex;  // FreeRTOS mutex
-void updateUI();  // Voor UI updates
+// Fase 8.11.2: updateUI() is verplaatst naar UIController module
+#include "../UIController/UIController.h"
 
 // TrendDetector module (voor trend-adaptive anchors)
 #include "../TrendDetector/TrendDetector.h"

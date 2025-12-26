@@ -74,8 +74,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 94
-#define VERSION_STRING "3.94"
+#define VERSION_MINOR 96
+#define VERSION_STRING "3.96"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -223,22 +223,22 @@
 // Touchscreen functionaliteit volledig verwijderd - CYD's gebruiken nu fysieke boot knop (GPIO 0)
 
 // LVGL Display global variables
+// Fase 8: Display state - gebruikt door UIController module
 lv_display_t *disp;
-static lv_color_t *disp_draw_buf = nullptr;  // Draw buffer pointer (één keer gealloceerd bij init)
-static size_t disp_draw_buf_size = 0;  // Buffer grootte in bytes (voor logging)
+lv_color_t *disp_draw_buf = nullptr;  // Draw buffer pointer (één keer gealloceerd bij init)
+size_t disp_draw_buf_size = 0;  // Buffer grootte in bytes (voor logging)
 
 // Widgets LVGL global variables
-// Fase 8.7.1: static verwijderd zodat UIController module deze kan gebruiken
+// Fase 8: UI object pointers - gebruikt door UIController module (zie src/UIController/UIController.h)
 lv_obj_t *chart;
 lv_chart_series_t *dataSeries;     // Blauwe serie voor alle punten
-static lv_obj_t *lblFooterLine1; // Footer regel 1 (alleen voor CYD: dBm links, RAM rechts)
-static lv_obj_t *lblFooterLine2; // Footer regel 2 (alleen voor CYD: IP links, versie rechts)
-static lv_obj_t *ramLabel; // RAM label rechts op regel 1 (alleen voor CYD)
+lv_obj_t *lblFooterLine1; // Footer regel 1 (alleen voor CYD: dBm links, RAM rechts)
+lv_obj_t *lblFooterLine2; // Footer regel 2 (alleen voor CYD: IP links, versie rechts)
+lv_obj_t *ramLabel; // RAM label rechts op regel 1 (alleen voor CYD)
 
 // One card per symbol
-// Fase 8.6.3: static verwijderd zodat UIController module deze kan gebruiken
+// Fase 8: UI object pointers - gebruikt door UIController module
 lv_obj_t *priceBox[SYMBOL_COUNT];
-// Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
 lv_obj_t *priceTitle[SYMBOL_COUNT];
 lv_obj_t *priceLbl[SYMBOL_COUNT];
 
@@ -249,14 +249,14 @@ SemaphoreHandle_t dataMutex = NULL;
 SemaphoreHandle_t gNetMutex = NULL;
 
 // Symbols array - eerste element wordt dynamisch ingesteld via binanceSymbol
-// Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
+// Fase 8: UI data - gebruikt door UIController module
 char symbolsArray[SYMBOL_COUNT][16] = {"BTCEUR", SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL};
 const char *symbols[SYMBOL_COUNT] = {symbolsArray[0], symbolsArray[1], symbolsArray[2]};
 // Fase 6.1: AlertEngine module gebruikt deze variabele (extern declaration in AlertEngine.cpp)
 float prices[SYMBOL_COUNT] = {0};
 // Fase 6.2: AnchorSystem module gebruikt deze variabele (extern declaration in AnchorSystem.cpp)
 float openPrices[SYMBOL_COUNT] = {0};
-// Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
+// Fase 8: UI data - gebruikt door UIController module
 float averagePrices[SYMBOL_COUNT] = {0}; // Gemiddelde prijzen voor 1 min en 30 min
 
 
@@ -302,13 +302,12 @@ float downtrendTakeProfitMultiplier = DOWNTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT;
 
 static float ret_2h = 0.0f;  // 2-hour return percentage
 static float ret_30m = 0.0f;  // 30-minute return percentage (calculated from minuteAverages or warm-start data)
-// Fase 8.5.2: static verwijderd zodat UIController module deze kan gebruiken
+// Fase 8: UI state - gebruikt door UIController module
 bool hasRet2hWarm = false;  // Flag: ret_2h beschikbaar vanuit warm-start (minimaal 2 candles)
 bool hasRet30mWarm = false;  // Flag: ret_30m beschikbaar vanuit warm-start (minimaal 2 candles)
 bool hasRet2hLive = false;  // Flag: ret_2h kan worden berekend uit live data (minuteIndex >= 120)
 bool hasRet30mLive = false;  // Flag: ret_30m kan worden berekend uit live data (minuteIndex >= 30)
 // Combined flags: beschikbaar vanuit warm-start OF live data
-// Fase 8.5.2: static verwijderd zodat UIController module deze kan gebruiken
 bool hasRet2h = false;  // hasRet2hWarm || hasRet2hLive
 bool hasRet30m = false;  // hasRet30mWarm || hasRet30mLive
 // Fase 5.3.17: Globale variabelen voor backward compatibility - modules zijn source of truth
@@ -354,39 +353,34 @@ float currentVolFactor = 1.0f;  // Huidige volatility factor
 static unsigned long lastVolatilityLog = 0;  // Timestamp van laatste volatility log (voor debug)
 #define VOLATILITY_LOG_INTERVAL_MS 300000UL  // Log elke 5 minuten
 
-// Fase 8.7.1: static verwijderd zodat UIController module deze kan gebruiken
+// Fase 8: UI state - gebruikt door UIController module
 uint8_t symbolIndexToChart = 0; // The symbol index to chart
-static uint32_t maxRange;
-static uint32_t minRange;
+uint32_t maxRange;
+uint32_t minRange;
 // chartMaxLabel verwijderd - niet meer nodig
-// Fase 8.5: static verwijderd zodat UIController module deze kan gebruiken
+
+// Fase 8: UI object pointers - gebruikt door UIController module (zie src/UIController/UIController.h)
 lv_obj_t *chartTitle;     // Label voor chart titel (symbool) - alleen voor CYD
 lv_obj_t *chartVersionLabel; // Label voor versienummer (rechts bovenste regel)
 lv_obj_t *chartDateLabel; // Label voor datum rechtsboven (vanaf pixel 180)
 lv_obj_t *chartTimeLabel; // Label voor tijd rechtsboven
-// Fase 8.7.1: static verwijderd zodat UIController module deze kan gebruiken
 lv_obj_t *chartBeginLettersLabel; // Label voor beginletters (TTGO, links tweede regel)
 static lv_obj_t *ipLabel; // IP-adres label (TTGO, onderin, gecentreerd)
-// Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
 lv_obj_t *price1MinMaxLabel; // Label voor max waarde in 1 min buffer
 lv_obj_t *price1MinMinLabel; // Label voor min waarde in 1 min buffer
 lv_obj_t *price1MinDiffLabel; // Label voor verschil tussen max en min in 1 min buffer
 lv_obj_t *price30MinMaxLabel; // Label voor max waarde in 30 min buffer
 lv_obj_t *price30MinMinLabel; // Label voor min waarde in 30 min buffer
 lv_obj_t *price30MinDiffLabel; // Label voor verschil tussen max en min in 30 min buffer
-// Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
 lv_obj_t *anchorLabel; // Label voor anchor price info (rechts midden, met percentage verschil)
 lv_obj_t *anchorMaxLabel; // Label voor "Pak winst" (rechts, groen, boven)
 lv_obj_t *anchorMinLabel; // Label voor "Stop loss" (rechts, rood, onder)
 static lv_obj_t *anchorDeltaLabel; // Label voor anchor delta % (TTGO, rechts)
-// Fase 8.5: static verwijderd zodat UIController module deze kan gebruiken
 lv_obj_t *trendLabel; // Label voor trend weergave
-// Fase 8.5.4: static verwijderd zodat UIController module deze kan gebruiken
 lv_obj_t *warmStartStatusLabel; // Label voor warm-start status weergave (rechts bovenin chart)
-// Fase 8.5: static verwijderd zodat UIController module deze kan gebruiken
 lv_obj_t *volatilityLabel; // Label voor volatiliteit weergave
 
-// Fase 8.8.1: static verwijderd zodat UIController module deze kan gebruiken
+// Fase 8: UI state - gebruikt door UIController module
 uint32_t lastApiMs = 0; // Time of last api call
 
 // CPU usage measurement (alleen voor web interface)
@@ -1115,7 +1109,8 @@ static uint16_t clampUint16(uint16_t value, uint16_t minVal, uint16_t maxVal)
 }
 
 // Helper: Detecteer PSRAM beschikbaarheid (runtime check)
-static bool hasPSRAM()
+// Fase 8: Helper functie - gebruikt door UIController module
+bool hasPSRAM()
 {
     #ifdef BOARD_HAS_PSRAM
         return psramFound();
@@ -2013,7 +2008,8 @@ static void getMqttDeviceId(char* buffer, size_t bufferSize) {
 // Helper: Extract device ID from topic (char array version - voorkomt String gebruik)
 // If topic format is [ESP32-ID]-alert, extracts the ESP32-ID
 // Falls back to showing first part before any dash if format is different
-static void getDeviceIdFromTopic(const char* topic, char* buffer, size_t bufferSize) {
+// Fase 8.11.1: static verwijderd zodat UIController module deze kan gebruiken
+void getDeviceIdFromTopic(const char* topic, char* buffer, size_t bufferSize) {
     if (topic == nullptr || buffer == nullptr || bufferSize == 0) {
         if (buffer && bufferSize > 0) buffer[0] = '\0';
         return;
@@ -4835,775 +4831,34 @@ void fetchPrice()
 // Update the UI (wordt aangeroepen vanuit uiTask met mutex)
 // Update UI - Refactored to use helper functions
 // UI Update Helper Functions - Split from updateUI() for better organization
-static void updateChartSection(int32_t currentPrice, bool hasNewPriceData) {
-    // Voeg een punt toe aan de grafiek als er geldige data is
-    if (prices[symbolIndexToChart] > 0.0f) {
-        // Track laatste chart waarde om conditional invalidate te doen
-        static int32_t lastChartValue = 0;
-        bool valueChanged = (currentPrice != lastChartValue);
-        
-        lv_chart_set_next_value(chart, dataSeries, currentPrice);
-        
-        // Conditional invalidate: alleen als waarde is veranderd of er nieuwe data is
-        if (valueChanged || hasNewPriceData || newPriceDataAvailable) {
-            lv_obj_invalidate(chart);
-            lastChartValue = currentPrice;
-        }
-        
-        // Reset flag na gebruik
-        newPriceDataAvailable = false;
-    }
-    
-    // Update chart range
-    updateChartRange(currentPrice);
-    
-    // Update chart title (CYD displays)
-    if (chartTitle != nullptr) {
-        char deviceIdBuffer[16] = {0};
-        const char* alertPos = strstr(ntfyTopic, "-alert");
-        if (alertPos != nullptr) {
-            size_t len = alertPos - ntfyTopic;
-            if (len > 0 && len < sizeof(deviceIdBuffer)) {
-                safeStrncpy(deviceIdBuffer, ntfyTopic, len + 1);
-            } else {
-                safeStrncpy(deviceIdBuffer, ntfyTopic, sizeof(deviceIdBuffer));
-            }
-        } else {
-            safeStrncpy(deviceIdBuffer, ntfyTopic, sizeof(deviceIdBuffer));
-        }
-        lv_label_set_text(chartTitle, deviceIdBuffer);
-    }
-    
-    // Update chart begin letters label (TTGO displays)
-    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI)
-    if (chartBeginLettersLabel != nullptr) {
-        char deviceIdBuffer[16];
-        getDeviceIdFromTopic(ntfyTopic, deviceIdBuffer, sizeof(deviceIdBuffer));
-        lv_label_set_text(chartBeginLettersLabel, deviceIdBuffer);
-    }
-    #endif
-}
-
-static void updateHeaderSection() {
-    // Update datum/tijd labels
-    // Fase 8.5.1: Gebruik module versie (parallel - oude functie blijft bestaan)
-    uiController.updateDateTimeLabels();
-    
-    // Update trend en volatiliteit labels
-    // Fase 8.5.2: Gebruik module versie (parallel - oude functie blijft bestaan)
-    uiController.updateTrendLabel();
-    // Fase 8.5.3: Gebruik module versie (parallel - oude functie blijft bestaan)
-    uiController.updateVolatilityLabel();
-    
-    // Update warm-start status label
-    // Fase 8.5.4: Gebruik module versie (parallel - oude functie blijft bestaan)
-    uiController.updateWarmStartStatusLabel();
-}
-
-static void updatePriceCardsSection(bool hasNewPriceData) {
-    // Update price cards
-    for (uint8_t i = 0; i < SYMBOL_COUNT; ++i) {
-        float pct = 0.0f;
-        
-        if (i == 0) {
-            // BTCEUR card
-            // Fase 8.6.1: Gebruik module versie (parallel - oude functie blijft bestaan)
-            uiController.updateBTCEURCard(hasNewPriceData);
-            pct = 0.0f; // BTCEUR heeft geen percentage voor kleur
-        } else {
-            // 1min/30min cards
-            // Fase 8.6.2: Gebruik module versie (parallel - oude functie blijft bestaan)
-            pct = prices[i];
-            uiController.updateAveragePriceCard(i);
-        }
-        
-        // Update kleuren
-        // Fase 8.6.3: Gebruik module versie (parallel - oude functie blijft bestaan)
-        uiController.updatePriceCardColor(i, pct);
-    }
-}
-
-void updateUI()
-{
-    // Veiligheid: controleer of chart en dataSeries bestaan
-    if (chart == nullptr || dataSeries == nullptr) {
-        Serial_println(F("[UI] WARN: Chart of dataSeries is null, skip update"));
-        return;
-    }
-    
-    // Data wordt al beschermd door mutex in uiTask
-    int32_t p = (int32_t)lroundf(prices[symbolIndexToChart] * 100.0f);
-    
-    // Bepaal of er nieuwe data is op basis van timestamp
-    // Bij 2000ms interval + retries kan call tot ~3000ms duren, dus marge van 3000ms
-    unsigned long currentTime = millis();
-    bool hasNewPriceData = false;
-    if (lastApiMs > 0) {
-        unsigned long timeSinceLastApi = (currentTime >= lastApiMs) ? (currentTime - lastApiMs) : (ULONG_MAX - lastApiMs + currentTime);
-        hasNewPriceData = (timeSinceLastApi < 3000);  // 2000ms interval + 1000ms marge voor retries
-    }
-    
-    // Update UI sections
-    // Fase 8.7.1: Gebruik module versie (parallel - oude functie blijft bestaan)
-    uiController.updateChartSection(p, hasNewPriceData);
-    // Fase 8.7.1: Gebruik module versie (parallel - oude functie blijft bestaan)
-    uiController.updateHeaderSection();
-    // Fase 8.7.3: Gebruik module versie (parallel - oude functie blijft bestaan)
-    uiController.updatePriceCardsSection(hasNewPriceData);
-    updateFooter();
-    
-    // Heap telemetry na LVGL update (optioneel, alleen periodiek)
-    // logHeapTelemetry("lvgl");  // Uitgecommentarieerd om spam te voorkomen
-}
+// Fase 8.11.2: Oude update functies verwijderd - nu in UIController module
+// - updateChartSection()
+// - updateHeaderSection()
+// - updatePriceCardsSection()
+// - updateUI()
 
 // ============================================================================
-// UI Update Helper Functions - Refactored from updateUI() for better code organization
+// ============================================================================
+// UI Update Helper Functions
 // ============================================================================
 
-// Helper functie om chart range te berekenen en bij te werken
-// Fase 8.7.1: static verwijderd zodat UIController module deze kan gebruiken
-void updateChartRange(int32_t currentPrice)
-{
-    int32_t chartMin = INT32_MAX;
-    int32_t chartMax = INT32_MIN;
-    int32_t sum = 0;
-    uint16_t count = 0;
-    
-    int32_t *yArray = lv_chart_get_series_y_array(chart, dataSeries);
-    
-    for (uint16_t i = 0; i < POINTS_TO_CHART; i++)
-    {
-        int32_t val = yArray[i];
-        if (val != LV_CHART_POINT_NONE)
-        {
-            if (val < chartMin) chartMin = val;
-            if (val > chartMax) chartMax = val;
-            sum += val;
-            count++;
-        }
-    }
-    
-    int32_t chartAverage = 0;
-    if (count > 0 && chartMin != INT32_MAX && chartMax != INT32_MIN)
-    {
-        chartAverage = sum / count;
-        
-        if (chartMin == INT32_MAX || chartMax == INT32_MIN || chartMin > chartMax)
-        {
-            chartMin = chartAverage - PRICE_RANGE;
-            chartMax = chartAverage + PRICE_RANGE;
-        }
-        
-        if (chartMin == chartMax)
-        {
-            int32_t minMargin = chartAverage / 100;
-            if (minMargin < 10) minMargin = 10;
-            chartMin = chartMin - minMargin;
-            chartMax = chartMax + minMargin;
-        }
-        
-        int32_t range = chartMax - chartMin;
-        int32_t margin = range / 20;
-        if (margin < 10) margin = 10;
-        
-        minRange = chartMin - margin;
-        maxRange = chartMax + margin;
-        
-        if (currentPrice < minRange) minRange = currentPrice - margin;
-        if (currentPrice > maxRange) maxRange = currentPrice + margin;
-        
-        if (minRange < 0) minRange = 0;
-        if (maxRange < 0) maxRange = 0;
-        if (minRange >= maxRange)
-        {
-            int32_t fallbackMargin = PRICE_RANGE / 20;
-            if (fallbackMargin < 10) fallbackMargin = 10;
-            minRange = chartAverage - PRICE_RANGE - fallbackMargin;
-            maxRange = chartAverage + PRICE_RANGE + fallbackMargin;
-            if (minRange < 0) minRange = 0;
-        }
-    }
-    else
-    {
-        chartAverage = currentPrice;
-        int32_t margin = PRICE_RANGE / 20;
-        if (margin < 10) margin = 10;
-        minRange = currentPrice - PRICE_RANGE - margin;
-        maxRange = currentPrice + PRICE_RANGE + margin;
-    }
-    
-    lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, minRange, maxRange);
-}
+// Fase 8: UI functies zijn verplaatst naar UIController module (zie src/UIController/UIController.cpp)
+// - createChart(), createHeaderLabels(), createPriceBoxes(), createFooter()
+// - updateDateTimeLabels(), updateTrendLabel(), updateVolatilityLabel(), updateWarmStartStatusLabel()
+// - updateBTCEURCard(), updateAveragePriceCard(), updatePriceCardColor()
+// - updateChartSection(), updateHeaderSection(), updatePriceCardsSection()
+// - updateUI(), checkButton(), updateChartRange(), setupLVGL()
 
 // Cache variabelen voor datum/tijd labels (lokaal voor deze functie)
 static char lastDateText[11] = {0};  // Cache voor date label
 static char lastTimeText[9] = {0};   // Cache voor time label
 
-// Helper functie om datum/tijd labels bij te werken
-static void updateDateTimeLabels()
-{
-    if (chartDateLabel != nullptr)
-    {
-        struct tm timeinfo;
-        if (getLocalTime(&timeinfo))
-        {
-            #ifdef PLATFORM_TTGO
-            // TTGO: compact formaat dd-mm-yy voor lagere resolutie
-            char dateStr[9]; // dd-mm-yy + null terminator = 9 karakters
-            strftime(dateStr, sizeof(dateStr), "%d-%m-%y", &timeinfo);
-            #else
-            // CYD/ESP32-S3: volledig formaat dd-mm-yyyy voor hogere resolutie
-            char dateStr[11]; // dd-mm-yyyy + null terminator = 11 karakters
-            strftime(dateStr, sizeof(dateStr), "%d-%m-%Y", &timeinfo);
-            #endif
-            // Update alleen als datum veranderd is
-            if (strcmp(lastDateText, dateStr) != 0) {
-                strncpy(lastDateText, dateStr, sizeof(lastDateText) - 1);
-                lastDateText[sizeof(lastDateText) - 1] = '\0';
-                lv_label_set_text(chartDateLabel, dateStr);
-            }
-        }
-    }
-    
-    if (chartTimeLabel != nullptr)
-    {
-        struct tm timeinfo;
-        if (getLocalTime(&timeinfo))
-        {
-            char timeStr[9];
-            strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
-            // Update alleen als tijd veranderd is
-            if (strcmp(lastTimeText, timeStr) != 0) {
-                strncpy(lastTimeText, timeStr, sizeof(lastTimeText) - 1);
-                lastTimeText[sizeof(lastTimeText) - 1] = '\0';
-                lv_label_set_text(chartTimeLabel, timeStr);
-            }
-        }
-    }
-}
-
-// Helper functie om trend label bij te werken
-static void updateTrendLabel()
-{
-    if (trendLabel == nullptr) return;
-    
-    // Toon trend alleen als beide availability flags true zijn
-    if (hasRet2h && hasRet30m)
-    {
-        const char* trendText = "";
-        lv_color_t trendColor = lv_palette_main(LV_PALETTE_GREY);
-        
-        // Bepaal of data uit warm-start of live komt
-        bool isFromWarmStart = (hasRet2hWarm && hasRet30mWarm) && !(hasRet2hLive && hasRet30mLive);
-        bool isFromLive = (hasRet2hLive && hasRet30mLive);
-        
-        // Fase 5.3.14: Gebruik TrendDetector module getter i.p.v. globale variabele
-        TrendState currentTrend = trendDetector.getTrendState();
-        switch (currentTrend) {
-            case TREND_UP:
-                trendText = getText("OMHOOG", "UP");
-                if (isFromWarmStart) {
-                    trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
-                } else if (isFromLive) {
-                    trendColor = lv_palette_main(LV_PALETTE_GREEN); // Groen voor live UP
-                } else {
-                    trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs als fallback
-                }
-                break;
-            case TREND_DOWN:
-                trendText = getText("OMLAAG", "DOWN");
-                if (isFromWarmStart) {
-                    trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
-                } else if (isFromLive) {
-                    trendColor = lv_palette_main(LV_PALETTE_RED); // Rood voor live DOWN
-                } else {
-                    trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs als fallback
-                }
-                break;
-            case TREND_SIDEWAYS:
-            default:
-                trendText = getText("VLAK", "SIDEWAYS");
-                if (isFromWarmStart) {
-                    trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
-                } else if (isFromLive) {
-                    trendColor = lv_palette_main(LV_PALETTE_BLUE); // Blauw voor live SIDEWAYS
-                } else {
-                    trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs als fallback
-                }
-                break;
-        }
-        
-        // Geen "-warm" tekst meer - kleur geeft status aan
-        lv_label_set_text(trendLabel, trendText);
-        lv_obj_set_style_text_color(trendLabel, trendColor, 0);
-    }
-    else
-    {
-        // Toon specifiek wat ontbreekt: 30m of 2h
-        uint8_t availableMinutes = minuteArrayFilled ? MINUTES_FOR_30MIN_CALC : minuteIndex;
-        char waitText[24];
-        
-        if (!hasRet30m) {
-            // Warm-up 30m: toon status alleen als warm-start NIET succesvol was
-            // Als warm-start succesvol was maar hasRet30m nog false, toon dan warm-start status
-            if (hasRet30mWarm) {
-                // Warm-start heeft 30m data, maar hasRet30m is nog false (mogelijk bug, toon "--")
-                lv_label_set_text(trendLabel, "--");
-                lv_obj_set_style_text_color(trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
-                return;
-            }
-            
-            // Warm-start was niet succesvol: bereken minuten nodig voor 30m window met ≥80% live
-            uint8_t livePct30 = calcLivePctMinuteAverages(30);
-            
-            if (availableMinutes < 30) {
-                // Nog niet genoeg data: toon minuten tot 30
-                uint8_t minutesNeeded = 30 - availableMinutes;
-                if (language == 1) {
-                    snprintf(waitText, sizeof(waitText), "Warm-up 30m %um", minutesNeeded);
-                } else {
-                    snprintf(waitText, sizeof(waitText), "Warm-up 30m %um", minutesNeeded);
-                }
-            } else if (livePct30 < 80) {
-                // Genoeg data maar niet genoeg live: toon percentage live
-                if (language == 1) {
-                    snprintf(waitText, sizeof(waitText), "Warm-up 30m %u%%", livePct30);
-                } else {
-                    snprintf(waitText, sizeof(waitText), "Warm-up 30m %u%%", livePct30);
-                }
-            } else {
-                // Zou niet moeten voorkomen (livePct30 >= 80 maar hasRet30m is false)
-                lv_label_set_text(trendLabel, "--");
-                lv_obj_set_style_text_color(trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
-                return;
-            }
-        } else if (!hasRet2h) {
-            // Warm-up 2h: bereken minuten nodig voor 120m window met ≥80% live
-            uint8_t livePct120 = calcLivePctMinuteAverages(120);
-            
-            if (availableMinutes < 120) {
-                // Nog niet genoeg data: toon minuten tot 120
-                uint8_t minutesNeeded = 120 - availableMinutes;
-                if (language == 1) {
-                    snprintf(waitText, sizeof(waitText), "Warm-up 2h %um", minutesNeeded);
-                } else {
-                    snprintf(waitText, sizeof(waitText), "Warm-up 2h %um", minutesNeeded);
-                }
-            } else if (livePct120 < 80) {
-                // Genoeg data maar niet genoeg live: toon percentage live
-                if (language == 1) {
-                    snprintf(waitText, sizeof(waitText), "Warm-up 2h %u%%", livePct120);
-                } else {
-                    snprintf(waitText, sizeof(waitText), "Warm-up 2h %u%%", livePct120);
-                }
-            } else {
-                // Zou niet moeten voorkomen (livePct120 >= 80 maar hasRet2h is false)
-                lv_label_set_text(trendLabel, "--");
-                lv_obj_set_style_text_color(trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
-                return;
-            }
-        } else {
-            // Beide ontbreken (zou niet moeten voorkomen, maar fallback)
-            lv_label_set_text(trendLabel, "--");
-            lv_obj_set_style_text_color(trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
-            return;
-        }
-        
-        lv_label_set_text(trendLabel, waitText);
-        lv_obj_set_style_text_color(trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
-    }
-    
-    // Update warm-start status label (rechts bovenin chart)
-    if (warmStartStatusLabel != nullptr) {
-        char warmStartText[16];
-        if (warmStartStatus == WARMING_UP) {
-            snprintf(warmStartText, sizeof(warmStartText), "DATA%u%%", warmStartStats.warmUpProgress);
-        } else if (warmStartStatus == LIVE_COLD) {
-            snprintf(warmStartText, sizeof(warmStartText), "COLD");
-        } else {
-            snprintf(warmStartText, sizeof(warmStartText), "LIVE");
-        }
-        lv_label_set_text(warmStartStatusLabel, warmStartText);
-        lv_color_t statusColor = (warmStartStatus == WARMING_UP) ? lv_palette_main(LV_PALETTE_ORANGE) :
-                                  (warmStartStatus == LIVE_COLD) ? lv_palette_main(LV_PALETTE_BLUE) :
-                                  lv_palette_main(LV_PALETTE_BLUE);
-        lv_obj_set_style_text_color(warmStartStatusLabel, statusColor, 0);
-    }
-}
-
-// Helper functie om volatiliteit label bij te werken
-static void updateVolatilityLabel()
-{
-    if (volatilityLabel == nullptr) return;
-    
-    const char* volText = "";
-    lv_color_t volColor = lv_palette_main(LV_PALETTE_GREY);
-    
-    // Fase 5.3.14: Gebruik VolatilityTracker module getter i.p.v. globale variabele
-    VolatilityState currentVol = volatilityTracker.getVolatilityState();
-    switch (currentVol) {
-        case VOLATILITY_LOW:
-            volText = getText("RUSTIG", "CALM");
-            volColor = lv_palette_main(LV_PALETTE_GREEN);
-            break;
-        case VOLATILITY_MEDIUM:
-            volText = getText("GEMIDDELD", "MEDIUM");
-            volColor = lv_palette_main(LV_PALETTE_ORANGE);
-            break;
-        case VOLATILITY_HIGH:
-            volText = getText("VOLATIEL", "VOLATILE");
-            volColor = lv_palette_main(LV_PALETTE_RED);
-            break;
-    }
-    
-    lv_label_set_text(volatilityLabel, volText);
-    lv_obj_set_style_text_color(volatilityLabel, volColor, 0);
-}
-
 // ============================================================================
 // RGB LED Functions (alleen voor CYD platforms)
 // ============================================================================
 
-
-// Helper functie om BTCEUR card bij te werken
-static void updateBTCEURCard(bool hasNewData)
-{
-    if (priceTitle[0] != nullptr) {
-        lv_label_set_text(priceTitle[0], "BTCEUR");
-    }
-    
-    // Update price label alleen als waarde veranderd is (cache check)
-    if (priceLbl[0] != nullptr && (lastPriceLblValue != prices[0] || lastPriceLblValue < 0.0f)) {
-        snprintf(priceLblBuffer, sizeof(priceLblBuffer), "%.2f", prices[0]);
-        lv_label_set_text(priceLbl[0], priceLblBuffer);
-        lastPriceLblValue = prices[0];
-    }
-    
-    // Stel tekstkleur in op basis van nieuwe data: blauw bij nieuwe data, grijs bij oude data
-    if (priceLbl[0] != nullptr) {
-        if (hasNewData && prices[0] > 0.0f) {
-            // Nieuwe data: blauw
-            lv_obj_set_style_text_color(priceLbl[0], lv_palette_main(LV_PALETTE_BLUE), 0);
-        } else {
-            // Oude data: grijs
-            lv_obj_set_style_text_color(priceLbl[0], lv_palette_main(LV_PALETTE_GREY), 0);
-        }
-    }
-    
-    // Bereken dynamische anchor-waarden op basis van trend voor UI weergave
-    AnchorConfigEffective effAnchorUI;
-    if (anchorActive && anchorPrice > 0.0f) {
-        // Fase 5.3.14: Gebruik TrendDetector module getter i.p.v. globale variabele
-        TrendState currentTrend = trendDetector.getTrendState();
-        // Fase 6.2.7: Gebruik AnchorSystem module i.p.v. globale functie
-        effAnchorUI = anchorSystem.calcEffectiveAnchor(anchorMaxLoss, anchorTakeProfit, currentTrend);
-    }
-    
-    #ifdef PLATFORM_TTGO
-    if (anchorMaxLabel != nullptr) {
-        if (anchorActive && anchorPrice > 0.0f) {
-            // Gebruik dynamische take profit waarde
-            float takeProfitPrice = anchorPrice * (1.0f + effAnchorUI.takeProfitPct / 100.0f);
-            // Update alleen als waarde veranderd is
-            if (lastAnchorMaxValue != takeProfitPrice || lastAnchorMaxValue < 0.0f) {
-                snprintf(anchorMaxLabelBuffer, sizeof(anchorMaxLabelBuffer), "%.2f", takeProfitPrice);
-                lv_label_set_text(anchorMaxLabel, anchorMaxLabelBuffer);
-                lastAnchorMaxValue = takeProfitPrice;
-            }
-        } else {
-            // Update alleen als label niet leeg is
-            if (strlen(anchorMaxLabelBuffer) > 0) {
-                anchorMaxLabelBuffer[0] = '\0';
-                lv_label_set_text(anchorMaxLabel, "");
-                lastAnchorMaxValue = -1.0f;
-            }
-        }
-    }
-    
-    if (anchorLabel != nullptr) {
-        if (anchorActive && anchorPrice > 0.0f) {
-            // Update alleen als waarde veranderd is
-            if (lastAnchorValue != anchorPrice || lastAnchorValue < 0.0f) {
-                snprintf(anchorLabelBuffer, sizeof(anchorLabelBuffer), "%.2f", anchorPrice);
-                lv_label_set_text(anchorLabel, anchorLabelBuffer);
-                lastAnchorValue = anchorPrice;
-            }
-        } else {
-            // Update alleen als label niet leeg is
-            if (strlen(anchorLabelBuffer) > 0) {
-                anchorLabelBuffer[0] = '\0';
-                lv_label_set_text(anchorLabel, "");
-                lastAnchorValue = -1.0f;
-            }
-        }
-    }
-    
-    if (anchorMinLabel != nullptr) {
-        if (anchorActive && anchorPrice > 0.0f) {
-            // Gebruik dynamische max loss waarde
-            float stopLossPrice = anchorPrice * (1.0f + effAnchorUI.maxLossPct / 100.0f);
-            // Update alleen als waarde veranderd is
-            if (lastAnchorMinValue != stopLossPrice || lastAnchorMinValue < 0.0f) {
-                snprintf(anchorMinLabelBuffer, sizeof(anchorMinLabelBuffer), "%.2f", stopLossPrice);
-                lv_label_set_text(anchorMinLabel, anchorMinLabelBuffer);
-                lastAnchorMinValue = stopLossPrice;
-            }
-        } else {
-            // Update alleen als label niet leeg is
-            if (strlen(anchorMinLabelBuffer) > 0) {
-                anchorMinLabelBuffer[0] = '\0';
-                lv_label_set_text(anchorMinLabel, "");
-                lastAnchorMinValue = -1.0f;
-            }
-        }
-    }
-    #else
-    if (anchorMaxLabel != nullptr) {
-        if (anchorActive && anchorPrice > 0.0f) {
-            // Toon dynamische take profit waarde (effectief percentage)
-            float takeProfitPrice = anchorPrice * (1.0f + effAnchorUI.takeProfitPct / 100.0f);
-            // Update alleen als waarde veranderd is
-            if (lastAnchorMaxValue != takeProfitPrice || lastAnchorMaxValue < 0.0f) {
-                snprintf(anchorMaxLabelBuffer, sizeof(anchorMaxLabelBuffer), "+%.2f%% %.2f", effAnchorUI.takeProfitPct, takeProfitPrice);
-                lv_label_set_text(anchorMaxLabel, anchorMaxLabelBuffer);
-                lastAnchorMaxValue = takeProfitPrice;
-            }
-        } else {
-            // Update alleen als label niet leeg is
-            if (strlen(anchorMaxLabelBuffer) > 0) {
-                anchorMaxLabelBuffer[0] = '\0';
-                lv_label_set_text(anchorMaxLabel, "");
-                lastAnchorMaxValue = -1.0f;
-            }
-        }
-    }
-    
-    if (anchorLabel != nullptr) {
-        if (anchorActive && anchorPrice > 0.0f && prices[0] > 0.0f) {
-            float anchorPct = ((prices[0] - anchorPrice) / anchorPrice) * 100.0f;
-            // Update alleen als waarde veranderd is (check zowel anchorPrice als anchorPct)
-            float currentValue = anchorPrice + anchorPct;  // Combinatie voor cache check
-            if (lastAnchorValue != currentValue || lastAnchorValue < 0.0f) {
-                snprintf(anchorLabelBuffer, sizeof(anchorLabelBuffer), "%c%.2f%% %.2f",
-                         anchorPct >= 0 ? '+' : '-', fabsf(anchorPct), anchorPrice);
-                lv_label_set_text(anchorLabel, anchorLabelBuffer);
-                lastAnchorValue = currentValue;
-            }
-        } else if (anchorActive && anchorPrice > 0.0f) {
-            // Update alleen als waarde veranderd is
-            if (lastAnchorValue != anchorPrice || lastAnchorValue < 0.0f) {
-                snprintf(anchorLabelBuffer, sizeof(anchorLabelBuffer), "%.2f", anchorPrice);
-                lv_label_set_text(anchorLabel, anchorLabelBuffer);
-                lastAnchorValue = anchorPrice;
-            }
-        } else {
-            // Update alleen als label niet leeg is
-            if (strlen(anchorLabelBuffer) > 0) {
-                anchorLabelBuffer[0] = '\0';
-                lv_label_set_text(anchorLabel, "");
-                lastAnchorValue = -1.0f;
-            }
-        }
-    }
-    
-    if (anchorMinLabel != nullptr) {
-        if (anchorActive && anchorPrice > 0.0f) {
-            // Toon dynamische max loss waarde (effectief percentage)
-            float stopLossPrice = anchorPrice * (1.0f + effAnchorUI.maxLossPct / 100.0f);
-            // Update alleen als waarde veranderd is
-            if (lastAnchorMinValue != stopLossPrice || lastAnchorMinValue < 0.0f) {
-                snprintf(anchorMinLabelBuffer, sizeof(anchorMinLabelBuffer), "%.2f%% %.2f", effAnchorUI.maxLossPct, stopLossPrice);
-                lv_label_set_text(anchorMinLabel, anchorMinLabelBuffer);
-                lastAnchorMinValue = stopLossPrice;
-            }
-        } else {
-            // Update alleen als label niet leeg is
-            if (strlen(anchorMinLabelBuffer) > 0) {
-                anchorMinLabelBuffer[0] = '\0';
-                lv_label_set_text(anchorMinLabel, "");
-                lastAnchorMinValue = -1.0f;
-            }
-        }
-    }
-    #endif
-}
-
-// Helper functie om average price cards (1min/30min) bij te werken
-static void updateAveragePriceCard(uint8_t index)
-{
-    float pct = prices[index];
-    bool hasData1m = (index == 1) ? secondArrayFilled : true;
-    bool hasData30m = (index == 2) ? (minuteArrayFilled || minuteIndex >= 30) : true;
-    bool hasData = (index == 1) ? hasData1m : ((index == 2) ? hasData30m : true);
-    
-    if (!hasData) {
-        pct = 0.0f;
-    }
-    
-    if (priceTitle[index] != nullptr) {
-        if (hasData && pct != 0.0f) {
-            // Format nieuwe tekst
-            char newText[64];
-            snprintf(newText, sizeof(newText), "%s  %c%.2f%%", symbols[index], pct >= 0 ? '+' : '-', fabsf(pct));
-            // Update alleen als tekst veranderd is
-            if (strcmp(lastPriceTitleText[index], newText) != 0) {
-                strncpy(priceTitleBuffer[index], newText, sizeof(priceTitleBuffer[index]) - 1);
-                priceTitleBuffer[index][sizeof(priceTitleBuffer[index]) - 1] = '\0';
-                strncpy(lastPriceTitleText[index], newText, sizeof(lastPriceTitleText[index]) - 1);
-                lastPriceTitleText[index][sizeof(lastPriceTitleText[index]) - 1] = '\0';
-                lv_label_set_text(priceTitle[index], priceTitleBuffer[index]);
-            }
-        } else {
-            // Update alleen als tekst veranderd is
-            if (strcmp(lastPriceTitleText[index], symbols[index]) != 0) {
-                strncpy(priceTitleBuffer[index], symbols[index], sizeof(priceTitleBuffer[index]) - 1);
-                priceTitleBuffer[index][sizeof(priceTitleBuffer[index]) - 1] = '\0';
-                strncpy(lastPriceTitleText[index], symbols[index], sizeof(lastPriceTitleText[index]) - 1);
-                lastPriceTitleText[index][sizeof(lastPriceTitleText[index]) - 1] = '\0';
-                lv_label_set_text(priceTitle[index], priceTitleBuffer[index]);
-            }
-        }
-    }
-    
-    if (index == 1 && price1MinMaxLabel != nullptr && price1MinMinLabel != nullptr && price1MinDiffLabel != nullptr)
-    {
-        float minVal, maxVal;
-        findMinMaxInSecondPrices(minVal, maxVal);
-        
-        if (minVal > 0.0f && maxVal > 0.0f)
-        {
-            float diff = maxVal - minVal;
-            // Update alleen als waarden veranderd zijn
-            if (lastPrice1MinMaxValue != maxVal || lastPrice1MinMaxValue < 0.0f) {
-                snprintf(price1MinMaxLabelBuffer, sizeof(price1MinMaxLabelBuffer), "%.2f", maxVal);
-                lv_label_set_text(price1MinMaxLabel, price1MinMaxLabelBuffer);
-                lastPrice1MinMaxValue = maxVal;
-            }
-            if (lastPrice1MinDiffValue != diff || lastPrice1MinDiffValue < 0.0f) {
-                snprintf(price1MinDiffLabelBuffer, sizeof(price1MinDiffLabelBuffer), "%.2f", diff);
-                lv_label_set_text(price1MinDiffLabel, price1MinDiffLabelBuffer);
-                lastPrice1MinDiffValue = diff;
-            }
-            if (lastPrice1MinMinValue != minVal || lastPrice1MinMinValue < 0.0f) {
-                snprintf(price1MinMinLabelBuffer, sizeof(price1MinMinLabelBuffer), "%.2f", minVal);
-                lv_label_set_text(price1MinMinLabel, price1MinMinLabelBuffer);
-                lastPrice1MinMinValue = minVal;
-            }
-        }
-        else
-        {
-            // Update alleen als labels niet "--" zijn
-            if (strcmp(price1MinMaxLabelBuffer, "--") != 0) {
-                strcpy(price1MinMaxLabelBuffer, "--");
-                lv_label_set_text(price1MinMaxLabel, "--");
-                lastPrice1MinMaxValue = -1.0f;
-            }
-            if (strcmp(price1MinDiffLabelBuffer, "--") != 0) {
-                strcpy(price1MinDiffLabelBuffer, "--");
-                lv_label_set_text(price1MinDiffLabel, "--");
-                lastPrice1MinDiffValue = -1.0f;
-            }
-            if (strcmp(price1MinMinLabelBuffer, "--") != 0) {
-                strcpy(price1MinMinLabelBuffer, "--");
-                lv_label_set_text(price1MinMinLabel, "--");
-                lastPrice1MinMinValue = -1.0f;
-            }
-        }
-    }
-    
-    if (index == 2 && price30MinMaxLabel != nullptr && price30MinMinLabel != nullptr && price30MinDiffLabel != nullptr)
-    {
-        float minVal, maxVal;
-        findMinMaxInLast30Minutes(minVal, maxVal);
-        
-        if (minVal > 0.0f && maxVal > 0.0f)
-        {
-            float diff = maxVal - minVal;
-            // Update alleen als waarden veranderd zijn
-            if (lastPrice30MinMaxValue != maxVal || lastPrice30MinMaxValue < 0.0f) {
-                snprintf(price30MinMaxLabelBuffer, sizeof(price30MinMaxLabelBuffer), "%.2f", maxVal);
-                lv_label_set_text(price30MinMaxLabel, price30MinMaxLabelBuffer);
-                lastPrice30MinMaxValue = maxVal;
-            }
-            if (lastPrice30MinDiffValue != diff || lastPrice30MinDiffValue < 0.0f) {
-                snprintf(price30MinDiffLabelBuffer, sizeof(price30MinDiffLabelBuffer), "%.2f", diff);
-                lv_label_set_text(price30MinDiffLabel, price30MinDiffLabelBuffer);
-                lastPrice30MinDiffValue = diff;
-            }
-            if (lastPrice30MinMinValue != minVal || lastPrice30MinMinValue < 0.0f) {
-                snprintf(price30MinMinLabelBuffer, sizeof(price30MinMinLabelBuffer), "%.2f", minVal);
-                lv_label_set_text(price30MinMinLabel, price30MinMinLabelBuffer);
-                lastPrice30MinMinValue = minVal;
-            }
-        }
-        else
-        {
-            // Update alleen als labels niet "--" zijn
-            if (strcmp(price30MinMaxLabelBuffer, "--") != 0) {
-                strcpy(price30MinMaxLabelBuffer, "--");
-                lv_label_set_text(price30MinMaxLabel, "--");
-                lastPrice30MinMaxValue = -1.0f;
-            }
-            if (strcmp(price30MinDiffLabelBuffer, "--") != 0) {
-                strcpy(price30MinDiffLabelBuffer, "--");
-                lv_label_set_text(price30MinDiffLabel, "--");
-                lastPrice30MinDiffValue = -1.0f;
-            }
-            if (strcmp(price30MinMinLabelBuffer, "--") != 0) {
-                strcpy(price30MinMinLabelBuffer, "--");
-                lv_label_set_text(price30MinMinLabel, "--");
-                lastPrice30MinMinValue = -1.0f;
-            }
-        }
-    }
-    
-    if (!hasData)
-    {
-        lv_label_set_text(priceLbl[index], "--");
-    }
-    else if (averagePrices[index] > 0.0f)
-    {
-        // Update alleen als waarde veranderd is
-        if (lastPriceLblValueArray[index] != averagePrices[index] || lastPriceLblValueArray[index] < 0.0f) {
-            snprintf(priceLblBufferArray[index], sizeof(priceLblBufferArray[index]), "%.2f", averagePrices[index]);
-            lv_label_set_text(priceLbl[index], priceLblBufferArray[index]);
-            lastPriceLblValueArray[index] = averagePrices[index];
-        }
-    }
-    else
-    {
-        lv_label_set_text(priceLbl[index], "--");
-    }
-}
-
-// Helper functie om price card kleuren bij te werken
-static void updatePriceCardColor(uint8_t index, float pct)
-{
-    bool hasDataForColor = (index == 0) ? true : ((index == 1) ? secondArrayFilled : (minuteArrayFilled || minuteIndex >= 30));
-    
-    if (hasDataForColor && pct != 0.0f)
-    {
-        lv_obj_set_style_text_color(priceLbl[index],
-                                    pct >= 0 ? lv_palette_lighten(LV_PALETTE_GREEN, 4)
-                                             : lv_palette_lighten(LV_PALETTE_RED, 3),
-                                    0);
-        
-        lv_color_t bg = pct >= 0
-                            ? lv_color_mix(lv_palette_main(LV_PALETTE_GREEN), lv_color_black(), 127)
-                            : lv_color_mix(lv_palette_main(LV_PALETTE_RED), lv_color_black(), 127);
-        lv_obj_set_style_bg_color(priceBox[index], bg, 0);
-    }
-    else
-    {
-        lv_obj_set_style_text_color(priceLbl[index], lv_palette_main(LV_PALETTE_GREY), 0);
-        lv_obj_set_style_bg_color(priceBox[index], lv_color_black(), 0);
-    }
-    
-    lv_obj_set_height(priceBox[index], LV_SIZE_CONTENT);
-}
-
 // Helper functie om footer bij te werken
-// Fase 8.8.1: static verwijderd zodat UIController module deze kan gebruiken
+// Fase 8: updateFooter() gebruikt nog globale pointers (kan later naar UIController module verplaatst worden)
 void updateFooter()
 {
     #ifdef PLATFORM_TTGO
@@ -5687,7 +4942,8 @@ void updateFooter()
 // ============================================================================
 
 // Helper functie om scroll uit te schakelen voor een object
-static void disableScroll(lv_obj_t *obj)
+// Fase 8.11.1: static verwijderd zodat UIController module deze kan gebruiken
+void disableScroll(lv_obj_t *obj)
 {
     lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLL_ELASTIC);
@@ -5696,394 +4952,13 @@ static void disableScroll(lv_obj_t *obj)
     lv_obj_set_style_width(obj, 0, LV_PART_SCROLLBAR);
 }
 
-// Helper functie om chart en bijbehorende labels te creëren
-static void createChart()
-{
-    // Chart - gebruik platform-specifieke afmetingen
-    chart = lv_chart_create(lv_scr_act());
-    lv_chart_set_point_count(chart, POINTS_TO_CHART);
-    lv_obj_set_size(chart, CHART_WIDTH, CHART_HEIGHT);
-    lv_obj_align(chart, LV_ALIGN_TOP_MID, 0, CHART_ALIGN_Y);
-    lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
-    disableScroll(chart);
-    
-    int32_t p = (int32_t)lroundf(openPrices[symbolIndexToChart] * 100.0f);
-    maxRange = p + PRICE_RANGE;
-    minRange = p - PRICE_RANGE;
-    lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, minRange, maxRange);
-
-    // Maak één blauwe serie aan voor alle punten
-    dataSeries = lv_chart_add_series(chart, lv_palette_main(LV_PALETTE_BLUE), LV_CHART_AXIS_PRIMARY_Y);
-
-    // Trend/volatiliteit labels in de chart, links uitgelijnd binnen de chart
-    trendLabel = lv_label_create(chart);
-    lv_obj_set_style_text_font(trendLabel, FONT_SIZE_TREND_VOLATILITY, 0);
-    lv_obj_set_style_text_color(trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
-    lv_obj_set_style_text_align(trendLabel, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(trendLabel, LV_ALIGN_TOP_LEFT, -4, -6);
-    lv_label_set_text(trendLabel, "--");
-    
-    // Warm-start status label (rechts bovenin chart, zelfde hoogte als trend)
-    warmStartStatusLabel = lv_label_create(chart);
-    lv_obj_set_style_text_font(warmStartStatusLabel, FONT_SIZE_TREND_VOLATILITY, 0);
-    lv_obj_set_style_text_color(warmStartStatusLabel, lv_palette_main(LV_PALETTE_GREY), 0);
-    lv_obj_set_style_text_align(warmStartStatusLabel, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(warmStartStatusLabel, LV_ALIGN_TOP_RIGHT, 4, -6);
-    lv_label_set_text(warmStartStatusLabel, "--");
-    
-    volatilityLabel = lv_label_create(chart);
-    lv_obj_set_style_text_font(volatilityLabel, FONT_SIZE_TREND_VOLATILITY, 0);
-    lv_obj_set_style_text_color(volatilityLabel, lv_palette_main(LV_PALETTE_GREY), 0);
-    lv_obj_set_style_text_align(volatilityLabel, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(volatilityLabel, LV_ALIGN_BOTTOM_LEFT, -4, 6);
-    lv_label_set_text(volatilityLabel, "--");
-    
-    // Platform-specifieke layout voor chart title
-    #if !defined(PLATFORM_TTGO) && !defined(PLATFORM_ESP32S3_SUPERMINI)
-    chartTitle = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(chartTitle, &lv_font_montserrat_16, 0);
-    char deviceIdBuffer[16];
-    getDeviceIdFromTopic(ntfyTopic, deviceIdBuffer, sizeof(deviceIdBuffer));
-    lv_label_set_text(chartTitle, deviceIdBuffer);
-    lv_obj_set_style_text_color(chartTitle, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_align_to(chartTitle, chart, LV_ALIGN_OUT_TOP_LEFT, 0, -4);
-    #endif
-}
-
-// Helper functie om header labels (datum/tijd/versie) te creëren
-static void createHeaderLabels()
-{
-    #ifdef PLATFORM_TTGO
-    // TTGO: Compacte layout met datum op regel 1, beginletters/versie/tijd op regel 2
-    chartDateLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(chartDateLabel, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(chartDateLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(chartDateLabel, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_text(chartDateLabel, "-- -- --");
-    lv_obj_set_width(chartDateLabel, CHART_WIDTH);
-    lv_obj_set_pos(chartDateLabel, 0, 0); // TTGO: originele positie (geen aanpassing nodig)
-    
-    chartBeginLettersLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(chartBeginLettersLabel, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(chartBeginLettersLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(chartBeginLettersLabel, LV_TEXT_ALIGN_LEFT, 0);
-    char deviceIdBuffer[16];
-    getDeviceIdFromTopic(ntfyTopic, deviceIdBuffer, sizeof(deviceIdBuffer));
-    lv_label_set_text(chartBeginLettersLabel, deviceIdBuffer);
-    lv_obj_set_pos(chartBeginLettersLabel, 0, 2);
-    
-    chartTimeLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(chartTimeLabel, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(chartTimeLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(chartTimeLabel, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_text(chartTimeLabel, "--:--:--");
-    lv_obj_set_width(chartTimeLabel, CHART_WIDTH);
-    lv_obj_set_pos(chartTimeLabel, 0, 10);
-    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
-    // ESP32-S3: Ruimere layout met datum/tijd zoals CYD, maar met device ID links
-    chartDateLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(chartDateLabel, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(chartDateLabel, lv_palette_main(LV_PALETTE_GREY), 0);
-    lv_obj_set_style_text_align(chartDateLabel, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_text(chartDateLabel, "-- -- --");
-    lv_obj_set_width(chartDateLabel, 180);
-    lv_obj_set_pos(chartDateLabel, -2, 4); // 2 pixels naar links
-    
-    chartBeginLettersLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(chartBeginLettersLabel, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(chartBeginLettersLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(chartBeginLettersLabel, LV_TEXT_ALIGN_LEFT, 0);
-    char deviceIdBuffer[16];
-    getDeviceIdFromTopic(ntfyTopic, deviceIdBuffer, sizeof(deviceIdBuffer));
-    lv_label_set_text(chartBeginLettersLabel, deviceIdBuffer);
-    lv_obj_set_pos(chartBeginLettersLabel, 0, 2);
-    
-    chartTimeLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(chartTimeLabel, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(chartTimeLabel, lv_palette_main(LV_PALETTE_GREY), 0);
-    lv_obj_set_style_text_align(chartTimeLabel, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_text(chartTimeLabel, "--:--:--");
-    lv_obj_set_width(chartTimeLabel, 240);
-    lv_obj_set_pos(chartTimeLabel, 0, 4);
-    #else
-    // CYD: Ruimere layout met datum/tijd op verschillende posities
-    chartDateLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(chartDateLabel, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(chartDateLabel, lv_palette_main(LV_PALETTE_GREY), 0);
-    lv_obj_set_style_text_align(chartDateLabel, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_text(chartDateLabel, "-- -- --");
-    lv_obj_set_width(chartDateLabel, 180);
-    lv_obj_set_pos(chartDateLabel, -2, 4); // 2 pixels naar links
-    
-    chartTimeLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(chartTimeLabel, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(chartTimeLabel, lv_palette_main(LV_PALETTE_GREY), 0);
-    lv_obj_set_style_text_align(chartTimeLabel, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_text(chartTimeLabel, "--:--:--");
-    lv_obj_set_width(chartTimeLabel, 240);
-    lv_obj_set_pos(chartTimeLabel, 0, 4);
-    #endif
-}
-
-// Helper functie om price boxes te creëren
-static void createPriceBoxes()
-{
-    for (uint8_t i = 0; i < SYMBOL_COUNT; ++i)
-    {
-        priceBox[i] = lv_obj_create(lv_scr_act());
-        lv_obj_set_size(priceBox[i], LV_PCT(100), LV_SIZE_CONTENT);
-
-        if (i == 0) {
-            lv_obj_align(priceBox[i], LV_ALIGN_TOP_LEFT, 0, PRICE_BOX_Y_START);
-        }
-        else {
-            lv_obj_align_to(priceBox[i], priceBox[i - 1], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 3);
-        }
-
-        lv_obj_set_style_radius(priceBox[i], 6, 0);
-        lv_obj_set_style_pad_all(priceBox[i], 4, 0);
-        disableScroll(priceBox[i]);
-
-        // Symbol caption
-        priceTitle[i] = lv_label_create(priceBox[i]);
-        if (i == 0) {
-            lv_obj_set_style_text_font(priceTitle[i], FONT_SIZE_TITLE_BTCEUR, 0);
-        } else {
-            lv_obj_set_style_text_font(priceTitle[i], FONT_SIZE_TITLE_OTHER, 0);
-        }
-        lv_obj_set_style_text_color(priceTitle[i], lv_color_white(), 0);
-        lv_label_set_text(priceTitle[i], symbols[i]);
-        lv_obj_align(priceTitle[i], LV_ALIGN_TOP_LEFT, 0, 0);
-
-        // Live price - platform-specifieke layout
-        priceLbl[i] = lv_label_create(priceBox[i]);
-        if (i == 0) {
-            lv_obj_set_style_text_font(priceLbl[i], FONT_SIZE_PRICE_BTCEUR, 0);
-        } else {
-            lv_obj_set_style_text_font(priceLbl[i], FONT_SIZE_PRICE_OTHER, 0);
-        }
-        
-        #ifdef PLATFORM_TTGO
-        if (i == 0) {
-            lv_obj_set_style_text_align(priceLbl[i], LV_TEXT_ALIGN_LEFT, 0);
-            lv_obj_set_style_text_color(priceLbl[i], lv_palette_main(LV_PALETTE_BLUE), 0);
-            lv_obj_align_to(priceLbl[i], priceTitle[i], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
-        } else {
-            lv_obj_align_to(priceLbl[i], priceTitle[i], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
-        }
-        
-        // Anchor labels alleen voor BTCEUR (i == 0) - TTGO layout
-        if (i == 0) {
-            anchorMaxLabel = lv_label_create(priceBox[i]);
-            lv_obj_set_style_text_font(anchorMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(anchorMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
-            lv_obj_set_style_text_align(anchorMaxLabel, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_obj_align(anchorMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14);
-            lv_label_set_text(anchorMaxLabel, "");
-            
-            anchorLabel = lv_label_create(priceBox[i]);
-            lv_obj_set_style_text_font(anchorLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(anchorLabel, lv_palette_main(LV_PALETTE_ORANGE), 0);
-            lv_obj_set_style_text_align(anchorLabel, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_obj_align(anchorLabel, LV_ALIGN_RIGHT_MID, 0, 0);
-            lv_label_set_text(anchorLabel, "");
-            
-            anchorMinLabel = lv_label_create(priceBox[i]);
-            lv_obj_set_style_text_font(anchorMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(anchorMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
-            lv_obj_set_style_text_align(anchorMinLabel, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_obj_align(anchorMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
-            lv_label_set_text(anchorMinLabel, "");
-        }
-        #else
-        if (i == 0) {
-            lv_obj_set_style_text_align(priceLbl[i], LV_TEXT_ALIGN_LEFT, 0);
-            lv_obj_set_style_text_color(priceLbl[i], lv_palette_main(LV_PALETTE_BLUE), 0);
-            lv_obj_align_to(priceLbl[i], priceTitle[i], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
-        } else {
-            lv_obj_align_to(priceLbl[i], priceTitle[i], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
-        }
-        
-        // Anchor labels alleen voor BTCEUR (i == 0) - CYD/ESP32-S3 layout (met percentages)
-        if (i == 0) {
-            anchorLabel = lv_label_create(priceBox[i]);
-            lv_obj_set_style_text_font(anchorLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(anchorLabel, lv_palette_main(LV_PALETTE_ORANGE), 0);
-            lv_obj_set_style_text_align(anchorLabel, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_obj_align(anchorLabel, LV_ALIGN_RIGHT_MID, 0, 0);
-            lv_label_set_text(anchorLabel, "");
-            
-            anchorMaxLabel = lv_label_create(priceBox[i]);
-            lv_obj_set_style_text_font(anchorMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(anchorMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
-            lv_obj_set_style_text_align(anchorMaxLabel, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_obj_align(anchorMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14);
-            lv_label_set_text(anchorMaxLabel, "");
-            
-            anchorMinLabel = lv_label_create(priceBox[i]);
-            lv_obj_set_style_text_font(anchorMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(anchorMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
-            lv_obj_set_style_text_align(anchorMinLabel, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_obj_align(anchorMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
-            lv_label_set_text(anchorMinLabel, "");
-        }
-        #endif
-        
-        lv_label_set_text(priceLbl[i], "--");
-        
-        // Min/Max/Diff labels voor 1 min blok
-        if (i == 1)
-        {
-            price1MinMaxLabel = lv_label_create(priceBox[i]);
-            lv_obj_set_style_text_font(price1MinMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(price1MinMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
-            lv_obj_set_style_text_align(price1MinMaxLabel, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_label_set_text(price1MinMaxLabel, "--");
-            lv_obj_align(price1MinMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14);
-            
-            price1MinDiffLabel = lv_label_create(priceBox[i]);
-            lv_obj_set_style_text_font(price1MinDiffLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(price1MinDiffLabel, lv_palette_main(LV_PALETTE_GREY), 0);
-            lv_obj_set_style_text_align(price1MinDiffLabel, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_label_set_text(price1MinDiffLabel, "--");
-            lv_obj_align(price1MinDiffLabel, LV_ALIGN_RIGHT_MID, 0, 0);
-            
-            price1MinMinLabel = lv_label_create(priceBox[i]);
-            lv_obj_set_style_text_font(price1MinMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(price1MinMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
-            lv_obj_set_style_text_align(price1MinMinLabel, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_label_set_text(price1MinMinLabel, "--");
-            lv_obj_align(price1MinMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
-        }
-        
-        // Min/Max/Diff labels voor 30 min blok
-        if (i == 2)
-        {
-            price30MinMaxLabel = lv_label_create(priceBox[i]);
-            lv_obj_set_style_text_font(price30MinMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(price30MinMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
-            lv_obj_set_style_text_align(price30MinMaxLabel, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_label_set_text(price30MinMaxLabel, "--");
-            lv_obj_align(price30MinMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14);
-            
-            price30MinDiffLabel = lv_label_create(priceBox[i]);
-            lv_obj_set_style_text_font(price30MinDiffLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(price30MinDiffLabel, lv_palette_main(LV_PALETTE_GREY), 0);
-            lv_obj_set_style_text_align(price30MinDiffLabel, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_label_set_text(price30MinDiffLabel, "--");
-            lv_obj_align(price30MinDiffLabel, LV_ALIGN_RIGHT_MID, 0, 0);
-            
-            price30MinMinLabel = lv_label_create(priceBox[i]);
-            lv_obj_set_style_text_font(price30MinMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(price30MinMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
-            lv_obj_set_style_text_align(price30MinMinLabel, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_label_set_text(price30MinMinLabel, "--");
-            lv_obj_align(price30MinMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
-        }
-    }
-}
-
-// Helper functie om footer te creëren
-static void createFooter()
-{
-    #ifdef PLATFORM_TTGO
-    // TTGO: IP-adres links, versienummer rechts
-    ipLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(ipLabel, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(ipLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(ipLabel, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(ipLabel, LV_ALIGN_BOTTOM_LEFT, 0, -2);
-    
-    chartVersionLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(chartVersionLabel, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_text(chartVersionLabel, VERSION_STRING);
-    lv_obj_align(chartVersionLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
-    
-    if (WiFi.status() == WL_CONNECTED) {
-        // Geoptimaliseerd: gebruik char array i.p.v. String
-        static char ipBuffer[16];
-        formatIPAddress(WiFi.localIP(), ipBuffer, sizeof(ipBuffer));
-        lv_label_set_text(ipLabel, ipBuffer);
-    } else {
-        lv_label_set_text(ipLabel, "--");
-    }
-    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
-    // ESP32-S3 Super Mini: IP + dBm links, RAM + versie rechts (één regel, meer horizontale ruimte)
-    ipLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(ipLabel, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(ipLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(ipLabel, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(ipLabel, LV_ALIGN_BOTTOM_LEFT, 0, -2);
-    
-    chartVersionLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(chartVersionLabel, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_text(chartVersionLabel, VERSION_STRING);
-    lv_obj_align(chartVersionLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
-    
-    if (WiFi.status() == WL_CONNECTED) {
-        // ESP32-S3: IP + dBm op één regel (5 spaties tussen IP en dBm)
-        static char ipBuffer[32];
-        formatIPAddress(WiFi.localIP(), ipBuffer, sizeof(ipBuffer));
-        int rssi = WiFi.RSSI();
-        char *ipEnd = ipBuffer + strlen(ipBuffer);
-        snprintf(ipEnd, sizeof(ipBuffer) - strlen(ipBuffer), "     %ddBm", rssi); // 5 spaties
-        lv_label_set_text(ipLabel, ipBuffer);
-    } else {
-        lv_label_set_text(ipLabel, "--     --dBm");
-    }
-    
-    // Update versie label met RAM info (5 spaties tussen kB en versie)
-    uint32_t freeRAM = heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024;
-    static char versionBuffer[16];
-    snprintf(versionBuffer, sizeof(versionBuffer), "%ukB     %s", freeRAM, VERSION_STRING); // 5 spaties
-    lv_label_set_text(chartVersionLabel, versionBuffer);
-    #else
-    // CYD: Footer met 2 regels
-    lblFooterLine1 = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(lblFooterLine1, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(lblFooterLine1, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(lblFooterLine1, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(lblFooterLine1, LV_ALIGN_BOTTOM_LEFT, 0, -18);
-    lv_label_set_text(lblFooterLine1, "--dBm");
-    
-    ramLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(ramLabel, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(ramLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(ramLabel, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(ramLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -18);
-    lv_label_set_text(ramLabel, "--kB");
-    
-    lblFooterLine2 = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(lblFooterLine2, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(lblFooterLine2, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(lblFooterLine2, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(lblFooterLine2, LV_ALIGN_BOTTOM_LEFT, 0, -2);
-    lv_label_set_text(lblFooterLine2, "--.--.--.--");
-    
-    chartVersionLabel = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(chartVersionLabel, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_text(chartVersionLabel, VERSION_STRING);
-    lv_obj_align(chartVersionLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
-    #endif
-}
-
-// Build the UI - Refactored to use helper functions
-static void buildUI()
-{
-    lv_obj_clean(lv_scr_act());
-    disableScroll(lv_scr_act());
-    
-    createChart();
-    createHeaderLabels();
-    createPriceBoxes();
-    createFooter();
-}
+// Fase 8.11.1: Oude create functies verwijderd - nu in UIController module
+// De volgende functies zijn verplaatst naar src/UIController/UIController.cpp:
+// - createChart()
+// - createHeaderLabels()
+// - createPriceBoxes()
+// - createFooter()
+// - buildUI()
 
 // ============================================================================
 // LVGL Callback Functions
@@ -6592,7 +5467,8 @@ void setup()
     // Setup in logical sections for better readability and maintainability
     setupSerialAndDevice();
     setupDisplay();
-    setupLVGL();
+    // Fase 8: LVGL initialisatie via UIController module
+    uiController.setupLVGL();
     setupWatchdog();
     setupWiFiEventHandlers();
     setupMutex();  // Mutex moet vroeg aangemaakt worden, maar tasks starten later
@@ -6653,7 +5529,8 @@ void setup()
     fetchPrice();
     
     // Build main UI (verwijdert WiFi UI en bouwt hoofd UI)
-    buildUI();
+    // Fase 8.4.3: Gebruik module versie
+    uiController.buildUI();
     
     // Force LVGL to render immediately after UI creation
     // CYD 2.4 en CYD 2.8 (zonder PSRAM, single buffering): gebruik lv_refr_now() voor directe rendering
