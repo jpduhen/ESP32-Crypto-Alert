@@ -96,7 +96,7 @@ extern void disableScroll(lv_obj_t *obj);
 extern const char* symbols[];
 // VERSION_STRING is een #define, niet een variabele
 #ifndef VERSION_STRING
-#define VERSION_STRING "3.92"  // Default (wordt overschreven door .ino)
+#define VERSION_STRING "4.00"  // Default (wordt overschreven door .ino)
 #endif
 extern void formatIPAddress(IPAddress ip, char* buffer, size_t bufferSize);
 // Fase 8.11.1: createFooter() dependencies (CYD platforms)

@@ -11,6 +11,10 @@ extern VolatilityTracker volatilityTracker;  // Fase 6.1.10: Voor checkAndNotify
 #include "../TrendDetector/TrendDetector.h"
 extern TrendDetector trendDetector;  // Fase 6.1.9: Voor checkAndSendConfluenceAlert
 
+// PriceData module (voor fiveMinutePrices getter)
+#include "../PriceData/PriceData.h"
+extern PriceData priceData;  // Voor getFiveMinutePrices()
+
 // Forward declarations voor dependencies (worden later via modules)
 extern bool sendNotification(const char *title, const char *message, const char *colorTag = nullptr);
 extern char binanceSymbol[];
@@ -507,33 +511,51 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                 if (smartConfluenceEnabled && last5mEvent.usedInConfluence) {
                     Serial_printf(F("[Notify] 5m move onderdrukt (al gebruikt in confluence)\n"));
                 } else {
-                    // Bereken min en max uit fiveMinutePrices buffer
-                    // Eerst zoeken naar eerste geldige waarde als startwaarde
+                    // Bereken min en max uit fiveMinutePrices buffer via PriceData module
+                    const float* fiveMinPrices = priceData.getFiveMinutePrices();
+                    uint16_t fiveMinIndex = priceData.getFiveMinuteIndex();
+                    bool fiveMinArrayFilled = priceData.getFiveMinuteArrayFilled();
                     float minVal = 0.0f;
                     float maxVal = 0.0f;
                     bool foundValidValue = false;
                     
-                    // Zoek eerste geldige waarde (> 0.0) als startwaarde
-                    for (int i = 0; i < SECONDS_PER_5MINUTES; i++) {
-                        if (fiveMinutePrices[i] > 0.0f) {
-                            minVal = fiveMinutePrices[i];
-                            maxVal = fiveMinutePrices[i];
-                            foundValidValue = true;
-                            break;
-                        }
-                    }
+                    // Bepaal hoeveel elementen we moeten checken (alleen gevulde elementen)
+                    uint16_t elementsToCheck = fiveMinArrayFilled ? SECONDS_PER_5MINUTES : fiveMinIndex;
                     
-                    // Als geen geldige waarde gevonden, gebruik huidige prijs als fallback
-                    if (!foundValidValue) {
+                    // Als array leeg is, gebruik huidige prijs
+                    if (elementsToCheck == 0) {
                         minVal = prices[0];
                         maxVal = prices[0];
                     } else {
-                        // Zoek min en max in rest van array
-                        for (int i = 0; i < SECONDS_PER_5MINUTES; i++) {
-                            if (fiveMinutePrices[i] > 0.0f) {
-                                if (fiveMinutePrices[i] < minVal) minVal = fiveMinutePrices[i];
-                                if (fiveMinutePrices[i] > maxVal) maxVal = fiveMinutePrices[i];
+                        // Zoek eerste geldige waarde (> 0.0 en < 1e6 om extreem hoge waarden uit te sluiten) als startwaarde
+                        for (uint16_t i = 0; i < elementsToCheck; i++) {
+                            if (fiveMinPrices[i] > 0.0f && fiveMinPrices[i] < 1000000.0f) {  // Validatie: prijs moet redelijk zijn
+                                minVal = fiveMinPrices[i];
+                                maxVal = fiveMinPrices[i];
+                                foundValidValue = true;
+                                break;
                             }
+                        }
+                        
+                        // Als geen geldige waarde gevonden, gebruik huidige prijs als fallback
+                        if (!foundValidValue) {
+                            minVal = prices[0];
+                            maxVal = prices[0];
+                        } else {
+                            // Zoek min en max in rest van array met validatie
+                            for (uint16_t i = 0; i < elementsToCheck; i++) {
+                                if (fiveMinPrices[i] > 0.0f && fiveMinPrices[i] < 1000000.0f) {  // Validatie: prijs moet redelijk zijn
+                                    if (fiveMinPrices[i] < minVal) minVal = fiveMinPrices[i];
+                                    if (fiveMinPrices[i] > maxVal) maxVal = fiveMinPrices[i];
+                                }
+                            }
+                        }
+                        
+                        // Extra validatie: als min/max nog steeds ongeldig zijn, gebruik huidige prijs
+                        if (minVal <= 0.0f || maxVal <= 0.0f || minVal > 1000000.0f || maxVal > 1000000.0f) {
+                            Serial_printf(F("[AlertEngine] WARN: Ongeldige min/max waarden voor 5m move (min=%.2f, max=%.2f), gebruik huidige prijs\n"), minVal, maxVal);
+                            minVal = prices[0];
+                            maxVal = prices[0];
                         }
                     }
                     
