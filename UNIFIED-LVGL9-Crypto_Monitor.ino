@@ -47,6 +47,9 @@
 // Net module (M2: streaming HTTP fetch zonder String allocaties)
 #include "src/Net/HttpFetch.h"
 
+// UIController module (Fase 8: UI Module refactoring)
+#include "src/UIController/UIController.h"
+
 // ArduinoJson support (optioneel - als library niet beschikbaar is, gebruik handmatige parsing)
 // Probeer ArduinoJson te includen - als het niet beschikbaar is, gebruik handmatige parsing
 #define USE_ARDUINOJSON 0  // Standaard uit, wordt gezet naar 1 als ArduinoJson beschikbaar is
@@ -71,8 +74,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 3
-#define VERSION_MINOR 91
-#define VERSION_STRING "3.91"
+#define VERSION_MINOR 94
+#define VERSION_STRING "3.94"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -225,16 +228,19 @@ static lv_color_t *disp_draw_buf = nullptr;  // Draw buffer pointer (één keer 
 static size_t disp_draw_buf_size = 0;  // Buffer grootte in bytes (voor logging)
 
 // Widgets LVGL global variables
-static lv_obj_t *chart;
-static lv_chart_series_t *dataSeries;     // Blauwe serie voor alle punten
+// Fase 8.7.1: static verwijderd zodat UIController module deze kan gebruiken
+lv_obj_t *chart;
+lv_chart_series_t *dataSeries;     // Blauwe serie voor alle punten
 static lv_obj_t *lblFooterLine1; // Footer regel 1 (alleen voor CYD: dBm links, RAM rechts)
 static lv_obj_t *lblFooterLine2; // Footer regel 2 (alleen voor CYD: IP links, versie rechts)
 static lv_obj_t *ramLabel; // RAM label rechts op regel 1 (alleen voor CYD)
 
 // One card per symbol
-static lv_obj_t *priceBox[SYMBOL_COUNT];
-static lv_obj_t *priceTitle[SYMBOL_COUNT];
-static lv_obj_t *priceLbl[SYMBOL_COUNT];
+// Fase 8.6.3: static verwijderd zodat UIController module deze kan gebruiken
+lv_obj_t *priceBox[SYMBOL_COUNT];
+// Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
+lv_obj_t *priceTitle[SYMBOL_COUNT];
+lv_obj_t *priceLbl[SYMBOL_COUNT];
 
 // FreeRTOS mutex voor data synchronisatie tussen cores
 SemaphoreHandle_t dataMutex = NULL;
@@ -243,13 +249,15 @@ SemaphoreHandle_t dataMutex = NULL;
 SemaphoreHandle_t gNetMutex = NULL;
 
 // Symbols array - eerste element wordt dynamisch ingesteld via binanceSymbol
-static char symbolsArray[SYMBOL_COUNT][16] = {"BTCEUR", SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL};
-static const char *symbols[SYMBOL_COUNT] = {symbolsArray[0], symbolsArray[1], symbolsArray[2]};
+// Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
+char symbolsArray[SYMBOL_COUNT][16] = {"BTCEUR", SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL};
+const char *symbols[SYMBOL_COUNT] = {symbolsArray[0], symbolsArray[1], symbolsArray[2]};
 // Fase 6.1: AlertEngine module gebruikt deze variabele (extern declaration in AlertEngine.cpp)
 float prices[SYMBOL_COUNT] = {0};
 // Fase 6.2: AnchorSystem module gebruikt deze variabele (extern declaration in AnchorSystem.cpp)
 float openPrices[SYMBOL_COUNT] = {0};
-static float averagePrices[SYMBOL_COUNT] = {0}; // Gemiddelde prijzen voor 1 min en 30 min
+// Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
+float averagePrices[SYMBOL_COUNT] = {0}; // Gemiddelde prijzen voor 1 min en 30 min
 
 
 // Anchor price (referentie prijs voor koop/verkoop tracking)
@@ -294,13 +302,15 @@ float downtrendTakeProfitMultiplier = DOWNTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT;
 
 static float ret_2h = 0.0f;  // 2-hour return percentage
 static float ret_30m = 0.0f;  // 30-minute return percentage (calculated from minuteAverages or warm-start data)
-static bool hasRet2hWarm = false;  // Flag: ret_2h beschikbaar vanuit warm-start (minimaal 2 candles)
-static bool hasRet30mWarm = false;  // Flag: ret_30m beschikbaar vanuit warm-start (minimaal 2 candles)
-static bool hasRet2hLive = false;  // Flag: ret_2h kan worden berekend uit live data (minuteIndex >= 120)
-static bool hasRet30mLive = false;  // Flag: ret_30m kan worden berekend uit live data (minuteIndex >= 30)
+// Fase 8.5.2: static verwijderd zodat UIController module deze kan gebruiken
+bool hasRet2hWarm = false;  // Flag: ret_2h beschikbaar vanuit warm-start (minimaal 2 candles)
+bool hasRet30mWarm = false;  // Flag: ret_30m beschikbaar vanuit warm-start (minimaal 2 candles)
+bool hasRet2hLive = false;  // Flag: ret_2h kan worden berekend uit live data (minuteIndex >= 120)
+bool hasRet30mLive = false;  // Flag: ret_30m kan worden berekend uit live data (minuteIndex >= 30)
 // Combined flags: beschikbaar vanuit warm-start OF live data
-static bool hasRet2h = false;  // hasRet2hWarm || hasRet2hLive
-static bool hasRet30m = false;  // hasRet30mWarm || hasRet30mLive
+// Fase 8.5.2: static verwijderd zodat UIController module deze kan gebruiken
+bool hasRet2h = false;  // hasRet2hWarm || hasRet2hLive
+bool hasRet30m = false;  // hasRet30mWarm || hasRet30mLive
 // Fase 5.3.17: Globale variabelen voor backward compatibility - modules zijn source of truth
 // Deze variabelen worden gesynchroniseerd met TrendDetector module na elke update
 // TODO: In toekomstige fase kunnen deze verwijderd worden zodra alle code volledig gemigreerd is
@@ -344,31 +354,40 @@ float currentVolFactor = 1.0f;  // Huidige volatility factor
 static unsigned long lastVolatilityLog = 0;  // Timestamp van laatste volatility log (voor debug)
 #define VOLATILITY_LOG_INTERVAL_MS 300000UL  // Log elke 5 minuten
 
-static uint8_t symbolIndexToChart = 0; // The symbol index to chart
+// Fase 8.7.1: static verwijderd zodat UIController module deze kan gebruiken
+uint8_t symbolIndexToChart = 0; // The symbol index to chart
 static uint32_t maxRange;
 static uint32_t minRange;
 // chartMaxLabel verwijderd - niet meer nodig
-static lv_obj_t *chartTitle;     // Label voor chart titel (symbool) - alleen voor CYD
-static lv_obj_t *chartVersionLabel; // Label voor versienummer (rechts bovenste regel)
-static lv_obj_t *chartDateLabel; // Label voor datum rechtsboven (vanaf pixel 180)
-static lv_obj_t *chartTimeLabel; // Label voor tijd rechtsboven
-static lv_obj_t *chartBeginLettersLabel; // Label voor beginletters (TTGO, links tweede regel)
+// Fase 8.5: static verwijderd zodat UIController module deze kan gebruiken
+lv_obj_t *chartTitle;     // Label voor chart titel (symbool) - alleen voor CYD
+lv_obj_t *chartVersionLabel; // Label voor versienummer (rechts bovenste regel)
+lv_obj_t *chartDateLabel; // Label voor datum rechtsboven (vanaf pixel 180)
+lv_obj_t *chartTimeLabel; // Label voor tijd rechtsboven
+// Fase 8.7.1: static verwijderd zodat UIController module deze kan gebruiken
+lv_obj_t *chartBeginLettersLabel; // Label voor beginletters (TTGO, links tweede regel)
 static lv_obj_t *ipLabel; // IP-adres label (TTGO, onderin, gecentreerd)
-static lv_obj_t *price1MinMaxLabel; // Label voor max waarde in 1 min buffer
-static lv_obj_t *price1MinMinLabel; // Label voor min waarde in 1 min buffer
-static lv_obj_t *price1MinDiffLabel; // Label voor verschil tussen max en min in 1 min buffer
-static lv_obj_t *price30MinMaxLabel; // Label voor max waarde in 30 min buffer
-static lv_obj_t *price30MinMinLabel; // Label voor min waarde in 30 min buffer
-static lv_obj_t *price30MinDiffLabel; // Label voor verschil tussen max en min in 30 min buffer
-static lv_obj_t *anchorLabel; // Label voor anchor price info (rechts midden, met percentage verschil)
-static lv_obj_t *anchorMaxLabel; // Label voor "Pak winst" (rechts, groen, boven)
-static lv_obj_t *anchorMinLabel; // Label voor "Stop loss" (rechts, rood, onder)
+// Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
+lv_obj_t *price1MinMaxLabel; // Label voor max waarde in 1 min buffer
+lv_obj_t *price1MinMinLabel; // Label voor min waarde in 1 min buffer
+lv_obj_t *price1MinDiffLabel; // Label voor verschil tussen max en min in 1 min buffer
+lv_obj_t *price30MinMaxLabel; // Label voor max waarde in 30 min buffer
+lv_obj_t *price30MinMinLabel; // Label voor min waarde in 30 min buffer
+lv_obj_t *price30MinDiffLabel; // Label voor verschil tussen max en min in 30 min buffer
+// Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
+lv_obj_t *anchorLabel; // Label voor anchor price info (rechts midden, met percentage verschil)
+lv_obj_t *anchorMaxLabel; // Label voor "Pak winst" (rechts, groen, boven)
+lv_obj_t *anchorMinLabel; // Label voor "Stop loss" (rechts, rood, onder)
 static lv_obj_t *anchorDeltaLabel; // Label voor anchor delta % (TTGO, rechts)
-static lv_obj_t *trendLabel; // Label voor trend weergave
-static lv_obj_t *warmStartStatusLabel; // Label voor warm-start status weergave (rechts bovenin chart)
-static lv_obj_t *volatilityLabel; // Label voor volatiliteit weergave
+// Fase 8.5: static verwijderd zodat UIController module deze kan gebruiken
+lv_obj_t *trendLabel; // Label voor trend weergave
+// Fase 8.5.4: static verwijderd zodat UIController module deze kan gebruiken
+lv_obj_t *warmStartStatusLabel; // Label voor warm-start status weergave (rechts bovenin chart)
+// Fase 8.5: static verwijderd zodat UIController module deze kan gebruiken
+lv_obj_t *volatilityLabel; // Label voor volatiliteit weergave
 
-static uint32_t lastApiMs = 0; // Time of last api call
+// Fase 8.8.1: static verwijderd zodat UIController module deze kan gebruiken
+uint32_t lastApiMs = 0; // Time of last api call
 
 // CPU usage measurement (alleen voor web interface)
 static float cpuUsagePercent = 0.0f;
@@ -396,34 +415,39 @@ char gApiResp[512];     // Buffer voor API price responses (M2: streaming)
 static char binanceStreamBuffer[1024];  // Fixed-size buffer voor chunked JSON parsing
 
 // LVGL UI buffers en cache (voorkomt herhaalde allocaties en onnodige updates)
-static char priceLblBuffer[32];  // Buffer voor price label (%.2f format)
-static char anchorMaxLabelBuffer[32];  // Buffer voor anchor max label
-static char anchorLabelBuffer[32];  // Buffer voor anchor label
-static char anchorMinLabelBuffer[32];  // Buffer voor anchor min label
-static char priceTitleBuffer[3][64];  // Buffers voor price titles (3 symbols)
-static char price1MinMaxLabelBuffer[32];  // Buffer voor 1m max label
-static char price1MinMinLabelBuffer[32];  // Buffer voor 1m min label
-static char price1MinDiffLabelBuffer[32];  // Buffer voor 1m diff label
-static char price30MinMaxLabelBuffer[32];  // Buffer voor 30m max label
-static char price30MinMinLabelBuffer[32];  // Buffer voor 30m min label
-static char price30MinDiffLabelBuffer[32];  // Buffer voor 30m diff label
+// Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
+char priceLblBuffer[32];  // Buffer voor price label (%.2f format)
+char anchorMaxLabelBuffer[32];  // Buffer voor anchor max label
+char anchorLabelBuffer[32];  // Buffer voor anchor label
+char anchorMinLabelBuffer[32];  // Buffer voor anchor min label
+// Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
+char priceTitleBuffer[3][64];  // Buffers voor price titles (3 symbols)
+char price1MinMaxLabelBuffer[32];  // Buffer voor 1m max label
+char price1MinMinLabelBuffer[32];  // Buffer voor 1m min label
+char price1MinDiffLabelBuffer[32];  // Buffer voor 1m diff label
+char price30MinMaxLabelBuffer[32];  // Buffer voor 30m max label
+char price30MinMinLabelBuffer[32];  // Buffer voor 30m min label
+char price30MinDiffLabelBuffer[32];  // Buffer voor 30m diff label
 
 // Cache laatste waarden (alleen updaten als veranderd)
-static float lastPriceLblValue = -1.0f;  // Cache voor price label
-static float lastAnchorMaxValue = -1.0f;  // Cache voor anchor max
-static float lastAnchorValue = -1.0f;  // Cache voor anchor
-static float lastAnchorMinValue = -1.0f;  // Cache voor anchor min
-static float lastPrice1MinMaxValue = -1.0f;  // Cache voor 1m max
-static float lastPrice1MinMinValue = -1.0f;  // Cache voor 1m min
-static float lastPrice1MinDiffValue = -1.0f;  // Cache voor 1m diff
-static float lastPrice30MinMaxValue = -1.0f;  // Cache voor 30m max
-static float lastPrice30MinMinValue = -1.0f;  // Cache voor 30m min
-static float lastPrice30MinDiffValue = -1.0f;  // Cache voor 30m diff
-static char lastPriceTitleText[3][64] = {""};  // Cache voor price titles
-static char priceLblBufferArray[3][32];  // Buffers voor average price labels (3 symbols)
+// Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
+float lastPriceLblValue = -1.0f;  // Cache voor price label
+float lastAnchorMaxValue = -1.0f;  // Cache voor anchor max
+float lastAnchorValue = -1.0f;  // Cache voor anchor
+float lastAnchorMinValue = -1.0f;  // Cache voor anchor min
+// Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
+float lastPrice1MinMaxValue = -1.0f;  // Cache voor 1m max
+float lastPrice1MinMinValue = -1.0f;  // Cache voor 1m min
+float lastPrice1MinDiffValue = -1.0f;  // Cache voor 1m diff
+float lastPrice30MinMaxValue = -1.0f;  // Cache voor 30m max
+float lastPrice30MinMinValue = -1.0f;  // Cache voor 30m min
+float lastPrice30MinDiffValue = -1.0f;  // Cache voor 30m diff
+char lastPriceTitleText[3][64] = {""};  // Cache voor price titles
+char priceLblBufferArray[3][32];  // Buffers voor average price labels (3 symbols)
 static char footerRssiBuffer[16];  // Buffer voor footer RSSI
 static char footerRamBuffer[16];  // Buffer voor footer RAM
-static float lastPriceLblValueArray[3] = {-1.0f, -1.0f, -1.0f};  // Cache voor average price labels
+// Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
+float lastPriceLblValueArray[3] = {-1.0f, -1.0f, -1.0f};  // Cache voor average price labels
 static int32_t lastRssiValue = -999;  // Cache voor RSSI
 static uint32_t lastRamValue = 0;  // Cache voor RAM
 // lastDateText en lastTimeText zijn verplaatst naar direct voor updateDateTimeLabels() functie
@@ -441,7 +465,8 @@ float secondPrices[SECONDS_PER_MINUTE];
 DataSource secondPricesSource[SECONDS_PER_MINUTE];  // Source tracking per sample
 uint8_t secondIndex = 0;
 bool secondArrayFilled = false;
-static bool newPriceDataAvailable = false;  // Flag om aan te geven of er nieuwe prijsdata is voor grafiek update
+// Fase 8.7.1: static verwijderd zodat UIController module deze kan gebruiken
+bool newPriceDataAvailable = false;  // Flag om aan te geven of er nieuwe prijsdata is voor grafiek update
 
 // Array van 300 posities voor laatste 300 seconden (5 minuten) - voor ret_5m berekening
 // Voor CYD zonder PSRAM: dynamisch alloceren om DRAM overflow te voorkomen
@@ -481,9 +506,11 @@ static uint8_t warmStart1mExtraCandles = WARM_START_1M_EXTRA_CANDLES_DEFAULT;
 static uint8_t warmStart5mCandles = WARM_START_5M_CANDLES_DEFAULT;
 static uint8_t warmStart30mCandles = WARM_START_30M_CANDLES_DEFAULT;
 static uint8_t warmStart2hCandles = WARM_START_2H_CANDLES_DEFAULT;
-static WarmStartStatus warmStartStatus = LIVE;  // Default: LIVE (cold start als warm-start faalt)
+// Fase 8.5.4: static verwijderd zodat UIController module deze kan gebruiken
+WarmStartStatus warmStartStatus = LIVE;  // Default: LIVE (cold start als warm-start faalt)
 static unsigned long warmStartCompleteTime = 0;  // Timestamp wanneer systeem volledig LIVE werd
-static WarmStartStats warmStartStats = {0, 0, 0, 0, false, false, false, false, WS_MODE_DISABLED, 0};
+// Fase 8.5.4: static verwijderd zodat UIController module deze kan gebruiken
+WarmStartStats warmStartStats = {0, 0, 0, 0, false, false, false, false, WS_MODE_DISABLED, 0};
 
 // Notification settings - NTFY.sh
 // Note: NTFY topic wordt dynamisch gegenereerd met ESP32 device ID
@@ -500,7 +527,8 @@ static uint8_t language = DEFAULT_LANGUAGE;  // 0 = Nederlands, 1 = English
 
 // Instelbare grenswaarden (worden geladen uit Preferences)
 // Note: ntfyTopic wordt geïnitialiseerd in loadSettings() met unieke ESP32 ID
-static char ntfyTopic[64] = "";  // NTFY topic (max 63 karakters)
+// Fase 8.7.1: static verwijderd zodat UIController module deze kan gebruiken
+char ntfyTopic[64] = "";  // NTFY topic (max 63 karakters)
 // Fase 5.1: static verwijderd zodat TrendDetector module deze variabele kan gebruiken
 char binanceSymbol[16] = BINANCE_SYMBOL_DEFAULT;  // Binance symbool (max 15 karakters, bijv. BTCEUR, BTCUSDT)
 
@@ -579,6 +607,9 @@ AlertEngine alertEngine;
 // AnchorSystem instance (Fase 6.2.1: anchor price tracking module - basis structuur)
 #include "src/AnchorSystem/AnchorSystem.h"
 AnchorSystem anchorSystem;
+
+// UIController instance (Fase 8.1.1: UI Module refactoring)
+UIController uiController;
 
 // MQTT configuratie (instelbaar via web interface)
 static char mqttHost[64] = MQTT_HOST_DEFAULT;    // MQTT broker IP
@@ -1676,7 +1707,8 @@ static bool safeAtof(const char* str, float& out)
 }
 
 // Helper: Safe string copy with guaranteed null termination
-static void safeStrncpy(char *dest, const char *src, size_t destSize)
+// Fase 8.7.1: static verwijderd zodat UIController module deze kan gebruiken
+void safeStrncpy(char *dest, const char *src, size_t destSize)
 {
     if (destSize == 0) return;
     strncpy(dest, src, destSize - 1);
@@ -1944,7 +1976,8 @@ void logVolatilityStatus(const EffectiveThresholds& eff)
 
 // Language translation function
 // Returns the appropriate text based on the selected language
-static const char* getText(const char* nlText, const char* enText) {
+// Fase 8.5.2: static verwijderd zodat UIController module deze kan gebruiken
+const char* getText(const char* nlText, const char* enText) {
     return (language == 1) ? enText : nlText;
 }
 
@@ -3887,7 +3920,8 @@ uint32_t getLastWrittenIndex(uint32_t currentIndex, uint32_t bufferSize)
 // Helper: Calculate percentage of SOURCE_LIVE entries in the last windowMinutes of minuteAverages
 // Returns percentage (0-100) of entries that are SOURCE_LIVE
 // Fase 4.2.9: Gebruik PriceData getters (parallel, arrays blijven globaal)
-static uint8_t calcLivePctMinuteAverages(uint16_t windowMinutes)
+// Fase 8.5.2: static verwijderd zodat UIController module deze kan gebruiken
+uint8_t calcLivePctMinuteAverages(uint16_t windowMinutes)
 {
     if (windowMinutes == 0 || windowMinutes > MINUTES_FOR_30MIN_CALC) {
         return 0;
@@ -4620,7 +4654,8 @@ static void updateMinuteAverage()
 // ============================================================================
 
 // Fetch the symbols' current prices (thread-safe met mutex)
-static void fetchPrice()
+// Fase 8.9.1: static verwijderd zodat UIController module deze kan gebruiken
+void fetchPrice()
 {
     // Controleer eerst of WiFi verbonden is
     if (WiFi.status() != WL_CONNECTED) {
@@ -4851,11 +4886,18 @@ static void updateChartSection(int32_t currentPrice, bool hasNewPriceData) {
 
 static void updateHeaderSection() {
     // Update datum/tijd labels
-    updateDateTimeLabels();
+    // Fase 8.5.1: Gebruik module versie (parallel - oude functie blijft bestaan)
+    uiController.updateDateTimeLabels();
     
     // Update trend en volatiliteit labels
-    updateTrendLabel();
-    updateVolatilityLabel();
+    // Fase 8.5.2: Gebruik module versie (parallel - oude functie blijft bestaan)
+    uiController.updateTrendLabel();
+    // Fase 8.5.3: Gebruik module versie (parallel - oude functie blijft bestaan)
+    uiController.updateVolatilityLabel();
+    
+    // Update warm-start status label
+    // Fase 8.5.4: Gebruik module versie (parallel - oude functie blijft bestaan)
+    uiController.updateWarmStartStatusLabel();
 }
 
 static void updatePriceCardsSection(bool hasNewPriceData) {
@@ -4865,16 +4907,19 @@ static void updatePriceCardsSection(bool hasNewPriceData) {
         
         if (i == 0) {
             // BTCEUR card
-            updateBTCEURCard(hasNewPriceData);
+            // Fase 8.6.1: Gebruik module versie (parallel - oude functie blijft bestaan)
+            uiController.updateBTCEURCard(hasNewPriceData);
             pct = 0.0f; // BTCEUR heeft geen percentage voor kleur
         } else {
             // 1min/30min cards
+            // Fase 8.6.2: Gebruik module versie (parallel - oude functie blijft bestaan)
             pct = prices[i];
-            updateAveragePriceCard(i);
+            uiController.updateAveragePriceCard(i);
         }
         
         // Update kleuren
-        updatePriceCardColor(i, pct);
+        // Fase 8.6.3: Gebruik module versie (parallel - oude functie blijft bestaan)
+        uiController.updatePriceCardColor(i, pct);
     }
 }
 
@@ -4899,9 +4944,12 @@ void updateUI()
     }
     
     // Update UI sections
-    updateChartSection(p, hasNewPriceData);
-    updateHeaderSection();
-    updatePriceCardsSection(hasNewPriceData);
+    // Fase 8.7.1: Gebruik module versie (parallel - oude functie blijft bestaan)
+    uiController.updateChartSection(p, hasNewPriceData);
+    // Fase 8.7.1: Gebruik module versie (parallel - oude functie blijft bestaan)
+    uiController.updateHeaderSection();
+    // Fase 8.7.3: Gebruik module versie (parallel - oude functie blijft bestaan)
+    uiController.updatePriceCardsSection(hasNewPriceData);
     updateFooter();
     
     // Heap telemetry na LVGL update (optioneel, alleen periodiek)
@@ -4913,7 +4961,8 @@ void updateUI()
 // ============================================================================
 
 // Helper functie om chart range te berekenen en bij te werken
-static void updateChartRange(int32_t currentPrice)
+// Fase 8.7.1: static verwijderd zodat UIController module deze kan gebruiken
+void updateChartRange(int32_t currentPrice)
 {
     int32_t chartMin = INT32_MAX;
     int32_t chartMax = INT32_MIN;
@@ -5554,7 +5603,8 @@ static void updatePriceCardColor(uint8_t index, float pct)
 }
 
 // Helper functie om footer bij te werken
-static void updateFooter()
+// Fase 8.8.1: static verwijderd zodat UIController module deze kan gebruiken
+void updateFooter()
 {
     #ifdef PLATFORM_TTGO
     if (ipLabel != nullptr) {
@@ -6067,9 +6117,13 @@ void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 // Physical button check function (voor TTGO en CYD platforms)
 #if HAS_PHYSICAL_BUTTON
 // Button debouncing - edge detection voor betere eerste-druk detectie
-static unsigned long lastButtonPress = 0;
-static int lastButtonState = HIGH; // Start met HIGH (niet ingedrukt)
-static const unsigned long BUTTON_DEBOUNCE_MS = 500; // 500ms debounce
+// Fase 8.9.1: static verwijderd zodat UIController module deze kan gebruiken
+unsigned long lastButtonPress = 0;
+int lastButtonState = HIGH; // Start met HIGH (niet ingedrukt)
+// Fase 8.9.1: const verwijderd, nu als #define gebruikt zodat UIController module deze kan gebruiken
+#ifndef BUTTON_DEBOUNCE_MS
+#define BUTTON_DEBOUNCE_MS 500  // 500ms debounce
+#endif
 
 void checkButton() {
     unsigned long now = millis();
@@ -6108,7 +6162,8 @@ void checkButton() {
         // Fase 6.2.7: Gebruik AnchorSystem module i.p.v. globale functie
         if (anchorSystem.setAnchorPrice(0.0f)) {
             // Update UI (this will also take the mutex internally)
-            updateUI();
+            // Fase 8.8.1: Gebruik module versie (parallel - oude functie blijft bestaan)
+            uiController.updateUI();
         } else {
             Serial_println("[Button] WARN: Kon anchor niet instellen");
         }
@@ -7115,7 +7170,8 @@ void uiTask(void *parameter)
                 uiMutexTimeoutCount = 0;
             }
             
-            updateUI();
+            // Fase 8.8.1: Gebruik module versie (parallel - oude functie blijft bestaan)
+            uiController.updateUI();
             safeMutexGive(dataMutex, "uiTask updateUI");
         }
         else
@@ -7151,7 +7207,8 @@ void uiTask(void *parameter)
         
         // Check physical button (alleen voor TTGO)
         #if HAS_PHYSICAL_BUTTON
-        checkButton();
+        // Fase 8.9.1: Gebruik module versie (parallel - oude functie blijft bestaan)
+        uiController.checkButton();
         #endif
         
         // Periodic heap telemetry check (elke 60 seconden)

@@ -22,7 +22,12 @@ extern bool smartConfluenceEnabled;  // Fase 6.1.9: Voor checkAndSendConfluenceA
 void findMinMaxInSecondPrices(float &minVal, float &maxVal);
 void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
 void logVolatilityStatus(const EffectiveThresholds& eff);
+// Fase 6.1.10: fiveMinutePrices kan pointer zijn (CYD) of array (andere platforms)
+#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+extern float *fiveMinutePrices;
+#else
 extern float fiveMinutePrices[];
+#endif
 
 // Fase 6.1.10: Thresholds zijn #define macros die verwijzen naar struct velden
 // We gebruiken de structs direct i.p.v. de macro namen
@@ -503,12 +508,32 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                     Serial_printf(F("[Notify] 5m move onderdrukt (al gebruikt in confluence)\n"));
                 } else {
                     // Bereken min en max uit fiveMinutePrices buffer
-                    float minVal = fiveMinutePrices[0];
-                    float maxVal = fiveMinutePrices[0];
-                    for (int i = 1; i < SECONDS_PER_5MINUTES; i++) {
+                    // Eerst zoeken naar eerste geldige waarde als startwaarde
+                    float minVal = 0.0f;
+                    float maxVal = 0.0f;
+                    bool foundValidValue = false;
+                    
+                    // Zoek eerste geldige waarde (> 0.0) als startwaarde
+                    for (int i = 0; i < SECONDS_PER_5MINUTES; i++) {
                         if (fiveMinutePrices[i] > 0.0f) {
-                            if (fiveMinutePrices[i] < minVal || minVal <= 0.0f) minVal = fiveMinutePrices[i];
-                            if (fiveMinutePrices[i] > maxVal || maxVal <= 0.0f) maxVal = fiveMinutePrices[i];
+                            minVal = fiveMinutePrices[i];
+                            maxVal = fiveMinutePrices[i];
+                            foundValidValue = true;
+                            break;
+                        }
+                    }
+                    
+                    // Als geen geldige waarde gevonden, gebruik huidige prijs als fallback
+                    if (!foundValidValue) {
+                        minVal = prices[0];
+                        maxVal = prices[0];
+                    } else {
+                        // Zoek min en max in rest van array
+                        for (int i = 0; i < SECONDS_PER_5MINUTES; i++) {
+                            if (fiveMinutePrices[i] > 0.0f) {
+                                if (fiveMinutePrices[i] < minVal) minVal = fiveMinutePrices[i];
+                                if (fiveMinutePrices[i] > maxVal) maxVal = fiveMinutePrices[i];
+                            }
                         }
                     }
                     

@@ -242,22 +242,134 @@ UNIFIED-LVGL9-Crypto_Monitor/
 
 ### Fase 8: UI Module
 **Status:** ⏳ Te starten
+**Lessons Learned toegepast:**
+- Kleine sub-stappen (< 100 regels per stap waar mogelijk)
+- Parallel implementatie eerst (nieuwe code naast oude)
+- Geen `static` keyword op helpers die modules gebruiken
+- Forward declarations voor dependencies
+- Test na elke stap
 
-#### Stap 8.1: UIController Module
-- [ ] Maak `src/UIController/UIController.h` en `.cpp`
-- [ ] Verplaats LVGL display initialisatie
-- [ ] Verplaats `buildUI()` functionaliteit
-- [ ] Verplaats `updateUI()` functionaliteit
-- [ ] Verplaats UI update functies (`updateTrendLabel()`, etc.)
-- [ ] Test: UI werkt nog
+#### Stap 8.1: UIController Module Setup
+**Status:** ⏳ Te starten
+**Sub-stappen:**
+- [ ] **8.1.1:** Maak `src/UIController/UIController.h` met basis structuur (class, forward declarations)
+- [ ] **8.1.2:** Maak `src/UIController/UIController.cpp` met constructor en begin() method
+- [ ] **8.1.3:** Verplaats LVGL callback functies naar module (my_print, millis_cb, my_disp_flush)
+- [ ] **8.1.4:** Test: Code compileert, callbacks werken nog
+- **Notities:**
+  - Callbacks moeten extern beschikbaar blijven voor LVGL
+  - Forward declarations voor dependencies (PriceData, TrendDetector, VolatilityTracker, etc.)
 
-**Verwachte output:** UIController module
+#### Stap 8.2: UI Object Pointers naar Module
+**Status:** ⏳ Te starten
+**Sub-stappen:**
+- [ ] **8.2.1:** Verplaats lv_obj_t pointer declaraties naar module (parallel, globaal blijft bestaan)
+- [ ] **8.2.2:** Voeg getters toe voor externe access (indien nodig)
+- [ ] **8.2.3:** Test: Code compileert, geen functionaliteit veranderd
+- **Notities:**
+  - Parallel implementatie: module pointers naast globale pointers
+  - Getters voor backward compatibility
 
-#### Stap 8.2: Cleanup UI Code
-- [ ] Verwijder oude UI code uit hoofdbestand
-- [ ] Test: UI functionaliteit werkt nog
+#### Stap 8.3: create*() functies naar Module
+**Status:** ⏳ Te starten
+**Sub-stappen:**
+- [ ] **8.3.1:** Verplaats `createChart()` naar module (parallel, niet vervangen)
+- [ ] **8.3.2:** Verplaats `createHeaderLabels()` naar module (parallel)
+- [ ] **8.3.3:** Verplaats `createPriceBoxes()` naar module (parallel)
+- [ ] **8.3.4:** Verplaats `createFooter()` naar module (parallel)
+- [ ] **8.3.5:** Test: Module functies werken parallel
+- **Notities:**
+  - Elke create functie is ~50-100 regels
+  - Parallel implementatie: oude functies blijven bestaan
 
-**Verwachte output:** Schonere code, functionaliteit behouden
+#### Stap 8.4: buildUI() naar Module
+**Status:** ⏳ Te starten
+**Sub-stappen:**
+- [ ] **8.4.1:** Verplaats `buildUI()` naar module (gebruikt module create functies)
+- [ ] **8.4.2:** Test: Module buildUI() werkt parallel
+- [ ] **8.4.3:** Vervang call naar `buildUI()` in setup() met module versie
+- [ ] **8.4.4:** Test: UI wordt correct gebouwd met module
+- **Notities:**
+  - buildUI() is klein (~10 regels), maar gebruikt alle create functies
+  - Vervang pas na alle create functies gemigreerd zijn
+
+#### Stap 8.5: update*Label() functies naar Module
+**Status:** ⏳ Te starten
+**Sub-stappen:**
+- [ ] **8.5.1:** Verplaats `updateDateTimeLabels()` naar module (parallel)
+- [ ] **8.5.2:** Verplaats `updateTrendLabel()` naar module (parallel)
+- [ ] **8.5.3:** Verplaats `updateVolatilityLabel()` naar module (parallel)
+- [ ] **8.5.4:** Test: Module update functies werken parallel
+- **Notities:**
+  - Elke update functie is ~30-100 regels
+  - Gebruikt TrendDetector en VolatilityTracker getters
+
+#### Stap 8.6: update*Card() functies naar Module
+**Status:** ⏳ Te starten
+**Sub-stappen:**
+- [ ] **8.6.1:** Verplaats `updateBTCEURCard()` naar module (parallel)
+- [ ] **8.6.2:** Verplaats `updateAveragePriceCard()` naar module (parallel)
+- [ ] **8.6.3:** Verplaats `updatePriceCardColor()` naar module (parallel)
+- [ ] **8.6.4:** Test: Module update functies werken parallel
+- **Notities:**
+  - Elke update functie is ~50-150 regels
+  - Gebruikt PriceData getters
+
+#### Stap 8.7: update*Section() functies naar Module
+**Status:** ⏳ Te starten
+**Sub-stappen:**
+- [ ] **8.7.1:** Verplaats `updateChartSection()` naar module (parallel)
+- [ ] **8.7.2:** Verplaats `updateHeaderSection()` naar module (parallel)
+- [ ] **8.7.3:** Verplaats `updatePriceCardsSection()` naar module (parallel)
+- [ ] **8.7.4:** Test: Module update functies werken parallel
+- **Notities:**
+  - Elke update functie is ~20-50 regels
+  - Gebruikt andere update functies
+
+#### Stap 8.8: updateUI() naar Module
+**Status:** ⏳ Te starten
+**Sub-stappen:**
+- [ ] **8.8.1:** Verplaats `updateUI()` naar module (gebruikt module update functies)
+- [ ] **8.8.2:** Test: Module updateUI() werkt parallel
+- [ ] **8.8.3:** Vervang call naar `updateUI()` in uiTask met module versie
+- [ ] **8.8.4:** Test: UI updates werken met module
+- **Notities:**
+  - updateUI() is ~30 regels, maar gebruikt alle update functies
+  - Vervang pas na alle update functies gemigreerd zijn
+
+#### Stap 8.9: checkButton() naar Module
+**Status:** ⏳ Te starten
+**Sub-stappen:**
+- [ ] **8.9.1:** Verplaats `checkButton()` naar module (parallel)
+- [ ] **8.9.2:** Test: Module checkButton() werkt parallel
+- [ ] **8.9.3:** Vervang call naar `checkButton()` met module versie
+- [ ] **8.9.4:** Test: Button functionaliteit werkt met module
+- **Notities:**
+  - checkButton() is ~50-100 regels
+  - Gebruikt AnchorSystem voor anchor setting
+
+#### Stap 8.10: LVGL Initialisatie naar Module
+**Status:** ⏳ Te starten
+**Sub-stappen:**
+- [ ] **8.10.1:** Verplaats LVGL display initialisatie code naar module (parallel)
+- [ ] **8.10.2:** Test: Module initialisatie werkt parallel
+- [ ] **8.10.3:** Vervang LVGL init code in setup() met module versie
+- [ ] **8.10.4:** Test: Display initialisatie werkt met module
+- **Notities:**
+  - LVGL init is ~50-100 regels
+  - Platform-specifieke code (TTGO, CYD, ESP32-S3)
+
+#### Stap 8.11: Cleanup UI Code
+**Status:** ⏳ Te starten
+**Sub-stappen:**
+- [ ] **8.11.1:** Verwijder oude create functies (als niet meer gebruikt)
+- [ ] **8.11.2:** Verwijder oude update functies (als niet meer gebruikt)
+- [ ] **8.11.3:** Verwijder oude UI object pointers (als volledig gemigreerd)
+- [ ] **8.11.4:** Cleanup oude commentaar (behoud referenties naar module)
+- [ ] **8.11.5:** Test: Alle UI functionaliteit werkt nog
+- **Notities:**
+  - Behoud globale pointers voor backward compatibility (indien nodig)
+  - Verwijder alleen als volledig gemigreerd en getest
 
 ---
 

@@ -1,8 +1,8 @@
 # Crypto Monitor Refactoring Status
 
-**Laatste update:** 2025-12-19 (Versie 3.90 - Fase 7 planning voltooid)  
-**Huidige fase:** Fase 7 - Warm-Start Module ⏳ TE STARTEN  
-**Huidige stap:** Fase 7.1 - WarmStart Module Setup ⏳ TE STARTEN
+**Laatste update:** 2025-01-XX (Versie 3.94 - Fase 8.9 voltooid)  
+**Huidige fase:** Fase 8 - UI Module 🔄 IN UITVOERING  
+**Huidige stap:** Fase 8.9 - checkButton() naar Module ✅ VOLTOOID, volgende: Fase 8.10 - LVGL Initialisatie
 
 ---
 
@@ -17,7 +17,7 @@
 | Fase 5: Analysis Modules | ✅ Voltooid | 2025-12-19 | 2025-12-19 | Fase 5.1 voltooid (TrendDetector), Fase 5.2 voltooid (VolatilityTracker), Fase 5.3 voltooid (Cleanup) |
 | Fase 6: Alert & Anchor | ✅ Voltooid | 2025-12-19 | 2025-12-19 | Fase 6.1 voltooid (AlertEngine), Fase 6.2 voltooid (AnchorSystem), Fase 6.3 voltooid (Cleanup) |
 | Fase 7: Warm-Start | ⏳ Te starten | - | - | Opgedeeld in 6 stappen met 25 sub-stappen |
-| Fase 8: UI Module | ⏳ Te starten | - | - | - |
+| Fase 8: UI Module | 🔄 In uitvoering | 2025-01-XX | - | Stappen 8.1-8.9 voltooid, 8.10-8.11 nog te doen |
 | Fase 9: Web Interface | ⏳ Te starten | - | - | - |
 | Fase 10: FreeRTOS Tasks | ⏳ Te starten | - | - | - |
 | Fase 11: Cleanup & Optimalisatie | ⏳ Te starten | - | - | - |
@@ -295,7 +295,7 @@
   - [x] **6.1.10:** Verplaats checkAndNotify() naar AlertEngine (parallel implementatie) ✅
   - [x] **6.1.11:** Vervang calls naar checkAndNotify() met AlertEngine ✅
   - [x] **6.1.12:** Cleanup: Verwijder oude alert code uit hoofdbestand ✅
-- **Notities:**
+- **Notities:** 
   - AlertEngine module volledig geïmplementeerd
   - Alle helper functies, state variabelen, en hoofdlogica verplaatst
   - Oude functies verwijderd uit hoofdbestand
@@ -327,7 +327,7 @@
   - [x] **6.2.6:** Verplaats anchor state variabelen naar AnchorSystem ✅
   - [x] **6.2.7:** Vervang calls naar anchor functies met AnchorSystem ✅
   - [x] **6.2.8:** Cleanup: Verwijder oude anchor code uit hoofdbestand ✅
-- **Notities:**
+- **Notities:** 
   - AnchorSystem module volledig geïmplementeerd
   - Alle anchor functies, state variabelen, en hoofdlogica verplaatst
   - Oude functies verwijderd uit hoofdbestand
@@ -367,7 +367,7 @@
   - [x] **6.3.3:** Verwijder oude anchor functie definities (alleen als niet meer gebruikt) ✅
   - [x] **6.3.4:** Cleanup oude commentaar (behoud referenties naar modules) ✅
   - [x] **6.3.5:** Test: Alle alert/anchor functionaliteit werkt nog ✅
-- **Notities:**
+- **Notities:** 
   - **6.3.1 Analyse voltooid:**
     - Geen oude functie definities gevonden (al verwijderd in 6.1.12 en 6.2.8)
     - Alleen commentaar over verplaatste functies gevonden (kan opgeschoond worden)
@@ -471,7 +471,7 @@
   - [ ] **7.6.2:** Verwijder oude state variabelen (als volledig gemigreerd)
   - [ ] **7.6.3:** Cleanup oude commentaar (behoud referenties naar module)
   - [ ] **7.6.4:** Test: Alle warm-start functionaliteit werkt nog
-- **Notities:**
+- **Notities:** 
   - Behoud globale variabelen voor backward compatibility (UI, web interface)
   - Verwijder alleen als volledig gemigreerd en getest 
 
@@ -485,24 +485,138 @@
 ---
 
 ### Fase 8: UI Module
-
-#### Stap 8.1: UIController Module
 - **Status:** ⏳ Te starten
-- **Taken:**
-  - [ ] Maak `src/UIController/UIController.h`
-  - [ ] Maak `src/UIController/UIController.cpp`
-  - [ ] Verplaats LVGL display initialisatie
-  - [ ] Verplaats `buildUI()` functionaliteit
-  - [ ] Verplaats `updateUI()` functionaliteit
-  - [ ] Test: UI werkt nog
-- **Notities:** 
+- **Start datum:** -
+- **Voltooiing datum:** -
+- **Lessons Learned toegepast:**
+  - Kleine sub-stappen (< 100 regels per stap waar mogelijk)
+  - Parallel implementatie eerst (nieuwe code naast oude)
+  - Geen `static` keyword op helpers die modules gebruiken
+  - Forward declarations voor dependencies
+  - Test na elke stap
 
-#### Stap 8.2: Cleanup UI Code
+#### Stap 8.1: UIController Module Setup
+- **Status:** 🔄 In uitvoering (8.1.4 test)
+- **Sub-stappen:**
+  - [x] **8.1.1:** Maak `src/UIController/UIController.h` met basis structuur ✅
+  - [x] **8.1.2:** Maak `src/UIController/UIController.cpp` met constructor en begin() ✅
+  - [x] **8.1.3:** Verplaats LVGL callback functies naar module (my_print, millis_cb, my_disp_flush) ✅
+  - [ ] **8.1.4:** Test: Code compileert, callbacks werken nog ⏳
+- **Notities:**
+  - Callbacks moeten extern beschikbaar blijven voor LVGL
+  - Forward declarations voor dependencies (PriceData, TrendDetector, VolatilityTracker, etc.)
+
+#### Stap 8.2: UI Object Pointers naar Module
+- **Status:** 🔄 In uitvoering (8.2.3 test)
+- **Sub-stappen:**
+  - [x] **8.2.1:** Verplaats lv_obj_t pointer declaraties naar module (parallel, globaal blijft bestaan) ✅
+  - [x] **8.2.2:** Voeg getters toe voor externe access (indien nodig) ✅
+  - [ ] **8.2.3:** Test: Code compileert, geen functionaliteit veranderd ⏳
+- **Notities:**
+  - Parallel implementatie: module pointers naast globale pointers
+  - Getters voor backward compatibility
+
+#### Stap 8.3: create*() functies naar Module
+- **Status:** ✅ Voltooid (8.3.4 voltooid, klaar voor test)
+- **Sub-stappen:**
+  - [x] **8.3.1:** Verplaats `createChart()` naar module (parallel, niet vervangen) ✅
+  - [x] **8.3.2:** Verplaats `createHeaderLabels()` naar module (parallel) ✅
+  - [x] **8.3.3:** Verplaats `createPriceBoxes()` naar module (parallel) ✅
+  - [x] **8.3.4:** Verplaats `createFooter()` naar module (parallel) ✅
+  - [ ] **8.3.5:** Test: Module functies werken parallel
+- **Notities:**
+  - Elke create functie is ~50-100 regels
+  - Parallel implementatie: oude functies blijven bestaan
+
+#### Stap 8.4: buildUI() naar Module
+- **Status:** 🔄 In uitvoering (8.4.3 voltooid)
+- **Sub-stappen:**
+  - [x] **8.4.1:** Verplaats `buildUI()` naar module (gebruikt module create functies) ✅
+  - [ ] **8.4.2:** Test: Module buildUI() werkt parallel
+  - [x] **8.4.3:** Vervang call naar `buildUI()` in setup() met module versie ✅
+  - [ ] **8.4.4:** Test: UI wordt correct gebouwd met module
+- **Notities:**
+  - buildUI() is klein (~10 regels), maar gebruikt alle create functies
+  - Vervang pas na alle create functies gemigreerd zijn
+
+#### Stap 8.5: update*Label() functies naar Module
+- **Status:** ✅ Voltooid (8.5.4 voltooid)
+- **Sub-stappen:**
+  - [x] **8.5.1:** Verplaats `updateDateTimeLabels()` naar module (parallel) ✅
+  - [x] **8.5.2:** Verplaats `updateTrendLabel()` naar module (parallel) ✅
+  - [x] **8.5.3:** Verplaats `updateVolatilityLabel()` naar module (parallel) ✅
+  - [x] **8.5.4:** Test: Module update functies werken parallel ✅
+  - [x] **8.5.5:** Verplaats `updateWarmStartStatusLabel()` naar module (parallel) ✅
+- **Notities:**
+  - Elke update functie is ~30-100 regels
+  - Gebruikt TrendDetector en VolatilityTracker getters
+
+#### Stap 8.6: update*Card() functies naar Module
+- **Status:** ✅ Voltooid (8.6.3 voltooid)
+- **Sub-stappen:**
+  - [x] **8.6.1:** Verplaats `updateBTCEURCard()` naar module (parallel) ✅
+  - [x] **8.6.2:** Verplaats `updateAveragePriceCard()` naar module (parallel) ✅
+  - [x] **8.6.3:** Verplaats `updatePriceCardColor()` naar module (parallel) ✅
+  - [ ] **8.6.4:** Test: Module update functies werken parallel
+- **Notities:**
+  - Elke update functie is ~50-150 regels
+  - Gebruikt PriceData getters
+
+#### Stap 8.7: update*Section() functies naar Module
+- **Status:** ✅ Voltooid (8.7.1, 8.7.2 en 8.7.3 voltooid)
+- **Sub-stappen:**
+  - [x] **8.7.1:** Verplaats `updateChartSection()` naar module (parallel) ✅
+  - [x] **8.7.2:** Verplaats `updateHeaderSection()` naar module (parallel) ✅
+  - [x] **8.7.3:** Verplaats `updatePriceCardsSection()` naar module (parallel) ✅
+  - [ ] **8.7.4:** Test: Module update functies werken parallel
+- **Notities:**
+  - Elke update functie is ~20-50 regels
+  - Gebruikt andere update functies
+
+#### Stap 8.8: updateUI() naar Module
+- **Status:** ✅ Voltooid (8.8.1 en 8.8.3 voltooid)
+- **Sub-stappen:**
+  - [x] **8.8.1:** Verplaats `updateUI()` naar module (gebruikt module update functies) ✅
+  - [ ] **8.8.2:** Test: Module updateUI() werkt parallel
+  - [x] **8.8.3:** Vervang call naar `updateUI()` in uiTask met module versie ✅
+  - [ ] **8.8.4:** Test: UI updates werken met module
+- **Notities:**
+  - updateUI() is ~30 regels, maar gebruikt alle update functies
+  - Vervang pas na alle update functies gemigreerd zijn
+
+#### Stap 8.9: checkButton() naar Module
+- **Status:** ✅ Voltooid (8.9.1 en 8.9.3 voltooid)
+- **Sub-stappen:**
+  - [x] **8.9.1:** Verplaats `checkButton()` naar module (parallel) ✅
+  - [ ] **8.9.2:** Test: Module checkButton() werkt parallel
+  - [x] **8.9.3:** Vervang call naar `checkButton()` met module versie ✅
+  - [ ] **8.9.4:** Test: Button functionaliteit werkt met module
+- **Notities:**
+  - checkButton() is ~50-100 regels
+  - Gebruikt AnchorSystem voor anchor setting
+
+#### Stap 8.10: LVGL Initialisatie naar Module
 - **Status:** ⏳ Te starten
-- **Taken:**
-  - [ ] Verwijder oude UI code uit hoofdbestand
-  - [ ] Test: UI functionaliteit werkt nog
+- **Sub-stappen:**
+  - [ ] **8.10.1:** Verplaats LVGL display initialisatie code naar module (parallel)
+  - [ ] **8.10.2:** Test: Module initialisatie werkt parallel
+  - [ ] **8.10.3:** Vervang LVGL init code in setup() met module versie
+  - [ ] **8.10.4:** Test: Display initialisatie werkt met module
 - **Notities:** 
+  - LVGL init is ~50-100 regels
+  - Platform-specifieke code (TTGO, CYD, ESP32-S3)
+
+#### Stap 8.11: Cleanup UI Code
+- **Status:** ⏳ Te starten
+- **Sub-stappen:**
+  - [ ] **8.11.1:** Verwijder oude create functies (als niet meer gebruikt)
+  - [ ] **8.11.2:** Verwijder oude update functies (als niet meer gebruikt)
+  - [ ] **8.11.3:** Verwijder oude UI object pointers (als volledig gemigreerd)
+  - [ ] **8.11.4:** Cleanup oude commentaar (behoud referenties naar module)
+  - [ ] **8.11.5:** Test: Alle UI functionaliteit werkt nog
+- **Notities:** 
+  - Behoud globale pointers voor backward compatibility (indien nodig)
+  - Verwijder alleen als volledig gemigreerd en getest 
 
 ---
 
