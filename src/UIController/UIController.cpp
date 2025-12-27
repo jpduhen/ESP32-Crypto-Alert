@@ -109,9 +109,10 @@ extern lv_obj_t *lblFooterLine2;
 extern lv_obj_t *ramLabel;
 extern void disableScroll(lv_obj_t *obj);
 extern const char* symbols[];
-// VERSION_STRING is een #define, niet een variabele
+// VERSION_STRING wordt gedefinieerd in platform_config.h (beschikbaar voor alle modules)
+// Hier alleen een fallback als het nog niet gedefinieerd is
 #ifndef VERSION_STRING
-#define VERSION_STRING "4.00"  // Default (wordt overschreven door .ino)
+#define VERSION_STRING "4.02"  // Fallback (wordt overschreven door platform_config.h)
 #endif
 extern void formatIPAddress(IPAddress ip, char* buffer, size_t bufferSize);
 // Fase 8.11.1: createFooter() dependencies (CYD platforms)

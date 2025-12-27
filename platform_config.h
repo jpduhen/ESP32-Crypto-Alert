@@ -7,6 +7,14 @@
 //#define PLATFORM_TTGO
 //#define PLATFORM_ESP32S3_SUPERMINI
 
+// --- Version Configuration ---
+// Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
+#ifndef VERSION_STRING
+#define VERSION_MAJOR 4
+#define VERSION_MINOR 2
+#define VERSION_STRING "4.02"
+#endif
+
 // Standaard taal instelling (0 = Nederlands, 1 = English)
 // Deze waarde wordt gebruikt als fallback als er nog geen taal is opgeslagen in Preferences
 // Je kunt de taal altijd wijzigen via de web interface

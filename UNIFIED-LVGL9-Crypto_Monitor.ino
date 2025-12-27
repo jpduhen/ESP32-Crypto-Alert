@@ -73,9 +73,13 @@
 // ============================================================================
 
 // --- Version and Build Configuration ---
+// VERSION_STRING wordt nu gedefinieerd in platform_config.h (beschikbaar voor alle modules)
+// Hier alleen een fallback als het nog niet gedefinieerd is
+#ifndef VERSION_STRING
 #define VERSION_MAJOR 4
 #define VERSION_MINOR 2
 #define VERSION_STRING "4.02"
+#endif
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
