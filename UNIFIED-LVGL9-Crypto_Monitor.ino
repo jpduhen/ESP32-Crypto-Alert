@@ -3600,8 +3600,52 @@ static float calculateReturn2Hours()
     }
     #endif
     
+    // Als er minder dan 120 minuten zijn, bereken return op basis van beschikbare data
     if (availableMinutes < 120)
     {
+        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        // Bereken return op basis van beschikbare minuten (minimaal 2 minuten nodig)
+        if (availableMinutes >= 2) {
+            // Get current price (last minute average)
+            uint8_t lastMinuteIdx;
+            if (!arrayFilled)
+            {
+                if (index == 0) return 0.0f;
+                lastMinuteIdx = index - 1;
+            }
+            else
+            {
+                lastMinuteIdx = getLastWrittenIndex(index, MINUTES_FOR_30MIN_CALC);
+            }
+            float priceNow = averages[lastMinuteIdx];
+            
+            // Get price X minutes ago (waar X = availableMinutes - 1, maar min 1)
+            uint8_t minutesAgo = (availableMinutes > 1) ? (availableMinutes - 1) : 1;
+            uint8_t idxXAgo;
+            if (!arrayFilled)
+            {
+                if (index < minutesAgo) return 0.0f;
+                idxXAgo = index - minutesAgo;
+            }
+            else
+            {
+                int32_t idxXAgo_temp = getRingBufferIndexAgo(index, minutesAgo, MINUTES_FOR_30MIN_CALC);
+                if (idxXAgo_temp < 0) return 0.0f;
+                idxXAgo = (uint8_t)idxXAgo_temp;
+            }
+            
+            float priceXAgo = averages[idxXAgo];
+            
+            // Validate prices
+            if (priceXAgo <= 0.0f || priceNow <= 0.0f)
+            {
+                return 0.0f;
+            }
+            
+            // Return percentage: (now - X ago) / X ago * 100
+            return ((priceNow - priceXAgo) / priceXAgo) * 100.0f;
+        }
+        #endif
         return 0.0f;
     }
     
@@ -3949,21 +3993,9 @@ void fetchPrice()
             
             // 2h return voor CYD platforms (index 3)
             #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-            // Zet prices[3] als er data is (ook als het nog geen 120 minuten zijn)
-            // hasRet2h betekent dat er minimaal 120 minuten data zijn, maar we willen
-            // het percentage ook tonen als er minder data is (maar wel data beschikbaar)
-            extern bool minuteArrayFilled;
-            extern uint8_t minuteIndex;
-            bool hasMinimalData = minuteArrayFilled || minuteIndex > 0;  // Minimaal 1 minuut data
-            if (hasRet2h) {
-                prices[3] = ret_2h;  // Volledige 2h return
-            } else if (hasMinimalData) {
-                // Er is data maar nog geen 120 minuten - bereken return op basis van beschikbare data
-                // Of toon 0.0f als er nog geen return kan worden berekend
-                prices[3] = 0.0f;  // Voorlopig 0.0f totdat er 120 minuten data zijn
-            } else {
-                prices[3] = 0.0f; // Reset naar 0 om aan te geven dat er nog geen data is
-            }
+            // ret_2h wordt nu altijd berekend in calculateReturn2Hours(), ook als er minder dan 120 minuten zijn
+            // Het berekent een return op basis van beschikbare data (minimaal 2 minuten nodig)
+            prices[3] = ret_2h;
             #endif
             
             // Check thresholds and send notifications if needed (met ret_5m voor extra filtering)

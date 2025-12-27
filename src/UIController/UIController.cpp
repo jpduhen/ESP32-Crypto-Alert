@@ -1203,7 +1203,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
     bool hasData30m = (index == 2) ? (minuteArrayFilled || minuteIndex >= 30) : true;
     #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
     bool hasData2h = (index == 3) ? (minuteArrayFilled || minuteIndex >= 120) : true;
-    bool hasData2hMinimal = (index == 3) ? (minuteIndex > 0) : true;  // Minimaal 1 minuut data nodig
+    bool hasData2hMinimal = (index == 3) ? (minuteIndex >= 2) : true;  // Minimaal 2 minuten data nodig voor return berekening
     bool hasData = (index == 1) ? hasData1m : ((index == 2) ? hasData30m : ((index == 3) ? hasData2hMinimal : true));
     #else
     bool hasData = (index == 1) ? hasData1m : ((index == 2) ? hasData30m : true);
@@ -1416,7 +1416,8 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
 {
     // Fase 8.6.3: Gebruik globale pointers (synchroniseert met module pointers)
     #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-    bool hasDataForColor = (index == 0) ? true : ((index == 1) ? secondArrayFilled : ((index == 2) ? (minuteArrayFilled || minuteIndex >= 30) : (minuteArrayFilled || minuteIndex >= 120)));
+    // Voor 2h box: gebruik minimaal 2 minuten data (net als voor return berekening)
+    bool hasDataForColor = (index == 0) ? true : ((index == 1) ? secondArrayFilled : ((index == 2) ? (minuteArrayFilled || minuteIndex >= 30) : (minuteArrayFilled || minuteIndex >= 2)));
     #else
     bool hasDataForColor = (index == 0) ? true : ((index == 1) ? secondArrayFilled : (minuteArrayFilled || minuteIndex >= 30));
     #endif
