@@ -1030,4 +1030,4 @@ Totaal RAM gebruik: ~30-50KB (zonder PSRAM)
 
 ---
 
-*Laatste update: Warm-start optimalisaties, mutex/API timing verbeteringen, trend kleuren (v3.82)*
+*Laatste update: Versie 4.03 - 2-uur alert systeem met instelbare thresholds, 5 nieuwe notificaties, debug logging, memory optimalisaties*
