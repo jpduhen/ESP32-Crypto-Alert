@@ -74,8 +74,8 @@
 
 // --- Version and Build Configuration ---
 #define VERSION_MAJOR 4
-#define VERSION_MINOR 1
-#define VERSION_STRING "4.01"
+#define VERSION_MINOR 2
+#define VERSION_STRING "4.02"
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -3610,7 +3610,10 @@ static float calculateReturn2Hours()
             uint8_t lastMinuteIdx;
             if (!arrayFilled)
             {
-                if (index == 0) return 0.0f;
+                if (index == 0) {
+                    Serial.printf("[Ret2h] ERROR: index == 0, availableMinutes=%u\n", availableMinutes);
+                    return 0.0f;
+                }
                 lastMinuteIdx = index - 1;
             }
             else
@@ -3624,13 +3627,19 @@ static float calculateReturn2Hours()
             uint8_t idxXAgo;
             if (!arrayFilled)
             {
-                if (index < minutesAgo) return 0.0f;
+                if (index < minutesAgo) {
+                    Serial.printf("[Ret2h] ERROR: index=%u < minutesAgo=%u, availableMinutes=%u\n", index, minutesAgo, availableMinutes);
+                    return 0.0f;
+                }
                 idxXAgo = index - minutesAgo;
             }
             else
             {
                 int32_t idxXAgo_temp = getRingBufferIndexAgo(index, minutesAgo, MINUTES_FOR_30MIN_CALC);
-                if (idxXAgo_temp < 0) return 0.0f;
+                if (idxXAgo_temp < 0) {
+                    Serial.printf("[Ret2h] ERROR: idxXAgo_temp < 0, index=%u, minutesAgo=%u\n", index, minutesAgo);
+                    return 0.0f;
+                }
                 idxXAgo = (uint8_t)idxXAgo_temp;
             }
             
@@ -3639,11 +3648,15 @@ static float calculateReturn2Hours()
             // Validate prices
             if (priceXAgo <= 0.0f || priceNow <= 0.0f)
             {
+                Serial.printf("[Ret2h] ERROR: Invalid prices: priceNow=%.2f, priceXAgo=%.2f\n", priceNow, priceXAgo);
                 return 0.0f;
             }
             
             // Return percentage: (now - X ago) / X ago * 100
-            return ((priceNow - priceXAgo) / priceXAgo) * 100.0f;
+            float ret = ((priceNow - priceXAgo) / priceXAgo) * 100.0f;
+            return ret;
+        } else {
+            Serial.printf("[Ret2h] ERROR: availableMinutes=%u < 2\n", availableMinutes);
         }
         #endif
         return 0.0f;
@@ -3657,6 +3670,7 @@ static float calculateReturn2Hours()
             #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
             averagePrices[3] = 0.0f;  // Reset voor 2h box
             #endif
+            Serial.printf("[Ret2h] ERROR: index == 0 in 120m path\n");
             return 0.0f;
         }
         lastMinuteIdx = index - 1;
@@ -3668,18 +3682,27 @@ static float calculateReturn2Hours()
     float priceNow = averages[lastMinuteIdx];
     
     // Get price 120 minutes ago
+    // Voor een ring buffer: als we 120 posities terug willen in een buffer van 120,
+    // dan moeten we de laatste geschreven positie gebruiken en dan 119 posities terug gaan
     uint8_t idx120mAgo;
     if (!arrayFilled)
     {
         if (index < 120) {
+            Serial.printf("[Ret2h] ERROR: index=%u < 120 in 120m path\n", index);
             return 0.0f;  // averagePrices[3] is al berekend boven
         }
         idx120mAgo = index - 120;
     }
     else
     {
-        int32_t idx120mAgo_temp = getRingBufferIndexAgo(index, 120, MINUTES_FOR_30MIN_CALC);
+        // Voor een ring buffer: als we 120 minuten terug willen in een buffer van 120,
+        // dan moeten we 119 posities terug gaan vanaf de laatste geschreven positie
+        // (omdat we al op de laatste geschreven positie staan)
+        uint8_t lastWrittenIdx = getLastWrittenIndex(index, MINUTES_FOR_30MIN_CALC);
+        // 119 posities terug (niet 120, omdat positionsAgo >= bufferSize niet toegestaan is)
+        int32_t idx120mAgo_temp = getRingBufferIndexAgo(lastWrittenIdx, 119, MINUTES_FOR_30MIN_CALC);
         if (idx120mAgo_temp < 0) {
+            Serial.printf("[Ret2h] ERROR: idx120mAgo_temp < 0, index=%u, lastWrittenIdx=%u\n", index, lastWrittenIdx);
             return 0.0f;  // averagePrices[3] is al berekend boven
         }
         idx120mAgo = (uint8_t)idx120mAgo_temp;
@@ -3690,11 +3713,14 @@ static float calculateReturn2Hours()
     // Validate prices
     if (price120mAgo <= 0.0f || priceNow <= 0.0f)
     {
+        Serial.printf("[Ret2h] ERROR: Invalid prices in 120m path: priceNow=%.2f, price120mAgo=%.2f\n", 
+                      priceNow, price120mAgo);
         return 0.0f;  // averagePrices[3] is al berekend boven
     }
     
     // Return percentage: (now - 120m ago) / 120m ago * 100
-    return ((priceNow - price120mAgo) / price120mAgo) * 100.0f;
+    float ret = ((priceNow - price120mAgo) / price120mAgo) * 100.0f;
+    return ret;
 }
 
 // ============================================================================
@@ -3920,6 +3946,7 @@ void fetchPrice()
             float ret_5m = calculateReturn5Minutes();  // Percentage verandering laatste 5 minuten
             ret_30m = calculateReturn30Minutes(); // Percentage verandering laatste 30 minuten (update global)
             ret_2h = calculateReturn2Hours();
+            
             
             // Update live availability flags: gebaseerd op data beschikbaarheid EN percentage live data
             // hasRet30mLive: true zodra er minimaal 30 minuten data is EN ≥80% daarvan SOURCE_LIVE is

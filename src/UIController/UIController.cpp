@@ -1203,8 +1203,17 @@ void UIController::updateAveragePriceCard(uint8_t index)
     bool hasData30m = (index == 2) ? (minuteArrayFilled || minuteIndex >= 30) : true;
     #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
     bool hasData2h = (index == 3) ? (minuteArrayFilled || minuteIndex >= 120) : true;
-    bool hasData2hMinimal = (index == 3) ? (minuteIndex >= 2) : true;  // Minimaal 2 minuten data nodig voor return berekening
+    bool hasData2hMinimal = (index == 3) ? (minuteArrayFilled || minuteIndex >= 2) : true;  // Minimaal 2 minuten data nodig voor return berekening (of buffer vol)
     bool hasData = (index == 1) ? hasData1m : ((index == 2) ? hasData30m : ((index == 3) ? hasData2hMinimal : true));
+    
+    // Debug voor 2h box
+    if (index == 3) {
+        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        bool shouldShowPct = (index == 3) ? (hasData2hMinimal) : (hasData && pct != 0.0f);
+        Serial.printf("[UI] 2h box: hasData=%d, hasData2hMinimal=%d, pct=%.4f, prices[3]=%.4f, shouldShowPct=%d\n", 
+                      hasData, hasData2hMinimal, pct, prices[3], shouldShowPct);
+        #endif
+    }
     #else
     bool hasData = (index == 1) ? hasData1m : ((index == 2) ? hasData30m : true);
     #endif
@@ -1215,10 +1224,10 @@ void UIController::updateAveragePriceCard(uint8_t index)
     
     if (::priceTitle[index] != nullptr) {
         #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-        // Voor 2h box: toon percentage als er minimaal 1 minuut data is (hasData2hMinimal)
+        // Voor 2h box: toon percentage als er minimaal 2 minuten data zijn (hasData2hMinimal)
         // Voor andere boxes: toon alleen als pct != 0.0f
-        bool shouldShowPct = (index == 3) ? (hasData2hMinimal && pct != 0.0f) : (hasData && pct != 0.0f);
-        if (shouldShowPct || (index == 3 && hasData2hMinimal && pct == 0.0f)) {  // Voor 2h box: toon ook 0.00%
+        bool shouldShowPct = (index == 3) ? (hasData2hMinimal) : (hasData && pct != 0.0f);
+        if (shouldShowPct) {  // Voor 2h box: toon percentage altijd als er data is (ook als 0.00%)
         #else
         if (hasData && pct != 0.0f) {
         #endif
@@ -1416,13 +1425,20 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
 {
     // Fase 8.6.3: Gebruik globale pointers (synchroniseert met module pointers)
     #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-    // Voor 2h box: gebruik minimaal 2 minuten data (net als voor return berekening)
+    // Voor 2h box: gebruik minimaal 2 minuten data (net als voor return berekening) of buffer vol
     bool hasDataForColor = (index == 0) ? true : ((index == 1) ? secondArrayFilled : ((index == 2) ? (minuteArrayFilled || minuteIndex >= 30) : (minuteArrayFilled || minuteIndex >= 2)));
     #else
     bool hasDataForColor = (index == 0) ? true : ((index == 1) ? secondArrayFilled : (minuteArrayFilled || minuteIndex >= 30));
     #endif
     
-    if (hasDataForColor && pct != 0.0f)
+    // Voor 2h box: toon kleur ook als pct 0.0f is maar er wel data is
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+    bool shouldShowColor = (index == 3) ? (hasDataForColor) : (hasDataForColor && pct != 0.0f);
+    #else
+    bool shouldShowColor = hasDataForColor && pct != 0.0f;
+    #endif
+    
+    if (shouldShowColor)
     {
         lv_obj_set_style_text_color(::priceLbl[index],
                                     pct >= 0 ? lv_palette_lighten(LV_PALETTE_GREEN, 4)
