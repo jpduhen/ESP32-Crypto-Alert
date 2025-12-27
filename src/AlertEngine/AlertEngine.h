@@ -26,6 +26,48 @@ struct LastFiveMinuteEvent {
     bool usedInConfluence;  // Flag om te voorkomen dat dit event dubbel wordt gebruikt
 };
 
+// TwoHMetrics struct - uniforme 2-uur metrics voor alert detection
+struct TwoHMetrics {
+    float avg2h = 0.0f;
+    float high2h = 0.0f;
+    float low2h = 0.0f;
+    float rangePct = 0.0f;
+    bool valid = false;
+};
+
+// Alert2HState struct - persistent runtime state voor 2h notificaties
+// Geoptimaliseerd met bitfields en compacte layout om geheugen te besparen (24 bytes i.p.v. 32 bytes)
+struct Alert2HState {
+    // Timestamps eerst (20 bytes totaal)
+    uint32_t lastBreakoutUpMs = 0;
+    uint32_t lastBreakoutDownMs = 0;
+    uint32_t lastCompressMs = 0;
+    uint32_t lastMeanMs = 0;
+    uint32_t lastAnchorCtxMs = 0;
+    
+    // Bitfields aan het einde om padding te minimaliseren (1 byte totaal)
+    uint8_t flags;  // Bitfield container: breakoutUpArmed(0), breakoutDownArmed(1), compressArmed(2), 
+                     // meanArmed(3), anchorCtxArmed(4), meanWasFar(5), meanFarSide(6-7)
+    
+    // Helper methods voor bitfield access
+    bool getBreakoutUpArmed() const { return (flags & 0x01) != 0; }
+    void setBreakoutUpArmed(bool v) { flags = v ? (flags | 0x01) : (flags & ~0x01); }
+    bool getBreakoutDownArmed() const { return (flags & 0x02) != 0; }
+    void setBreakoutDownArmed(bool v) { flags = v ? (flags | 0x02) : (flags & ~0x02); }
+    bool getCompressArmed() const { return (flags & 0x04) != 0; }
+    void setCompressArmed(bool v) { flags = v ? (flags | 0x04) : (flags & ~0x04); }
+    bool getMeanArmed() const { return (flags & 0x08) != 0; }
+    void setMeanArmed(bool v) { flags = v ? (flags | 0x08) : (flags & ~0x08); }
+    bool getAnchorCtxArmed() const { return (flags & 0x10) != 0; }
+    void setAnchorCtxArmed(bool v) { flags = v ? (flags | 0x10) : (flags & ~0x10); }
+    bool getMeanWasFar() const { return (flags & 0x20) != 0; }
+    void setMeanWasFar(bool v) { flags = v ? (flags | 0x20) : (flags & ~0x20); }
+    int8_t getMeanFarSide() const { return ((flags >> 6) & 0x03) - 1; } // -1, 0, +1
+    void setMeanFarSide(int8_t v) { flags = (flags & 0x3F) | (((v + 1) & 0x03) << 6); }
+    
+    Alert2HState() : flags(0x1F) {} // Alle armed flags op true (0x1F = 0b00011111)
+};
+
 // AlertEngine class - beheert alert detection en notificaties
 class AlertEngine {
 public:
@@ -69,6 +111,10 @@ public:
     // Check for confluence and send combined alert if found
     // Fase 6.1.9: Verplaatst naar AlertEngine (parallel implementatie)
     bool checkAndSendConfluenceAlert(unsigned long now, float ret_30m);
+    
+    // Check 2-hour notifications (breakout, breakdown, compression, mean reversion, anchor context)
+    // Wordt aangeroepen na elke price update
+    static void check2HNotifications(float lastPrice, float anchorPrice);
     
     // Sync state: Update AlertEngine state met globale variabelen (voor parallel implementatie)
     void syncStateFromGlobals();

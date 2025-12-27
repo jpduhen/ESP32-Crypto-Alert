@@ -1,4 +1,5 @@
 #include "AlertEngine.h"
+#include <WiFi.h>
 
 // SettingsStore module (Fase 6.1.10: voor AlertThresholds en NotificationCooldowns structs)
 #include "../SettingsStore/SettingsStore.h"
@@ -11,6 +12,12 @@ extern VolatilityTracker volatilityTracker;  // Fase 6.1.10: Voor checkAndNotify
 #include "../TrendDetector/TrendDetector.h"
 extern TrendDetector trendDetector;  // Fase 6.1.9: Voor checkAndSendConfluenceAlert
 
+// Alert2HThresholds module (voor 2h alert thresholds)
+#include "Alert2HThresholds.h"
+
+// Extern declaration voor 2h alert thresholds (wordt geladen vanuit settings)
+extern Alert2HThresholds alert2HThresholds;
+
 // PriceData module (voor fiveMinutePrices getter)
 #include "../PriceData/PriceData.h"
 extern PriceData priceData;  // Voor getFiveMinutePrices()
@@ -21,6 +28,12 @@ extern char binanceSymbol[];
 extern float prices[];  // Fase 6.1.4: Voor formatNotificationMessage
 void getFormattedTimestamp(char* buffer, size_t bufferSize);  // Fase 6.1.4: Voor formatNotificationMessage
 extern bool smartConfluenceEnabled;  // Fase 6.1.9: Voor checkAndSendConfluenceAlert
+
+// Forward declaration voor computeTwoHMetrics()
+TwoHMetrics computeTwoHMetrics();
+
+// Persistent runtime state voor 2h notificaties
+static Alert2HState gAlert2H;
 
 // Fase 6.1.10: Forward declarations voor checkAndNotify dependencies
 void findMinMaxInSecondPrices(float &minVal, float &maxVal);
@@ -139,7 +152,7 @@ bool AlertEngine::sendAlertNotification(float ret, float threshold, float strong
     
     const char* colorTag = determineColorTag(ret, threshold, strongThreshold);
     
-    char title[64];
+    char title[48];  // Verkleind van 64 naar 48 bytes
     snprintf(title, sizeof(title), "%s %s Alert", binanceSymbol, alertType);
     
     sendNotification(title, msg, colorTag);
@@ -279,10 +292,10 @@ bool AlertEngine::checkAndSendConfluenceAlert(unsigned long now, float ret_30m)
     
     char timestamp[32];
     getFormattedTimestamp(timestamp, sizeof(timestamp));
-    char title[80];
+    char title[64];  // Verkleind van 80 naar 64 bytes
     snprintf(title, sizeof(title), "%s Confluence Alert (1m+5m+Trend)", binanceSymbol);
     
-    char msg[320];
+    char msg[256];  // Verkleind van 320 naar 256 bytes
     if (direction == EVENT_UP) {
         snprintf(msg, sizeof(msg),
                  "Confluence %s gedetecteerd!\n\n"
@@ -411,7 +424,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                     }
                     
                     const char* colorTag = determineColorTag(ret_1m, effThresh.spike1m, effThresh.spike1m * 1.5f);
-                    char title[64];
+                    char title[48];  // Verkleind van 64 naar 48 bytes
                     snprintf(title, sizeof(title), "%s 1m Spike Alert", binanceSymbol);
                     
                     // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
@@ -574,7 +587,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                     }
                     
                     const char* colorTag = determineColorTag(ret_5m, effThresh.move5m, effThresh.move5m * 1.5f);
-                    char title[64];
+                    char title[48];  // Verkleind van 64 naar 48 bytes
                     snprintf(title, sizeof(title), "%s 5m Move Alert", binanceSymbol);
                     
                     // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
@@ -587,6 +600,206 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                     }
                 }
             }
+        }
+    }
+}
+
+// Check 2-hour notifications (breakout, breakdown, compression, mean reversion, anchor context)
+// Wordt aangeroepen na elke price update
+void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
+{
+    // Check WiFi verbinding
+    if (WiFi.status() != WL_CONNECTED) {
+        return;
+    }
+    
+    // Check validiteit van inputs (anchorPrice kan 0.0f zijn als anchor niet actief is)
+    if (lastPrice <= 0.0f) {
+        return;
+    }
+    
+    // Bereken 2h metrics
+    TwoHMetrics metrics = computeTwoHMetrics();
+    
+    // Check validiteit van metrics
+    if (!metrics.valid) {
+        return;
+    }
+    
+    uint32_t now = millis();
+    
+    // Gedeelde buffers (hergebruik om geheugen te besparen)
+    char title[32];  // Verkleind van 48 naar 32 bytes
+    char msg[80];    // Verkleind van 128 naar 80 bytes om DRAM overflow te voorkomen (32 bytes bespaard)
+    
+    #if DEBUG_2H_ALERTS
+    // Rate-limited debug logging (1x per 60 sec)
+    static uint32_t lastDebugLogMs = 0;
+    static constexpr uint32_t DEBUG_LOG_INTERVAL_MS = 60UL * 1000UL; // 60 sec
+    
+    if ((now - lastDebugLogMs) >= DEBUG_LOG_INTERVAL_MS) {
+        // Bereken condities voor logging (deze worden later ook gebruikt in de checks)
+        float breakMargin = alert2HThresholds.breakMarginPct;
+        float breakThresholdUp = metrics.high2h * (1.0f + breakMargin / 100.0f);
+        float breakThresholdDown = metrics.low2h * (1.0f - breakMargin / 100.0f);
+        bool condBreakUp = lastPrice > breakThresholdUp;
+        bool condBreakDown = lastPrice < breakThresholdDown;
+        bool condCompress = metrics.rangePct < alert2HThresholds.compressThresholdPct;
+        float distPct = absf((lastPrice - metrics.avg2h) / metrics.avg2h * 100.0f);
+        bool condTouch = distPct <= alert2HThresholds.meanTouchBandPct;
+        
+        Serial.printf("[2H-DBG] price=%.2f avg2h=%.2f high2h=%.2f low2h=%.2f rangePct=%.2f%% anchor=%.2f\n",
+                     lastPrice, metrics.avg2h, metrics.high2h, metrics.low2h, metrics.rangePct, anchorPrice);
+        Serial.printf("[2H-DBG] cond: breakUp=%d breakDown=%d compress=%d touch=%d\n",
+                     condBreakUp ? 1 : 0, condBreakDown ? 1 : 0, condCompress ? 1 : 0, condTouch ? 1 : 0);
+        lastDebugLogMs = now;
+    }
+    #endif // DEBUG_2H_ALERTS
+    
+    // === A) 2h Breakout Up ===
+    {
+        float breakMargin = alert2HThresholds.breakMarginPct;
+        float breakThreshold = metrics.high2h * (1.0f + breakMargin / 100.0f);
+        bool condUp = lastPrice > breakThreshold;
+        bool cooldownOk = (now - gAlert2H.lastBreakoutUpMs) >= alert2HThresholds.breakCooldownMs;
+        
+        if (gAlert2H.getBreakoutUpArmed() && condUp && cooldownOk) {
+            #if DEBUG_2H_ALERTS
+            Serial.printf("[ALERT2H] breakout_up sent: price=%.2f > high2h=%.2f (avg=%.2f, range=%.2f%%)\n",
+                         lastPrice, metrics.high2h, metrics.avg2h, metrics.rangePct);
+            #endif
+            snprintf(title, sizeof(title), "%s 2h breakout ↑", binanceSymbol);
+            snprintf(msg, sizeof(msg), "Price %.2f > 2h high %.2f (avg %.2f, range %.2f%%)",
+                     lastPrice, metrics.high2h, metrics.avg2h, metrics.rangePct);
+            sendNotification(title, msg, "blue_square,🔼");
+            gAlert2H.lastBreakoutUpMs = now;
+            gAlert2H.setBreakoutUpArmed(false);
+        }
+        
+        // Reset arm zodra prijs weer onder reset threshold komt
+        float resetThreshold = metrics.high2h * (1.0f - alert2HThresholds.breakResetMarginPct / 100.0f);
+        if (!gAlert2H.getBreakoutUpArmed() && lastPrice < resetThreshold) {
+            gAlert2H.setBreakoutUpArmed(true);
+        }
+    }
+    
+    // === B) 2h Breakdown Down ===
+    {
+        float breakMargin = alert2HThresholds.breakMarginPct;
+        float breakThreshold = metrics.low2h * (1.0f - breakMargin / 100.0f);
+        bool condDown = lastPrice < breakThreshold;
+        bool cooldownOk = (now - gAlert2H.lastBreakoutDownMs) >= alert2HThresholds.breakCooldownMs;
+        
+        if (gAlert2H.getBreakoutDownArmed() && condDown && cooldownOk) {
+            #if DEBUG_2H_ALERTS
+            Serial.printf("[ALERT2H] breakdown_down sent: price=%.2f < low2h=%.2f (avg=%.2f, range=%.2f%%)\n",
+                         lastPrice, metrics.low2h, metrics.avg2h, metrics.rangePct);
+            #endif
+            snprintf(title, sizeof(title), "%s 2h breakdown ↓", binanceSymbol);
+            snprintf(msg, sizeof(msg), "Price %.2f < 2h low %.2f (avg %.2f, range %.2f%%)",
+                     lastPrice, metrics.low2h, metrics.avg2h, metrics.rangePct);
+            sendNotification(title, msg, "orange_square,🔽");
+            gAlert2H.lastBreakoutDownMs = now;
+            gAlert2H.setBreakoutDownArmed(false);
+        }
+        
+        // Reset arm zodra prijs weer boven reset threshold komt
+        float resetThreshold = metrics.low2h * (1.0f + alert2HThresholds.breakResetMarginPct / 100.0f);
+        if (!gAlert2H.getBreakoutDownArmed() && lastPrice > resetThreshold) {
+            gAlert2H.setBreakoutDownArmed(true);
+        }
+    }
+    
+    // === C) Range compression ===
+    {
+        bool condComp = metrics.rangePct < alert2HThresholds.compressThresholdPct;
+        bool cooldownOk = (now - gAlert2H.lastCompressMs) >= alert2HThresholds.compressCooldownMs;
+        
+        if (gAlert2H.getCompressArmed() && condComp && cooldownOk) {
+            #if DEBUG_2H_ALERTS
+            Serial.printf("[ALERT2H] range_compress sent: range=%.2f%% < %.2f%% (avg=%.2f high=%.2f low=%.2f)\n",
+                         metrics.rangePct, alert2HThresholds.compressThresholdPct,
+                         metrics.avg2h, metrics.high2h, metrics.low2h);
+            #endif
+            snprintf(title, sizeof(title), "%s 2h range compress", binanceSymbol);
+            snprintf(msg, sizeof(msg), "Range %.2f%% (<%.2f%%). avg %.2f high %.2f low %.2f",
+                     metrics.rangePct, alert2HThresholds.compressThresholdPct,
+                     metrics.avg2h, metrics.high2h, metrics.low2h);
+            sendNotification(title, msg, "yellow_square,📉");
+            gAlert2H.lastCompressMs = now;
+            gAlert2H.setCompressArmed(false);
+        }
+        
+        // Reset arm zodra range weer boven reset threshold komt
+        if (!gAlert2H.getCompressArmed() && metrics.rangePct > alert2HThresholds.compressResetPct) {
+            gAlert2H.setCompressArmed(true);
+        }
+    }
+    
+    // === D) Mean reversion touch to avg2h ===
+    {
+        float distPct = absf((lastPrice - metrics.avg2h) / metrics.avg2h * 100.0f);
+        
+        // Update state: zijn we ver genoeg weg?
+        if (distPct >= alert2HThresholds.meanMinDistancePct) {
+            gAlert2H.setMeanWasFar(true);
+            gAlert2H.setMeanFarSide((lastPrice >= metrics.avg2h) ? +1 : -1);
+        }
+        
+        // Check touch
+        bool touch = distPct <= alert2HThresholds.meanTouchBandPct;
+        bool cooldownOk = (now - gAlert2H.lastMeanMs) >= alert2HThresholds.meanCooldownMs;
+        
+        if (gAlert2H.getMeanArmed() && gAlert2H.getMeanWasFar() && touch && cooldownOk) {
+            const char* direction = (gAlert2H.getMeanFarSide() > 0) ? "from above" : "from below";
+            #if DEBUG_2H_ALERTS
+            Serial.printf("[ALERT2H] mean_touch sent: price=%.2f touched avg2h=%.2f after %.2f%% away (%s)\n",
+                         lastPrice, metrics.avg2h, distPct, direction);
+            #endif
+            snprintf(title, sizeof(title), "%s 2h mean touch", binanceSymbol);
+            snprintf(msg, sizeof(msg), "Touched 2h avg %.2f after %.2f%% away (%s)",
+                     metrics.avg2h, distPct, direction);
+            sendNotification(title, msg, "green_square,📊");
+            gAlert2H.lastMeanMs = now;
+            gAlert2H.setMeanArmed(false);
+            gAlert2H.setMeanWasFar(false);
+            gAlert2H.setMeanFarSide(0);
+        }
+        
+        // Reset arm zodra prijs weer ver genoeg weg is
+        if (!gAlert2H.getMeanArmed() && distPct > (alert2HThresholds.meanTouchBandPct * 2.0f)) {
+            gAlert2H.setMeanArmed(true);
+        }
+    }
+    
+    // === E) Anchor context ===
+    // Alleen checken als anchor actief is (anchorPrice > 0)
+    if (anchorPrice > 0.0f) {
+        float anchorMargin = alert2HThresholds.anchorOutsideMarginPct;
+        float anchorHighThreshold = metrics.high2h * (1.0f + anchorMargin / 100.0f);
+        float anchorLowThreshold = metrics.low2h * (1.0f - anchorMargin / 100.0f);
+        bool condAnchorHigh = anchorPrice > anchorHighThreshold;
+        bool condAnchorLow = anchorPrice < anchorLowThreshold;
+        bool cooldownOk = (now - gAlert2H.lastAnchorCtxMs) >= alert2HThresholds.anchorCooldownMs;
+        
+        if (gAlert2H.getAnchorCtxArmed() && cooldownOk && (condAnchorHigh || condAnchorLow)) {
+            #if DEBUG_2H_ALERTS
+            Serial.printf("[ALERT2H] anchor_context sent: anchor=%.2f outside 2h [%.2f..%.2f] (avg=%.2f)\n",
+                         anchorPrice, metrics.low2h, metrics.high2h, metrics.avg2h);
+            #endif
+            snprintf(title, sizeof(title), "%s Anchor buiten 2h", binanceSymbol);
+            snprintf(msg, sizeof(msg), "Anchor %.2f outside 2h [%.2f..%.2f] (avg %.2f)",
+                     anchorPrice, metrics.low2h, metrics.high2h, metrics.avg2h);
+            sendNotification(title, msg, "purple_square,⚓");
+            gAlert2H.lastAnchorCtxMs = now;
+            gAlert2H.setAnchorCtxArmed(false);
+        }
+        
+        // Reset arm zodra anchor weer binnen range komt (inclusief marge)
+        if (!gAlert2H.getAnchorCtxArmed() && 
+            anchorPrice <= anchorHighThreshold && 
+            anchorPrice >= anchorLowThreshold) {
+            gAlert2H.setAnchorCtxArmed(true);
         }
     }
 }

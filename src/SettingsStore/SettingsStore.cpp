@@ -165,6 +165,19 @@ const char* SettingsStore::PREF_KEY_TREND_TH = "trendTh";
 const char* SettingsStore::PREF_KEY_VOL_LOW = "volLow";
 const char* SettingsStore::PREF_KEY_VOL_HIGH = "volHigh";
 
+// 2-hour alert threshold keys
+const char* SettingsStore::PREF_KEY_2H_BREAK_MARGIN = "2hBreakMargin";
+const char* SettingsStore::PREF_KEY_2H_BREAK_RESET = "2hBreakReset";
+const char* SettingsStore::PREF_KEY_2H_BREAK_CD = "2hBreakCD";
+const char* SettingsStore::PREF_KEY_2H_MEAN_MIN_DIST = "2hMeanMinDist";
+const char* SettingsStore::PREF_KEY_2H_MEAN_TOUCH = "2hMeanTouch";
+const char* SettingsStore::PREF_KEY_2H_MEAN_CD = "2hMeanCD";
+const char* SettingsStore::PREF_KEY_2H_COMPRESS_TH = "2hCompressTh";
+const char* SettingsStore::PREF_KEY_2H_COMPRESS_RESET = "2hCompressReset";
+const char* SettingsStore::PREF_KEY_2H_COMPRESS_CD = "2hCompressCD";
+const char* SettingsStore::PREF_KEY_2H_ANCHOR_MARGIN = "2hAnchorMargin";
+const char* SettingsStore::PREF_KEY_2H_ANCHOR_CD = "2hAnchorCD";
+
 // Helper: Generate unique ESP32 device ID using Crockford Base32 encoding
 // Deze functie moet extern beschikbaar zijn voor generateDefaultNtfyTopic
 static void getESP32DeviceId(char* buffer, size_t bufferSize) {
@@ -266,6 +279,19 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     trendThreshold = TREND_THRESHOLD_DEFAULT;
     volatilityLowThreshold = VOLATILITY_LOW_THRESHOLD_DEFAULT;
     volatilityHighThreshold = VOLATILITY_HIGH_THRESHOLD_DEFAULT;
+    
+    // 2-hour alert thresholds defaults (van Alert2HThresholds namespace)
+    alert2HThresholds.breakMarginPct = 0.15f;
+    alert2HThresholds.breakResetMarginPct = 0.10f;
+    alert2HThresholds.breakCooldownMs = 30UL * 60UL * 1000UL; // 30 min
+    alert2HThresholds.meanMinDistancePct = 0.60f;
+    alert2HThresholds.meanTouchBandPct = 0.10f;
+    alert2HThresholds.meanCooldownMs = 60UL * 60UL * 1000UL; // 60 min
+    alert2HThresholds.compressThresholdPct = 0.80f;
+    alert2HThresholds.compressResetPct = 1.10f;
+    alert2HThresholds.compressCooldownMs = 2UL * 60UL * 60UL * 1000UL; // 2 uur
+    alert2HThresholds.anchorOutsideMarginPct = 0.25f;
+    alert2HThresholds.anchorCooldownMs = 3UL * 60UL * 60UL * 1000UL; // 3 uur
 }
 
 CryptoMonitorSettings SettingsStore::load() {
@@ -380,6 +406,19 @@ CryptoMonitorSettings SettingsStore::load() {
     settings.volatilityLowThreshold = prefs.getFloat(PREF_KEY_VOL_LOW, VOLATILITY_LOW_THRESHOLD_DEFAULT);
     settings.volatilityHighThreshold = prefs.getFloat(PREF_KEY_VOL_HIGH, VOLATILITY_HIGH_THRESHOLD_DEFAULT);
     
+    // Load 2-hour alert thresholds
+    settings.alert2HThresholds.breakMarginPct = prefs.getFloat(PREF_KEY_2H_BREAK_MARGIN, 0.15f);
+    settings.alert2HThresholds.breakResetMarginPct = prefs.getFloat(PREF_KEY_2H_BREAK_RESET, 0.10f);
+    settings.alert2HThresholds.breakCooldownMs = prefs.getULong(PREF_KEY_2H_BREAK_CD, 30UL * 60UL * 1000UL);
+    settings.alert2HThresholds.meanMinDistancePct = prefs.getFloat(PREF_KEY_2H_MEAN_MIN_DIST, 0.60f);
+    settings.alert2HThresholds.meanTouchBandPct = prefs.getFloat(PREF_KEY_2H_MEAN_TOUCH, 0.10f);
+    settings.alert2HThresholds.meanCooldownMs = prefs.getULong(PREF_KEY_2H_MEAN_CD, 60UL * 60UL * 1000UL);
+    settings.alert2HThresholds.compressThresholdPct = prefs.getFloat(PREF_KEY_2H_COMPRESS_TH, 0.80f);
+    settings.alert2HThresholds.compressResetPct = prefs.getFloat(PREF_KEY_2H_COMPRESS_RESET, 1.10f);
+    settings.alert2HThresholds.compressCooldownMs = prefs.getULong(PREF_KEY_2H_COMPRESS_CD, 2UL * 60UL * 60UL * 1000UL);
+    settings.alert2HThresholds.anchorOutsideMarginPct = prefs.getFloat(PREF_KEY_2H_ANCHOR_MARGIN, 0.25f);
+    settings.alert2HThresholds.anchorCooldownMs = prefs.getULong(PREF_KEY_2H_ANCHOR_CD, 3UL * 60UL * 60UL * 1000UL);
+    
     prefs.end();
     return settings;
 }
@@ -446,6 +485,19 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     prefs.putFloat(PREF_KEY_TREND_TH, settings.trendThreshold);
     prefs.putFloat(PREF_KEY_VOL_LOW, settings.volatilityLowThreshold);
     prefs.putFloat(PREF_KEY_VOL_HIGH, settings.volatilityHighThreshold);
+    
+    // Save 2-hour alert thresholds
+    prefs.putFloat(PREF_KEY_2H_BREAK_MARGIN, settings.alert2HThresholds.breakMarginPct);
+    prefs.putFloat(PREF_KEY_2H_BREAK_RESET, settings.alert2HThresholds.breakResetMarginPct);
+    prefs.putULong(PREF_KEY_2H_BREAK_CD, settings.alert2HThresholds.breakCooldownMs);
+    prefs.putFloat(PREF_KEY_2H_MEAN_MIN_DIST, settings.alert2HThresholds.meanMinDistancePct);
+    prefs.putFloat(PREF_KEY_2H_MEAN_TOUCH, settings.alert2HThresholds.meanTouchBandPct);
+    prefs.putULong(PREF_KEY_2H_MEAN_CD, settings.alert2HThresholds.meanCooldownMs);
+    prefs.putFloat(PREF_KEY_2H_COMPRESS_TH, settings.alert2HThresholds.compressThresholdPct);
+    prefs.putFloat(PREF_KEY_2H_COMPRESS_RESET, settings.alert2HThresholds.compressResetPct);
+    prefs.putULong(PREF_KEY_2H_COMPRESS_CD, settings.alert2HThresholds.compressCooldownMs);
+    prefs.putFloat(PREF_KEY_2H_ANCHOR_MARGIN, settings.alert2HThresholds.anchorOutsideMarginPct);
+    prefs.putULong(PREF_KEY_2H_ANCHOR_CD, settings.alert2HThresholds.anchorCooldownMs);
     
     prefs.end();
 }

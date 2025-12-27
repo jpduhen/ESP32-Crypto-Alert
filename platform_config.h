@@ -11,8 +11,8 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 4
-#define VERSION_MINOR 2
-#define VERSION_STRING "4.02"
+#define VERSION_MINOR 3
+#define VERSION_STRING "4.03"
 #endif
 
 // Standaard taal instelling (0 = Nederlands, 1 = English)

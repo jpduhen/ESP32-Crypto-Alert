@@ -24,6 +24,22 @@ struct NotificationCooldowns {
     unsigned long cooldown5MinMs;
 };
 
+// 2-hour alert thresholds struct
+// Geoptimaliseerd: gebruik uint32_t i.p.v. unsigned long (bespaart geen bytes op ESP32, maar consistenter)
+struct Alert2HThresholds {
+    float breakMarginPct;
+    float breakResetMarginPct;
+    uint32_t breakCooldownMs;
+    float meanMinDistancePct;
+    float meanTouchBandPct;
+    uint32_t meanCooldownMs;
+    float compressThresholdPct;
+    float compressResetPct;
+    uint32_t compressCooldownMs;
+    float anchorOutsideMarginPct;
+    uint32_t anchorCooldownMs;
+};
+
 // Settings struct - bevat alle instelbare waarden
 struct CryptoMonitorSettings {
     // Basic settings
@@ -33,6 +49,9 @@ struct CryptoMonitorSettings {
     
     // Alert thresholds
     AlertThresholds alertThresholds;
+    
+    // 2-hour alert thresholds
+    Alert2HThresholds alert2HThresholds;
     
     // Notification cooldowns
     NotificationCooldowns notificationCooldowns;
@@ -137,6 +156,19 @@ private:
     static const char* PREF_KEY_TREND_TH;
     static const char* PREF_KEY_VOL_LOW;
     static const char* PREF_KEY_VOL_HIGH;
+    
+    // 2-hour alert threshold keys
+    static const char* PREF_KEY_2H_BREAK_MARGIN;
+    static const char* PREF_KEY_2H_BREAK_RESET;
+    static const char* PREF_KEY_2H_BREAK_CD;
+    static const char* PREF_KEY_2H_MEAN_MIN_DIST;
+    static const char* PREF_KEY_2H_MEAN_TOUCH;
+    static const char* PREF_KEY_2H_MEAN_CD;
+    static const char* PREF_KEY_2H_COMPRESS_TH;
+    static const char* PREF_KEY_2H_COMPRESS_RESET;
+    static const char* PREF_KEY_2H_COMPRESS_CD;
+    static const char* PREF_KEY_2H_ANCHOR_MARGIN;
+    static const char* PREF_KEY_2H_ANCHOR_CD;
 };
 
 #endif // SETTINGSSTORE_H

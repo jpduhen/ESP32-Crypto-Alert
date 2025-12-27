@@ -77,8 +77,8 @@
 // Hier alleen een fallback als het nog niet gedefinieerd is
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 4
-#define VERSION_MINOR 2
-#define VERSION_STRING "4.02"
+#define VERSION_MINOR 3
+#define VERSION_STRING "4.03"
 #endif
 
 // --- Debug Configuration ---
@@ -412,18 +412,18 @@ static unsigned long lastHeapTelemetryLog = 0;   // Timestamp van laatste heap t
 static const unsigned long HEAP_TELEMETRY_INTERVAL_MS = 60000UL; // Elke 60 seconden
 
 // Static buffers voor hot paths (voorkomt String allocaties)
-static char httpResponseBuffer[512];  // Buffer voor HTTP responses (NTFY, etc.)
-static char notificationMsgBuffer[512];  // Buffer voor notification messages
-static char notificationTitleBuffer[128];  // Buffer voor notification titles
+static char httpResponseBuffer[384];  // Buffer voor HTTP responses (NTFY, etc.) - verkleind van 512 naar 384 bytes
+static char notificationMsgBuffer[384];  // Buffer voor notification messages - verkleind van 512 naar 384 bytes
+static char notificationTitleBuffer[96];  // Buffer voor notification titles - verkleind van 128 naar 96 bytes
 
 // M2: Globale herbruikbare buffer voor HTTP responses (voorkomt String allocaties)
 // Note: Niet static zodat ApiClient.cpp er toegang toe heeft via extern declaratie in ApiClient.h
 // Verkleind van 2048 naar 512 bytes (genoeg voor price responses, ~100 bytes)
-char gApiResp[512];     // Buffer voor API price responses (M2: streaming)
+char gApiResp[384];  // Verkleind van 512 naar 384 bytes     // Buffer voor API price responses (M2: streaming)
 // gKlinesResp verwijderd: fetchBinanceKlines gebruikt streaming parsing met binanceStreamBuffer
 
 // Streaming buffer voor Binance klines parsing (geen grote heap allocaties)
-static char binanceStreamBuffer[1024];  // Fixed-size buffer voor chunked JSON parsing
+static char binanceStreamBuffer[768];  // Fixed-size buffer voor chunked JSON parsing - verkleind van 1024 naar 768 bytes
 
 // LVGL UI buffers en cache (voorkomt herhaalde allocaties en onnodige updates)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
@@ -432,7 +432,7 @@ char anchorMaxLabelBuffer[24];  // Buffer voor anchor max label (max: "12345.67"
 char anchorLabelBuffer[24];  // Buffer voor anchor label (max: "12345.67" = ~8 chars)
 char anchorMinLabelBuffer[24];  // Buffer voor anchor min label (max: "12345.67" = ~8 chars)
 // Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
-char priceTitleBuffer[SYMBOL_COUNT][48];  // Buffers voor price titles (max: "30 min  +12.34%" = ~20 chars)
+char priceTitleBuffer[SYMBOL_COUNT][40];  // Buffers voor price titles (verkleind van 48 naar 40 bytes, bespaart 24 bytes voor CYD)
 char price1MinMaxLabelBuffer[20];  // Buffer voor 1m max label (max: "12345.67" = ~8 chars)
 char price1MinMinLabelBuffer[20];  // Buffer voor 1m min label (max: "12345.67" = ~8 chars)
 char price1MinDiffLabelBuffer[20];  // Buffer voor 1m diff label (max: "12345.67" = ~8 chars)
@@ -571,6 +571,22 @@ NotificationCooldowns notificationCooldowns = {
     .cooldown1MinMs = NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT,
     .cooldown30MinMs = NOTIFICATION_COOLDOWN_30MIN_MS_DEFAULT,
     .cooldown5MinMs = NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT
+};
+
+// 2-hour alert thresholds in struct voor betere organisatie
+// Wordt gebruikt door AlertEngine voor 2h notificaties
+Alert2HThresholds alert2HThresholds = {
+    .breakMarginPct = 0.15f,
+    .breakResetMarginPct = 0.10f,
+    .breakCooldownMs = 30UL * 60UL * 1000UL, // 30 min
+    .meanMinDistancePct = 0.60f,
+    .meanTouchBandPct = 0.10f,
+    .meanCooldownMs = 60UL * 60UL * 1000UL, // 60 min
+    .compressThresholdPct = 0.80f,
+    .compressResetPct = 1.10f,
+    .compressCooldownMs = 2UL * 60UL * 60UL * 1000UL, // 2 uur
+    .anchorOutsideMarginPct = 0.25f,
+    .anchorCooldownMs = 3UL * 60UL * 60UL * 1000UL // 3 uur
 };
 
 // Backward compatibility: legacy variabelen (verwijzen naar struct)
@@ -1846,6 +1862,7 @@ void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
 #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
 void findMinMaxInLast2Hours(float &minVal, float &maxVal);  // Alleen voor CYD platforms
 #endif
+TwoHMetrics computeTwoHMetrics();  // Compute 2-hour metrics uniformly from existing state
 static void checkHeapTelemetry();
 
 // ============================================================================
@@ -2104,6 +2121,9 @@ static void loadSettings()
     // Copy alert thresholds
     alertThresholds = settings.alertThresholds;
     
+    // Copy 2-hour alert thresholds
+    alert2HThresholds = settings.alert2HThresholds;
+    
     // Copy notification cooldowns
     notificationCooldowns = settings.notificationCooldowns;
     
@@ -2165,6 +2185,9 @@ void saveSettings()
     
     // Copy alert thresholds
     settings.alertThresholds = alertThresholds;
+    
+    // Copy 2-hour alert thresholds
+    settings.alert2HThresholds = alert2HThresholds;
     
     // Copy notification cooldowns
     settings.notificationCooldowns = notificationCooldowns;
@@ -2377,7 +2400,15 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         {"/config/anchorMaxLoss/set", true, -100.0f, -0.1f, &anchorMaxLoss, "/config/anchorMaxLoss"},
         {"/config/trendThreshold/set", true, 0.1f, 10.0f, &trendThreshold, "/config/trendThreshold"},
         {"/config/volatilityLowThreshold/set", true, 0.01f, 1.0f, &volatilityLowThreshold, "/config/volatilityLowThreshold"},
-        {"/config/volatilityHighThreshold/set", true, 0.01f, 1.0f, &volatilityHighThreshold, "/config/volatilityHighThreshold"}
+        {"/config/volatilityHighThreshold/set", true, 0.01f, 1.0f, &volatilityHighThreshold, "/config/volatilityHighThreshold"},
+        // 2-hour alert thresholds
+        {"/config/2hBreakMargin/set", true, 0.01f, 5.0f, &alert2HThresholds.breakMarginPct, "/config/2hBreakMargin"},
+        {"/config/2hBreakReset/set", true, 0.01f, 5.0f, &alert2HThresholds.breakResetMarginPct, "/config/2hBreakReset"},
+        {"/config/2hMeanMinDist/set", true, 0.01f, 10.0f, &alert2HThresholds.meanMinDistancePct, "/config/2hMeanMinDist"},
+        {"/config/2hMeanTouch/set", true, 0.01f, 2.0f, &alert2HThresholds.meanTouchBandPct, "/config/2hMeanTouch"},
+        {"/config/2hCompressTh/set", true, 0.01f, 5.0f, &alert2HThresholds.compressThresholdPct, "/config/2hCompressTh"},
+        {"/config/2hCompressReset/set", true, 0.01f, 10.0f, &alert2HThresholds.compressResetPct, "/config/2hCompressReset"},
+        {"/config/2hAnchorMargin/set", true, 0.01f, 5.0f, &alert2HThresholds.anchorOutsideMarginPct, "/config/2hAnchorMargin"}
     };
     
     static const struct {
@@ -2387,7 +2418,12 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     } cooldownSettings[] = {
         {"/config/cooldown1min/set", &notificationCooldowns.cooldown1MinMs, "/config/cooldown1min"},
         {"/config/cooldown30min/set", &notificationCooldowns.cooldown30MinMs, "/config/cooldown30min"},
-        {"/config/cooldown5min/set", &notificationCooldowns.cooldown5MinMs, "/config/cooldown5min"}
+        {"/config/cooldown5min/set", &notificationCooldowns.cooldown5MinMs, "/config/cooldown5min"},
+        // 2-hour alert cooldowns
+        {"/config/2hBreakCD/set", &alert2HThresholds.breakCooldownMs, "/config/2hBreakCD"},
+        {"/config/2hMeanCD/set", &alert2HThresholds.meanCooldownMs, "/config/2hMeanCD"},
+        {"/config/2hCompressCD/set", &alert2HThresholds.compressCooldownMs, "/config/2hCompressCD"},
+        {"/config/2hAnchorCD/set", &alert2HThresholds.anchorCooldownMs, "/config/2hAnchorCD"}
     };
     
     // Process float settings
@@ -3827,6 +3863,82 @@ void findMinMaxInLast2Hours(float &minVal, float &maxVal)
 }
 #endif
 
+// Compute 2-hour metrics uniformly from existing state
+// Gebruikt bestaande berekeningen: averagePrices[3], findMinMaxInLast2Hours() (CYD) of minuteAverages (andere), hasRet2h
+TwoHMetrics computeTwoHMetrics()
+{
+    TwoHMetrics metrics;
+    
+    // Gebruik bestaande 2h average (wordt berekend in calculateReturn2Hours())
+    metrics.avg2h = averagePrices[3];
+    
+    // Gebruik bestaande findMinMaxInLast2Hours() functie voor CYD platforms
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+    findMinMaxInLast2Hours(metrics.low2h, metrics.high2h);
+    #else
+    // Voor niet-CYD platforms: bereken 2h min/max uit minuteAverages (zoals findMinMaxInLast2Hours doet)
+    metrics.low2h = 0.0f;
+    metrics.high2h = 0.0f;
+    
+    uint8_t availableMinutes = 0;
+    if (!minuteArrayFilled) {
+        availableMinutes = minuteIndex;
+    } else {
+        availableMinutes = MINUTES_FOR_30MIN_CALC;  // 120 minuten
+    }
+    
+    if (availableMinutes > 0) {
+        // Gebruik laatste 120 minuten (of minder als niet beschikbaar)
+        uint8_t count = (availableMinutes < 120) ? availableMinutes : 120;
+        bool firstValid = false;
+        
+        for (uint8_t i = 1; i <= count; i++) {
+            uint8_t idx = (minuteIndex - i + MINUTES_FOR_30MIN_CALC) % MINUTES_FOR_30MIN_CALC;
+            if (isValidPrice(minuteAverages[idx])) {
+                if (!firstValid) {
+                    metrics.low2h = minuteAverages[idx];
+                    metrics.high2h = minuteAverages[idx];
+                    firstValid = true;
+                } else {
+                    if (minuteAverages[idx] < metrics.low2h) metrics.low2h = minuteAverages[idx];
+                    if (minuteAverages[idx] > metrics.high2h) metrics.high2h = minuteAverages[idx];
+                }
+            }
+        }
+    }
+    #endif
+    
+    // Valid check: avg2h > 0, high2h > 0, low2h > 0, high2h >= low2h, en hasRet2h
+    metrics.valid = (metrics.avg2h > 0.0f) && 
+                    (metrics.high2h > 0.0f) && 
+                    (metrics.low2h > 0.0f) && 
+                    (metrics.high2h >= metrics.low2h) &&
+                    hasRet2h;
+    
+    // Bereken range percentage: (high2h - low2h) / avg2h * 100
+    if (metrics.valid && metrics.avg2h > 0.0f) {
+        metrics.rangePct = ((metrics.high2h - metrics.low2h) / metrics.avg2h) * 100.0f;
+    } else {
+        metrics.rangePct = 0.0f;
+    }
+    
+    // Log metrics (alleen 1x per boot of op debug-flag)
+    static bool loggedOnce = false;
+    static bool lastValidState = false;
+    if (metrics.valid && (!loggedOnce || !lastValidState)) {
+        Serial.printf("[2H] avg=%.2f high=%.2f low=%.2f range=%.2f%%\n", 
+                      metrics.avg2h, metrics.high2h, metrics.low2h, metrics.rangePct);
+        loggedOnce = true;
+        lastValidState = true;
+    } else if (!metrics.valid && lastValidState) {
+        // Reset logged flag als valid weer false wordt (bijvoorbeeld na reset)
+        lastValidState = false;
+        loggedOnce = false;
+    }
+    
+    return metrics;
+}
+
 // Add price to second array (called every second)
 // Geoptimaliseerd: bounds checking toegevoegd voor robuustheid
 // Fase 4.2.11: Oude addPriceToSecondArray() functie verwijderd
@@ -4036,6 +4148,11 @@ void fetchPrice()
             // Check anchor take profit / max loss alerts
             // Fase 6.2.7: Gebruik AnchorSystem module i.p.v. globale functie
             anchorSystem.checkAnchorAlerts();
+            
+            // Check 2-hour notifications (breakout, breakdown, compression, mean reversion, anchor context)
+            // Wordt aangeroepen na elke price update
+            // Functie checkt zelf of anchorPrice > 0 voor anchor context notificaties
+            AlertEngine::check2HNotifications(prices[0], anchorActive ? anchorPrice : 0.0f);
             
             // Touchscreen anchor set functionaliteit verwijderd - gebruik nu fysieke knop
             

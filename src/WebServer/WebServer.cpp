@@ -60,6 +60,7 @@ extern void formatIPAddress(IPAddress ip, char* buffer, size_t bufferSize);
 extern void generateDefaultNtfyTopic(char* buffer, size_t bufferSize);
 extern SettingsStore settingsStore;
 extern AlertThresholds alertThresholds;
+extern Alert2HThresholds alert2HThresholds;
 extern NotificationCooldowns notificationCooldowns;
 extern void saveSettings();
 extern bool safeAtof(const char* str, float& result);
@@ -353,6 +354,71 @@ void WebServerModule::renderSettingsHTML() {
     
     sendSectionFooter();
     
+    // 2-hour Alert Thresholds sectie
+    sendSectionHeader(getText("2-uur Alert Thresholds", "2-hour Alert Thresholds"), "2hAlerts", false);
+    sendSectionDesc(getText("Thresholds voor 2-uur breakout, breakdown, compressie en mean reversion alerts", "Thresholds for 2-hour breakout, breakdown, compression and mean reversion alerts"));
+    
+    // Breakout/Breakdown thresholds
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.breakMarginPct);
+    sendInputRow(getText("Breakout/Breakdown Margin (%)", "Breakout/Breakdown Margin (%)"), "2hBreakMargin", "number", 
+                 valueBuf, getText("Minimaal percentage boven/onder 2h high/low voor breakout", "Minimum percentage above/below 2h high/low for breakout"), 
+                 0.01f, 5.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.breakResetMarginPct);
+    sendInputRow(getText("Breakout Reset Margin (%)", "Breakout Reset Margin (%)"), "2hBreakReset", "number", 
+                 valueBuf, getText("Percentage voor reset van breakout arm", "Percentage for breakout arm reset"), 
+                 0.01f, 5.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.breakCooldownMs / 1000UL / 60UL);
+    sendInputRow(getText("Breakout Cooldown (min)", "Breakout Cooldown (min)"), "2hBreakCD", "number", 
+                 valueBuf, getText("Cooldown in minuten tussen breakout alerts", "Cooldown in minutes between breakout alerts"), 
+                 1, 180, 1);
+    
+    // Mean reversion thresholds
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.meanMinDistancePct);
+    sendInputRow(getText("Mean Min Distance (%)", "Mean Min Distance (%)"), "2hMeanMinDist", "number", 
+                 valueBuf, getText("Minimaal percentage afstand van avg2h voor mean reversion", "Minimum percentage distance from avg2h for mean reversion"), 
+                 0.01f, 10.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.meanTouchBandPct);
+    sendInputRow(getText("Mean Touch Band (%)", "Mean Touch Band (%)"), "2hMeanTouch", "number", 
+                 valueBuf, getText("Band rond avg2h voor 'touch' detectie", "Band around avg2h for 'touch' detection"), 
+                 0.01f, 2.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.meanCooldownMs / 1000UL / 60UL);
+    sendInputRow(getText("Mean Reversion Cooldown (min)", "Mean Reversion Cooldown (min)"), "2hMeanCD", "number", 
+                 valueBuf, getText("Cooldown in minuten tussen mean reversion alerts", "Cooldown in minutes between mean reversion alerts"), 
+                 1, 180, 1);
+    
+    // Range compression thresholds
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.compressThresholdPct);
+    sendInputRow(getText("Compress Threshold (%)", "Compress Threshold (%)"), "2hCompressTh", "number", 
+                 valueBuf, getText("Maximum range% voor compressie alert", "Maximum range% for compression alert"), 
+                 0.01f, 5.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.compressResetPct);
+    sendInputRow(getText("Compress Reset (%)", "Compress Reset (%)"), "2hCompressReset", "number", 
+                 valueBuf, getText("Range% voor reset van compressie arm", "Range% for compression arm reset"), 
+                 0.01f, 10.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.compressCooldownMs / 1000UL / 60UL);
+    sendInputRow(getText("Compress Cooldown (min)", "Compress Cooldown (min)"), "2hCompressCD", "number", 
+                 valueBuf, getText("Cooldown in minuten tussen compressie alerts", "Cooldown in minutes between compression alerts"), 
+                 1, 300, 1);
+    
+    // Anchor context thresholds
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.anchorOutsideMarginPct);
+    sendInputRow(getText("Anchor Outside Margin (%)", "Anchor Outside Margin (%)"), "2hAnchorMargin", "number", 
+                 valueBuf, getText("Minimaal percentage buiten 2h range voor anchor alert", "Minimum percentage outside 2h range for anchor alert"), 
+                 0.01f, 5.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.anchorCooldownMs / 1000UL / 60UL);
+    sendInputRow(getText("Anchor Context Cooldown (min)", "Anchor Context Cooldown (min)"), "2hAnchorCD", "number", 
+                 valueBuf, getText("Cooldown in minuten tussen anchor context alerts", "Cooldown in minutes between anchor context alerts"), 
+                 1, 300, 1);
+    
+    sendSectionFooter();
+    
     // Slimme logica & filters sectie
     sendSectionHeader(getText("Slimme logica & filters", "Smart Logic & Filters"), "smart", false);
     sendSectionDesc(getText("Trend-adaptive anchors, Confluence Mode en Auto-Volatility", "Trend-adaptive anchors, Confluence Mode and Auto-Volatility"));
@@ -572,6 +638,75 @@ void WebServerModule::handleSave() {
             move5mAlertThreshold = val;
         }
     }
+    
+    // 2-hour alert thresholds
+    if (server->hasArg("2hBreakMargin")) {
+        float val;
+        if (safeAtof(server->arg("2hBreakMargin").c_str(), val) && val >= 0.01f && val <= 5.0f) {
+            alert2HThresholds.breakMarginPct = val;
+        }
+    }
+    if (server->hasArg("2hBreakReset")) {
+        float val;
+        if (safeAtof(server->arg("2hBreakReset").c_str(), val) && val >= 0.01f && val <= 5.0f) {
+            alert2HThresholds.breakResetMarginPct = val;
+        }
+    }
+    if (server->hasArg("2hBreakCD")) {
+        int minutes = server->arg("2hBreakCD").toInt();
+        if (minutes >= 1 && minutes <= 180) {
+            alert2HThresholds.breakCooldownMs = minutes * 60UL * 1000UL;
+        }
+    }
+    if (server->hasArg("2hMeanMinDist")) {
+        float val;
+        if (safeAtof(server->arg("2hMeanMinDist").c_str(), val) && val >= 0.01f && val <= 10.0f) {
+            alert2HThresholds.meanMinDistancePct = val;
+        }
+    }
+    if (server->hasArg("2hMeanTouch")) {
+        float val;
+        if (safeAtof(server->arg("2hMeanTouch").c_str(), val) && val >= 0.01f && val <= 2.0f) {
+            alert2HThresholds.meanTouchBandPct = val;
+        }
+    }
+    if (server->hasArg("2hMeanCD")) {
+        int minutes = server->arg("2hMeanCD").toInt();
+        if (minutes >= 1 && minutes <= 180) {
+            alert2HThresholds.meanCooldownMs = minutes * 60UL * 1000UL;
+        }
+    }
+    if (server->hasArg("2hCompressTh")) {
+        float val;
+        if (safeAtof(server->arg("2hCompressTh").c_str(), val) && val >= 0.01f && val <= 5.0f) {
+            alert2HThresholds.compressThresholdPct = val;
+        }
+    }
+    if (server->hasArg("2hCompressReset")) {
+        float val;
+        if (safeAtof(server->arg("2hCompressReset").c_str(), val) && val >= 0.01f && val <= 10.0f) {
+            alert2HThresholds.compressResetPct = val;
+        }
+    }
+    if (server->hasArg("2hCompressCD")) {
+        int minutes = server->arg("2hCompressCD").toInt();
+        if (minutes >= 1 && minutes <= 300) {
+            alert2HThresholds.compressCooldownMs = minutes * 60UL * 1000UL;
+        }
+    }
+    if (server->hasArg("2hAnchorMargin")) {
+        float val;
+        if (safeAtof(server->arg("2hAnchorMargin").c_str(), val) && val >= 0.01f && val <= 5.0f) {
+            alert2HThresholds.anchorOutsideMarginPct = val;
+        }
+    }
+    if (server->hasArg("2hAnchorCD")) {
+        int minutes = server->arg("2hAnchorCD").toInt();
+        if (minutes >= 1 && minutes <= 300) {
+            alert2HThresholds.anchorCooldownMs = minutes * 60UL * 1000UL;
+        }
+    }
+    
     if (server->hasArg("cd1min")) {
         int seconds = server->arg("cd1min").toInt();
         uint32_t resultMs;

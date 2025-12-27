@@ -27,6 +27,7 @@ Een unificatie van de Crypto Monitor voor verschillende ESP32 display platforms:
 - **Smart Confluence Mode**: Gecombineerde alerts wanneer meerdere timeframes samenvallen
 - **Auto-Volatility Mode**: Automatische threshold aanpassing op basis van volatiliteit
 - **Warm-Start met Binance historische data**: Vul buffers bij opstarten met historische data voor direct bruikbare trend- en volatiliteitsindicaties
+- **2-uur Alert Systeem**: Instelbare notificaties voor 2-uur timeframe (breakout, breakdown, compressie, mean reversion, anchor context)
 
 ## TL;DR – Alerts lezen in één oogopslag
 
@@ -1048,6 +1049,29 @@ MQTT is optioneel en kan ook gebruikt worden met andere systemen zoals:
 Als je MQTT niet gebruikt, kun je de MQTT instellingen leeg laten in de web interface.
 
 ## Versie Geschiedenis
+
+### Versie 4.03
+- **2-uur Alert Thresholds**: Nieuwe instelbare thresholds voor 2-uur alerts via web-interface en MQTT
+  - Breakout/Breakdown: margin, reset margin en cooldown instelbaar
+  - Mean Reversion: min distance, touch band en cooldown instelbaar
+  - Range Compression: threshold, reset en cooldown instelbaar
+  - Anchor Context: margin en cooldown instelbaar
+- **2-uur Alert Notificaties**: Vijf nieuwe notificatietypes voor 2-uur timeframe
+  - 2h Breakout Up: Prijs breekt boven 2h high met configurable margin
+  - 2h Breakdown Down: Prijs breekt onder 2h low met configurable margin
+  - Range Compression: 2h range wordt zeer klein (< threshold%)
+  - Mean Reversion Touch: Prijs keert terug naar 2h gemiddelde na significante afwijking
+  - Anchor Context: Anchor prijs ligt buiten 2h range
+- **Debug Logging**: Optionele compile-time debug logging voor 2h alerts (DEBUG_2H_ALERTS flag)
+- **Memory Optimalisaties**: Verschillende buffers verkleind om DRAM overflow te voorkomen
+- **Code Optimalisaties**: Alert2HState struct geoptimaliseerd met bitfields (24 bytes i.p.v. 32 bytes)
+
+### Versie 4.02
+- **2-uur Box**: Nieuwe prijsbox voor 2-uur timeframe (alleen CYD 2.4" en 2.8")
+  - Toont min, max, diff en gemiddelde prijs over laatste 2 uur
+  - Percentage return berekening op basis van gemiddelde minuut-waarden
+  - Kleurcodering op basis van prijsbeweging
+  - UI layout geoptimaliseerd voor 320px schermbreedte
 
 ### Versie 4.01
 - **2-uur Box voor CYD Platforms**: Toegevoegd 2-uur (2h) prijs box voor CYD 2.4" en CYD 2.8" platforms

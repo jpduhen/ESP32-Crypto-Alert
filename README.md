@@ -27,6 +27,7 @@ A unified Crypto Monitor for different ESP32 display platforms: TTGO T-Display, 
 - **Smart Confluence Mode**: Combined alerts when multiple timeframes align
 - **Auto-Volatility Mode**: Automatic threshold adjustment based on volatility
 - **Warm-Start with Binance historical data**: Fill buffers on boot with historical data for immediately usable trend and volatility indications
+- **2-hour Alert System**: Configurable notifications for 2-hour timeframe (breakout, breakdown, compression, mean reversion, anchor context)
 
 ## Architecture
 
@@ -1164,6 +1165,29 @@ MQTT is optional and can also be used with other systems such as:
 If you don't use MQTT, you can leave the MQTT settings empty in the web interface.
 
 ## Version History
+
+### Version 4.03
+- **2-hour Alert Thresholds**: New configurable thresholds for 2-hour alerts via web interface and MQTT
+  - Breakout/Breakdown: configurable margin, reset margin and cooldown
+  - Mean Reversion: configurable min distance, touch band and cooldown
+  - Range Compression: configurable threshold, reset and cooldown
+  - Anchor Context: configurable margin and cooldown
+- **2-hour Alert Notifications**: Five new notification types for 2-hour timeframe
+  - 2h Breakout Up: Price breaks above 2h high with configurable margin
+  - 2h Breakdown Down: Price breaks below 2h low with configurable margin
+  - Range Compression: 2h range becomes very small (< threshold%)
+  - Mean Reversion Touch: Price returns to 2h average after significant deviation
+  - Anchor Context: Anchor price lies outside 2h range
+- **Debug Logging**: Optional compile-time debug logging for 2h alerts (DEBUG_2H_ALERTS flag)
+- **Memory Optimizations**: Various buffers reduced to prevent DRAM overflow
+- **Code Optimizations**: Alert2HState struct optimized with bitfields (24 bytes instead of 32 bytes)
+
+### Version 4.02
+- **2-hour Box**: New price box for 2-hour timeframe (CYD 2.4" and 2.8" only)
+  - Shows min, max, diff and average price over last 2 hours
+  - Percentage return calculation based on average minute values
+  - Color coding based on price movement
+  - UI layout optimized for 320px screen width
 
 ### Version 4.01
 - **2-Hour Box for CYD Platforms**: Added 2-hour (2h) price box for CYD 2.4" and CYD 2.8" platforms

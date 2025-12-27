@@ -23,7 +23,7 @@
 #define HTTP_TIMEOUT_MS_DEFAULT HTTP_READ_TIMEOUT_MS_DEFAULT  // Backward compatibility: totale timeout = read timeout
 
 // M2: Extern declaratie voor globale response buffer (gedefinieerd in .ino)
-extern char gApiResp[512];
+extern char gApiResp[384];  // Verkleind van 512 naar 384 bytes
 
 // S0: Extern declaratie voor netwerk mutex (gedefinieerd in .ino)
 extern SemaphoreHandle_t gNetMutex;
