@@ -1,8 +1,8 @@
 # Code Index - UNIFIED-LVGL9-Crypto_Monitor
 
-**Versie:** 4.00  
+**Versie:** 4.03  
 **Platform:** ESP32 (TTGO T-Display, CYD 2.4/2.8, ESP32-S3 Super Mini)  
-**Laatste update:** 2025-12-26 - Fase 10 voltooid (FreeRTOS Task Refactoring), modulaire architectuur
+**Laatste update:** 2025-12-26 - Versie 4.03: 2-uur alert thresholds instelbaar via web en MQTT, 5 nieuwe 2h notificaties, debug logging, memory optimalisaties
 
 ---
 
@@ -46,8 +46,10 @@ De codebase is gerefactord naar een modulaire architectuur:
 #### Alert & Anchor Modules
 - **`src/AlertEngine/`** - Alert detection & notificaties
   - `AlertEngine.h` / `AlertEngine.cpp`
-  - Alert condition checking
+  - `Alert2HThresholds.h` - 2-uur alert threshold defaults en helper functies
+  - Alert condition checking (1m, 5m, 30m, 2h)
   - Smart Confluence detection
+  - 2-hour alert notifications (breakout, breakdown, compression, mean reversion, anchor context)
   - Notification sending
 
 - **`src/AnchorSystem/`** - Anchor price tracking
@@ -213,11 +215,49 @@ struct AlertThresholds {
     float threshold30MinUp, threshold30MinDown;
 };
 
+struct Alert2HThresholds {
+    float breakMarginPct;
+    float breakResetMarginPct;
+    uint32_t breakCooldownMs;
+    float meanMinDistancePct;
+    float meanTouchBandPct;
+    uint32_t meanCooldownMs;
+    float compressThresholdPct;
+    float compressResetPct;
+    uint32_t compressCooldownMs;
+    float anchorOutsideMarginPct;
+    uint32_t anchorCooldownMs;
+};
+
 struct NotificationCooldowns {
     unsigned long cooldown1MinMs;
     unsigned long cooldown30MinMs;
     unsigned long cooldown5MinMs;
 };
+```
+
+### 2-Hour Alert System
+```cpp
+struct TwoHMetrics {
+    float avg2h;
+    float high2h;
+    float low2h;
+    float rangePct;
+    bool valid;
+};
+
+struct Alert2HState {
+    uint32_t lastBreakoutUpMs;
+    uint32_t lastBreakoutDownMs;
+    uint32_t lastCompressMs;
+    uint32_t lastMeanMs;
+    uint32_t lastAnchorCtxMs;
+    uint8_t flags;  // Bitfield voor armed states en mean reversion state
+    // Helper methods: getBreakoutUpArmed(), setBreakoutUpArmed(), etc.
+};
+
+TwoHMetrics computeTwoHMetrics();
+void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice);
 ```
 
 ### MQTT Queue
@@ -315,6 +355,14 @@ trendDetector.checkTrendChange() → Notificatie bij wijziging
 [Smart Confluence Mode?]
     ├─ Ja: checkAndSendConfluenceAlert() → combineer 1m+5m+trend
     └─ Nee: verstuur losse alerts
+    ↓
+[2-Hour Alert Detection]
+    └─ check2HNotifications() → 5 nieuwe 2h alert types
+        ├─ Breakout Up: price > high2h * (1 + breakMarginPct/100)
+        ├─ Breakdown Down: price < low2h * (1 - breakMarginPct/100)
+        ├─ Range Compression: rangePct < compressThresholdPct
+        ├─ Mean Reversion Touch: prijs keert terug naar avg2h na significante afwijking
+        └─ Anchor Context: anchorPrice buiten 2h range
     ↓
 [Anchor Monitoring]
     └─ checkAnchorAlerts() → Max Loss / Take Profit
@@ -424,14 +472,39 @@ trendDetector.checkTrendChange() → Notificatie bij wijziging
    - Cooldown: `CONFLUENCE_TIME_WINDOW_MS` (300000ms)
    - Onderdrukt losse 1m/5m alerts
 
-5. **Anchor Alerts**
-   - Take Profit: `deltaPct >= effAnchorTakeProfit`
-   - Max Loss: `deltaPct <= effAnchorMaxLoss`
-   - Trend-adaptive: multipliers per trend state
+5. **2-Hour Breakout Up Alert**
+   - Voorwaarde: `price > high2h * (1 + breakMarginPct/100)` AND armed AND cooldown OK
+   - Cooldown: `alert2HThresholds.breakCooldownMs` (default: 30 min)
+   - Reset: `price < high2h * (1 - breakResetMarginPct/100)`
 
-6. **Trend Change Alert**
-   - Voorwaarde: `trendState != previousTrendState`
-   - Cooldown: `TREND_CHANGE_COOLDOWN_MS` (600000ms)
+6. **2-Hour Breakdown Down Alert**
+   - Voorwaarde: `price < low2h * (1 - breakMarginPct/100)` AND armed AND cooldown OK
+   - Cooldown: `alert2HThresholds.breakCooldownMs` (default: 30 min)
+   - Reset: `price > low2h * (1 + breakResetMarginPct/100)`
+
+7. **2-Hour Range Compression Alert**
+   - Voorwaarde: `rangePct < compressThresholdPct` AND armed AND cooldown OK
+   - Cooldown: `alert2HThresholds.compressCooldownMs` (default: 2 uur)
+   - Reset: `rangePct > compressResetPct`
+
+8. **2-Hour Mean Reversion Touch Alert**
+   - Voorwaarde: Prijs was minstens `meanMinDistancePct` van avg2h, nu binnen `meanTouchBandPct` AND armed AND cooldown OK
+   - Cooldown: `alert2HThresholds.meanCooldownMs` (default: 60 min)
+   - Reset: `distPct > (meanTouchBandPct * 2)`
+
+9. **2-Hour Anchor Context Alert**
+   - Voorwaarde: `anchorPrice` buiten 2h range (boven high2h + margin OF onder low2h - margin) AND armed AND cooldown OK
+   - Cooldown: `alert2HThresholds.anchorCooldownMs` (default: 3 uur)
+   - Reset: Anchor komt weer binnen 2h range
+
+10. **Anchor Alerts**
+    - Take Profit: `deltaPct >= effAnchorTakeProfit`
+    - Max Loss: `deltaPct <= effAnchorMaxLoss`
+    - Trend-adaptive: multipliers per trend state
+
+11. **Trend Change Alert**
+    - Voorwaarde: `trendState != previousTrendState`
+    - Cooldown: `TREND_CHANGE_COOLDOWN_MS` (600000ms)
 
 #### Alert Decision Tree
 ```
@@ -626,6 +699,8 @@ Totaal RAM gebruik: ~30-50KB (zonder PSRAM)
 - `alertEngine.checkAndSendConfluenceAlert()` - Smart Confluence detection
 - `alertEngine.update1mEvent()` / `alertEngine.update5mEvent()` - Event state tracking
 - `alertEngine.checkAlertConditions()` - Check individuele alert condities
+- `AlertEngine::check2HNotifications()` - 2-hour alert detection (breakout, breakdown, compression, mean reversion, anchor context)
+- `computeTwoHMetrics()` - Bereken 2h metrics (avg, high, low, rangePct)
 
 ### Anchor System (AnchorSystem Module)
 - `anchorSystem.setAnchorPrice()` - Stel anchor prijs in
@@ -673,6 +748,19 @@ Totaal RAM gebruik: ~30-50KB (zonder PSRAM)
 - `move30mThreshold` - 30m move threshold (default: 1.3%)
 - `move5mThreshold` - 5m move filter (default: 0.40%)
 - `move5mAlertThreshold` - 5m alert threshold (default: 0.8%)
+
+### 2-Hour Alert Thresholds (instelbaar via web en MQTT)
+- `alert2HThresholds.breakMarginPct` - Breakout margin (default: 0.15%)
+- `alert2HThresholds.breakResetMarginPct` - Breakout reset margin (default: 0.10%)
+- `alert2HThresholds.breakCooldownMs` - Breakout cooldown (default: 30 min)
+- `alert2HThresholds.meanMinDistancePct` - Mean reversion min distance (default: 0.60%)
+- `alert2HThresholds.meanTouchBandPct` - Mean reversion touch band (default: 0.10%)
+- `alert2HThresholds.meanCooldownMs` - Mean reversion cooldown (default: 60 min)
+- `alert2HThresholds.compressThresholdPct` - Compression threshold (default: 0.80%)
+- `alert2HThresholds.compressResetPct` - Compression reset (default: 1.10%)
+- `alert2HThresholds.compressCooldownMs` - Compression cooldown (default: 2 uur)
+- `alert2HThresholds.anchorOutsideMarginPct` - Anchor context margin (default: 0.25%)
+- `alert2HThresholds.anchorCooldownMs` - Anchor context cooldown (default: 3 uur)
 
 ### Trend & Volatiliteit
 - `trendThreshold` - Trend detection threshold (default: 1.30%)

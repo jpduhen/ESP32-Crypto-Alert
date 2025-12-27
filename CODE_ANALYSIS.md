@@ -1,15 +1,17 @@
 # Code Analyse - Crypto Monitor
 
-**Datum:** 2025-12-17 22:30  
-**Status:** In uitvoering
+**Datum:** 2025-12-26  
+**Versie:** 4.03  
+**Status:** Actueel
 
 ---
 
 ## Overzicht
 
-- **Totaal regels:** 8169
-- **Statische variabelen:** ~319
-- **Functies:** ~353
+- **Totaal regels:** ~13111
+- **Statische variabelen:** ~350+
+- **Functies:** ~380+
+- **Modules:** 12 (SettingsStore, ApiClient, PriceData, TrendDetector, VolatilityTracker, AlertEngine, AnchorSystem, UIController, WebServer, WarmStart, Memory, Net)
 
 ---
 
@@ -120,11 +122,13 @@
 ### 6. Alert System
 **Module:** `AlertEngine`
 - `static AlertThresholds alertThresholds`
+- `static Alert2HThresholds alert2HThresholds` - 2-hour alert thresholds (instelbaar)
 - `static NotificationCooldowns notificationCooldowns`
 - `static bool smartConfluenceEnabled`
 - `static LastOneMinuteEvent last1mEvent`
 - `static LastFiveMinuteEvent last5mEvent`
 - `static unsigned long lastConfluenceAlert`
+- `static Alert2HState gAlert2H` - Persistent state voor 2h alerts (geoptimaliseerd met bitfields, 24 bytes)
 
 ### 7. Warm-Start
 **Module:** `WarmStart`
@@ -209,6 +213,8 @@
 **Module:** `AlertEngine`
 - `checkAndNotify()`
 - `checkAndSendConfluenceAlert()`
+- `AlertEngine::check2HNotifications()` - 2-hour alert detection
+- `computeTwoHMetrics()` - Bereken 2h metrics voor alerts
 - `checkAnchorAlerts()`
 - `update1mEvent()`
 - `update5mEvent()`
@@ -325,7 +331,7 @@
 
 ---
 
-**Laatste update:** 2025-12-17 22:30
+**Laatste update:** 2025-12-26 - Versie 4.03: 2-uur alert systeem, instelbare thresholds via web/MQTT, memory optimalisaties
 
 
 
