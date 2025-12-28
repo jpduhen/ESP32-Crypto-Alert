@@ -128,6 +128,12 @@ private:
     // Fase 8.11.3: Helper functies (verplaatst vanuit .ino)
     void updateChartRange(int32_t currentPrice);
     
+    // Helper functies voor code duplicatie eliminatie
+    static void updateMinMaxDiffLabels(lv_obj_t* maxLabel, lv_obj_t* minLabel, lv_obj_t* diffLabel,
+                                       char* maxBuffer, char* minBuffer, char* diffBuffer,
+                                       float maxVal, float minVal, float diff,
+                                       float& lastMaxValue, float& lastMinValue, float& lastDiffValue);
+    
     // Forward declarations voor interne helpers (worden later geïmplementeerd)
     // Fase 8.3: createHeaderLabels(), createPriceBoxes(), createFooter()
     // Fase 8.5: update*Label() functies

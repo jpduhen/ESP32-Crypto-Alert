@@ -112,7 +112,7 @@ extern const char* symbols[];
 // VERSION_STRING wordt gedefinieerd in platform_config.h (beschikbaar voor alle modules)
 // Hier alleen een fallback als het nog niet gedefinieerd is
 #ifndef VERSION_STRING
-#define VERSION_STRING "4.03"  // Fallback (wordt overschreven door platform_config.h)
+#define VERSION_STRING "4.05"  // Fallback (wordt overschreven door platform_config.h)
 #endif
 extern void formatIPAddress(IPAddress ip, char* buffer, size_t bufferSize);
 // Fase 8.11.1: createFooter() dependencies (CYD platforms)
@@ -920,19 +920,13 @@ void UIController::updateTrendLabel()
             
             if (availableMinutes < 30) {
                 // Nog niet genoeg data: toon minuten tot 30
+                // Geoptimaliseerd: language check geëlimineerd (beide branches identiek)
                 uint8_t minutesNeeded = 30 - availableMinutes;
-                if (language == 1) {
-                    snprintf(waitText, sizeof(waitText), "Warm-up 30m %um", minutesNeeded);
-                } else {
-                    snprintf(waitText, sizeof(waitText), "Warm-up 30m %um", minutesNeeded);
-                }
+                snprintf(waitText, sizeof(waitText), "Warm-up 30m %um", minutesNeeded);
             } else if (livePct30 < 80) {
                 // Genoeg data maar niet genoeg live: toon percentage live
-                if (language == 1) {
-                    snprintf(waitText, sizeof(waitText), "Warm-up 30m %u%%", livePct30);
-                } else {
-                    snprintf(waitText, sizeof(waitText), "Warm-up 30m %u%%", livePct30);
-                }
+                // Geoptimaliseerd: language check geëlimineerd (beide branches identiek)
+                snprintf(waitText, sizeof(waitText), "Warm-up 30m %u%%", livePct30);
             } else {
                 // Zou niet moeten voorkomen (livePct30 >= 80 maar hasRet30m is false)
                 lv_label_set_text(::trendLabel, "--");
@@ -945,19 +939,13 @@ void UIController::updateTrendLabel()
             
             if (availableMinutes < 120) {
                 // Nog niet genoeg data: toon minuten tot 120
+                // Geoptimaliseerd: language check geëlimineerd (beide branches identiek)
                 uint8_t minutesNeeded = 120 - availableMinutes;
-                if (language == 1) {
-                    snprintf(waitText, sizeof(waitText), "Warm-up 2h %um", minutesNeeded);
-                } else {
-                    snprintf(waitText, sizeof(waitText), "Warm-up 2h %um", minutesNeeded);
-                }
+                snprintf(waitText, sizeof(waitText), "Warm-up 2h %um", minutesNeeded);
             } else if (livePct120 < 80) {
                 // Genoeg data maar niet genoeg live: toon percentage live
-                if (language == 1) {
-                    snprintf(waitText, sizeof(waitText), "Warm-up 2h %u%%", livePct120);
-                } else {
-                    snprintf(waitText, sizeof(waitText), "Warm-up 2h %u%%", livePct120);
-                }
+                // Geoptimaliseerd: language check geëlimineerd (beide branches identiek)
+                snprintf(waitText, sizeof(waitText), "Warm-up 2h %u%%", livePct120);
             } else {
                 // Zou niet moeten voorkomen (livePct120 >= 80 maar hasRet2h is false)
                 lv_label_set_text(::trendLabel, "--");
@@ -1265,45 +1253,12 @@ void UIController::updateAveragePriceCard(uint8_t index)
         float minVal, maxVal;
         findMinMaxInSecondPrices(minVal, maxVal);
         
-        if (minVal > 0.0f && maxVal > 0.0f)
-        {
-            float diff = maxVal - minVal;
-            // Update alleen als waarden veranderd zijn
-            if (lastPrice1MinMaxValue != maxVal || lastPrice1MinMaxValue < 0.0f) {
-                snprintf(price1MinMaxLabelBuffer, sizeof(price1MinMaxLabelBuffer), "%.2f", maxVal);
-                lv_label_set_text(::price1MinMaxLabel, price1MinMaxLabelBuffer);
-                lastPrice1MinMaxValue = maxVal;
-            }
-            if (lastPrice1MinDiffValue != diff || lastPrice1MinDiffValue < 0.0f) {
-                snprintf(price1MinDiffLabelBuffer, sizeof(price1MinDiffLabelBuffer), "%.2f", diff);
-                lv_label_set_text(::price1MinDiffLabel, price1MinDiffLabelBuffer);
-                lastPrice1MinDiffValue = diff;
-            }
-            if (lastPrice1MinMinValue != minVal || lastPrice1MinMinValue < 0.0f) {
-                snprintf(price1MinMinLabelBuffer, sizeof(price1MinMinLabelBuffer), "%.2f", minVal);
-                lv_label_set_text(::price1MinMinLabel, price1MinMinLabelBuffer);
-                lastPrice1MinMinValue = minVal;
-            }
-        }
-        else
-        {
-            // Update alleen als labels niet "--" zijn
-            if (strcmp(price1MinMaxLabelBuffer, "--") != 0) {
-                strcpy(price1MinMaxLabelBuffer, "--");
-                lv_label_set_text(::price1MinMaxLabel, "--");
-                lastPrice1MinMaxValue = -1.0f;
-            }
-            if (strcmp(price1MinDiffLabelBuffer, "--") != 0) {
-                strcpy(price1MinDiffLabelBuffer, "--");
-                lv_label_set_text(::price1MinDiffLabel, "--");
-                lastPrice1MinDiffValue = -1.0f;
-            }
-            if (strcmp(price1MinMinLabelBuffer, "--") != 0) {
-                strcpy(price1MinMinLabelBuffer, "--");
-                lv_label_set_text(::price1MinMinLabel, "--");
-                lastPrice1MinMinValue = -1.0f;
-            }
-        }
+        float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
+        // Geoptimaliseerd: gebruik helper functie i.p.v. gedupliceerde code
+        updateMinMaxDiffLabels(::price1MinMaxLabel, ::price1MinMinLabel, ::price1MinDiffLabel,
+                              price1MinMaxLabelBuffer, price1MinMinLabelBuffer, price1MinDiffLabelBuffer,
+                              maxVal, minVal, diff,
+                              lastPrice1MinMaxValue, lastPrice1MinMinValue, lastPrice1MinDiffValue);
     }
     
     if (index == 2 && ::price30MinMaxLabel != nullptr && ::price30MinMinLabel != nullptr && ::price30MinDiffLabel != nullptr)
@@ -1311,45 +1266,12 @@ void UIController::updateAveragePriceCard(uint8_t index)
         float minVal, maxVal;
         findMinMaxInLast30Minutes(minVal, maxVal);
         
-        if (minVal > 0.0f && maxVal > 0.0f)
-        {
-            float diff = maxVal - minVal;
-            // Update alleen als waarden veranderd zijn
-            if (lastPrice30MinMaxValue != maxVal || lastPrice30MinMaxValue < 0.0f) {
-                snprintf(price30MinMaxLabelBuffer, sizeof(price30MinMaxLabelBuffer), "%.2f", maxVal);
-                lv_label_set_text(::price30MinMaxLabel, price30MinMaxLabelBuffer);
-                lastPrice30MinMaxValue = maxVal;
-            }
-            if (lastPrice30MinDiffValue != diff || lastPrice30MinDiffValue < 0.0f) {
-                snprintf(price30MinDiffLabelBuffer, sizeof(price30MinDiffLabelBuffer), "%.2f", diff);
-                lv_label_set_text(::price30MinDiffLabel, price30MinDiffLabelBuffer);
-                lastPrice30MinDiffValue = diff;
-            }
-            if (lastPrice30MinMinValue != minVal || lastPrice30MinMinValue < 0.0f) {
-                snprintf(price30MinMinLabelBuffer, sizeof(price30MinMinLabelBuffer), "%.2f", minVal);
-                lv_label_set_text(::price30MinMinLabel, price30MinMinLabelBuffer);
-                lastPrice30MinMinValue = minVal;
-            }
-        }
-        else
-        {
-            // Update alleen als labels niet "--" zijn
-            if (strcmp(price30MinMaxLabelBuffer, "--") != 0) {
-                strcpy(price30MinMaxLabelBuffer, "--");
-                lv_label_set_text(::price30MinMaxLabel, "--");
-                lastPrice30MinMaxValue = -1.0f;
-            }
-            if (strcmp(price30MinDiffLabelBuffer, "--") != 0) {
-                strcpy(price30MinDiffLabelBuffer, "--");
-                lv_label_set_text(::price30MinDiffLabel, "--");
-                lastPrice30MinDiffValue = -1.0f;
-            }
-            if (strcmp(price30MinMinLabelBuffer, "--") != 0) {
-                strcpy(price30MinMinLabelBuffer, "--");
-                lv_label_set_text(::price30MinMinLabel, "--");
-                lastPrice30MinMinValue = -1.0f;
-            }
-        }
+        float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
+        // Geoptimaliseerd: gebruik helper functie i.p.v. gedupliceerde code
+        updateMinMaxDiffLabels(::price30MinMaxLabel, ::price30MinMinLabel, ::price30MinDiffLabel,
+                              price30MinMaxLabelBuffer, price30MinMinLabelBuffer, price30MinDiffLabelBuffer,
+                              maxVal, minVal, diff,
+                              lastPrice30MinMaxValue, lastPrice30MinMinValue, lastPrice30MinDiffValue);
     }
     
     #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
@@ -1358,45 +1280,12 @@ void UIController::updateAveragePriceCard(uint8_t index)
         float minVal, maxVal;
         findMinMaxInLast2Hours(minVal, maxVal);
         
-        if (minVal > 0.0f && maxVal > 0.0f)
-        {
-            float diff = maxVal - minVal;
-            // Update alleen als waarden veranderd zijn
-            if (lastPrice2HMaxValue != maxVal || lastPrice2HMaxValue < 0.0f) {
-                snprintf(price2HMaxLabelBuffer, sizeof(price2HMaxLabelBuffer), "%.2f", maxVal);
-                lv_label_set_text(::price2HMaxLabel, price2HMaxLabelBuffer);
-                lastPrice2HMaxValue = maxVal;
-            }
-            if (lastPrice2HDiffValue != diff || lastPrice2HDiffValue < 0.0f) {
-                snprintf(price2HDiffLabelBuffer, sizeof(price2HDiffLabelBuffer), "%.2f", diff);
-                lv_label_set_text(::price2HDiffLabel, price2HDiffLabelBuffer);
-                lastPrice2HDiffValue = diff;
-            }
-            if (lastPrice2HMinValue != minVal || lastPrice2HMinValue < 0.0f) {
-                snprintf(price2HMinLabelBuffer, sizeof(price2HMinLabelBuffer), "%.2f", minVal);
-                lv_label_set_text(::price2HMinLabel, price2HMinLabelBuffer);
-                lastPrice2HMinValue = minVal;
-            }
-        }
-        else
-        {
-            // Update alleen als labels niet "--" zijn
-            if (strcmp(price2HMaxLabelBuffer, "--") != 0) {
-                strcpy(price2HMaxLabelBuffer, "--");
-                lv_label_set_text(::price2HMaxLabel, "--");
-                lastPrice2HMaxValue = -1.0f;
-            }
-            if (strcmp(price2HDiffLabelBuffer, "--") != 0) {
-                strcpy(price2HDiffLabelBuffer, "--");
-                lv_label_set_text(::price2HDiffLabel, "--");
-                lastPrice2HDiffValue = -1.0f;
-            }
-            if (strcmp(price2HMinLabelBuffer, "--") != 0) {
-                strcpy(price2HMinLabelBuffer, "--");
-                lv_label_set_text(::price2HMinLabel, "--");
-                lastPrice2HMinValue = -1.0f;
-            }
-        }
+        float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
+        // Geoptimaliseerd: gebruik helper functie i.p.v. gedupliceerde code
+        updateMinMaxDiffLabels(::price2HMaxLabel, ::price2HMinLabel, ::price2HDiffLabel,
+                              price2HMaxLabelBuffer, price2HMinLabelBuffer, price2HDiffLabelBuffer,
+                              maxVal, minVal, diff,
+                              lastPrice2HMaxValue, lastPrice2HMinValue, lastPrice2HDiffValue);
     }
     #endif
     
@@ -1746,6 +1635,49 @@ void UIController::setupLVGL()
     } else {
         // Single buffering: alleen eerste buffer gebruiken (size in bytes)
         lv_display_set_buffers(disp, disp_draw_buf, NULL, bufSizeBytesPerBuffer, LV_DISPLAY_RENDER_MODE_PARTIAL);
+    }
+}
+
+// Helper: Update min/max/diff labels (geoptimaliseerd: elimineert code duplicatie)
+void UIController::updateMinMaxDiffLabels(lv_obj_t* maxLabel, lv_obj_t* minLabel, lv_obj_t* diffLabel,
+                                          char* maxBuffer, char* minBuffer, char* diffBuffer,
+                                          float maxVal, float minVal, float diff,
+                                          float& lastMaxValue, float& lastMinValue, float& lastDiffValue)
+{
+    if (minVal > 0.0f && maxVal > 0.0f) {
+        // Update alleen als waarden veranderd zijn
+        if (lastMaxValue != maxVal || lastMaxValue < 0.0f) {
+            snprintf(maxBuffer, 20, "%.2f", maxVal);
+            lv_label_set_text(maxLabel, maxBuffer);
+            lastMaxValue = maxVal;
+        }
+        if (lastDiffValue != diff || lastDiffValue < 0.0f) {
+            snprintf(diffBuffer, 20, "%.2f", diff);
+            lv_label_set_text(diffLabel, diffBuffer);
+            lastDiffValue = diff;
+        }
+        if (lastMinValue != minVal || lastMinValue < 0.0f) {
+            snprintf(minBuffer, 20, "%.2f", minVal);
+            lv_label_set_text(minLabel, minBuffer);
+            lastMinValue = minVal;
+        }
+    } else {
+        // Update alleen als labels niet "--" zijn
+        if (strcmp(maxBuffer, "--") != 0) {
+            strcpy(maxBuffer, "--");
+            lv_label_set_text(maxLabel, "--");
+            lastMaxValue = -1.0f;
+        }
+        if (strcmp(diffBuffer, "--") != 0) {
+            strcpy(diffBuffer, "--");
+            lv_label_set_text(diffLabel, "--");
+            lastDiffValue = -1.0f;
+        }
+        if (strcmp(minBuffer, "--") != 0) {
+            strcpy(minBuffer, "--");
+            lv_label_set_text(minLabel, "--");
+            lastMinValue = -1.0f;
+        }
     }
 }
 

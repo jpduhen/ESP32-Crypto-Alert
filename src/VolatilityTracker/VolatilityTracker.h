@@ -56,6 +56,20 @@ public:
     // Sync state: Update VolatilityTracker state met globale variabelen (voor parallel implementatie)
     void syncStateFromGlobals();
     
+    // Helper: Get clamped window size (geoptimaliseerd: elimineert code duplicatie)
+    static inline uint8_t getClampedWindowSize() {
+        extern uint8_t autoVolatilityWindowMinutes;
+        return (autoVolatilityWindowMinutes > MAX_VOLATILITY_WINDOW_SIZE) ? MAX_VOLATILITY_WINDOW_SIZE : autoVolatilityWindowMinutes;
+    }
+    
+    // Helper: Set base thresholds (geoptimaliseerd: elimineert code duplicatie)
+    static inline void setBaseThresholds(EffectiveThresholds& eff, float baseSpike1m, float baseMove5m, float baseMove30m) {
+        eff.volFactor = 1.0f;
+        eff.spike1m = baseSpike1m;
+        eff.move5m = baseMove5m;
+        eff.move30m = baseMove30m;
+    }
+    
 private:
     VolatilityState volatilityState;
     

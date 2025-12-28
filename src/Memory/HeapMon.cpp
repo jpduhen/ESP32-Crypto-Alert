@@ -13,6 +13,23 @@ struct TagLogEntry {
 static TagLogEntry tagLogs[MAX_TAGS];
 static int tagCount = 0;
 
+// Helper: Find tag index in tagLogs array (geoptimaliseerd: elimineert code duplicatie)
+// Geoptimaliseerd: pointer vergelijking eerst (sneller), dan string vergelijking alleen als nodig
+static int findTagIndex(const char* tag) {
+    if (tag == nullptr) {
+        return -1;
+    }
+    
+    for (int i = 0; i < tagCount; i++) {
+        // Geoptimaliseerd: pointer vergelijking eerst (sneller), dan string vergelijking
+        if (tagLogs[i].tag == tag || 
+            (tagLogs[i].tag != nullptr && strcmp(tagLogs[i].tag, tag) == 0)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 HeapSnap snapHeap() {
     HeapSnap snap;
     snap.freeHeap = ESP.getFreeHeap();
@@ -22,36 +39,31 @@ HeapSnap snapHeap() {
 }
 
 void logHeap(const char* tag) {
+    // Geconsolideerde validatie: early return
     if (tag == nullptr) {
         return;
     }
     
     // Rate limiting: check of deze tag recent is gelogd
     unsigned long now = millis();
-    bool shouldLog = true;
-    int tagIndex = -1;
+    int tagIndex = findTagIndex(tag);
+    bool shouldLog = false;
     
-    // Zoek bestaande tag entry
-    for (int i = 0; i < tagCount; i++) {
-        if (tagLogs[i].tag == tag || (tagLogs[i].tag != nullptr && strcmp(tagLogs[i].tag, tag) == 0)) {
-            tagIndex = i;
-            // Check rate limit
-            if ((now - tagLogs[i].lastLogTime) < RATE_LIMIT_MS) {
-                shouldLog = false;
-            } else {
-                tagLogs[i].lastLogTime = now;
-            }
-            break;
+    if (tagIndex >= 0) {
+        // Bestaande tag: check rate limit
+        if ((now - tagLogs[tagIndex].lastLogTime) >= RATE_LIMIT_MS) {
+            tagLogs[tagIndex].lastLogTime = now;
+            shouldLog = true;
         }
-    }
-    
-    // Nieuwe tag toevoegen als er ruimte is
-    if (tagIndex == -1 && tagCount < MAX_TAGS) {
-        tagIndex = tagCount;
-        tagLogs[tagIndex].tag = tag;
-        tagLogs[tagIndex].lastLogTime = now;
-        tagCount++;
-        shouldLog = true;
+    } else {
+        // Nieuwe tag toevoegen als er ruimte is
+        if (tagCount < MAX_TAGS) {
+            tagIndex = tagCount;
+            tagLogs[tagIndex].tag = tag;
+            tagLogs[tagIndex].lastLogTime = now;
+            tagCount++;
+            shouldLog = true;
+        }
     }
     
     // Log alleen als rate limit niet is bereikt
@@ -63,17 +75,19 @@ void logHeap(const char* tag) {
 }
 
 void resetRateLimit(const char* tag) {
+    // Geconsolideerde validatie: early return
     if (tag == nullptr) {
         return;
     }
     
-    for (int i = 0; i < tagCount; i++) {
-        if (tagLogs[i].tag == tag || (tagLogs[i].tag != nullptr && strcmp(tagLogs[i].tag, tag) == 0)) {
-            tagLogs[i].lastLogTime = 0;
-            break;
-        }
+    // Geoptimaliseerd: gebruik helper functie i.p.v. duplicatie
+    int tagIndex = findTagIndex(tag);
+    if (tagIndex >= 0) {
+        tagLogs[tagIndex].lastLogTime = 0;
     }
 }
+
+
 
 
 

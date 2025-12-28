@@ -200,6 +200,49 @@ static void getESP32DeviceId(char* buffer, size_t bufferSize) {
     buffer[8] = '\0';
 }
 
+// Helper: Load string preference (geoptimaliseerd: elimineert duplicatie)
+// Consolideert getString + toCharArray logica
+void SettingsStore::loadStringPreference(const char* key, char* buffer, size_t bufferSize, const char* defaultValue) {
+    if (buffer == nullptr || bufferSize == 0) return;
+    
+    String value = prefs.getString(key, defaultValue);
+    value.toCharArray(buffer, bufferSize);
+    buffer[bufferSize - 1] = '\0'; // Ensure null termination
+}
+
+// Helper: Check if topic needs migration (geoptimaliseerd: geconsolideerde logica)
+// Geconsolideerde migration checks in één functie
+bool SettingsStore::needsTopicMigration(const char* topic) {
+    if (topic == nullptr) return false;
+    
+    // Check exact match first (sneller)
+    if (strcmp(topic, "crypto-monitor-alerts") == 0) {
+        return true;
+    }
+    
+    // Check if ends with "-alert"
+    size_t topicLen = strlen(topic);
+    if (topicLen < 6) return false; // "-alert" is 6 chars
+    
+    const char* suffix = topic + topicLen - 6;
+    if (strcmp(suffix, "-alert") != 0) return false;
+    
+    // Check if starts with "crypt-" and has correct length
+    if (topicLen != 14) return false; // "crypt-" (6) + hex (8) = 14
+    if (strncmp(topic, "crypt-", 6) != 0) return false;
+    
+    // Check if hex part is valid (8 chars after "crypt-")
+    const char* hexPart = topic + 6;
+    for (int i = 0; i < 8; i++) {
+        char c = hexPart[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+            return false;
+        }
+    }
+    
+    return true;
+}
+
 SettingsStore::SettingsStore() {
 }
 
@@ -302,48 +345,28 @@ CryptoMonitorSettings SettingsStore::load() {
     char defaultTopic[64];
     generateDefaultNtfyTopic(defaultTopic, sizeof(defaultTopic));
     
-    // Load NTFY topic with migration logic
+    // Load NTFY topic with migration logic (geoptimaliseerd: gebruik helper)
+    char topicBuffer[64];
     String topic = prefs.getString(PREF_KEY_NTFY_TOPIC, defaultTopic);
+    topic.toCharArray(topicBuffer, sizeof(topicBuffer));
     
-    // Migrate old formats (same logic as original)
-    bool needsMigration = false;
-    if (topic == "crypto-monitor-alerts") {
-        needsMigration = true;
-    } else if (topic.endsWith("-alert")) {
-        int alertPos = topic.indexOf("-alert");
-        if (alertPos > 0) {
-            String beforeAlert = topic.substring(0, alertPos);
-            if (beforeAlert.startsWith("crypt-") && beforeAlert.length() == 14) {
-                String hexPart = beforeAlert.substring(6);
-                bool isHex = true;
-                for (int i = 0; i < hexPart.length(); i++) {
-                    char c = hexPart.charAt(i);
-                    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
-                        isHex = false;
-                        break;
-                    }
-                }
-                if (isHex && hexPart.length() == 8) {
-                    needsMigration = true;
-                }
-            }
-        }
-    }
-    
-    if (needsMigration) {
-        topic = defaultTopic;
+    // Geoptimaliseerd: gebruik helper functie voor migration check
+    if (needsTopicMigration(topicBuffer)) {
+        strncpy(topicBuffer, defaultTopic, sizeof(topicBuffer) - 1);
+        topicBuffer[sizeof(topicBuffer) - 1] = '\0';
         prefs.end();
         prefs.begin(PREF_NAMESPACE, false);
-        prefs.putString(PREF_KEY_NTFY_TOPIC, topic);
+        prefs.putString(PREF_KEY_NTFY_TOPIC, topicBuffer);
         prefs.end();
         prefs.begin(PREF_NAMESPACE, true);
     }
     
-    topic.toCharArray(settings.ntfyTopic, sizeof(settings.ntfyTopic));
+    strncpy(settings.ntfyTopic, topicBuffer, sizeof(settings.ntfyTopic) - 1);
+    settings.ntfyTopic[sizeof(settings.ntfyTopic) - 1] = '\0';
     
-    // Load binance symbol
-    String symbol = prefs.getString(PREF_KEY_BINANCE_SYMBOL, BINANCE_SYMBOL_DEFAULT);
-    symbol.toCharArray(settings.binanceSymbol, sizeof(settings.binanceSymbol));
+    // Geoptimaliseerd: gebruik helper functie voor string loading
+    loadStringPreference(PREF_KEY_BINANCE_SYMBOL, settings.binanceSymbol, 
+                        sizeof(settings.binanceSymbol), BINANCE_SYMBOL_DEFAULT);
     
     // Load language
     settings.language = prefs.getUChar(PREF_KEY_LANGUAGE, DEFAULT_LANGUAGE);
@@ -364,14 +387,14 @@ CryptoMonitorSettings SettingsStore::load() {
     settings.notificationCooldowns.cooldown30MinMs = prefs.getULong(PREF_KEY_CD30MIN, NOTIFICATION_COOLDOWN_30MIN_MS_DEFAULT);
     settings.notificationCooldowns.cooldown5MinMs = prefs.getULong(PREF_KEY_CD5MIN, NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT);
     
-    // Load MQTT settings
-    String host = prefs.getString(PREF_KEY_MQTT_HOST, MQTT_HOST_DEFAULT);
-    host.toCharArray(settings.mqttHost, sizeof(settings.mqttHost));
+    // Load MQTT settings (geoptimaliseerd: gebruik helper functie)
+    loadStringPreference(PREF_KEY_MQTT_HOST, settings.mqttHost, 
+                        sizeof(settings.mqttHost), MQTT_HOST_DEFAULT);
     settings.mqttPort = prefs.getUInt(PREF_KEY_MQTT_PORT, MQTT_PORT_DEFAULT);
-    String user = prefs.getString(PREF_KEY_MQTT_USER, MQTT_USER_DEFAULT);
-    user.toCharArray(settings.mqttUser, sizeof(settings.mqttUser));
-    String pass = prefs.getString(PREF_KEY_MQTT_PASS, MQTT_PASS_DEFAULT);
-    pass.toCharArray(settings.mqttPass, sizeof(settings.mqttPass));
+    loadStringPreference(PREF_KEY_MQTT_USER, settings.mqttUser, 
+                        sizeof(settings.mqttUser), MQTT_USER_DEFAULT);
+    loadStringPreference(PREF_KEY_MQTT_PASS, settings.mqttPass, 
+                        sizeof(settings.mqttPass), MQTT_PASS_DEFAULT);
     
     // Load anchor settings
     settings.anchorTakeProfit = prefs.getFloat(PREF_KEY_ANCHOR_TP, ANCHOR_TAKE_PROFIT_DEFAULT);

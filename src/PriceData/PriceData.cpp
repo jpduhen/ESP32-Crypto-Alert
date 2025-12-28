@@ -69,6 +69,7 @@ extern float calculateAverage(float *array, uint8_t size, bool filled);
 float PriceData::calculateReturn1Minute(float* averagePrices) {
     // Fase 4.2.8: Implementeer calculateReturn1Minute() logica direct in PriceData
     // Gebaseerd op calculateReturnGeneric() maar specifiek voor 1-minuut return
+    // Geoptimaliseerd: geconsolideerde checks, helper voor averagePrices updates
     
     const float* priceArray = this->getSecondPrices();
     uint16_t arraySize = SECONDS_PER_MINUTE;
@@ -79,12 +80,16 @@ float PriceData::calculateReturn1Minute(float* averagePrices) {
     uint32_t logIntervalMs = 10000;
     uint8_t averagePriceIndex = 1;
     
-    // Check if we have enough data
-    if (!arrayFilled && currentIndex < positionsAgo)
-    {
+    // Helper: Update averagePrices array (geconsolideerd om duplicatie te elimineren)
+    auto updateAveragePrice = [&](float value) {
         if (averagePrices != nullptr && averagePriceIndex < 3) {
-            averagePrices[averagePriceIndex] = 0.0f;
+            averagePrices[averagePriceIndex] = value;
         }
+    };
+    
+    // Geconsolideerde check: check if we have enough data
+    if (!arrayFilled && currentIndex < positionsAgo) {
+        updateAveragePrice(0.0f);
         if (logIntervalMs > 0) {
             static uint32_t lastLogTime = 0;
             uint32_t now = millis();
@@ -96,49 +101,47 @@ float PriceData::calculateReturn1Minute(float* averagePrices) {
         return 0.0f;
     }
     
-    // Get current price
+    // Get current price (geconsolideerde logica)
     float priceNow;
     if (arrayFilled) {
         uint16_t lastWrittenIdx = getLastWrittenIndex(currentIndex, arraySize);
         priceNow = priceArray[lastWrittenIdx];
     } else {
-        if (currentIndex == 0) return 0.0f;
+        // Geconsolideerde check: early return als currentIndex == 0
+        if (currentIndex == 0) {
+            return 0.0f;
+        }
         priceNow = priceArray[currentIndex - 1];
     }
     
-    // Get price X positions ago
+    // Get price X positions ago (geconsolideerde logica)
     float priceXAgo;
-    if (arrayFilled)
-    {
+    if (arrayFilled) {
         int32_t idxXAgo = getRingBufferIndexAgo(currentIndex, positionsAgo, arraySize);
         if (idxXAgo < 0) {
             Serial_printf("%s FATAL: idxXAgo invalid, currentIndex=%u\n", logPrefix, currentIndex);
             return 0.0f;
         }
         priceXAgo = priceArray[idxXAgo];
-    }
-    else
-    {
-        if (currentIndex < positionsAgo) return 0.0f;
+    } else {
+        // Geconsolideerde check: early return als niet genoeg data
+        if (currentIndex < positionsAgo) {
+            return 0.0f;
+        }
         priceXAgo = priceArray[currentIndex - positionsAgo];
     }
     
     // Validate prices
-    if (!areValidPrices(priceNow, priceXAgo))
-    {
-        if (averagePrices != nullptr && averagePriceIndex < 3) {
-            averagePrices[averagePriceIndex] = 0.0f;
-        }
+    if (!areValidPrices(priceNow, priceXAgo)) {
+        updateAveragePrice(0.0f);
         Serial_printf("%s ERROR: priceNow=%.2f, priceXAgo=%.2f - invalid!\n", logPrefix, priceNow, priceXAgo);
         return 0.0f;
     }
     
     // Calculate average for display (if requested)
-    if (averagePrices != nullptr && averagePriceIndex < 3) {
-        if (averagePriceIndex == 1) {
-            // For 1m: use calculateAverage helper
-            averagePrices[1] = calculateAverage(this->getSecondPrices(), SECONDS_PER_MINUTE, this->getSecondArrayFilled());
-        }
+    if (averagePrices != nullptr && averagePriceIndex < 3 && averagePriceIndex == 1) {
+        // For 1m: use calculateAverage helper
+        averagePrices[1] = calculateAverage(this->getSecondPrices(), SECONDS_PER_MINUTE, this->getSecondArrayFilled());
     }
     
     // Return percentage: (now - X ago) / X ago * 100

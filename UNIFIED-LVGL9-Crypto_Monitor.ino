@@ -77,8 +77,8 @@
 // Hier alleen een fallback als het nog niet gedefinieerd is
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 4
-#define VERSION_MINOR 3
-#define VERSION_STRING "4.03"
+#define VERSION_MINOR 5
+#define VERSION_STRING "4.05"
 #endif
 
 // --- Debug Configuration ---
@@ -379,7 +379,7 @@ lv_obj_t *chartVersionLabel; // Label voor versienummer (rechts bovenste regel)
 lv_obj_t *chartDateLabel; // Label voor datum rechtsboven (vanaf pixel 180)
 lv_obj_t *chartTimeLabel; // Label voor tijd rechtsboven
 lv_obj_t *chartBeginLettersLabel; // Label voor beginletters (TTGO, links tweede regel)
-static lv_obj_t *ipLabel; // IP-adres label (TTGO, onderin, gecentreerd)
+lv_obj_t *ipLabel; // IP-adres label (TTGO, onderin, gecentreerd)
 lv_obj_t *price1MinMaxLabel; // Label voor max waarde in 1 min buffer
 lv_obj_t *price1MinMinLabel; // Label voor min waarde in 1 min buffer
 lv_obj_t *price1MinDiffLabel; // Label voor verschil tussen max en min in 1 min buffer
@@ -486,10 +486,10 @@ bool secondArrayFilled = false;
 bool newPriceDataAvailable = false;  // Flag om aan te geven of er nieuwe prijsdata is voor grafiek update
 
 // Array van 300 posities voor laatste 300 seconden (5 minuten) - voor ret_5m berekening
-// Voor CYD zonder PSRAM: dynamisch alloceren om DRAM overflow te voorkomen
+// Voor CYD en TTGO zonder PSRAM: dynamisch alloceren om DRAM overflow te voorkomen
 // Fase 4.2.3: static verwijderd tijdelijk voor parallelle implementatie
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-float *fiveMinutePrices = nullptr;  // Dynamisch gealloceerd voor CYD zonder PSRAM
+#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
+float *fiveMinutePrices = nullptr;  // Dynamisch gealloceerd voor CYD/TTGO zonder PSRAM
 DataSource *fiveMinutePricesSource = nullptr;  // Dynamisch gealloceerd
 #else
 float fiveMinutePrices[SECONDS_PER_5MINUTES];
@@ -502,10 +502,10 @@ bool fiveMinuteArrayFilled = false;
 // Elke minuut wordt het gemiddelde van de 60 seconden opgeslagen
 // We hebben 60 posities nodig om het gemiddelde van laatste 30 minuten te vergelijken
 // met het gemiddelde van de 30 minuten daarvoor (maar we houden 120 voor buffer)
-// Voor CYD zonder PSRAM: dynamisch alloceren om DRAM overflow te voorkomen
+// Voor CYD en TTGO zonder PSRAM: dynamisch alloceren om DRAM overflow te voorkomen
 // Fase 4.2.9: static verwijderd zodat PriceData getters deze kunnen gebruiken
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-float *minuteAverages = nullptr;  // Dynamisch gealloceerd voor CYD zonder PSRAM
+#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
+float *minuteAverages = nullptr;  // Dynamisch gealloceerd voor CYD/TTGO zonder PSRAM
 DataSource *minuteAveragesSource = nullptr;  // Dynamisch gealloceerd
 #else
 float minuteAverages[MINUTES_FOR_30MIN_CALC];
@@ -4718,11 +4718,11 @@ static void setupMutex()
     }
 }
 
-// Alloceer grote arrays dynamisch voor CYD zonder PSRAM om DRAM overflow te voorkomen
+// Alloceer grote arrays dynamisch voor CYD en TTGO zonder PSRAM om DRAM overflow te voorkomen
 static void allocateDynamicArrays()
 {
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-    // Voor CYD zonder PSRAM: alloceer arrays dynamisch
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
+    // Voor CYD/TTGO zonder PSRAM: alloceer arrays dynamisch
     if (!hasPSRAM()) {
         // Alloceer fiveMinutePrices arrays
         fiveMinutePrices = (float *)heap_caps_malloc(SECONDS_PER_5MINUTES * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
@@ -4831,11 +4831,17 @@ void setup()
     for (uint8_t i = 0; i < SECONDS_PER_MINUTE; i++) {
         secondPricesSource[i] = SOURCE_LIVE;
     }
-    for (uint16_t i = 0; i < SECONDS_PER_5MINUTES; i++) {
-        fiveMinutePricesSource[i] = SOURCE_LIVE;
+    // Initialize fiveMinutePricesSource (alleen als array bestaat, niet nullptr)
+    if (fiveMinutePricesSource != nullptr) {
+        for (uint16_t i = 0; i < SECONDS_PER_5MINUTES; i++) {
+            fiveMinutePricesSource[i] = SOURCE_LIVE;
+        }
     }
-    for (uint8_t i = 0; i < MINUTES_FOR_30MIN_CALC; i++) {
-        minuteAveragesSource[i] = SOURCE_LIVE;
+    // Initialize minuteAveragesSource (alleen als array bestaat, niet nullptr)
+    if (minuteAveragesSource != nullptr) {
+        for (uint8_t i = 0; i < MINUTES_FOR_30MIN_CALC; i++) {
+            minuteAveragesSource[i] = SOURCE_LIVE;
+        }
     }
     
     // Initialize lastPriceLblValueArray (cache voor average price labels)

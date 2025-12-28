@@ -115,6 +115,12 @@ private:
     Preferences prefs;
     static const char* PREF_NAMESPACE;
     
+    // Helper: Load string preference (geoptimaliseerd: elimineert duplicatie)
+    void loadStringPreference(const char* key, char* buffer, size_t bufferSize, const char* defaultValue);
+    
+    // Helper: Check if topic needs migration (geoptimaliseerd: geconsolideerde logica)
+    static bool needsTopicMigration(const char* topic);
+    
     // Preference keys
     static const char* PREF_KEY_NTFY_TOPIC;
     static const char* PREF_KEY_BINANCE_SYMBOL;

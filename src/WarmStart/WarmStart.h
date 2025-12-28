@@ -83,6 +83,16 @@ private:
                    uint16_t req1m, uint16_t req5m, uint16_t req30m, uint16_t req2h);
     const char* modeToString(WarmStartMode mode) const;
     const char* statusToString(WarmStartStatus status) const;
+    
+    // Helper: Log timeframe status (geoptimaliseerd: elimineert code duplicatie)
+    void logTimeframeStatus(const char* label, uint16_t loaded, bool ok, bool hasRet = false) const;
+    
+    // Helper: Get setting value with default (geoptimaliseerd: elimineert code duplicatie)
+    // Template moet inline in header staan
+    template<typename T>
+    T getSettingValue(T CryptoMonitorSettings::*field, T defaultValue) const {
+        return m_settings ? (m_settings->*field) : defaultValue;
+    }
 };
 
 #endif // WARMSTART_H

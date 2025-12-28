@@ -3,6 +3,9 @@
 
 #include <Arduino.h>
 
+// TrendDetector module (voor getTrendName helper)
+#include "../TrendDetector/TrendDetector.h"
+
 // EventDirection enum - gebruikt voor Smart Confluence Mode
 enum EventDirection {
     EVENT_UP,
@@ -116,6 +119,20 @@ public:
     // Wordt aangeroepen na elke price update
     static void check2HNotifications(float lastPrice, float anchorPrice);
     
+    // Helper: Get trend name string (inline voor performance)
+    static inline const char* getTrendName(TrendState trend) {
+        switch (trend) {
+            case TREND_UP: return "UP";
+            case TREND_DOWN: return "DOWN";
+            case TREND_SIDEWAYS: return "SIDEWAYS";
+            default: return "UNKNOWN";
+        }
+    }
+    
+    // Helper: Send 2h breakout/breakdown notification (consolideert up/down logica)
+    static void send2HBreakoutNotification(bool isUp, float lastPrice, float threshold, 
+                                         const TwoHMetrics& metrics, uint32_t now);
+    
     // Sync state: Update AlertEngine state met globale variabelen (voor parallel implementatie)
     void syncStateFromGlobals();
     
@@ -133,6 +150,28 @@ private:
     LastOneMinuteEvent last1mEvent;
     LastFiveMinuteEvent last5mEvent;
     unsigned long lastConfluenceAlert;
+    
+    // Geheugen optimalisatie: hergebruik buffers i.p.v. lokale stack allocaties
+    // Verkleind om DRAM overflow te voorkomen: 200+48+32 = 280 bytes (was 352 bytes, bespaart 72 bytes)
+    char msgBuffer[200];      // Hergebruik voor alle notification messages (verkleind van 256)
+    char titleBuffer[48];     // Hergebruik voor alle notification titles (verkleind van 64)
+    char timestampBuffer[32]; // Hergebruik voor timestamp formatting
+    
+    // CPU optimalisatie: cache berekende waarden
+    float cachedAbsRet1m;
+    float cachedAbsRet5m;
+    float cachedAbsRet30m;
+    bool valuesCached;
+    
+    // Helper: Cache absolute waarden (voorkomt herhaalde fabsf calls)
+    void cacheAbsoluteValues(float ret_1m, float ret_5m, float ret_30m);
+    
+    // Helper: Bereken min/max uit fiveMinutePrices (geoptimaliseerde versie)
+    bool findMinMaxInFiveMinutePrices(float& minVal, float& maxVal);
+    
+    // Helper: Format notification message (gebruikt class buffers)
+    void formatNotificationMessageInternal(float ret, const char* direction, 
+                                           float minVal, float maxVal, const char* timeframe);
     
     // Note: Globale arrays en settings worden via extern declarations in .cpp file gebruikt
     // (parallel implementatie - arrays blijven globaal in .ino)

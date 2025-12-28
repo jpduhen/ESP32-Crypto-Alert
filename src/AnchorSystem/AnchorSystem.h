@@ -26,6 +26,12 @@ struct AnchorConfigEffective {
     float takeProfitPct;   // Effectieve take profit percentage (positief)
 };
 
+// Anchor event types (geoptimaliseerd: enum i.p.v. string vergelijkingen)
+enum AnchorEventType {
+    ANCHOR_EVENT_TAKE_PROFIT,
+    ANCHOR_EVENT_MAX_LOSS
+};
+
 // AnchorSystem class - beheert anchor price tracking en alerts
 class AnchorSystem {
 public:
@@ -85,6 +91,33 @@ private:
     float uptrendTakeProfitMultiplier;
     float downtrendMaxLossMultiplier;
     float downtrendTakeProfitMultiplier;
+    
+    // Note: Buffers verwijderd om DRAM overflow te voorkomen (208 bytes bespaard)
+    // Gebruik lokale stack buffers in plaats van instance members
+    // Dit gebruikt stack geheugen i.p.v. DRAM, wat acceptabel is voor deze functies
+    
+    // Helper: Get trend name string (inline voor performance)
+    static inline const char* getTrendName(TrendState trend) {
+        switch (trend) {
+            case TREND_UP: return "UP";
+            case TREND_DOWN: return "DOWN";
+            case TREND_SIDEWAYS: return "SIDEWAYS";
+            default: return "UNKNOWN";
+        }
+    }
+    
+    // Helper: Send anchor alert notification (consolideert take profit en max loss logica)
+    void sendAnchorAlert(AnchorEventType eventType, float anchorPct, 
+                        const AnchorConfigEffective& effAnchor, 
+                        const char* trendName);
+    
+    // Helper: Format notification message (gebruikt lokale buffers)
+    void formatAnchorNotification(AnchorEventType eventType, float anchorPct, 
+                                  const AnchorConfigEffective& effAnchor, 
+                                  const char* trendName,
+                                  char* msgBuffer, size_t msgSize,
+                                  char* titleBuffer, size_t titleSize,
+                                  char* timestampBuffer, size_t timestampSize);
 };
 
 #endif // ANCHORSYSTEM_H

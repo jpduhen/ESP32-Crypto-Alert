@@ -3,6 +3,9 @@
 // 2.8 inch 240x320 TFT display with ILI9341 controller
 // Based on Setup902_CYD28R_2USB.h pin definitions
 
+#ifndef PINS_CYD_ESP32_2432S028_2USB_H
+#define PINS_CYD_ESP32_2432S028_2USB_H
+
 #if defined(ESP32)
 
 #include <Arduino_GFX_Library.h>
@@ -44,4 +47,6 @@ Arduino_GFX *gfx = new Arduino_ILI9341(bus, TFT_RST, 0 /* rotation */, false /* 
 #else
 #error "This pin configuration is for ESP32 only"
 #endif
+
+#endif // PINS_CYD_ESP32_2432S028_2USB_H
 

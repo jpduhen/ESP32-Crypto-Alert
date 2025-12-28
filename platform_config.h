@@ -11,8 +11,8 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 4
-#define VERSION_MINOR 3
-#define VERSION_STRING "4.03"
+#define VERSION_MINOR 5
+#define VERSION_STRING "4.05"
 #endif
 
 // Standaard taal instelling (0 = Nederlands, 1 = English)
@@ -24,7 +24,9 @@
 
 // Platform-specifieke instellingen
 #ifdef PLATFORM_TTGO
+    #ifndef UICONTROLLER_INCLUDE
     #include "PINS_TTGO_T_Display.h"
+    #endif
     #define MQTT_TOPIC_PREFIX "ttgo_crypto"
     #define DEVICE_NAME "TTGO T-Display Crypto Monitor"
     #define DEVICE_MODEL "ESP32 TTGO T-Display"
@@ -114,7 +116,9 @@
     #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
     #define SYMBOL_COUNT 4  // CYD: BTCEUR, 1m, 30m, 2h
 #elif defined(PLATFORM_ESP32S3_SUPERMINI)
+    #ifndef UICONTROLLER_INCLUDE
     #include "PINS_ESP32S3_SuperMini_ST7789_154.h"
+    #endif
     #define MQTT_TOPIC_PREFIX "esp32s3_crypto"
     #define DEVICE_NAME "ESP32-S3 Super Mini Crypto Monitor"
     #define DEVICE_MODEL "ESP32-S3 Super Mini"

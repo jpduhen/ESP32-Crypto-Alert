@@ -12,8 +12,8 @@ A unified Crypto Monitor for different ESP32 display platforms: TTGO T-Display, 
 ## Features
 
 - Real-time Bitcoin (BTCEUR) price monitoring via Binance API
-- Live chart with 60 data points (~1.5 minutes history at 1500ms API interval)
-- 1 minute return calculation uses 40 data points (exactly 1 minute at 1500ms API interval)
+- Live chart with 60 data points (2 minutes history at 2000ms API interval)
+- 1 minute return calculation uses 30 data points (exactly 1 minute at 2000ms API interval)
 - Trend detection (2-hour trend analysis)
 - Volatility monitoring (low/medium/high)
 - Anchor price tracking with take profit and stop loss alerts
@@ -703,9 +703,9 @@ For developers who want to modify the code, there are several configuration opti
 #### Other Configuration Options
 - **`SCREEN_BRIGHTNESS`**: Display brightness (0-255, default: 255)
 - **`SYMBOL_COUNT`**: Number of symbols to track (default: 3)
-- **`HTTP_TIMEOUT_MS`**: HTTP request timeout (default: 3000ms)
-- **`UPDATE_API_INTERVAL`**: API update frequency (default: 1500ms)
-- **`UPDATE_UI_INTERVAL`**: UI update frequency (default: 1100ms)
+- **`HTTP_TIMEOUT_MS`**: HTTP request timeout (default: 4000ms)
+- **`UPDATE_API_INTERVAL`**: API update frequency (default: 2000ms)
+- **`UPDATE_UI_INTERVAL`**: UI update frequency (default: 1000ms)
 
 **Note**: After modifying these settings, you need to recompile and upload the code to the ESP32.
 
@@ -724,7 +724,7 @@ The display shows real-time cryptocurrency information in a clear layout:
 
 #### Chart Section
 - **Live Price Chart**: 
-  - 60 data points (1 minute history)
+  - 60 data points (2 minutes history at 2000ms API interval)
   - Blue line shows price movement
   - Automatic scale adjustment
 - **Trend Indicator**: Top-left in the chart
@@ -1251,11 +1251,10 @@ If you don't use MQTT, you can leave the MQTT settings empty in the web interfac
   - Better reliability and robustness for network operations
 
 ### Version 3.49
-- **Current Version**: Latest stable release
 - **Fixed 1m and 5m Return Calculations**: Fixed issue where 1m and 5m returns stayed at 0.00%
-  - Adjusted calculations to account for 1500ms API update interval
-  - 1m return now correctly uses 40 values (instead of 60) for 1 minute period
-  - 5m return now correctly uses 200 values (instead of 300) for 5 minute period
+  - Adjusted calculations to account for 2000ms API update interval
+  - 1m return now correctly uses 30 values (instead of 60) for 1 minute period
+  - 5m return now correctly uses 150 values (instead of 300) for 5 minute period
   - Added `VALUES_FOR_1MIN_RETURN` and `VALUES_FOR_5MIN_RETURN` constants based on `UPDATE_API_INTERVAL`
 
 ### Version 3.46
@@ -1288,9 +1287,9 @@ If you don't use MQTT, you can leave the MQTT settings empty in the web interfac
 
 ### Version 3.42
 - **HTTP Client Optimizations**: Improved API call reliability
-  - Increased HTTP timeout: 2000ms → 3000ms
-  - Added connect timeout: 2000ms (faster failure on connection problems)
-  - Increased API interval: 1200ms → 1500ms (more room for slow networks)
+  - Increased HTTP timeout: 2000ms → 4000ms
+  - Added connect timeout: 4000ms (faster failure on connection problems)
+  - Increased API interval: 1500ms → 2000ms (more room for slow networks and retries)
   - Better error handling and logging for timeouts and connection issues
 
 ### Version 3.41

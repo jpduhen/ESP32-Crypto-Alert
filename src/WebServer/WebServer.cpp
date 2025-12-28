@@ -233,21 +233,9 @@ void WebServerModule::renderSettingsHTML() {
         sendStatusRow(getText("Huidige Prijs", "Current Price"), getText("--", "--"));
     }
     
-    const char* trendText = "";
-    switch (currentTrend) {
-        case TREND_UP: trendText = getText("OMHOOG", "UP"); break;
-        case TREND_DOWN: trendText = getText("OMLAAG", "DOWN"); break;
-        case TREND_SIDEWAYS: default: trendText = getText("VLAK", "SIDEWAYS"); break;
-    }
-    sendStatusRow(getText("Trend", "Trend"), trendText);
-    
-    const char* volText = "";
-    switch (currentVol) {
-        case VOLATILITY_LOW: volText = getText("Laag", "Low"); break;
-        case VOLATILITY_MEDIUM: volText = getText("Gemiddeld", "Medium"); break;
-        case VOLATILITY_HIGH: volText = getText("Hoog", "High"); break;
-    }
-    sendStatusRow(getText("Volatiliteit", "Volatility"), volText);
+    // Geoptimaliseerd: gebruik helper functies i.p.v. switch statements
+    sendStatusRow(getText("Trend", "Trend"), getTrendText(currentTrend));
+    sendStatusRow(getText("Volatiliteit", "Volatility"), getVolatilityText(currentVol));
     
     if (currentRet1m != 0.0f) {
         snprintf(valueBuf, sizeof(valueBuf), "%.2f%%", currentRet1m);
@@ -585,17 +573,16 @@ void WebServerModule::handleSave() {
         }
     }
     
+    // Geoptimaliseerd: gebruik helper functie waar mogelijk
     if (server->hasArg("ntfytopic")) {
         String topic = server->arg("ntfytopic");
         topic.trim();
         // Allow empty topic (will use default) or valid length topic
-        if (topic.length() == 0 || (topic.length() > 0 && topic.length() < 64)) {
-            if (topic.length() == 0) {
-                // Generate default topic if empty
-                generateDefaultNtfyTopic(ntfyTopic, 64);
-            } else {
-                topic.toCharArray(ntfyTopic, 64);
-            }
+        if (topic.length() == 0) {
+            // Generate default topic if empty
+            generateDefaultNtfyTopic(ntfyTopic, 64);
+        } else if (topic.length() < 64) {
+            topic.toCharArray(ntfyTopic, 64);
         }
     }
     if (server->hasArg("binancesymbol")) {
@@ -608,273 +595,154 @@ void WebServerModule::handleSave() {
             safeStrncpy(symbolsArray[0], binanceSymbol, 16);  // symbolsArray[0] is 16 bytes
         }
     }
-    if (server->hasArg("spike1m")) {
-        float val;
-        if (safeAtof(server->arg("spike1m").c_str(), val) && val >= 0.01f && val <= 10.0f) {
-            spike1mThreshold = val;
-        }
+    // Geoptimaliseerd: gebruik helper functie i.p.v. gedupliceerde code
+    float floatVal;
+    if (parseFloatArg("spike1m", floatVal, 0.01f, 10.0f)) {
+        spike1mThreshold = floatVal;
     }
-    if (server->hasArg("spike5m")) {
-        float val;
-        if (safeAtof(server->arg("spike5m").c_str(), val) && val >= 0.01f && val <= 10.0f) {
-            spike5mThreshold = val;
-        }
+    if (parseFloatArg("spike5m", floatVal, 0.01f, 10.0f)) {
+        spike5mThreshold = floatVal;
     }
-    if (server->hasArg("move30m")) {
-        float val;
-        if (safeAtof(server->arg("move30m").c_str(), val) && val >= 0.01f && val <= 20.0f) {
-            move30mThreshold = val;
-        }
+    if (parseFloatArg("move30m", floatVal, 0.01f, 20.0f)) {
+        move30mThreshold = floatVal;
     }
-    if (server->hasArg("move5m")) {
-        float val;
-        if (safeAtof(server->arg("move5m").c_str(), val) && val >= 0.01f && val <= 10.0f) {
-            move5mThreshold = val;
-        }
+    if (parseFloatArg("move5m", floatVal, 0.01f, 10.0f)) {
+        move5mThreshold = floatVal;
     }
-    if (server->hasArg("move5mAlert")) {
-        float val;
-        if (safeAtof(server->arg("move5mAlert").c_str(), val) && val >= 0.01f && val <= 10.0f) {
-            move5mAlertThreshold = val;
-        }
+    if (parseFloatArg("move5mAlert", floatVal, 0.01f, 10.0f)) {
+        move5mAlertThreshold = floatVal;
     }
     
-    // 2-hour alert thresholds
-    if (server->hasArg("2hBreakMargin")) {
-        float val;
-        if (safeAtof(server->arg("2hBreakMargin").c_str(), val) && val >= 0.01f && val <= 5.0f) {
-            alert2HThresholds.breakMarginPct = val;
-        }
+    // 2-hour alert thresholds - geoptimaliseerd: gebruik helper functies
+    if (parseFloatArg("2hBreakMargin", floatVal, 0.01f, 5.0f)) {
+        alert2HThresholds.breakMarginPct = floatVal;
     }
-    if (server->hasArg("2hBreakReset")) {
-        float val;
-        if (safeAtof(server->arg("2hBreakReset").c_str(), val) && val >= 0.01f && val <= 5.0f) {
-            alert2HThresholds.breakResetMarginPct = val;
-        }
+    if (parseFloatArg("2hBreakReset", floatVal, 0.01f, 5.0f)) {
+        alert2HThresholds.breakResetMarginPct = floatVal;
     }
-    if (server->hasArg("2hBreakCD")) {
-        int minutes = server->arg("2hBreakCD").toInt();
-        if (minutes >= 1 && minutes <= 180) {
-            alert2HThresholds.breakCooldownMs = minutes * 60UL * 1000UL;
-        }
+    int intVal;
+    if (parseIntArg("2hBreakCD", intVal, 1, 180)) {
+        alert2HThresholds.breakCooldownMs = intVal * 60UL * 1000UL;
     }
-    if (server->hasArg("2hMeanMinDist")) {
-        float val;
-        if (safeAtof(server->arg("2hMeanMinDist").c_str(), val) && val >= 0.01f && val <= 10.0f) {
-            alert2HThresholds.meanMinDistancePct = val;
-        }
+    if (parseFloatArg("2hMeanMinDist", floatVal, 0.01f, 10.0f)) {
+        alert2HThresholds.meanMinDistancePct = floatVal;
     }
-    if (server->hasArg("2hMeanTouch")) {
-        float val;
-        if (safeAtof(server->arg("2hMeanTouch").c_str(), val) && val >= 0.01f && val <= 2.0f) {
-            alert2HThresholds.meanTouchBandPct = val;
-        }
+    if (parseFloatArg("2hMeanTouch", floatVal, 0.01f, 2.0f)) {
+        alert2HThresholds.meanTouchBandPct = floatVal;
     }
-    if (server->hasArg("2hMeanCD")) {
-        int minutes = server->arg("2hMeanCD").toInt();
-        if (minutes >= 1 && minutes <= 180) {
-            alert2HThresholds.meanCooldownMs = minutes * 60UL * 1000UL;
-        }
+    if (parseIntArg("2hMeanCD", intVal, 1, 180)) {
+        alert2HThresholds.meanCooldownMs = intVal * 60UL * 1000UL;
     }
-    if (server->hasArg("2hCompressTh")) {
-        float val;
-        if (safeAtof(server->arg("2hCompressTh").c_str(), val) && val >= 0.01f && val <= 5.0f) {
-            alert2HThresholds.compressThresholdPct = val;
-        }
+    if (parseFloatArg("2hCompressTh", floatVal, 0.01f, 5.0f)) {
+        alert2HThresholds.compressThresholdPct = floatVal;
     }
-    if (server->hasArg("2hCompressReset")) {
-        float val;
-        if (safeAtof(server->arg("2hCompressReset").c_str(), val) && val >= 0.01f && val <= 10.0f) {
-            alert2HThresholds.compressResetPct = val;
-        }
+    if (parseFloatArg("2hCompressReset", floatVal, 0.01f, 10.0f)) {
+        alert2HThresholds.compressResetPct = floatVal;
     }
-    if (server->hasArg("2hCompressCD")) {
-        int minutes = server->arg("2hCompressCD").toInt();
-        if (minutes >= 1 && minutes <= 300) {
-            alert2HThresholds.compressCooldownMs = minutes * 60UL * 1000UL;
-        }
+    if (parseIntArg("2hCompressCD", intVal, 1, 300)) {
+        alert2HThresholds.compressCooldownMs = intVal * 60UL * 1000UL;
     }
-    if (server->hasArg("2hAnchorMargin")) {
-        float val;
-        if (safeAtof(server->arg("2hAnchorMargin").c_str(), val) && val >= 0.01f && val <= 5.0f) {
-            alert2HThresholds.anchorOutsideMarginPct = val;
-        }
+    if (parseFloatArg("2hAnchorMargin", floatVal, 0.01f, 5.0f)) {
+        alert2HThresholds.anchorOutsideMarginPct = floatVal;
     }
-    if (server->hasArg("2hAnchorCD")) {
-        int minutes = server->arg("2hAnchorCD").toInt();
-        if (minutes >= 1 && minutes <= 300) {
-            alert2HThresholds.anchorCooldownMs = minutes * 60UL * 1000UL;
-        }
+    if (parseIntArg("2hAnchorCD", intVal, 1, 300)) {
+        alert2HThresholds.anchorCooldownMs = intVal * 60UL * 1000UL;
     }
     
-    if (server->hasArg("cd1min")) {
-        int seconds = server->arg("cd1min").toInt();
+    // Geoptimaliseerd: gebruik helper functie i.p.v. gedupliceerde code
+    if (parseIntArg("cd1min", intVal, 0, 3600)) {
         uint32_t resultMs;
-        if (safeSecondsToMs(seconds, resultMs)) {
+        if (safeSecondsToMs(intVal, resultMs)) {
             notificationCooldown1MinMs = resultMs;
         }
     }
-    if (server->hasArg("cd30min")) {
-        int seconds = server->arg("cd30min").toInt();
+    if (parseIntArg("cd30min", intVal, 0, 3600)) {
         uint32_t resultMs;
-        if (safeSecondsToMs(seconds, resultMs)) {
+        if (safeSecondsToMs(intVal, resultMs)) {
             notificationCooldown30MinMs = resultMs;
         }
     }
-    if (server->hasArg("cd5min")) {
-        int seconds = server->arg("cd5min").toInt();
+    if (parseIntArg("cd5min", intVal, 0, 3600)) {
         uint32_t resultMs;
-        if (safeSecondsToMs(seconds, resultMs)) {
+        if (safeSecondsToMs(intVal, resultMs)) {
             notificationCooldown5MinMs = resultMs;
         }
     }
     
-    // MQTT settings
-    if (server->hasArg("mqtthost")) {
-        String host = server->arg("mqtthost");
-        host.trim();
-        if (host.length() > 0 && host.length() < 64) {  // mqttHost is 64 bytes
-            host.toCharArray(mqttHost, 64);
-        }
+    // MQTT settings - geoptimaliseerd: gebruik helper functie i.p.v. gedupliceerde code
+    parseStringArg("mqtthost", mqttHost, 64);
+    if (parseIntArg("mqttport", intVal, 1, 65535)) {
+        mqttPort = static_cast<uint16_t>(intVal);
     }
-    if (server->hasArg("mqttport")) {
-        uint16_t port = server->arg("mqttport").toInt();
-        if (port > 0 && port <= 65535) {
-            mqttPort = port;
-        }
-    }
-    if (server->hasArg("mqttuser")) {
-        String user = server->arg("mqttuser");
-        user.trim();
-        if (user.length() > 0 && user.length() < 64) {  // mqttUser is 64 bytes
-            user.toCharArray(mqttUser, 64);
-        }
-    }
-    if (server->hasArg("mqttpass")) {
-        String pass = server->arg("mqttpass");
-        pass.trim();
-        if (pass.length() > 0 && pass.length() < 64) {  // mqttPass is 64 bytes
-            pass.toCharArray(mqttPass, 64);
-        }
-    }
+    parseStringArg("mqttuser", mqttUser, 64);
+    parseStringArg("mqttpass", mqttPass, 64);
     
-    // Trend and volatility settings
-    if (server->hasArg("trendTh")) {
-        float val;
-        if (safeAtof(server->arg("trendTh").c_str(), val) && val >= 0.1f && val <= 10.0f) {
-            trendThreshold = val;
-        }
+    // Trend and volatility settings - geoptimaliseerd: gebruik helper functie
+    if (parseFloatArg("trendTh", floatVal, 0.1f, 10.0f)) {
+        trendThreshold = floatVal;
     }
-    if (server->hasArg("volLow")) {
-        float val;
-        if (safeAtof(server->arg("volLow").c_str(), val) && val >= 0.01f && val <= 1.0f) {
-            volatilityLowThreshold = val;
-        }
+    if (parseFloatArg("volLow", floatVal, 0.01f, 1.0f)) {
+        volatilityLowThreshold = floatVal;
     }
-    if (server->hasArg("volHigh")) {
-        float val;
-        if (safeAtof(server->arg("volHigh").c_str(), val) && val >= 0.01f && val <= 1.0f && val > volatilityLowThreshold) {
-            volatilityHighThreshold = val;
-        }
+    if (parseFloatArg("volHigh", floatVal, 0.01f, 1.0f) && floatVal > volatilityLowThreshold) {
+        volatilityHighThreshold = floatVal;
     }
     
     // Anchor settings - NIET vanuit web server thread verwerken om crashes te voorkomen
     // Anchor setting wordt verwerkt via een aparte route /anchor/set die sneller is
-    if (server->hasArg("anchorTP")) {
-        float val;
-        if (safeAtof(server->arg("anchorTP").c_str(), val) && val >= 0.1f && val <= 100.0f) {
-            anchorTakeProfit = val;
-        }
+    if (parseFloatArg("anchorTP", floatVal, 0.1f, 100.0f)) {
+        anchorTakeProfit = floatVal;
     }
-    if (server->hasArg("anchorML")) {
-        float val;
-        if (safeAtof(server->arg("anchorML").c_str(), val) && val >= -100.0f && val <= -0.1f) {
-            anchorMaxLoss = val;
-        }
+    if (parseFloatArg("anchorML", floatVal, -100.0f, -0.1f)) {
+        anchorMaxLoss = floatVal;
     }
     
-    // Trend-adaptive anchor settings
+    // Trend-adaptive anchor settings - geoptimaliseerd: gebruik helper functie
     trendAdaptiveAnchorsEnabled = server->hasArg("trendAdapt");
-    if (server->hasArg("upMLMult")) {
-        float val;
-        if (safeAtof(server->arg("upMLMult").c_str(), val) && val >= 0.5f && val <= 2.0f) {
-            uptrendMaxLossMultiplier = val;
-        }
+    if (parseFloatArg("upMLMult", floatVal, 0.5f, 2.0f)) {
+        uptrendMaxLossMultiplier = floatVal;
     }
-    if (server->hasArg("upTPMult")) {
-        float val;
-        if (safeAtof(server->arg("upTPMult").c_str(), val) && val >= 0.5f && val <= 2.0f) {
-            uptrendTakeProfitMultiplier = val;
-        }
+    if (parseFloatArg("upTPMult", floatVal, 0.5f, 2.0f)) {
+        uptrendTakeProfitMultiplier = floatVal;
     }
-    if (server->hasArg("downMLMult")) {
-        float val;
-        if (safeAtof(server->arg("downMLMult").c_str(), val) && val >= 0.5f && val <= 2.0f) {
-            downtrendMaxLossMultiplier = val;
-        }
+    if (parseFloatArg("downMLMult", floatVal, 0.5f, 2.0f)) {
+        downtrendMaxLossMultiplier = floatVal;
     }
-    if (server->hasArg("downTPMult")) {
-        float val;
-        if (safeAtof(server->arg("downTPMult").c_str(), val) && val >= 0.5f && val <= 2.0f) {
-            downtrendTakeProfitMultiplier = val;
-        }
+    if (parseFloatArg("downTPMult", floatVal, 0.5f, 2.0f)) {
+        downtrendTakeProfitMultiplier = floatVal;
     }
     
     // Smart Confluence Mode settings
     smartConfluenceEnabled = server->hasArg("smartConf");
     
-    // Warm-Start settings
+    // Warm-Start settings - geoptimaliseerd: gebruik helper functie
     warmStartEnabled = server->hasArg("warmStart");
-    if (server->hasArg("ws1mExtra")) {
-        uint8_t val = server->arg("ws1mExtra").toInt();
-        if (val >= 0 && val <= 100) {
-            warmStart1mExtraCandles = val;
-        }
+    if (parseIntArg("ws1mExtra", intVal, 0, 100)) {
+        warmStart1mExtraCandles = static_cast<uint8_t>(intVal);
     }
-    if (server->hasArg("ws5m")) {
-        uint8_t val = server->arg("ws5m").toInt();
-        if (val >= 2 && val <= 200) {
-            warmStart5mCandles = val;
-        }
+    if (parseIntArg("ws5m", intVal, 2, 200)) {
+        warmStart5mCandles = static_cast<uint8_t>(intVal);
     }
-    if (server->hasArg("ws30m")) {
-        uint8_t val = server->arg("ws30m").toInt();
-        if (val >= 2 && val <= 200) {
-            warmStart30mCandles = val;
-        }
+    if (parseIntArg("ws30m", intVal, 2, 200)) {
+        warmStart30mCandles = static_cast<uint8_t>(intVal);
     }
-    if (server->hasArg("ws2h")) {
-        uint8_t val = server->arg("ws2h").toInt();
-        if (val >= 2 && val <= 200) {
-            warmStart2hCandles = val;
-        }
+    if (parseIntArg("ws2h", intVal, 2, 200)) {
+        warmStart2hCandles = static_cast<uint8_t>(intVal);
     }
     
-    // Auto-Volatility Mode settings
+    // Auto-Volatility Mode settings - geoptimaliseerd: gebruik helper functie
     autoVolatilityEnabled = server->hasArg("autoVol");
-    if (server->hasArg("autoVolWin")) {
-        uint8_t val = server->arg("autoVolWin").toInt();
-        if (val >= 10 && val <= 120) {
-            autoVolatilityWindowMinutes = val;
-        }
+    if (parseIntArg("autoVolWin", intVal, 10, 120)) {
+        autoVolatilityWindowMinutes = static_cast<uint8_t>(intVal);
     }
-    if (server->hasArg("autoVolBase")) {
-        float val;
-        if (safeAtof(server->arg("autoVolBase").c_str(), val) && val >= 0.01f && val <= 1.0f) {
-            autoVolatilityBaseline1mStdPct = val;
-        }
+    if (parseFloatArg("autoVolBase", floatVal, 0.01f, 1.0f)) {
+        autoVolatilityBaseline1mStdPct = floatVal;
     }
-    if (server->hasArg("autoVolMin")) {
-        float val;
-        if (safeAtof(server->arg("autoVolMin").c_str(), val) && val >= 0.1f && val <= 1.0f) {
-            autoVolatilityMinMultiplier = val;
-        }
+    if (parseFloatArg("autoVolMin", floatVal, 0.1f, 1.0f)) {
+        autoVolatilityMinMultiplier = floatVal;
     }
-    if (server->hasArg("autoVolMax")) {
-        float val;
-        if (safeAtof(server->arg("autoVolMax").c_str(), val) && val >= 1.0f && val <= 3.0f) {
-            autoVolatilityMaxMultiplier = val;
-        }
+    if (parseFloatArg("autoVolMax", floatVal, 1.0f, 3.0f)) {
+        autoVolatilityMaxMultiplier = floatVal;
     }
     
     saveSettings();
@@ -1285,6 +1153,66 @@ void WebServerModule::sendSectionDesc(const char* desc) {
     char buf[256];
     snprintf(buf, sizeof(buf), "<div class='section-desc'>%s</div>", desc);
     server->sendContent(buf);
+}
+
+// Helper: Get trend text (geoptimaliseerd: elimineert switch duplicatie)
+const char* WebServerModule::getTrendText(TrendState trend) {
+    switch (trend) {
+        case TREND_UP: return getText("OMHOOG", "UP");
+        case TREND_DOWN: return getText("OMLAAG", "DOWN");
+        case TREND_SIDEWAYS:
+        default: return getText("VLAK", "SIDEWAYS");
+    }
+}
+
+// Helper: Get volatility text (geoptimaliseerd: elimineert switch duplicatie)
+const char* WebServerModule::getVolatilityText(VolatilityState vol) {
+    switch (vol) {
+        case VOLATILITY_LOW: return getText("Laag", "Low");
+        case VOLATILITY_MEDIUM: return getText("Gemiddeld", "Medium");
+        case VOLATILITY_HIGH: return getText("Hoog", "High");
+        default: return getText("Onbekend", "Unknown");
+    }
+}
+
+// Helper: Parse float argument (geoptimaliseerd: elimineert code duplicatie)
+bool WebServerModule::parseFloatArg(const char* argName, float& result, float minVal, float maxVal) {
+    if (!server || !server->hasArg(argName)) {
+        return false;
+    }
+    float val;
+    if (safeAtof(server->arg(argName).c_str(), val) && val >= minVal && val <= maxVal) {
+        result = val;
+        return true;
+    }
+    return false;
+}
+
+// Helper: Parse int argument (geoptimaliseerd: elimineert code duplicatie)
+bool WebServerModule::parseIntArg(const char* argName, int& result, int minVal, int maxVal) {
+    if (!server || !server->hasArg(argName)) {
+        return false;
+    }
+    int val = server->arg(argName).toInt();
+    if (val >= minVal && val <= maxVal) {
+        result = val;
+        return true;
+    }
+    return false;
+}
+
+// Helper: Parse string argument (geoptimaliseerd: elimineert code duplicatie)
+bool WebServerModule::parseStringArg(const char* argName, char* dest, size_t destSize) {
+    if (!server || !server->hasArg(argName)) {
+        return false;
+    }
+    String str = server->arg(argName);
+    str.trim();
+    if (str.length() > 0 && str.length() < destSize) {
+        str.toCharArray(dest, destSize);
+        return true;
+    }
+    return false;
 }
 
 

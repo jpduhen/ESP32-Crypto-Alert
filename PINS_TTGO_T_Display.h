@@ -3,6 +3,9 @@
 // 1.14 inch 135x240 TFT display with ST7789 controller
 // Based on Setup900_TTGO_T_Display.h pin definitions
 
+#ifndef PINS_TTGO_T_DISPLAY_H
+#define PINS_TTGO_T_DISPLAY_H
+
 #if defined(ESP32)
 
 #include <Arduino_GFX_Library.h>
@@ -47,4 +50,6 @@ Arduino_GFX *gfx = new Arduino_ST7789(bus, TFT_RST, 0 /* rotation */, true /* IP
 #else
 #error "This pin configuration is for ESP32 only"
 #endif
+
+#endif // PINS_TTGO_T_DISPLAY_H
 

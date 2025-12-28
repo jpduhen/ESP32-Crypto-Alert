@@ -102,20 +102,16 @@ float VolatilityTracker::calculateAverageAbs1mReturn() {
 }
 
 // Bepaal volatiliteit state op basis van gemiddelde absolute 1m return
+// Geoptimaliseerd: early returns i.p.v. else-if chain
 VolatilityState VolatilityTracker::determineVolatilityState(float avg_abs_1m, float volatilityLowThreshold, float volatilityHighThreshold) {
-    // Volatiliteit bepaling (geoptimaliseerd: LOW < 0.05%, HIGH >= 0.15%)
-    if (avg_abs_1m < volatilityLowThreshold)
-    {
+    // Volatiliteit bepaling (LOW < 0.05%, HIGH >= 0.15%)
+    if (avg_abs_1m < volatilityLowThreshold) {
         return VOLATILITY_LOW;  // Rustig: < 0.05%
     }
-    else if (avg_abs_1m < volatilityHighThreshold)
-    {
+    if (avg_abs_1m < volatilityHighThreshold) {
         return VOLATILITY_MEDIUM;  // Gemiddeld: 0.05% - 0.15%
     }
-    else
-    {
-        return VOLATILITY_HIGH;  // Volatiel: >= 0.15%
-    }
+    return VOLATILITY_HIGH;  // Volatiel: >= 0.15%
 }
 
 // Bereken standaarddeviatie van 1m returns in sliding window (auto-volatility mode)
@@ -124,8 +120,8 @@ float VolatilityTracker::calculateStdDev1mReturns() {
         return 0.0f;  // Geen data beschikbaar
     }
     
-    // Gebruik de geconfigureerde window size, maar clamp naar array grootte
-    uint8_t windowSize = (autoVolatilityWindowMinutes > MAX_VOLATILITY_WINDOW_SIZE) ? MAX_VOLATILITY_WINDOW_SIZE : autoVolatilityWindowMinutes;
+    // Geoptimaliseerd: gebruik helper functie i.p.v. gedupliceerde berekening
+    uint8_t windowSize = getClampedWindowSize();
     
     // Validatie: window size moet minimaal 1 zijn
     if (windowSize == 0) {
@@ -161,8 +157,8 @@ float VolatilityTracker::calculateStdDev1mReturns() {
 void VolatilityTracker::updateVolatilityWindow(float ret_1m) {
     if (!autoVolatilityEnabled) return;
     
-    // Gebruik de geconfigureerde window size, maar clamp naar array grootte
-    uint8_t windowSize = (autoVolatilityWindowMinutes > MAX_VOLATILITY_WINDOW_SIZE) ? MAX_VOLATILITY_WINDOW_SIZE : autoVolatilityWindowMinutes;
+    // Geoptimaliseerd: gebruik helper functie i.p.v. gedupliceerde berekening
+    uint8_t windowSize = getClampedWindowSize();
     
     // Voeg nieuwe return toe aan circulaire buffer
     volatility1mReturns[this->volatility1mIndex] = ret_1m;
@@ -181,54 +177,45 @@ void VolatilityTracker::updateVolatilityWindow(float ret_1m) {
 }
 
 // Bereken volatility factor en effective thresholds (auto-volatility mode)
+// Geoptimaliseerd: helper functies, geconsolideerde checks, geconsolideerde clamp operaties
 EffectiveThresholds VolatilityTracker::calculateEffectiveThresholds(float baseSpike1m, float baseMove5m, float baseMove30m) {
     EffectiveThresholds eff;
-    eff.volFactor = 1.0f;
     eff.stdDev = 0.0f;
     
+    // Geoptimaliseerd: gebruik helper functie voor base thresholds
+    setBaseThresholds(eff, baseSpike1m, baseMove5m, baseMove30m);
+    
     if (!autoVolatilityEnabled) {
-        // Als disabled, gebruik basiswaarden
-        eff.spike1m = baseSpike1m;
-        eff.move5m = baseMove5m;
-        eff.move30m = baseMove30m;
         return eff;
     }
     
     // Bereken standaarddeviatie
     eff.stdDev = this->calculateStdDev1mReturns();
     
-    // Als er onvoldoende data is, gebruik volFactor = 1.0
-    // Minimaal 10 samples nodig voor betrouwbare berekening
-    uint8_t windowSize = (autoVolatilityWindowMinutes > MAX_VOLATILITY_WINDOW_SIZE) ? MAX_VOLATILITY_WINDOW_SIZE : autoVolatilityWindowMinutes;
+    // Geoptimaliseerd: gebruik helper functie voor window size
+    uint8_t windowSize = getClampedWindowSize();
     uint8_t minSamples = (windowSize < 10) ? windowSize : 10;
     
+    // Geconsolideerde check: onvoldoende data of invalid stdDev
     if (eff.stdDev <= 0.0f || (!this->volatility1mArrayFilled && this->volatility1mIndex < minSamples)) {
-        eff.volFactor = 1.0f;
-        eff.spike1m = baseSpike1m;
-        eff.move5m = baseMove5m;
-        eff.move30m = baseMove30m;
-        return eff;
+        return eff;  // Base thresholds al ingesteld
+    }
+    
+    // Validatie: voorkom deling door nul
+    if (autoVolatilityBaseline1mStdPct <= 0.0f) {
+        return eff;  // Base thresholds al ingesteld
     }
     
     // Bereken volatility factor
-    // Validatie: voorkom deling door nul
-    if (autoVolatilityBaseline1mStdPct <= 0.0f) {
-        eff.volFactor = 1.0f;
-        eff.spike1m = baseSpike1m;
-        eff.move5m = baseMove5m;
-        eff.move30m = baseMove30m;
-        return eff;
-    }
-    
     float rawVolFactor = eff.stdDev / autoVolatilityBaseline1mStdPct;
     
-    // Clamp tussen min en max (validatie)
-    eff.volFactor = rawVolFactor;
-    if (eff.volFactor < autoVolatilityMinMultiplier) {
+    // Geconsolideerde clamp operaties: clamp tussen min en max in één keer
+    if (rawVolFactor < autoVolatilityMinMultiplier) {
         eff.volFactor = autoVolatilityMinMultiplier;
-    }
-    if (eff.volFactor > autoVolatilityMaxMultiplier) {
+    } else if (rawVolFactor > autoVolatilityMaxMultiplier) {
         eff.volFactor = autoVolatilityMaxMultiplier;
+    } else {
+        eff.volFactor = rawVolFactor;
     }
     
     // Validatie: voorkom negatieve of nul thresholds
@@ -244,7 +231,7 @@ EffectiveThresholds VolatilityTracker::calculateEffectiveThresholds(float baseSp
     eff.move5m = baseMove5m * sqrtf(eff.volFactor);  // sqrt voor langere timeframes
     eff.move30m = baseMove30m * sqrtf(eff.volFactor);
     
-    // Validatie: voorkom negatieve thresholds (safety check)
+    // Geconsolideerde validatie: voorkom negatieve thresholds (safety check)
     if (eff.spike1m < 0.0f) eff.spike1m = baseSpike1m;
     if (eff.move5m < 0.0f) eff.move5m = baseMove5m;
     if (eff.move30m < 0.0f) eff.move30m = baseMove30m;

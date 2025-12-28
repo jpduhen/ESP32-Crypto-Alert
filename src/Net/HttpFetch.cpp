@@ -5,6 +5,7 @@
 
 bool httpGetToBuffer(const char* url, char* buf, size_t bufCap, size_t* outLen, int timeoutMs)
 {
+    // Geconsolideerde validatie: check alle parameters in één keer
     if (url == nullptr || buf == nullptr || bufCap == 0 || outLen == nullptr) {
         return false;
     }
@@ -33,12 +34,17 @@ bool httpGetToBuffer(const char* url, char* buf, size_t bufCap, size_t* outLen, 
         
         int code = http.GET();
         
+        // Geconsolideerde error check: log error en break
         if (code != 200) {
+            #if !DEBUG_BUTTON_ONLY
+            Serial.printf(F("[HttpFetch] HTTP error: code=%d\n"), code);
+            #endif
             break;
         }
         
         // Get response size (kan -1 zijn voor chunked encoding)
         int contentLength = http.getSize();
+        // Geconsolideerde size check: check alles in één keer
         if (contentLength > 0 && (size_t)contentLength >= bufCap) {
             Serial.printf(F("[HttpFetch] Response te groot: %d bytes (buffer: %zu bytes)\n"), contentLength, bufCap);
             break;
@@ -56,8 +62,10 @@ bool httpGetToBuffer(const char* url, char* buf, size_t bufCap, size_t* outLen, 
         size_t totalRead = 0;
         const size_t CHUNK_SIZE = 256;  // Lees in chunks van 256 bytes
         
+        // Geconsolideerde loop conditie: check alles in één keer
         // Read in chunks: continue zolang stream connected/available
-        while (http.connected() && (contentLength > 0 || contentLength == -1)) {
+        while (http.connected() && (contentLength < 0 || totalRead < (size_t)contentLength)) {
+            // Geconsolideerde buffer check: check buffer ruimte in één keer
             if (totalRead >= (bufCap - 1)) {
                 // Buffer vol, truncate
                 Serial.printf(F("[HttpFetch] WARN: Response truncated (buffer vol: %zu bytes)\n"), bufCap);
@@ -69,7 +77,7 @@ bool httpGetToBuffer(const char* url, char* buf, size_t bufCap, size_t* outLen, 
             
             size_t bytesRead = stream->readBytes((uint8_t*)(buf + totalRead), chunkSize);
             if (bytesRead == 0) {
-                // Geen data meer beschikbaar
+                // Geconsolideerde check: geen data meer beschikbaar
                 if (!stream->available()) {
                     break;
                 }
@@ -79,11 +87,6 @@ bool httpGetToBuffer(const char* url, char* buf, size_t bufCap, size_t* outLen, 
             }
             
             totalRead += bytesRead;
-            
-            // Als contentLength bekend is, stop wanneer we alles hebben gelezen
-            if (contentLength > 0 && totalRead >= (size_t)contentLength) {
-                break;
-            }
         }
         
         // NUL terminator

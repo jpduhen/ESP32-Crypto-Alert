@@ -3,6 +3,9 @@
 
 #include <Arduino.h>
 
+// VolatilityTracker module (voor VolatilityState enum)
+#include "../VolatilityTracker/VolatilityTracker.h"
+
 // TrendState enum - gebruikt voor trend detection
 enum TrendState {
     TREND_UP,
@@ -40,6 +43,29 @@ public:
     
     // Sync state: Update TrendDetector state met globale variabelen (voor parallel implementatie)
     void syncStateFromGlobals();
+    
+    // Helper: Get trend name string (inline voor performance)
+    static inline const char* getTrendName(TrendState trend) {
+        switch (trend) {
+            case TREND_UP: return "UP";
+            case TREND_DOWN: return "DOWN";
+            case TREND_SIDEWAYS: return "SIDEWAYS";
+            default: return "UNKNOWN";
+        }
+    }
+    
+    // Helper: Get color tag for trend (geoptimaliseerd: elimineert switch duplicatie)
+    static inline const char* getTrendColorTag(TrendState trend) {
+        switch (trend) {
+            case TREND_UP: return "green_square,📈";
+            case TREND_DOWN: return "red_square,📉";
+            case TREND_SIDEWAYS:
+            default: return "grey_square,➡️";
+        }
+    }
+    
+    // Helper: Get volatility text (geoptimaliseerd: elimineert switch duplicatie)
+    static inline const char* getVolatilityText(VolatilityState volState);
     
 private:
     TrendState trendState;

@@ -52,28 +52,23 @@ void WarmStartWrapper::endRun(WarmStartMode mode, WarmStartStats& stats, WarmSta
 }
 
 bool WarmStartWrapper::isEnabled() const {
-    if (!m_settings) return false;
-    return m_settings->warmStartEnabled;
+    return getSettingValue(&CryptoMonitorSettings::warmStartEnabled, false);
 }
 
 uint8_t WarmStartWrapper::get1mExtraCandles() const {
-    if (!m_settings) return 15; // Default
-    return m_settings->warmStart1mExtraCandles;
+    return getSettingValue(&CryptoMonitorSettings::warmStart1mExtraCandles, static_cast<uint8_t>(15));
 }
 
 uint8_t WarmStartWrapper::get5mCandles() const {
-    if (!m_settings) return 12; // Default
-    return m_settings->warmStart5mCandles;
+    return getSettingValue(&CryptoMonitorSettings::warmStart5mCandles, static_cast<uint8_t>(12));
 }
 
 uint8_t WarmStartWrapper::get30mCandles() const {
-    if (!m_settings) return 8; // Default
-    return m_settings->warmStart30mCandles;
+    return getSettingValue(&CryptoMonitorSettings::warmStart30mCandles, static_cast<uint8_t>(8));
 }
 
 uint8_t WarmStartWrapper::get2hCandles() const {
-    if (!m_settings) return 6; // Default
-    return m_settings->warmStart2hCandles;
+    return getSettingValue(&CryptoMonitorSettings::warmStart2hCandles, static_cast<uint8_t>(6));
 }
 
 void WarmStartWrapper::logStart() {
@@ -147,6 +142,7 @@ void WarmStartWrapper::logResult(WarmStartMode mode, const WarmStartStats& stats
     // Detailed status per timeframe
     m_logger->println(F("[WarmStart] Status per timeframe:"));
     
+    // Geoptimaliseerd: gebruik helper functie i.p.v. gedupliceerde code
     // 1m: candles loaded (voor buffer)
     m_logger->print(F("  1m: "));
     m_logger->print(stats.loaded1m);
@@ -155,23 +151,9 @@ void WarmStartWrapper::logResult(WarmStartMode mode, const WarmStartStats& stats
     m_logger->println(F(")"));
     
     // 5m/30m/2h: closes used (voor returns)
-    m_logger->print(F("  5m: "));
-    m_logger->print(stats.loaded5m);
-    m_logger->print(F(" candles fetched, 2 closes used ("));
-    m_logger->print((stats.warmStartOk5m && stats.loaded5m >= 2) ? F("OK") : F("FAIL"));
-    m_logger->println(F(")"));
-    
-    m_logger->print(F("  30m: "));
-    m_logger->print(stats.loaded30m);
-    m_logger->print(F(" candles fetched, 2 closes used ("));
-    m_logger->print((stats.warmStartOk30m && stats.loaded30m >= 2 && hasRet30m) ? F("OK") : F("FAIL"));
-    m_logger->println(F(")"));
-    
-    m_logger->print(F("  2h: "));
-    m_logger->print(stats.loaded2h);
-    m_logger->print(F(" candles fetched, 2 closes used ("));
-    m_logger->print((stats.warmStartOk2h && stats.loaded2h >= 2 && hasRet2h) ? F("OK") : F("FAIL"));
-    m_logger->println(F(")"));
+    logTimeframeStatus("5m", stats.loaded5m, stats.warmStartOk5m && stats.loaded5m >= 2);
+    logTimeframeStatus("30m", stats.loaded30m, stats.warmStartOk30m && stats.loaded30m >= 2 && hasRet30m);
+    logTimeframeStatus("2h", stats.loaded2h, stats.warmStartOk2h && stats.loaded2h >= 2 && hasRet2h);
     
     m_logger->print(F("[WarmStart] Warm-up progress: "));
     m_logger->print(stats.warmUpProgress);
@@ -197,4 +179,17 @@ const char* WarmStartWrapper::statusToString(WarmStartStatus status) const {
         case LIVE_COLD: return "LIVE_COLD";
         default: return "UNKNOWN";
     }
+}
+
+// Helper: Log timeframe status (geoptimaliseerd: elimineert code duplicatie)
+void WarmStartWrapper::logTimeframeStatus(const char* label, uint16_t loaded, bool ok, bool hasRet) const {
+    if (!m_logger) return;
+    
+    m_logger->print(F("  "));
+    m_logger->print(label);
+    m_logger->print(F(": "));
+    m_logger->print(loaded);
+    m_logger->print(F(" candles fetched, 2 closes used ("));
+    m_logger->print(ok ? F("OK") : F("FAIL"));
+    m_logger->println(F(")"));
 }

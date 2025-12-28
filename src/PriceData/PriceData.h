@@ -21,7 +21,7 @@ enum DataSource {
 // State variabelen zijn nu in PriceData, arrays blijven globaal tot stap 4.2.6+
 extern float secondPrices[];
 extern DataSource secondPricesSource[];
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
 extern float *fiveMinutePrices;
 extern DataSource *fiveMinutePricesSource;
 #else
@@ -54,7 +54,7 @@ public:
     
     // Fase 4.2.9: Getters voor fiveMinutePrices arrays (parallel, arrays blijven globaal)
     float* getFiveMinutePrices() {
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
         extern float *fiveMinutePrices;
         #else
         extern float fiveMinutePrices[];
@@ -62,7 +62,7 @@ public:
         return fiveMinutePrices;
     }
     DataSource* getFiveMinutePricesSource() {
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
         extern DataSource *fiveMinutePricesSource;
         #else
         extern DataSource fiveMinutePricesSource[];
@@ -74,7 +74,7 @@ public:
     
     // Fase 4.2.9: Getters voor minuteAverages arrays (parallel, arrays blijven globaal)
     float* getMinuteAverages() {
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
         extern float *minuteAverages;
         #else
         extern float minuteAverages[];
@@ -82,7 +82,7 @@ public:
         return minuteAverages;
     }
     DataSource* getMinuteAveragesSource() {
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
         extern DataSource *minuteAveragesSource;
         #else
         extern DataSource minuteAveragesSource[];
@@ -120,9 +120,9 @@ public:
         extern DataSource secondPricesSource[];
         secondPrices[this->secondIndex] = price;
         secondPricesSource[this->secondIndex] = SOURCE_LIVE;  // Mark as live data
+        // Geconsolideerde index update: check en update in één keer
         this->secondIndex = (this->secondIndex + 1) % SECONDS_PER_MINUTE;
-        if (this->secondIndex == 0)
-        {
+        if (this->secondIndex == 0) {
             this->secondArrayFilled = true;
         }
         
@@ -136,8 +136,8 @@ public:
             this->fiveMinuteArrayFilled = true;
         }
         
-        // Null pointer check voor dynamische arrays (CYD platforms)
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        // Null pointer check voor dynamische arrays (CYD/TTGO platforms)
+        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
         extern float *fiveMinutePrices;
         extern DataSource *fiveMinutePricesSource;
         if (fiveMinutePrices == nullptr || fiveMinutePricesSource == nullptr) {
@@ -151,9 +151,9 @@ public:
         
         fiveMinutePrices[this->fiveMinuteIndex] = price;
         fiveMinutePricesSource[this->fiveMinuteIndex] = SOURCE_LIVE;  // Mark as live data
+        // Geconsolideerde index update: check en update in één keer
         this->fiveMinuteIndex = (this->fiveMinuteIndex + 1) % SECONDS_PER_5MINUTES;
-        if (this->fiveMinuteIndex == 0)
-        {
+        if (this->fiveMinuteIndex == 0) {
             this->fiveMinuteArrayFilled = true;
         }
         

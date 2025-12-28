@@ -67,6 +67,14 @@ public:
     static bool isValidPrice(float price);
     static bool safeAtof(const char* str, float& out);
     
+    // Helper: Log HTTP error (consolideert error logging logica)
+    static void logHttpError(int code, const char* phase, unsigned long requestTime, 
+                            uint8_t attempt = 0, uint8_t maxAttempts = 1, 
+                            const char* prefix = "[HTTP]");
+    
+    // Helper: Detect HTTP error phase (consolideert fase detectie)
+    static const char* detectHttpErrorPhase(int code);
+    
 private:
     // N2: Persistent HTTPClient en WiFiClient voor keep-alive connecties
     WiFiClient wifiClient;

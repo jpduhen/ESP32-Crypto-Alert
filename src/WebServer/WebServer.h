@@ -3,10 +3,10 @@
 
 #include <Arduino.h>
 #include <WebServer.h>
+#include "../TrendDetector/TrendDetector.h"
+#include "../VolatilityTracker/VolatilityTracker.h"
 
 // Forward declarations voor dependencies
-class TrendDetector;
-class VolatilityTracker;
 class AnchorSystem;
 
 // WebServerModule class - beheert web interface voor instellingen
@@ -44,6 +44,13 @@ private:
     void sendSectionHeader(const char* title, const char* sectionId, bool expanded = false);
     void sendSectionFooter();
     void sendSectionDesc(const char* desc);
+    
+    // Helper functies voor code duplicatie eliminatie
+    static const char* getTrendText(TrendState trend);
+    static const char* getVolatilityText(VolatilityState vol);
+    bool parseFloatArg(const char* argName, float& result, float minVal, float maxVal);
+    bool parseIntArg(const char* argName, int& result, int minVal, int maxVal);
+    bool parseStringArg(const char* argName, char* dest, size_t destSize);
     
     // WebServer instance (wordt extern gedeclareerd in .ino)
     // Note: WebServer is een externe library class, we gebruiken een referentie

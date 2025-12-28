@@ -90,44 +90,16 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
             logHeap("HTTP_GET_POST");
             
             if (code != 200) {
-                // S2: Check retry-waardige fouten
-                if (code == HTTPC_ERROR_CONNECTION_REFUSED || code == HTTPC_ERROR_CONNECTION_LOST) {
-                    shouldRetry = true;
-                } else if (code == HTTPC_ERROR_READ_TIMEOUT) {
-                    shouldRetry = true;
-                } else if (code == HTTPC_ERROR_SEND_HEADER_FAILED || code == HTTPC_ERROR_SEND_PAYLOAD_FAILED) {
-                    shouldRetry = true;
-                } else if (code < 0) {
-                    // Andere HTTPClient error codes - retry alleen bij network errors
-                    shouldRetry = (code == HTTPC_ERROR_CONNECTION_REFUSED || 
-                                  code == HTTPC_ERROR_CONNECTION_LOST || 
-                                  code == HTTPC_ERROR_READ_TIMEOUT ||
-                                  code == HTTPC_ERROR_SEND_HEADER_FAILED ||
-                                  code == HTTPC_ERROR_SEND_PAYLOAD_FAILED);
-                }
+                // Geconsolideerde retry check: check alle retry-waardige fouten in één keer
+                shouldRetry = (code == HTTPC_ERROR_CONNECTION_REFUSED || 
+                              code == HTTPC_ERROR_CONNECTION_LOST || 
+                              code == HTTPC_ERROR_READ_TIMEOUT ||
+                              code == HTTPC_ERROR_SEND_HEADER_FAILED ||
+                              code == HTTPC_ERROR_SEND_PAYLOAD_FAILED);
                 
-                // N1: Betere error logging met errorToString en fase detectie
-                if (code < 0) {
-                    // Detecteer fase: connect timeout vs read timeout
-                    const char* phase = "unknown";
-                    if (code == HTTPC_ERROR_CONNECTION_REFUSED || 
-                        code == HTTPC_ERROR_CONNECTION_LOST) {
-                        phase = "connect";
-                    } else if (code == HTTPC_ERROR_READ_TIMEOUT) {
-                        phase = "read";
-                    } else if (code == HTTPC_ERROR_SEND_HEADER_FAILED || 
-                              code == HTTPC_ERROR_SEND_PAYLOAD_FAILED) {
-                        phase = "send";
-                    }
-                    
-                    // T2: Gebruik errorToString voor leesbare error messages (deterministisch, geen mojibake)
-                    String localErr = http.errorToString(code);
-                    Serial.printf(F("[HTTP] HTTP error (code=%d, fase=%s, tijd=%lu ms, poging %d/%d, error=%s)\n"), 
-                                  code, phase, requestTime, attempt + 1, MAX_RETRIES + 1, localErr.c_str());
-                } else {
-                    Serial.printf(F("[HTTP] Status code=%d, tijd=%lu ms, poging %d/%d\n"), 
-                                  code, requestTime, attempt + 1, MAX_RETRIES + 1);
-                }
+                // Geoptimaliseerd: gebruik helper functie voor error logging
+                const char* phase = detectHttpErrorPhase(code);
+                logHttpError(code, phase, requestTime, attempt, MAX_RETRIES + 1, "[HTTP]");
                 
                 // S2: Break uit do-while voor cleanup, retry logica gebeurt hieronder
                 break;
@@ -221,62 +193,93 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
 // Parse Binance price from JSON response
 // Fase 4.1.6: Verplaatst naar ApiClient (parallel, nog niet gebruikt)
 // Handmatige JSON parsing (geen heap allocaties, geen ArduinoJson dependency)
+// Geoptimaliseerd: geconsolideerde validatie checks
 bool ApiClient::parseBinancePrice(const char *body, float &out)
 {
-    // Check of body niet leeg is
-    if (body == nullptr || strlen(body) == 0)
+    // Geconsolideerde validatie: check alle voorwaarden in één keer
+    if (body == nullptr || strlen(body) == 0) {
         return false;
+    }
     
     const char *priceStart = strstr(body, "\"price\":\"");
-    if (priceStart == nullptr)
+    if (priceStart == nullptr) {
         return false;
+    }
     
     priceStart += 9; // skip to first digit after "price":""
     
     const char *priceEnd = strchr(priceStart, '"');
-    if (priceEnd == nullptr)
+    if (priceEnd == nullptr) {
         return false;
+    }
     
-    // Valideer lengte
+    // Valideer lengte (geconsolideerd: check alles in één keer)
     size_t priceLen = priceEnd - priceStart;
-    if (priceLen == 0 || priceLen > 20) // Max 20 karakters voor prijs (veiligheidscheck)
+    if (priceLen == 0 || priceLen > 20 || priceLen >= 32) {  // Max 20 karakters voor prijs, buffer is 32
         return false;
+    }
     
     // Extract price string (gebruik stack buffer, geen heap allocatie)
     char priceStr[32];
-    if (priceLen >= sizeof(priceStr)) {
-        return false;
-    }
     strncpy(priceStr, priceStart, priceLen);
     priceStr[priceLen] = '\0';
     
-    // Convert to float
+    // Convert to float en valideer in één keer
     float val;
-    if (!safeAtof(priceStr, val)) {
+    if (!safeAtof(priceStr, val) || !isValidPrice(val)) {
         return false;
     }
-    
-    // Validate that we got a valid price
-    if (!isValidPrice(val))
-        return false;
     
     out = val;
     return true;
 }
 
+// Helper: Detect HTTP error phase (consolideert fase detectie)
+// Geoptimaliseerd: elimineert code duplicatie
+const char* ApiClient::detectHttpErrorPhase(int code)
+{
+    if (code == HTTPC_ERROR_CONNECTION_REFUSED || code == HTTPC_ERROR_CONNECTION_LOST) {
+        return "connect";
+    } else if (code == HTTPC_ERROR_READ_TIMEOUT) {
+        return "read";
+    } else if (code == HTTPC_ERROR_SEND_HEADER_FAILED || code == HTTPC_ERROR_SEND_PAYLOAD_FAILED) {
+        return "send";
+    }
+    return "unknown";
+}
+
+// Helper: Log HTTP error (consolideert error logging logica)
+// Geoptimaliseerd: elimineert code duplicatie tussen httpGETInternal en fetchBinancePrice
+void ApiClient::logHttpError(int code, const char* phase, unsigned long requestTime, 
+                            uint8_t attempt, uint8_t maxAttempts, const char* prefix)
+{
+    if (code < 0) {
+        // T2: Gebruik errorToString voor leesbare error messages (deterministisch, geen mojibake)
+        String localErr = HTTPClient().errorToString(code);  // Temporary object voor errorToString
+        if (maxAttempts > 1) {
+            Serial.printf(F("%s HTTP error (code=%d, fase=%s, tijd=%lu ms, poging %d/%d, error=%s)\n"), 
+                         prefix, code, phase, requestTime, attempt + 1, maxAttempts, localErr.c_str());
+        } else {
+            Serial.printf(F("%s HTTP error (code=%d, fase=%s, tijd=%lu ms, error=%s)\n"), 
+                         prefix, code, phase, requestTime, localErr.c_str());
+        }
+    } else {
+        if (maxAttempts > 1) {
+            Serial.printf(F("%s Status code=%d, tijd=%lu ms, poging %d/%d\n"), 
+                         prefix, code, requestTime, attempt + 1, maxAttempts);
+        } else {
+            Serial.printf(F("%s HTTP status code=%d, tijd=%lu ms\n"), prefix, code, requestTime);
+        }
+    }
+}
+
 // Helper: Validate price value
 bool ApiClient::isValidPrice(float price)
 {
-    // Check for NaN or Inf
-    if (isnan(price) || isinf(price)) {
+    // Geconsolideerde validatie: check alle voorwaarden in één keer
+    if (isnan(price) || isinf(price) || price <= 0.0f || price > 1000000.0f) {
         return false;
     }
-    
-    // Check for reasonable price range (0.0001 to 1000000)
-    if (price <= 0.0f || price > 1000000.0f) {
-        return false;
-    }
-    
     return true;
 }
 
@@ -428,36 +431,19 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
         logHeap("API_GET_POST");
         
         if (code != 200) {
-            // N1: Betere error logging met errorToString en fase detectie
-            if (code < 0) {
-                // Detecteer fase: connect timeout vs read timeout
-                const char* phase = "unknown";
-                if (code == HTTPC_ERROR_CONNECTION_REFUSED || 
-                    code == HTTPC_ERROR_CONNECTION_LOST) {
-                    phase = "connect";
-                } else if (code == HTTPC_ERROR_READ_TIMEOUT) {
-                    phase = "read";
-                } else if (code == HTTPC_ERROR_SEND_HEADER_FAILED || 
-                          code == HTTPC_ERROR_SEND_PAYLOAD_FAILED) {
-                    phase = "send";
+            // Geoptimaliseerd: gebruik helper functie voor error logging
+            const char* phase = detectHttpErrorPhase(code);
+            logHttpError(code, phase, requestTime, 0, 1, "[API]");
+            
+            // N2: Log ook response body bij HTTP 400 voor debugging
+            if (code == 400) {
+                WiFiClient* errorStream = http.getStreamPtr();
+                if (errorStream != nullptr && errorStream->available()) {
+                    char errorBuf[256];
+                    size_t errorLen = errorStream->readBytes((uint8_t*)errorBuf, sizeof(errorBuf) - 1);
+                    errorBuf[errorLen] = '\0';
+                    Serial.printf(F("[API] HTTP 400 response body: %s\n"), errorBuf);
                 }
-                
-                // T2: Gebruik errorToString voor leesbare error messages (deterministisch, geen mojibake)
-                String localErr = http.errorToString(code);
-                Serial.printf(F("[API] HTTP error (code=%d, fase=%s, tijd=%lu ms, error=%s)\n"), 
-                              code, phase, requestTime, localErr.c_str());
-            } else {
-                // N2: Log ook response body bij HTTP 400 voor debugging
-                if (code == 400) {
-                    WiFiClient* errorStream = http.getStreamPtr();
-                    if (errorStream != nullptr && errorStream->available()) {
-                        char errorBuf[256];
-                        size_t errorLen = errorStream->readBytes((uint8_t*)errorBuf, sizeof(errorBuf) - 1);
-                        errorBuf[errorLen] = '\0';
-                        Serial.printf(F("[API] HTTP 400 response body: %s\n"), errorBuf);
-                    }
-                }
-                Serial.printf(F("[API] HTTP status code=%d, tijd=%lu ms\n"), code, requestTime);
             }
             break;
         }
