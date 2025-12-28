@@ -5,6 +5,11 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 
+// Include alleen DEBUG_BUTTON_ONLY, niet de hele platform_config.h (voorkomt PINS includes)
+#ifndef DEBUG_BUTTON_ONLY
+#define DEBUG_BUTTON_ONLY 1
+#endif
+
 // S0: FreeRTOS headers voor SemaphoreHandle_t
 #include <freertos/semphr.h>
 

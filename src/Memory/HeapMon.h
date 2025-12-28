@@ -3,6 +3,11 @@
 
 #include <Arduino.h>
 
+// Include alleen DEBUG_BUTTON_ONLY, niet de hele platform_config.h (voorkomt PINS includes)
+#ifndef DEBUG_BUTTON_ONLY
+#define DEBUG_BUTTON_ONLY 1
+#endif
+
 /**
  * HeapMon: Heap telemetry voor geheugenfragmentatie audit
  * 

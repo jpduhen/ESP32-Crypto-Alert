@@ -11,8 +11,14 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 4
-#define VERSION_MINOR 5
-#define VERSION_STRING "4.05"
+#define VERSION_MINOR 10
+#define VERSION_STRING "4.10"
+#endif
+
+// --- Debug Configuration ---
+// Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
+#ifndef DEBUG_BUTTON_ONLY
+#define DEBUG_BUTTON_ONLY 1
 #endif
 
 // Standaard taal instelling (0 = Nederlands, 1 = English)
@@ -23,8 +29,10 @@
 #endif
 
 // Platform-specifieke instellingen
+// PINS files worden alleen geïncludeerd vanuit de main .ino file, niet vanuit modules
+// Dit voorkomt multiple definition errors voor bus en gfx
 #ifdef PLATFORM_TTGO
-    #ifndef UICONTROLLER_INCLUDE
+    #if !defined(UICONTROLLER_INCLUDE) && !defined(MODULE_INCLUDE)
     #include "PINS_TTGO_T_Display.h"
     #endif
     #define MQTT_TOPIC_PREFIX "ttgo_crypto"
@@ -54,7 +62,7 @@
     #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_10
     #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
 #elif defined(PLATFORM_CYD24)
-    #ifndef UICONTROLLER_INCLUDE
+    #if !defined(UICONTROLLER_INCLUDE) && !defined(MODULE_INCLUDE)
     #include "PINS_CYD-ESP32-2432S024.h"
     #endif
     #define MQTT_TOPIC_PREFIX "cyd24_crypto"
@@ -85,7 +93,7 @@
     #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
     #define SYMBOL_COUNT 4  // CYD: BTCEUR, 1m, 30m, 2h
 #elif defined(PLATFORM_CYD28)
-    #ifndef UICONTROLLER_INCLUDE
+    #if !defined(UICONTROLLER_INCLUDE) && !defined(MODULE_INCLUDE)
     #include "PINS_CYD-ESP32-2432S028-2USB.h"
     #endif
     #define MQTT_TOPIC_PREFIX "cyd28_crypto"
@@ -116,7 +124,7 @@
     #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
     #define SYMBOL_COUNT 4  // CYD: BTCEUR, 1m, 30m, 2h
 #elif defined(PLATFORM_ESP32S3_SUPERMINI)
-    #ifndef UICONTROLLER_INCLUDE
+    #if !defined(UICONTROLLER_INCLUDE) && !defined(MODULE_INCLUDE)
     #include "PINS_ESP32S3_SuperMini_ST7789_154.h"
     #endif
     #define MQTT_TOPIC_PREFIX "esp32s3_crypto"

@@ -1,1360 +1,162 @@
-# Unified LVGL9 Crypto Monitor
+# ESP32 Crypto Alert Monitor (CYD)
 
-A unified Crypto Monitor for different ESP32 display platforms: TTGO T-Display, CYD 2.4" and CYD 2.8".
+## What is this?
+This project is a **standalone crypto price monitoring system** that runs on an ESP32
+and analyzes real-time price data from Binance.
 
-## Supported Platforms
+It provides **context-aware notifications**, not just raw price updates.
 
-- **TTGO T-Display**: 1.14" 135x240 TFT display (ST7789)
-- **CYD 2.4"**: 2.4" 240x320 TFT display with touchscreen (XPT2046)
-- **CYD 2.8"**: 2.8" 240x320 TFT display with touchscreen (XPT2046)
-- **ESP32-S3 Super Mini**: ESP32-S3 Super Mini HW-747 v0.0.2i + 1.54" 240x240 TFT display (ST7789)
+The device includes a display and sends notifications via **ntfy.sh**.
 
-## Features
+👉 The goal is **market awareness and context**, not automated trading.
 
-- Real-time Bitcoin (BTCEUR) price monitoring via Binance API
-- Live chart with 60 data points (2 minutes history at 2000ms API interval)
-- 1 minute return calculation uses 30 data points (exactly 1 minute at 2000ms API interval)
-- Trend detection (2-hour trend analysis)
-- Volatility monitoring (low/medium/high)
-- Anchor price tracking with take profit and stop loss alerts
-- 1 minute and 30 minute average price tracking
-- Min/Max/Diff display for 1m and 30m periods
-- MQTT integration for home automation
-- NTFY.sh notifications for alerts
-- Web interface for configuration
-- WiFi Manager for easy WiFi setup
-- **Trend-Adaptive Anchors**: Dynamic anchor thresholds based on trend
-- **Smart Confluence Mode**: Combined alerts when multiple timeframes align
-- **Auto-Volatility Mode**: Automatic threshold adjustment based on volatility
-- **Warm-Start with Binance historical data**: Fill buffers on boot with historical data for immediately usable trend and volatility indications
-- **2-hour Alert System**: Configurable notifications for 2-hour timeframe (breakout, breakdown, compression, mean reversion, anchor context)
+---
 
-## Architecture
+## Who is this for?
+This project is intended for people who:
+- actively follow crypto prices
+- want to know *when something meaningful happens*
+- prefer insight over automated trading
+- are interested in ESP32 or embedded projects
 
-The codebase uses a modular architecture for better maintainability and organization:
+You **do not need to be a programmer** to use it.
+All configuration is done through a web interface.
 
-### Core Modules
-- **SettingsStore**: Persistent storage (Preferences/NVS)
-- **ApiClient**: Binance API communication
-- **PriceData**: Price data management & return calculations
+---
 
-### Analysis Modules
-- **TrendDetector**: Trend detection & state management
-- **VolatilityTracker**: Volatility calculations & state management
+## What does the system do?
+The system:
+- periodically fetches price data from Binance
+- analyzes price movement across multiple timeframes
+- determines trend and volatility
+- compares price to a user-defined reference (anchor)
+- sends notifications when predefined situations occur
 
-### Alert & Anchor Modules
-- **AlertEngine**: Alert detection & notifications
-- **AnchorSystem**: Anchor price tracking & alerts
+Everything runs **locally on the device**.
 
-### UI & Web Modules
-- **UIController**: LVGL UI management
-- **WebServer**: Web interface & handlers
+---
 
-### Utility Modules
-- **WarmStart**: Historical data fetching on boot
-- **Memory/HeapMon**: Heap telemetry & monitoring
-- **Net/HttpFetch**: Network utilities
+## Key concepts (important)
 
-See `CODE_INDEX.md` for detailed module documentation.
-
-## TL;DR – Reading alerts at a glance
-
-**Confluence Alert** = highest priority
-→ multiple timeframes pointing in the same direction
-
-**1m Spike** = quick impulse
-→ mainly a watch moment, not a direct trading signal
-
-**5m Move** = momentum building
-→ more important than 1m, indicates direction
-
-**30m Move** = structural shift
-→ rare, but significant
-
-**TrendState**
-- **UP** → UP signals are more important
-- **DOWN** → DOWN signals are more important
-- **SIDEWAYS** → only confluence is really interesting
-
-**Volatility**
-- **LOW** → small movements count
-- **HIGH** → only large movements count
-
-**Anchor alerts** (Max Loss / Take Profit)
-→ decision moments, boundaries adapt to trend
+### Anchor (reference price)
+The **anchor** is a price you define as a reference point.
+For example:
+- your entry price
+- an important technical level
+- a psychological threshold
 
-**No alerts** = no clear opportunity
-→ system deliberately filters out noise
-
-**Fewer notifications = higher quality.** The system helps determine when it's worth looking, not what you should do.
-
-## Alert System Decision Tree
+Many alerts are evaluated **relative to this anchor**.
 
-The alert system uses a structured decision tree to generate alerts. Below is the complete logic:
+---
 
-### 1. New candle / tick received
+### Timeframes
+The system does not look at a single moment, but at multiple windows:
 
-1.1. Update price, 1m/5m/30m returns and history
-
-### 2. Determine volatility (Auto-Volatility Mode)
-
-2.1. If `autoVolatilityEnabled == true`:
-    - Calculate standard deviation (σ) of last N 1m-returns (sliding window)
-    - Calculate `volatilityFactor = clamp(σ / σ_baseline, minMultiplier, maxMultiplier)`
-    - Scale all thresholds:
-      - `1mSpikeThreshold = base_1m * volatilityFactor`
-      - `5mMoveThreshold = base_5m * sqrt(volatilityFactor)` (sqrt for longer timeframes)
-      - `30mMoveThreshold = base_30m * sqrt(volatilityFactor)` (sqrt for longer timeframes)
-2.2. If `autoVolatilityEnabled == false`:
-    - Use base thresholds without adjustment
-
-### 3. Determine trend
-
-3.1. Calculate 2-hour return (`ret_2h`) and 30-minute return (`ret_30m`)
-3.2. If `ret_2h >= trendThreshold` AND `ret_30m >= 0.0` → Trend = **UP**
-3.3. If `ret_2h <= -trendThreshold` AND `ret_30m <= 0.0` → Trend = **DOWN**
-3.4. Otherwise → Trend = **SIDEWAYS**
-
-### 4. Adjust Anchor risk (Trend-Adaptive Anchors)
-
-4.1. If `trendAdaptiveAnchorsEnabled == true`:
-    - Start from base values: `anchorMaxLossBase`, `anchorTakeProfitBase`
-    - Choose multipliers per Trend:
-      - for **UP**: `lossMul_up`, `tpMul_up`
-      - for **DOWN**: `lossMul_down`, `tpMul_down`
-      - for **SIDEWAYS**: 1.0 (no adjustment)
-    - Calculate:
-      - `anchorMaxLoss = anchorMaxLossBase * lossMul_trend`
-      - `anchorTakeProfit = anchorTakeProfitBase * tpMul_trend`
-    - Clamp values for safety (max loss: -6% to -1%, take profit: 2% to 10%)
-4.2. If `trendAdaptiveAnchorsEnabled == false`:
-    - Use base values without adjustment
-
-### 5. Detect spikes & moves on each timeframe
-
-5.1. **1m Spike**: 
-    - `|ret_1m| >= effective1mSpikeThreshold` **AND**
-    - `|ret_5m| >= spike5mThreshold` (filter) **AND**
-    - Both in same direction → candidate 1m spike
-
-5.2. **5m Move**: 
-    - `|ret_5m| >= effective5mMoveThreshold` → candidate 5m move
-
-5.3. **30m Move**: 
-    - `|ret_30m| >= effective30mMoveThreshold` **AND**
-    - `|ret_5m| >= move5mThreshold` (filter) **AND**
-    - Both in same direction → candidate 30m move
-
-### 6. Smart Confluence logic
-
-6.1. If `smartConfluenceEnabled == true`:
-    - Collect recent 1m and 5m events (direction UP or DOWN)
-    - Check if:
-      - 1m event and 5m event are within time window (±5 minutes)
-      - Both events are in same direction
-      - 30m trend supports the direction (UP trend supports UP events, DOWN trend supports DOWN events, SIDEWAYS supports both)
-      - Cooldown for confluence alerts has expired
-    - If all conditions met:
-      - Send one "Confluence Alert" with summary (1m magnitude, 5m magnitude, 30m trend)
-      - Mark 1m and 5m events as "used in confluence"
-      - Suppress individual alerts for these events
-    - If conditions not met:
-      - Send only individual alerts that meet cooldown/debouncing requirements
-      - Suppress alerts already used in confluence
-
-6.2. If `smartConfluenceEnabled == false`:
-    - Send all alerts that exceed thresholds (respecting cooldowns)
-    - No confluence checks
-
-### 7. Monitor Anchor Max Loss / Take Profit
-
-7.1. Calculate PnL vs Anchor:
-    - `deltaPct = (price - anchorPrice) / anchorPrice * 100%`
-
-7.2. If `deltaPct <= effectiveAnchorMaxLoss`:
-    - Send "Max Loss" alert
-    - Include trend and effective threshold (if trend-adaptive enabled)
-
-7.3. If `deltaPct >= effectiveAnchorTakeProfit`:
-    - Send "Take Profit" alert
-    - Include trend and effective threshold (if trend-adaptive enabled)
-
-### 8. Cooldown & housekeeping
-
-8.1. Per signal type (1m, 5m, 30m, Confluence, Anchor):
-    - Check if cooldown has expired
-    - Update last send time
-    - Check maximum alerts per hour
-
-8.2. Log all events (signals, trend, volatility, anchors) for analysis
-
-### Flow Chart
-
-```
-[ START: new candle / tick ]
-            |
-            v
-[ Update price & history ]
-- update price
-- calculate ret_1m, ret_5m, ret_30m, ret_2h
-- update sliding windows
-            |
-            v
-[ Auto-Volatility Mode ? ]
-      |                         |
-    yes                        no
-      |                         |
-      v                         v
-[ Calculate σ (1m returns) ]   [ Use base thresholds ]
-[ volFactor = clamp(σ/σ₀) ]
-[ eff thresholds:
-  - 1m  = base1m * volFactor
-  - 5m  = base5m * sqrt(volFactor)
-  - 30m = base30m * sqrt(volFactor) ]
-            |
-            v
-[ Determine TrendState ]
-- if ret_2h ≥ trendThreshold AND ret_30m ≥ 0 → TREND_UP
-- if ret_2h ≤ -trendThreshold AND ret_30m ≤ 0 → TREND_DOWN
-- else → TREND_SIDEWAYS
-            |
-            v
-[ Trend-Adaptive Anchors ? ]
-      |                         |
-    yes                        no
-      |                         |
-      v                         v
-[ Calculate effective anchors ] [ Use base anchors ]
-- start from base MaxLoss / TakeProfit
-- apply multipliers per TrendState
-- clamp (safety bounds)
-            |
-            v
-[ Detect events per timeframe ]
-            |
-            +--> [ 1m Spike check ]
-            |     - |ret_1m| ≥ effSpike1m
-            |     - |ret_5m| ≥ spike5mThreshold
-            |     - same direction
-            |     → candidate 1m event
-            |
-            +--> [ 5m Move check ]
-            |     - |ret_5m| ≥ effMove5m
-            |     → candidate 5m event
-            |
-            +--> [ 30m Move check ]
-                  - |ret_30m| ≥ effMove30m
-                  - |ret_5m| ≥ move5mThreshold
-                  - same direction
-                  → candidate 30m event
-            |
-            v
-[ Smart Confluence Mode ? ]
-      |                         |
-    yes                        no
-      |                         |
-      v                         v
-[ Collect recent events ]  [ Send individual alerts ]
-- 1m + 5m events
-- direction (UP/DOWN)
-- timestamps
-            |
-            v
-[ Confluence conditions check ]
-- 1m & 5m within time window (±5 min)
-- same direction
-- TrendState supports direction
-  * UP → only UP
-  * DOWN → only DOWN
-  * SIDEWAYS → both
-- confluence cooldown expired?
-            |
-      +-----+-----+
-      |           |
-    yes          no
-      |           |
-      v           v
-[ Confluence Alert ]   [ Individual alerts ]
-- send 1 alert      - only if cooldown ok
-- mark events       - don't send events twice
-  as "used"
-            |
-            v
-[ Anchor monitoring ]
-- deltaPct = (price - anchorPrice) / anchorPrice * 100
-- if deltaPct ≤ effAnchorMaxLoss → Max Loss alert
-- if deltaPct ≥ effAnchorTakeProfit → Take Profit alert
-            |
-            v
-[ Cooldowns & housekeeping ]
-- update lastSent times
-- max alerts / hour check
-- log: trend, volatility, events, anchors
-            |
-            v
-[ END → wait for next candle ]
-```
-
-## Warm-Start Sizing
-
-The warm-start mechanism fills buffers on boot with Binance historical data for immediately usable trend and volatility indications.
-
-### Configuration Parameters
-
-- **warmStartEnabled** (default: true): Enable/disable warm-start
-- **warmStart1mExtraCandles** (default: 15): Extra 1m candles on top of volatility window
-- **warmStart5mCandles** (default: 12): Number of 5m candles (12 = 1 hour)
-- **warmStart30mCandles** (default: 8): Number of 30m candles (8 = 4 hours)
-- **warmStart2hCandles** (default: 6): Number of 2h candles (6 = 12 hours)
-
-### Dynamic Sizing
-
-- **1m candles**: `warmStart1mCandles = volatilityWindowMinutes + warmStart1mExtraCandles`
-  - Clamped between 30-200 candles
-- **Other timeframes**: Clamped between 2-200 candles
-
-### Status Modes
-
-- **FULL**: All timeframes successfully loaded
-- **PARTIAL**: Partially loaded (some timeframes failed)
-- **FAILED**: All timeframes failed
-- **DISABLED**: Warm-start disabled
-
-### Status Display
-
-- **WARMING_UP**: Buffers still contain Binance data
-- **LIVE**: Fully on live data
-- **LIVE(COLD)**: Live data but warm-start failed (cold start)
-
-### Warm-up Progress
-
-The system automatically calculates the percentage of LIVE data in buffers:
-- Volatility LIVE: ≥80% of secondPrices buffer is LIVE
-- Trend LIVE: ≥80% of minuteAverages buffer is LIVE
-- Warm-up progress: Average of both percentages
-
-Status is visible:
-- In web interface: "Current Status" box with warm-start info and progress
-- On display: Right top of chart block (same height as trend text)
-  - "WXX%" during warming up (orange)
-  - "LIVE" when fully live (green)
-  - "COLD" on cold start (red)
-
-### Memory Efficiency
-
-The warm-start mechanism is optimized for memory efficiency:
-- Returns-only parsing: only last closes are stored
-- 1m: only last 60 closes (for buffer)
-- 5m/30m: only last 2 closes (for ret calculation)
-- 2h: only first and last close (for ret_2h calculation)
-
-### Important Notes
-
-- **5m Confirmation Filter**: Note: 1m spike and 30m move alerts are 'gated' by a 5m confirmation filter (`spike5mThreshold` / `move5mThreshold`). This means these alerts are only sent when both the 1m/30m threshold and the 5m filter threshold are exceeded, and both are in the same direction.
-- **Effective Thresholds**: When Auto-Volatility Mode is enabled, all threshold comparisons use effective thresholds (adjusted based on volatility)
-- **Feature Disabling**: When all three features are disabled, behavior is identical to base version (no adjustments)
-- **Thread Safety**: All calculations are thread-safe with mutex protection where needed
-- **Edge Cases**: Validation prevents division by zero, negative thresholds, and insufficient data
-
-## Hardware Requirements
-
-### TTGO T-Display
-- ESP32 with TTGO T-Display module
-- 1.14" 135x240 TFT display (ST7789)
-- Physical reset button (GPIO 0)
-
-### CYD 2.4" / 2.8"
-- ESP32 with CYD display module
-- 2.4" or 2.8" 240x320 TFT display
-- Touchscreen (XPT2046)
-
-### ESP32-S3 Super Mini
-- ESP32-S3 Super Mini HW-747 v0.0.2i
-- 1.54" 240x240 TFT display (ST7789)
-- Physical reset button (GPIO 0)
-
-## Software Requirements
-
-- Arduino IDE 1.8.x or 2.x
-- ESP32 Board Support Package
-- LVGL library v9.2.2 or higher
-- Arduino_GFX library
-- WiFiManager library
-- PubSubClient3 library
-- XPT2046_Touchscreen library (only for CYD variants)
-- **atomic.h** (included in project) - Wrapper for stdatomic.h for thread-safe operations
-
-## Installation
-
-> **⚠️ IMPORTANT**: Read the entire installation section before starting!
-
-### Step 1: Clone the Repository
-```bash
-git clone https://github.com/<your-username>/<repository-name>.git
-cd UNIFIED-LVGL9-Crypto_Monitor
-```
-
-**Or download as ZIP**: Click the green "Code" button on GitHub and select "Download ZIP"
-
-### Step 2: Select Your Platform ⚠️ IMPORTANT - DO THIS FIRST!
-
-**You MUST specify which board you're using before compiling the code!**
-
-**Location**: Open the file **`platform_config.h`** in the root of the project (next to `UNIFIED-LVGL9-Crypto_Monitor.ino`)
-
-**What to do**:
-1. Open `platform_config.h` in a text editor or Arduino IDE
-2. Find the following lines (approximately lines 5-7):
-```cpp
-//#define PLATFORM_CYD28
-#define PLATFORM_TTGO
-// #define PLATFORM_CYD24
-```
-
-3. **Activate the correct platform** by removing the `//` (comment) and commenting out the other lines:
-
-**For TTGO T-Display:**
-```cpp
-//#define PLATFORM_CYD28
-#define PLATFORM_TTGO
-// #define PLATFORM_CYD24
-```
-
-**For CYD 2.4":**
-```cpp
-//#define PLATFORM_CYD28
-// #define PLATFORM_TTGO
-#define PLATFORM_CYD24
-```
-
-**For CYD 2.8":**
-```cpp
-#define PLATFORM_CYD28
-// #define PLATFORM_TTGO
-// #define PLATFORM_CYD24
-// #define PLATFORM_ESP32S3_SUPERMINI
-```
-
-**For ESP32-S3 Super Mini:**
-```cpp
-//#define PLATFORM_CYD28
-// #define PLATFORM_TTGO
-// #define PLATFORM_CYD24
-#define PLATFORM_ESP32S3_SUPERMINI
-```
-
-**⚠️ Note**: Only ONE platform can be active! Make sure the other three lines are commented out with `//`.
-
-#### Optional: Set Default Language
-
-You can optionally set the default language in `platform_config.h`. This will be used as a fallback if no language has been saved in Preferences yet (e.g., on first boot).
-
-**Location**: In `platform_config.h`, find the language setting (around line 10-12):
-
-```cpp
-// Standaard taal instelling (0 = Nederlands, 1 = English)
-#ifndef DEFAULT_LANGUAGE
-#define DEFAULT_LANGUAGE 0  // 0 = Nederlands, 1 = English
-#endif
-```
-
-**Options**:
-- `0` = Dutch (Nederlands) - Default
-- `1` = English
-
-**Note**: You can always change the language later via the web interface. This setting is only used as a fallback on first boot.
-
-### Step 3: Install Libraries
-
-Install the required libraries via Arduino Library Manager:
-   - **LVGL** (v9.2.2 or higher) - Required for all platforms
-   - **WiFiManager** - Required for all platforms
-   - **PubSubClient3** - Required for all platforms
-   - **Arduino_GFX** - Required for all platforms
-   - **XPT2046_Touchscreen** - Only required for CYD 2.4" and 2.8" (not needed for TTGO)
-
-### Step 4: Upload to ESP32
-
-1. Open `UNIFIED-LVGL9-Crypto_Monitor.ino` in Arduino IDE
-2. Select your ESP32 board in Tools → Board
-3. Select the correct port in Tools → Port
-4. Click Upload
-
-### Step 5: First Boot
-
-On first boot:
-   - Connect to the WiFi Access Point that is created
-   - Configure your WiFi credentials via the web interface
-   - Configure MQTT and NTFY settings (optional)
-
-## Screenshots
-
-The following screenshots show the different screens of the application:
-
-### Startup Screen
-![Startup Screen](images/startup.png)
-
-### WiFi Configuration Screen
-![WiFi Configuration Screen](images/wifi_config.png)
-
-### WiFi Connected Screen
-![WiFi Connected Screen](images/wifi_connected.png)
-
-### Main Screen
-![Main Screen](images/main_screen.png)
-
-**Note**: To add screenshots to your repository:
-1. Create an `images` folder in the root of the project
-2. Place your screenshot images in this folder with the names shown above
-3. Supported formats: PNG, JPG, or GIF
-4. Recommended size: 800-1200px width for best display on GitHub
-
-## Configuration
-
-### Web Interface
-
-After the first WiFi setup, you can access the web interface at the IP address shown on the display.
-
-**Access**: Open your browser and go to `http://<IP-address>` (e.g. `http://192.168.1.50`)
-
-The web interface provides a clear, dark interface with all settings grouped in sections:
-
-#### Language Selection
-- **Language**: Choose between Dutch (Nederlands) or English
-  - This setting affects all texts on the display and in the web interface
-  - The language is saved in Preferences and persists after reboot
-  - You can also set a default language in `platform_config.h` (see Installation section)
-
-#### Basic Settings
-- **NTFY Topic**: Your NTFY.sh topic name for notifications
-- **Binance Symbol**: The trading pair you want to monitor (e.g. BTCEUR, BTCUSDT, ETHUSDT)
-
-#### Spike & Move Alerts
-Configure when you want to receive alerts for rapid price movements (defaults optimized based on measurements):
-
-- **1m Spike - ret_1m threshold (%)**: Threshold for 1-minute spike alerts (default: 0.28%)
-  - *Optimized*: Based on noise maxima to prevent too many alerts
-- **5m Spike Filter - ret_5m filter (%)**: Filter to prevent false alerts (default: 0.65%)
-  - *Optimized*: Matches current volatility patterns
-  - *Explanation*: Both conditions must be true for an alert
-- **30m Move - ret_30m threshold (%)**: Threshold for 30-minute move alerts (default: 1.3%)
-  - *Optimized*: 0.8% was too sensitive on quiet days
-- **5m Move Filter - ret_5m filter (%)**: Filter for 5-minute moves (default: 0.40%)
-  - *Optimized*: More sensitive to momentum build-up
-- **5m Move Alert - threshold (%)**: Threshold for 5-minute move alerts (default: 0.8%)
-  - *Optimized*: Historically often occurs at trend start
-
-#### Cooldowns
-Time between notifications to prevent spam (defaults optimized based on measurements):
-
-- **1-minute spike cooldown (seconds)**: Time between 1m spike alerts (default: 90 = 1.5 minutes)
-  - *Optimized*: Less spam during fast pumps
-- **30-minute move cooldown (seconds)**: Time between 30m move alerts (default: 900 = 15 minutes)
-  - *Optimized*: Large moves need longer rest periods
-- **5-minute move cooldown (seconds)**: Time between 5m move alerts (default: 420 = 7 minutes)
-  - *Optimized*: Faster second signal on breakouts
-
-#### MQTT Settings
-Configure your MQTT broker for integration with Home Assistant or other systems:
-
-- **MQTT Host (IP)**: IP address of your MQTT broker (e.g. `192.168.1.100`)
-- **MQTT Port**: Port of your MQTT broker (default: `1883` for unencrypted, `8883` for SSL)
-- **MQTT User**: Username for MQTT authentication (optional)
-- **MQTT Password**: Password for MQTT authentication (optional)
-
-**Note**: Leave user and password empty if your MQTT broker doesn't require authentication.
-
-#### Trend & Volatility Settings
-- **Trend Threshold (%)**: Percentage difference for trend detection (default: 1.2%)
-  - *Optimized*: Reduces false trend switches
-  - Above this value = UP, below = DOWN, otherwise = SIDEWAYS
-- **Volatility Low Threshold (%)**: Below this value market is CALM (default: 0.05%)
-  - *Optimized*: Better detection of quiet night hours
-- **Volatility High Threshold (%)**: Above this value market is VOLATILE (default: 0.15%)
-  - *Optimized*: Good detection during peak activity
-
-#### Anchor Settings
-- **Anchor Value (EUR)**: Set the anchor price value
-  - Enter a custom value (default: current price is pre-filled)
-  - Leave empty to use the current price
-  - Click "Set Anchor" button to apply immediately (separate from saving other settings)
-- **Anchor Take Profit (%)**: Percentage above anchor for profit notification (default: 5.0%)
-- **Anchor Max Loss (%)**: Percentage below anchor for loss notification (default: -3.0%)
-
-**Note**: The anchor value can be set via:
-- **Web Interface**: Enter value and click "Set Anchor" button
-- **Physical Button** (TTGO only): Press reset button (GPIO 0)
-- **Touchscreen** (CYD only): Tap on the BTCEUR price card
-- **MQTT**: Send value to `{prefix}/config/anchorValue/set` topic (see MQTT section)
-
-**Save**: Click "Save" to save all settings. The device will automatically reconnect to MQTT if settings have changed.
-
-### Language Settings
-
-The device supports two languages: **Dutch (Nederlands)** and **English**. All texts are translated, including:
-
-**Display Texts**:
-- WiFi setup screens ("Connecting to WiFi", "Configure WiFi", etc.)
-- Trend indicators (UP/DOWN/SIDEWAYS or OMHOOG/OMLAAG/ZIJWAARTS)
-- Volatility indicators (CALM/MEDIUM/VOLATILE or RUSTIG/GEMIDDELD/VOLATIEL)
-- "Wait Xm" messages
-
-**Web Interface**:
-- All labels and field names
-- All help texts and explanations
-- All section headers
-- All buttons and messages
-
-**How to Change Language**:
-1. **Via Web Interface** (Recommended):
-   - Go to the web interface
-   - Select your preferred language from the dropdown at the top
-   - Click "Save"
-   - The language is saved and will persist after reboot
-
-2. **Via platform_config.h** (Default only):
-   - Edit `platform_config.h`
-   - Set `DEFAULT_LANGUAGE` to `0` (Dutch) or `1` (English)
-   - This only affects the initial language on first boot
-   - After first boot, the language from Preferences takes precedence
-
-**Note**: The language setting is stored in Preferences, so it persists across reboots. The `DEFAULT_LANGUAGE` in `platform_config.h` is only used as a fallback if no language has been saved yet.
-
-### Settings Explanation
-
-#### Binance Symbol
-- **What it does**: Determines which cryptocurrency is monitored
-- **Default**: `BTCEUR` (Bitcoin in Euro)
-- **Examples**: `BTCUSDT`, `ETHUSDT`, `ADAUSDT`, etc.
-- **Usage**: Enter the symbol as used on Binance
-
-#### NTFY Topic
-- **What it does**: The topic on which notifications are sent via NTFY.sh
-- **Default**: Automatically generated as `[ESP32-ID]-alert` (e.g. `9MK28H3Q-alert`)
-  - The ESP32-ID is unique per device (8 characters using Crockford Base32 encoding)
-  - Uses safe character set without confusing characters (no 0/O, 1/I/L, U)
-  - Character set: `0123456789ABCDEFGHJKMNPQRSTVWXYZ`
-  - The ESP32-ID is displayed on the device screen for easy reference
-- **Usage**: The default topic is already unique per device, but you can change it in the web interface if needed
-- **Important**: 
-  - Each device automatically gets a unique topic, preventing conflicts between multiple devices
-  - **This is the topic you need to subscribe to in the NTFY app to receive notifications on your mobile**
-
-#### MQTT Settings
-- **MQTT Host**: IP address of your MQTT broker (e.g. `192.168.1.100` or `mqtt.example.com`)
-- **MQTT Port**: Port of your MQTT broker (default: `1883` for unencrypted, `8883` for SSL)
-- **MQTT User**: Username for MQTT authentication
-- **MQTT Password**: Password for MQTT authentication
-- **Usage**: Leave empty if you don't use MQTT (optional)
-
-#### Thresholds
-These determine when you receive notifications for rapid price movements:
-
-- **1 Min Up**: Notification on rising trend > X% per minute (default: `0.5%`)
-  - *Example*: At 0.5% you get a notification if the price rises more than 0.5% in 1 minute
-  
-- **1 Min Down**: Notification on falling trend < -X% per minute (default: `-0.5%`)
-  - *Example*: At -0.5% you get a notification if the price falls more than 0.5% in 1 minute
-
-- **30 Min Up**: Notification on rising trend > X% per 30 minutes (default: `2.0%`)
-  - *Example*: At 2.0% you get a notification if the price rises more than 2% in 30 minutes
-
-- **30 Min Down**: Notification on falling trend < -X% per 30 minutes (default: `-2.0%`)
-  - *Example*: At -2.0% you get a notification if the price falls more than 2% in 30 minutes
-
-#### Anchor Settings
-Settings for the anchor price functionality:
-
-- **Take Profit**: Percentage above anchor price for profit notification (default: `5.0%`)
-  - *Example*: If you set anchor at €50,000 and take profit at 5%, you get a notification at €52,500
-  
-- **Max Loss**: Percentage below anchor price for loss notification (default: `-3.0%`)
-  - *Example*: If you set anchor at €50,000 and max loss at -3%, you get a notification at €48,500
-
-- **Trend Threshold**: Percentage difference for trend detection (default: `1.2%`)
-  - *Optimized*: Reduces false trend switches
-  - Determines when a trend is considered "UP" or "DOWN" (vs "SIDEWAYS")
-
-#### Volatility Thresholds
-Determine when the market is considered calm, medium or volatile (defaults optimized based on measurements):
-
-- **Low Threshold**: Below this value the market is "CALM" (default: `0.05%`)
-  - *Optimized*: Better detection of quiet night hours
-- **High Threshold**: Above this value the market is "VOLATILE" (default: `0.15%`)
-  - *Optimized*: Good detection during peak activity
-- Between these values the market is "MEDIUM"
-
-### Advanced Configuration (Code Level)
-
-For developers who want to modify the code, there are several configuration options available in `UNIFIED-LVGL9-Crypto_Monitor.ino`:
-
-#### Debug Configuration
-- **`DEBUG_BUTTON_ONLY`** (line ~38): Controls Serial output
-  - Set to `1` (default): Only button actions are logged to Serial
-  - Set to `0`: All debug messages are logged (useful for troubleshooting)
-  - **Note**: Reducing Serial output improves performance and reduces memory usage
-
-#### Atomic Operations
-- **`atomic.h`**: Included wrapper for thread-safe operations
-  - Provides atomic operations for ESP32 dual-core systems
-  - Prevents race conditions when accessing shared variables between cores/tasks
-  - Automatically included in the project
-
-#### Other Configuration Options
-- **`SCREEN_BRIGHTNESS`**: Display brightness (0-255, default: 255)
-- **`SYMBOL_COUNT`**: Number of symbols to track (default: 3)
-- **`HTTP_TIMEOUT_MS`**: HTTP request timeout (default: 4000ms)
-- **`UPDATE_API_INTERVAL`**: API update frequency (default: 2000ms)
-- **`UPDATE_UI_INTERVAL`**: UI update frequency (default: 1000ms)
-
-**Note**: After modifying these settings, you need to recompile and upload the code to the ESP32.
-
-## Display Overview
-
-### What is displayed?
-
-The display shows real-time cryptocurrency information in a clear layout:
-
-#### Top Section (Header)
-- **Date and Time**: Current date and time (right-aligned)
-  - **CYD**: Format `dd-mm-yyyy` (e.g. "26-01-2025")
-  - **TTGO**: Format `dd-mm-yy` (e.g. "26-01-25") - compact format for lower resolution
-- **Version Number**: Software version (center)
-- **Chart Title**: First letters of your NTFY topic (CYD) or first letters on line 2 (TTGO)
-
-#### Chart Section
-- **Live Price Chart**: 
-  - 60 data points (2 minutes history at 2000ms API interval)
-  - Blue line shows price movement
-  - Automatic scale adjustment
-- **Trend Indicator**: Top-left in the chart
-  - 🟢 **UP** (green): Rising trend (>1.2% over 2 hours)
-  - 🔴 **DOWN** (red): Falling trend (<-1.2% over 2 hours)
-  - ⚪ **SIDEWAYS** (gray): No clear trend
-  - Shows "Wait Xm" if there's not enough data yet (minimum 2 hours needed)
-- **Volatility Indicator**: Bottom-left in the chart
-  - 🟢 **CALM** (green): <0.05% average movement
-  - 🟠 **MEDIUM** (orange): 0.05% - 0.15% average movement
-  - 🔴 **VOLATILE** (red): >0.15% average movement
-  - Available immediately from first minute
-
-#### Price Cards (3 blocks)
-
-**1. BTCEUR Card (Main Price)**
-- **Title**: Cryptocurrency symbol (e.g. BTCEUR)
-- **Current Price**: Real-time price (blue)
-- **Anchor Price Info**:
-  - **CYD**: Right-aligned, vertically centered:
-    - Top (green): Take profit price with percentage (e.g. "+5.00% 52500.00")
-    - Middle (orange): Anchor price with percentage difference (e.g. "+2.50% 51250.00")
-    - Bottom (red): Stop loss price with percentage (e.g. "-3.00% 48500.00")
-  - **TTGO**: Right-aligned, vertically centered (without percentages):
-    - Top (green): Take profit price (e.g. "52500.00")
-    - Middle (orange): Anchor price (e.g. "50000.00")
-    - Bottom (red): Stop loss price (e.g. "48500.00")
-- **Interaction**: 
-  - **CYD**: Tap on the block to set anchor price
-  - **TTGO**: Press reset button (GPIO 0) to set anchor price
-
-**2. 1 Minute Card**
-- **Title**: "1m" (TTGO) or "1 min" (CYD)
-- **Percentage**: 1-minute return percentage (price change vs 1 minute ago)
-- **Right-aligned**:
-  - Top (green): Max price in last minute
-  - Middle (gray): Difference between max and min
-  - Bottom (red): Min price in last minute
-
-**3. 30 Minutes Card**
-- **Title**: "30m" (TTGO) or "30 min" (CYD)
-- **Percentage**: 30-minute return percentage (price change vs 30 minutes ago)
-- **Right-aligned**:
-  - Top (green): Max price in last 30 minutes
-  - Middle (gray): Difference between max and min
-  - Bottom (red): Min price in last 30 minutes
-
-#### Footer Section
-- **CYD**: Shows IP address, WiFi signal strength (dBm) and available RAM (kB)
-  - Example: `IP: 192.168.1.50   -45dBm   RAM: 125kB`
-- **TTGO**: Shows only IP address (due to limited space)
-  - Example: `192.168.1.50`
-
-## Difference between CYD and TTGO Display
-
-### CYD 2.4" / 2.8" Display (240x320 pixels)
-
-**Layout Features:**
-- **Spacious layout** with more details
-- **Chart Title**: Large title above the chart with first letters of NTFY topic
-- **Date/Time/Version**: All three on the same line right-aligned (version at 120px, date at 180px, time at 240px)
-- **Chart**: 240px wide, 80px high
-- **Font Sizes**: Larger for better readability
-  - BTCEUR title: 18px
-  - BTCEUR price: 16px
-  - Anchor labels: 14px
-- **Anchor Display**: With percentages (e.g. "+5.00% 52500.00")
-- **Footer**: Extended with IP, WiFi signal strength and RAM usage
-- **Touchscreen**: Interaction via touch (tap BTCEUR block for anchor)
-
-### TTGO T-Display (135x240 pixels)
-
-**Layout Features:**
-- **Compact layout** optimized for small screen
-- **No Chart Title**: First letters are on line 2 left (instead of above chart)
-- **Date/Time/Version**: Compact on 2 lines
-  - Line 1: Date right, Trend indicator left
-  - Line 2: First letters left, Version center, Time right, Volatility left
-- **Chart**: 135px wide, 60px high (smaller but still clear)
-- **Font Sizes**: Smaller for compact display
-  - BTCEUR title: 14px
-  - BTCEUR price: 12px
-  - Anchor labels: 10px
-- **Anchor Display**: Prices only without percentages (e.g. "52500.00")
-- **Footer**: Only IP address (no room for extra info)
-- **Physical Button**: Reset button (GPIO 0) for anchor functionality
-
-### Main Differences Summary
-
-| Feature | CYD | TTGO |
-|---------|-----|------|
-| Screen size | 240x320 | 135x240 |
-| Chart title | Above chart | On line 2 left |
-| Date/time layout | 1 line, 3 items | 2 lines, compact |
-| Font sizes | Larger (14-18px) | Smaller (10-14px) |
-| Anchor display | With percentages | Prices only |
-| Footer | IP + RSSI + RAM | IP only |
-| Interaction | Touchscreen | Physical button |
-| Chart size | 240x80 | 135x60 |
-
-Both layouts show the same information, but the TTGO version is optimized for the smaller screen with a more compact display and smaller fonts.
-
-## Platform-specific Features
-
-### TTGO T-Display
-- Compact layout adapted for small screen (135x240)
-- Physical reset button for anchor price
-- IP address only in footer
-
-### CYD 2.4" / 2.8"
-- Spacious layout with more details
-- Touchscreen interaction via dedicated "Klik Vast" button
-- Two-line footer: WiFi signal/RAM (line 1), IP/version (line 2)
-
-### ESP32-S3 Super Mini
-- Square 240x240 display layout (240px vertical, same as TTGO)
-- Physical reset button for anchor price (GPIO 0)
-- Compact layout similar to TTGO (optimized for 240px vertical resolution)
-- Date format: dd-mm-yy (compact format like TTGO)
-
-## NTFY.sh Setup and Usage
-
-### What is NTFY.sh?
-
-NTFY.sh is a free, open-source push notification service. It allows you to receive notifications on your phone, tablet or computer without needing to run your own server.
-
-### Install NTFY App
-
-1. **Android/iOS**: Install the official NTFY app from the Play Store or App Store
-2. **Desktop**: Download the desktop app from [ntfy.sh/apps](https://ntfy.sh/apps)
-
-### Set NTFY Topic
-
-**Automatic Unique Topic Generation**:
-- By default, the device automatically generates a unique NTFY topic using your ESP32's unique ID
-- Format: `[ESP32-ID]-alert` (e.g. `9MK28H3Q-alert`)
-- The ESP32-ID is derived from the device's MAC address using Crockford Base32 encoding (8 characters)
-- Uses safe character set: `0123456789ABCDEFGHJKMNPQRSTVWXYZ` (no confusing 0/O, 1/I/L, U)
-- Provides 2^40 = 1.1 trillion possible combinations, ensuring uniqueness
-- The ESP32-ID is displayed on the device screen (in the chart title area for CYD, or on line 2 for TTGO)
-
-**Manual Configuration**:
-1. **Via Web Interface** (Recommended):
-   - Go to your device's web interface
-   - The default topic is already set with your unique ESP32 ID
-   - You can change it if needed in "NTFY Topic"
-   - **Important**: This is the NTFY topic you need to subscribe to in the NTFY app to receive notifications on your mobile
-   - Save the settings
-
-2. **Subscribe to the topic in NTFY app**:
-   - Open the NTFY app
-   - Click "Subscribe to topic"
-   - Enter your topic name (shown on the device display or in web interface)
-   - Example: If your ESP32-ID is `9MK28H3Q`, subscribe to `9MK28H3Q-alert`
-   - Click "Subscribe"
-
-**Note**: The ESP32-ID is displayed on the device screen, making it easy to identify which topic to subscribe to in the NTFY app.
-
-### Notification Types
-
-The device sends the following types of notifications:
-
-#### 1. Trend Change Notifications
-- **When**: On trend change (UP ↔ DOWN ↔ SIDEWAYS)
-- **Cooldown**: Maximum 1x per 10 minutes (to prevent spam)
-- **Content**: 
-  - Old and new trend
-  - 2-hour return percentage
-  - 30-minute return percentage
-  - Current volatility status
-- **Example**: 
-  ```
-  Title: "Trend Change: SIDEWAYS → UP"
-  Message: "2h: +1.5% | 30m: +0.8% | Vol: MEDIUM"
-  ```
-- **Color**: Green for UP, red for DOWN, gray for SIDEWAYS
-
-#### 2. 1-Minute Spike Notifications
-- **When**: Rapid price movement in 1 minute
-- **Conditions**:
-  - 1-minute return > threshold (rise) OR < threshold (fall)
-  - 5-minute return as filter (to prevent false alerts)
-- **Cooldown**: Maximum 1x per 10 minutes
-- **Limit**: Maximum 6 notifications per hour
-- **Example**:
-  ```
-  Title: "1m Spike: +0.8%"
-  Message: "Price: €52,450.00 (was €52,030.00)"
-  ```
-- **Color**: Green for rise, red for fall
-
-#### 3. 30-Minute Move Notifications
-- **When**: Significant price movement over 30 minutes
-- **Conditions**:
-  - 30-minute return > threshold (rise) OR < threshold (fall)
-  - 5-minute return as filter
-- **Cooldown**: Maximum 1x per 10 minutes
-- **Limit**: Maximum 6 notifications per hour
-- **Example**:
-  ```
-  Title: "30m Move: +2.5%"
-  Message: "Price: €53,125.00 (was €51,840.00)"
-  ```
-- **Color**: Green for rise, red for fall
-
-#### 4. 5-Minute Move Notifications
-- **When**: Significant price movement over 5 minutes
-- **Conditions**: 5-minute return > threshold
-- **Cooldown**: Maximum 1x per 10 minutes
-- **Limit**: Maximum 6 notifications per hour
-- **Example**:
-  ```
-  Title: "5m Move: +1.2%"
-  Message: "Price: €52,622.40"
-  ```
-- **Color**: Green for rise, red for fall
-
-#### 5. Anchor Price Notifications
-- **Take Profit**: 
-  - **When**: Price reaches take profit percentage above anchor price
-  - **Example**: Anchor €50,000, take profit 5% → notification at €52,500
-  - **Content**: Anchor price, current price, profit percentage
-  - **Color**: Green with 💰 emoji
-  - **One-time**: Only sent once per anchor
-  
-- **Max Loss (Stop Loss)**: 
-  - **When**: Price reaches max loss percentage below anchor price
-  - **Example**: Anchor €50,000, max loss -3% → notification at €48,500
-  - **Content**: Anchor price, current price, loss percentage
-  - **Color**: Red with ⚠️ emoji
-  - **One-time**: Only sent once per anchor
-
-### Notification Settings Tips
-
-- **Fewer notifications**: Increase threshold values (e.g. 1 Min Up from 0.5% to 1.0%)
-- **More notifications**: Decrease threshold values (e.g. 1 Min Up from 0.5% to 0.3%)
-- **Only important movements**: Use only 30-minute notifications
-- **Fast alerts**: Use 1-minute notifications for quick reactions
-- **Anchor tracking**: Set anchor price for important price levels you want to monitor
-
-### NTFY Topic Security (Optional)
-
-For extra security, you can secure your topic with a password:
-
-1. Go to [ntfy.sh](https://ntfy.sh) and create an account
-2. Create a secured topic with password
-3. In NTFY app: Add the password when subscribing
-
-**Note**: The default NTFY.sh service is public - anyone with your topic name can see your notifications. 
-- **Good news**: Each device automatically gets a unique topic based on its ESP32 ID (e.g. `a1b2c3-alert`), making conflicts very unlikely
-- For extra security, you can still secure your topic with a password (see above)
-
-### Troubleshooting NTFY
-
-- **Not receiving notifications?**
-  - Check if you're correctly subscribed to the right topic
-  - Check if the topic name matches exactly (case-sensitive)
-  - Check your internet connection on the device
-  
-- **Notifications arriving late?**
-  - NTFY.sh uses free servers that can sometimes have delays
-  - For better performance you can run your own NTFY server
-
-## MQTT Integration
-
-### MQTT Topics
-
-The device publishes to the following topics (prefix is platform-specific: `ttgo_crypto`, `cyd24_crypto`, `cyd28_crypto`, or `esp32s3_crypto`):
-
-#### Data Topics (Read-only)
-- `{prefix}/values/price` - Current price (float, e.g. `52345.67`)
-- `{prefix}/values/return_1m` - 1 minute return percentage (float, e.g. `0.25`)
-- `{prefix}/values/return_5m` - 5 minute return percentage (float, e.g. `0.50`)
-- `{prefix}/values/return_30m` - 30 minute return percentage (float, e.g. `1.25`)
-- `{prefix}/values/timestamp` - Unix timestamp in milliseconds
-
-#### Status Topics
-- `{prefix}/trend` - Trend state (string: "UP", "DOWN", or "SIDEWAYS")
-- `{prefix}/volatility` - Volatility state (string: "LOW", "MEDIUM", or "HIGH")
-- `{prefix}/anchor/event` - Anchor events (JSON with event type, price and timestamp)
-
-#### Config Topics (Read/Write)
-These topics can be read (current value) and written (to change):
-
-- `{prefix}/config/spike1m` - 1m spike threshold (float)
-- `{prefix}/config/spike5m` - 5m spike filter (float)
-- `{prefix}/config/move30m` - 30m move threshold (float)
-- `{prefix}/config/move5m` - 5m move filter (float)
-- `{prefix}/config/move5mAlert` - 5m move alert threshold (float)
-- `{prefix}/config/cooldown1min` - 1m cooldown in seconds (integer)
-- `{prefix}/config/cooldown30min` - 30m cooldown in seconds (integer)
-- `{prefix}/config/cooldown5min` - 5m cooldown in seconds (integer)
-- `{prefix}/config/binanceSymbol` - Binance symbol (string)
-- `{prefix}/config/ntfyTopic` - NTFY topic (string)
-- `{prefix}/config/anchorTakeProfit` - Anchor take profit % (float)
-- `{prefix}/config/anchorMaxLoss` - Anchor max loss % (float)
-- `{prefix}/config/anchorValue` - Anchor price value in EUR (float)
-- `{prefix}/config/trendThreshold` - Trend threshold % (float)
-- `{prefix}/config/volatilityLowThreshold` - Volatility low threshold % (float)
-- `{prefix}/config/volatilityHighThreshold` - Volatility high threshold % (float)
-- `{prefix}/config/language` - Language setting (string: "0" = Nederlands, "1" = English)
-
-**To change a setting**: Publish the new value to `{prefix}/config/{setting}/set`
-
-**Example**: To change the 1m spike threshold to 0.5%:
-```bash
-mosquitto_pub -h 192.168.1.100 -t "ttgo_crypto/config/spike1m/set" -m "0.5"
-```
-
-**Example**: To set anchor value to 78650.00 EUR:
-```bash
-mosquitto_pub -h 192.168.1.100 -t "ttgo_crypto/config/anchorValue/set" -m "78650.00"
-```
-
-**Example**: To set anchor to current price:
-```bash
-mosquitto_pub -h 192.168.1.100 -t "ttgo_crypto/config/anchorValue/set" -m "current"
-```
-
-#### Control Topics
-- `{prefix}/button/reset/set` - Publish "PRESS" to set anchor price to current price (string)
-
-### Home Assistant Integration
-
-The device supports **MQTT Auto Discovery** for Home Assistant. This means your device is automatically detected and added to Home Assistant!
-
-#### Automatic Detection
-
-1. **Make sure MQTT is configured** in the web interface
-2. **Make sure MQTT Broker is configured** in Home Assistant
-3. **Start the device** - it automatically publishes discovery messages
-4. **Go to Home Assistant** → Settings → Devices & Services → MQTT
-5. **Click "Configure"** on your MQTT integration
-6. Your device should automatically appear under "Discovered MQTT devices"
-
-#### Available Entities in Home Assistant
-
-After detection you get the following entities:
-
-**Sensors (Read-only)**:
-- `sensor.{device_id}_price` - Current cryptocurrency price
-- `sensor.{device_id}_return_1m` - 1 minute return percentage
-- `sensor.{device_id}_return_5m` - 5 minute return percentage
-- `sensor.{device_id}_return_30m` - 30 minute return percentage
-- `sensor.{device_id}_anchor_event` - Anchor events (JSON)
-
-**Numbers (Read/Write)**:
-- `number.{device_id}_spike1m` - 1m spike threshold
-- `number.{device_id}_spike5m` - 5m spike filter
-- `number.{device_id}_move30m` - 30m move threshold
-- `number.{device_id}_move5m` - 5m move filter
-- `number.{device_id}_move5mAlert` - 5m move alert threshold
-- `number.{device_id}_cooldown1min` - 1m cooldown (seconds)
-- `number.{device_id}_cooldown30min` - 30m cooldown (seconds)
-- `number.{device_id}_cooldown5min` - 5m cooldown (seconds)
-- `number.{device_id}_anchorTakeProfit` - Anchor take profit %
-- `number.{device_id}_anchorMaxLoss` - Anchor max loss %
-- `number.{device_id}_anchorValue` - Anchor price value in EUR
-- `number.{device_id}_trendThreshold` - Trend threshold %
-- `number.{device_id}_volatilityLowThreshold` - Volatility low threshold %
-- `number.{device_id}_volatilityHighThreshold` - Volatility high threshold %
-
-**Text (Read/Write)**:
-- `text.{device_id}_binanceSymbol` - Binance symbol
-- `text.{device_id}_ntfyTopic` - NTFY topic
-
-**Select (Read/Write)**:
-- `select.{device_id}_language` - Language selection (0 = Nederlands, 1 = English)
-
-**Button**:
-- `button.{device_id}_reset` - Reset anchor price (click to set anchor)
-
-#### Home Assistant Automations
-
-You can create automations based on MQTT data:
-
-**Example 1: Notification on high price**
-```yaml
-automation:
-  - alias: "Crypto Price Alert"
-    trigger:
-      - platform: numeric_state
-        entity_id: sensor.ttgo_crypto_xxxxx_price
-        above: 55000
-    action:
-      - service: notify.mobile_app
-        data:
-          message: "Bitcoin price is above €55,000!"
-```
-
-**Example 2: Notification on rapid fall**
-```yaml
-automation:
-  - alias: "Crypto Crash Alert"
-    trigger:
-      - platform: numeric_state
-        entity_id: sensor.ttgo_crypto_xxxxx_return_1m
-        below: -1.0
-    action:
-      - service: notify.mobile_app
-        data:
-          message: "Warning: Rapid fall detected!"
-```
-
-**Example 3: Dashboard Card**
-Add a card to your dashboard:
-```yaml
-type: entities
-entities:
-  - entity: sensor.ttgo_crypto_xxxxx_price
-    name: Bitcoin Price
-  - entity: sensor.ttgo_crypto_xxxxx_return_30m
-    name: 30 Min Return
-  - entity: sensor.ttgo_crypto_xxxxx_trend
-    name: Trend
-```
-
-#### Manual MQTT Configuration (without Auto Discovery)
-
-If Auto Discovery doesn't work, you can manually add sensors in Home Assistant:
-
-1. Go to Configuration → Integrations → MQTT → Configure
-2. Click "Add Entry"
-3. Add a sensor with:
-   - **Topic**: `ttgo_crypto/values/price` (or your prefix)
-   - **Name**: `Crypto Price`
-   - **State Topic**: `ttgo_crypto/values/price`
-   - **Unit of Measurement**: `EUR`
-
-### MQTT Usage without Home Assistant
-
-MQTT is optional and can also be used with other systems such as:
-- **Node-RED**: For advanced automations
-- **OpenHAB**: Home automation platform
-- **Grafana**: For data visualization
-- **Custom scripts**: Python, Node.js, etc.
-
-If you don't use MQTT, you can leave the MQTT settings empty in the web interface.
-
-## Version History
-
-### Version 4.03
-- **2-hour Alert Thresholds**: New configurable thresholds for 2-hour alerts via web interface and MQTT
-  - Breakout/Breakdown: configurable margin, reset margin and cooldown
-  - Mean Reversion: configurable min distance, touch band and cooldown
-  - Range Compression: configurable threshold, reset and cooldown
-  - Anchor Context: configurable margin and cooldown
-- **2-hour Alert Notifications**: Five new notification types for 2-hour timeframe
-  - 2h Breakout Up: Price breaks above 2h high with configurable margin
-  - 2h Breakdown Down: Price breaks below 2h low with configurable margin
-  - Range Compression: 2h range becomes very small (< threshold%)
-  - Mean Reversion Touch: Price returns to 2h average after significant deviation
-  - Anchor Context: Anchor price lies outside 2h range
-- **Debug Logging**: Optional compile-time debug logging for 2h alerts (DEBUG_2H_ALERTS flag)
-- **Memory Optimizations**: Various buffers reduced to prevent DRAM overflow
-- **Code Optimizations**: Alert2HState struct optimized with bitfields (24 bytes instead of 32 bytes)
-
-### Version 4.02
-- **2-hour Box**: New price box for 2-hour timeframe (CYD 2.4" and 2.8" only)
-  - Shows min, max, diff and average price over last 2 hours
-  - Percentage return calculation based on average minute values
-  - Color coding based on price movement
-  - UI layout optimized for 320px screen width
-
-### Version 4.01
-- **2-Hour Box for CYD Platforms**: Added 2-hour (2h) price box for CYD 2.4" and CYD 2.8" platforms
-  - **CYD Only**: 2h box is only displayed on CYD 2.4" and CYD 2.8" (320px screen width)
-  - **Four Boxes**: BTCEUR, 1m, 30m, and 2h boxes are now displayed on CYD platforms
-  - **2h Box Features**:
-    - Percentage return over last 2 hours in the title
-    - Average price of last 2 hours bottom left
-    - Min/Max/Diff values on the right in the box (like 1m and 30m)
-  - **UI Optimizations**:
-    - Chart height reduced from 80px to 72px (8px smaller)
-    - Spacing between chart and BTCEUR box adjusted to 3px (consistent with other boxes)
-    - Font sizes for CYD platforms adjusted to ESP32-S3 values for better space utilization
-    - All four boxes and chart now fit perfectly within 320px screen width
-  - **Data Management**:
-    - `averagePrices[3]` is calculated based on available minutes (max 120)
-    - `prices[3]` contains 2-hour return percentage (ret_2h)
-    - Min/Max/Diff calculation via `findMinMaxInLast2Hours()` function
-- **Code Improvements**:
-  - Removed debug Serial.printf statements
-  - Better error handling for 2h data calculations
-  - Optimized memory usage for CYD platforms
-
-### Version 4.00
-- **Current Version**: Latest stable release
-
-### Version 3.62
-- **Anchor Value Setting via Web Interface and MQTT**:
-  - **Web Interface**: Added "Anchor Value (EUR)" input field with "Set Anchor" button in "Anchor Settings" section
-    - Default value is pre-filled with current price
-    - Can enter custom value or leave empty to use current price
-    - Button applies anchor immediately (separate from saving other settings)
-  - **MQTT Support**: Added `{prefix}/config/anchorValue/set` topic for setting anchor value
-    - Accepts numeric value (e.g. "78650.00") or "current" to use current price
-    - Home Assistant auto-discovery: `number.{device_id}_anchorValue` entity
-  - **Asynchronous Processing**: All anchor settings (web, MQTT, physical button) use queue for thread-safe processing
-  - **Improved Thread Safety**: Centralized `queueAnchorSetting()` helper function for all input methods
-  - **Better Error Handling**: Improved validation and error recovery
-- **Web Interface Improvements**:
-  - Reorganized sections: "General Settings" (Language, NTFY Topic, Binance Symbol) followed by "Anchor Settings"
-  - Anchor settings moved directly under General Settings for better organization
-  - Swapped order: "Trend & Volatility Settings" now comes before "MQTT Settings"
-- **Display Improvements**:
-  - **CYD**: Date format changed to `dd-mm-yyyy` (e.g. "26-01-2025") and position adjusted 2 pixels left
-  - **TTGO**: Date format remains `dd-mm-yy` (e.g. "26-01-25") for lower resolution compatibility
-
-### Version 3.61
-- **Web Interface Anchor Reset**: Added anchor value reset functionality via web interface
-  - Input field with current price as default
-  - Separate button for immediate anchor setting
-  - Asynchronous processing to prevent crashes
-
-### Version 3.50
-- **Code Quality & Reliability Improvements (Sprint 1)**:
-  - **Input Validation**: Added `safeAtof()` helper function with NaN/Inf validation for all float conversions (20 locations updated)
-  - **Range Checks**: Added range validation for all numeric MQTT and web inputs (spike/move thresholds, cooldowns)
-  - **Memory Optimization**: Refactored `httpGET()` and `parsePrice()` to use char arrays instead of String objects, reducing memory fragmentation
-  - **Code Simplification**: Refactored MQTT callback from nested if-else chain to lookup table structure (~140 lines → ~80 lines, much more readable)
-  - **HTTP Retry Logic**: Added automatic retry mechanism (max 2 retries) for temporary HTTP failures (timeouts, connection issues)
-  - Improved error handling and logging throughout
-  - Better reliability and robustness for network operations
-
-### Version 3.49
-- **Fixed 1m and 5m Return Calculations**: Fixed issue where 1m and 5m returns stayed at 0.00%
-  - Adjusted calculations to account for 2000ms API update interval
-  - 1m return now correctly uses 30 values (instead of 60) for 1 minute period
-  - 5m return now correctly uses 150 values (instead of 300) for 5 minute period
-  - Added `VALUES_FOR_1MIN_RETURN` and `VALUES_FOR_5MIN_RETURN` constants based on `UPDATE_API_INTERVAL`
-
-### Version 3.46
-- **MQTT Language Support**: Language setting (Nederlands/English) is now configurable via MQTT
-  - New MQTT topic: `{prefix}/config/language/set` (accepts "0" for Nederlands or "1" for English)
-  - Home Assistant auto-discovery: `select.{device_id}_language` entity
-  - Language changes are saved to Preferences and persist after reboot
-
-### Version 3.45
-- **Atomic Operations Support**: Added `atomic.h` wrapper for thread-safe operations on ESP32 dual-core
-- **Debug Configuration**: Added `DEBUG_BUTTON_ONLY` option to reduce Serial output (only button actions logged when enabled)
-- **Code Improvements**: Enhanced stability and performance optimizations
-
-### Version 3.44
-- (Version information to be documented)
-
-### Version 3.43
-- **Optimized Default Thresholds**: All default thresholds and cooldowns optimized based on measurements
-  - 1m Spike Threshold: 0.30% → 0.28% (based on noise maxima)
-  - 1m Cooldown: 600s → 90s (less spam in fast pumps)
-  - 5m Move Alert: 1.0% → 0.8% (historically often at trend start)
-  - 5m Move Filter: 0.5% → 0.40% (more sensitive to momentum)
-  - 5m Spike Filter: 0.60% → 0.65% (matches current volatility)
-  - 5m Cooldown: 600s → 420s (faster second signal on breakouts)
-  - 30m Move Threshold: 2.0% → 1.3% (0.8% was too sensitive)
-  - 30m Cooldown: 600s → 900s (large moves need longer rest)
-  - Trend Threshold: 1.0% → 1.2% (reduces false switches)
-  - Volatility High: 0.12% → 0.15% (good for peak activity)
-  - Volatility Low: 0.06% → 0.05% (better quiet night detection)
-
-### Version 3.42
-- **HTTP Client Optimizations**: Improved API call reliability
-  - Increased HTTP timeout: 2000ms → 4000ms
-  - Added connect timeout: 4000ms (faster failure on connection problems)
-  - Increased API interval: 1500ms → 2000ms (more room for slow networks and retries)
-  - Better error handling and logging for timeouts and connection issues
-
-### Version 3.41
-- **RGB LED Support Removed**: Reverted to version 3.39 (RGB LED caused display issues)
-
-### Version 3.40
-- **RGB LED Support**: Added RGB LED trend indication for CYD platforms
-  - Green for UP trend, Red for DOWN trend, Yellow for SIDEWAYS
-  - Only activates after 120 minutes of data for reliable trends
-  - Configurable brightness (default: 50%)
-
-### Version 3.39
-- **IP Address via MQTT**: IP address now published to Home Assistant
-  - New sensor: `sensor.{device_id}_ip_address`
-  - Automatically updates when IP changes
-  - Published with each value update
-
-### Version 3.38
-- **String Optimizations**: Replaced remaining String usage with char arrays
-  - WiFi IP address formatting (all `WiFi.localIP().toString()` calls)
-  - MQTT settings and values publishing
-  - Reduced memory fragmentation
-
-### Version 3.24
-- **TTGO Partition Scheme Fix**: Fixed flash size detection issue for TTGO T-Display
-  - TTGO now uses `huge_app` partition scheme with explicit `FlashSize=4M` setting
-  - Resolves "Detected size(4096k) smaller than the size in the binary image header(16384k)" error
-  - Upload script now correctly configures partition scheme per platform
-
-### Version 3.23
-- **SPI Frequency Configuration**: Explicitly set SPI frequencies in platform-specific header files
-  - TTGO T-Display: 27 MHz (PINS_TTGO_T_Display.h)
-  - CYD 2.8": 55 MHz (PINS_CYD-ESP32-2432S028-2USB.h)
-  - CYD 2.4": 40 MHz (PINS_CYD-ESP32-2432S024.h)
-
-### Version 3.22
-- **CYD Footer Redesign**: Two-line footer layout
-  - Line 1: WiFi signal strength (dBm) left, RAM (kB) right
-  - Line 2: IP address left, version number right
-- **Anchor Button**: Blue "Klik Vast" button below 30min box (80px wide, 0.66x of original)
-- **BTCEUR Box**: Touch functionality removed (now handled by dedicated button)
-- **Performance Improvements for CYD**:
-  - Increased UI task mutex timeout (50ms → 100ms) for better chart updates
-  - Increased LVGL handler frequency (5ms → 3ms) for smoother rendering
-  - Decreased API task mutex timeout (300ms → 200ms) for faster UI updates
-  - Reduces chart stuttering/hanging issues on CYD devices
-
-### Version 3.21
-- Touchscreen responsiveness improvements (5ms polling, PRESSED event support)
-- Touchscreen notification format aligned with physical button
-- LVGL deprecated define fix (LV_FS_DEFAULT_DRIVER_LETTER)
-
-## License
-
-MIT License - See `LICENSE` file for details.
-
-## Author
-
-Jan Pieter Duhen
-
-## Credits
-
-- **LVGL** - Graphics library for embedded systems
-- **Binance** - Cryptocurrency API
-- **Arduino_GFX** - Display drivers for ESP32
-- **WiFiManager** - WiFi configuration library
-- **PubSubClient3** - MQTT client library
-# ESP32-Crypto-Alert
+| Timeframe | Purpose |
+|---------|--------|
+| 1 minute | fast spikes |
+| 5 minutes | short moves |
+| 30 minutes | medium-term moves |
+| 2 hours | market structure & context |
+
+This helps separate noise from meaningful movement.
+
+---
+
+### Trend
+Based on **2-hour price change**, the system determines:
+- UP trend
+- DOWN trend
+- FLAT
+
+Trend information can influence risk settings and alert behavior.
+
+---
+
+### Volatility
+Volatility describes how calm or aggressive the market is.
+High volatility uses different thresholds than low volatility.
+
+The system can automatically adapt thresholds to volatility.
+
+---
+
+## How the system works (high level)
+1. ESP32 connects to WiFi
+2. Price data is fetched from Binance
+3. Data is stored in internal buffers
+4. Indicators are calculated
+5. Logic decides whether a situation is alert-worthy
+6. Notification is sent (if applicable)
+7. Current state is shown on the display
+
+---
+
+## Types of alerts
+The system can generate alerts such as:
+
+- ⚡ Fast price spikes (1m)
+- 📈 Short-term moves (5m)
+- 📊 Medium-term moves (30m)
+- 🔄 Mean reversion to 2h average
+- 📦 Volatility compression
+- 🚀 Breakout / breakdown relative to 2h high/low
+- 🎯 Price far outside anchor context
+- 💰 Take profit / max loss signals
+
+Cooldowns prevent alert spam.
+
+---
+
+## Configuration (conceptual)
+All settings are configurable through the web interface.
+
+You control:
+- sensitivity of alerts
+- percentage thresholds
+- cooldown times
+- risk boundaries
+- whether thresholds adapt automatically to volatility
+
+You **do not need to understand the internal formulas** to use the system effectively.
+
+---
+
+## What this project is NOT
+- ❌ not a trading bot
+- ❌ not an automated buy/sell system
+- ❌ not financial advice
+- ❌ not a high-frequency trading tool
+
+It is designed as a **decision-support and awareness tool**.
+
+---
+
+## Hardware
+Tested on:
+- ESP32 (CYD / ESP32-2432S028)
+- 240×320 TFT display
+- No PSRAM required
+
+The system is optimized for **limited-memory environments**.
+
+---
+
+## Installation (brief)
+- Flash the firmware
+- Connect to WiFi
+- Open the web interface
+- Configure your settings
+- Done
+
+See the installation section in this repository for details.
+
+---
+
+## Final note
+Use this system as:
+- an extra set of eyes
+- a context generator
+- a way to reduce emotional noise
+
+Not as an automated truth machine.

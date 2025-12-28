@@ -418,9 +418,13 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
         unsigned long requestStart = millis();
         
         // Normale URL flow (zoals voorheen, zonder DNS cache)
+        #if !DEBUG_BUTTON_ONLY
         Serial.printf(F("[API] Fetching price from: %s\n"), url);
+        #endif
         if (!http.begin(url)) {
+            #if !DEBUG_BUTTON_ONLY
             Serial.printf(F("[API] http.begin() gefaald voor URL: %s\n"), url);
+            #endif
             break;
         }
         

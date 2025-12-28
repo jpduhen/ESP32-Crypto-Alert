@@ -565,32 +565,75 @@ void WebServerModule::handleSave() {
     // M1: Rate-limited heap telemetry in web server (alleen bij "/save")
     logHeap("WEB_SAVE");
     
-    // Handle language setting
+    // Handle language setting - geoptimaliseerd: gebruik C-style i.p.v. String
     if (server->hasArg("language")) {
-        uint8_t newLanguage = server->arg("language").toInt();
-        if (newLanguage == 0 || newLanguage == 1) {
-            language = newLanguage;
+        const char* langStr = server->arg("language").c_str();
+        int langVal = atoi(langStr);
+        if (langVal == 0 || langVal == 1) {
+            language = static_cast<uint8_t>(langVal);
         }
     }
     
-    // Geoptimaliseerd: gebruik helper functie waar mogelijk
+    // Geoptimaliseerd: gebruik C-style string operaties i.p.v. String objecten
     if (server->hasArg("ntfytopic")) {
-        String topic = server->arg("ntfytopic");
-        topic.trim();
+        const char* topicStr = server->arg("ntfytopic").c_str();
+        char topicBuffer[64];
+        size_t topicLen = strlen(topicStr);
+        
+        if (topicLen >= sizeof(topicBuffer)) {
+            topicLen = sizeof(topicBuffer) - 1;
+        }
+        strncpy(topicBuffer, topicStr, topicLen);
+        topicBuffer[topicLen] = '\0';
+        
+        // Trim leading/trailing whitespace
+        char* start = topicBuffer;
+        while (*start == ' ' || *start == '\t') start++;
+        char* end = start + strlen(start) - 1;
+        while (end > start && (*end == ' ' || *end == '\t')) {
+            *end = '\0';
+            end--;
+        }
+        topicLen = strlen(start);
+        
         // Allow empty topic (will use default) or valid length topic
-        if (topic.length() == 0) {
-            // Generate default topic if empty
-            generateDefaultNtfyTopic(ntfyTopic, 64);
-        } else if (topic.length() < 64) {
-            topic.toCharArray(ntfyTopic, 64);
+        if (topicLen == 0) {
+                // Generate default topic if empty
+                generateDefaultNtfyTopic(ntfyTopic, 64);
+        } else if (topicLen < 64) {
+            strncpy(ntfyTopic, start, topicLen);
+            ntfyTopic[topicLen] = '\0';
         }
     }
     if (server->hasArg("binancesymbol")) {
-        String symbol = server->arg("binancesymbol");
-        symbol.trim();
-        symbol.toUpperCase(); // Binance symbolen zijn altijd uppercase
-        if (symbol.length() > 0 && symbol.length() < 16) {  // binanceSymbol is 16 bytes
-            symbol.toCharArray(binanceSymbol, 16);
+        const char* symbolStr = server->arg("binancesymbol").c_str();
+        char symbolBuffer[16];
+        size_t symbolLen = strlen(symbolStr);
+        
+        if (symbolLen >= sizeof(symbolBuffer)) {
+            symbolLen = sizeof(symbolBuffer) - 1;
+        }
+        strncpy(symbolBuffer, symbolStr, symbolLen);
+        symbolBuffer[symbolLen] = '\0';
+        
+        // Trim leading/trailing whitespace
+        char* start = symbolBuffer;
+        while (*start == ' ' || *start == '\t') start++;
+        char* end = start + strlen(start) - 1;
+        while (end > start && (*end == ' ' || *end == '\t')) {
+            *end = '\0';
+            end--;
+        }
+        symbolLen = strlen(start);
+        
+        if (symbolLen > 0 && symbolLen < 16) {  // binanceSymbol is 16 bytes
+            // Convert to uppercase and copy
+            for (size_t i = 0; i < symbolLen; i++) {
+                binanceSymbol[i] = (start[i] >= 'a' && start[i] <= 'z') 
+                    ? (start[i] - 'a' + 'A') 
+                    : start[i];
+            }
+            binanceSymbol[symbolLen] = '\0';
             // Update symbols array
             safeStrncpy(symbolsArray[0], binanceSymbol, 16);  // symbolsArray[0] is 16 bytes
         }
@@ -818,8 +861,8 @@ void WebServerModule::handleAnchorSet() {
         // Kopieer naar buffer (met lengte check)
         size_t len = anchorValueStr.length();
         if (len > 0 && len < sizeof(valueBuffer)) {
-            strncpy(valueBuffer, anchorValueStr.c_str(), sizeof(valueBuffer) - 1);
-            valueBuffer[sizeof(valueBuffer) - 1] = '\0';
+            strncpy(valueBuffer, anchorValueStr.c_str(), len);
+            valueBuffer[len] = '\0';
         }
         
         // Trim whitespace
@@ -1188,12 +1231,14 @@ bool WebServerModule::parseFloatArg(const char* argName, float& result, float mi
     return false;
 }
 
-// Helper: Parse int argument (geoptimaliseerd: elimineert code duplicatie)
+// Helper: Parse int argument (geoptimaliseerd: elimineert code duplicatie, gebruikt C-style i.p.v. String)
 bool WebServerModule::parseIntArg(const char* argName, int& result, int minVal, int maxVal) {
     if (!server || !server->hasArg(argName)) {
         return false;
     }
-    int val = server->arg(argName).toInt();
+    // Geoptimaliseerd: gebruik atoi() i.p.v. String.toInt()
+    const char* argStr = server->arg(argName).c_str();
+    int val = atoi(argStr);
     if (val >= minVal && val <= maxVal) {
         result = val;
         return true;
@@ -1201,15 +1246,40 @@ bool WebServerModule::parseIntArg(const char* argName, int& result, int minVal, 
     return false;
 }
 
-// Helper: Parse string argument (geoptimaliseerd: elimineert code duplicatie)
+// Helper: Parse string argument (geoptimaliseerd: elimineert code duplicatie, gebruikt C-style i.p.v. String)
 bool WebServerModule::parseStringArg(const char* argName, char* dest, size_t destSize) {
     if (!server || !server->hasArg(argName)) {
         return false;
     }
-    String str = server->arg(argName);
-    str.trim();
-    if (str.length() > 0 && str.length() < destSize) {
-        str.toCharArray(dest, destSize);
+    // Geoptimaliseerd: gebruik C-style string operaties i.p.v. String object
+    const char* str = server->arg(argName).c_str();
+    size_t strLen = strlen(str);
+    
+    if (strLen >= destSize) {
+        strLen = destSize - 1;
+    }
+    
+    // Copy to temp buffer for trimming
+    char tempBuffer[128];  // Max size for most string args
+    if (strLen >= sizeof(tempBuffer)) {
+        strLen = sizeof(tempBuffer) - 1;
+    }
+    strncpy(tempBuffer, str, strLen);
+    tempBuffer[strLen] = '\0';
+    
+    // Trim leading/trailing whitespace
+    char* start = tempBuffer;
+    while (*start == ' ' || *start == '\t') start++;
+    char* end = start + strlen(start) - 1;
+    while (end > start && (*end == ' ' || *end == '\t')) {
+        *end = '\0';
+        end--;
+    }
+    strLen = strlen(start);
+    
+    if (strLen > 0 && strLen < destSize) {
+        strncpy(dest, start, strLen);
+        dest[strLen] = '\0';
         return true;
     }
     return false;

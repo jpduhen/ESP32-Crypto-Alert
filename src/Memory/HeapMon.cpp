@@ -67,11 +67,13 @@ void logHeap(const char* tag) {
     }
     
     // Log alleen als rate limit niet is bereikt
+    #if !DEBUG_BUTTON_ONLY
     if (shouldLog) {
         HeapSnap snap = snapHeap();
         Serial.printf("[Heap] %s: free=%u largest=%u minFree=%u\n", 
                      tag, snap.freeHeap, snap.largestBlock, snap.minFreeHeap);
     }
+    #endif
 }
 
 void resetRateLimit(const char* tag) {

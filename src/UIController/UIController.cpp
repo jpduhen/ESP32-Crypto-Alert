@@ -110,10 +110,7 @@ extern lv_obj_t *ramLabel;
 extern void disableScroll(lv_obj_t *obj);
 extern const char* symbols[];
 // VERSION_STRING wordt gedefinieerd in platform_config.h (beschikbaar voor alle modules)
-// Hier alleen een fallback als het nog niet gedefinieerd is
-#ifndef VERSION_STRING
-#define VERSION_STRING "4.05"  // Fallback (wordt overschreven door platform_config.h)
-#endif
+// Geen fallback nodig omdat platform_config.h altijd wordt geïncludeerd
 extern void formatIPAddress(IPAddress ip, char* buffer, size_t bufferSize);
 // Fase 8.11.1: createFooter() dependencies (CYD platforms)
 extern lv_obj_t *lblFooterLine1;
@@ -541,7 +538,7 @@ void UIController::createPriceBoxes() {
             anchorLabel = lv_label_create(priceBox[i]);
             ::anchorLabel = anchorLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(anchorLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(anchorLabel, lv_palette_main(LV_PALETTE_ORANGE), 0);
+            lv_obj_set_style_text_color(anchorLabel, lv_palette_main(LV_PALETTE_GREY), 0);
             lv_obj_set_style_text_align(anchorLabel, LV_TEXT_ALIGN_RIGHT, 0);
             lv_obj_align(anchorLabel, LV_ALIGN_RIGHT_MID, 0, 0);
             lv_label_set_text(anchorLabel, "");
@@ -568,7 +565,7 @@ void UIController::createPriceBoxes() {
             anchorLabel = lv_label_create(priceBox[i]);
             ::anchorLabel = anchorLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(anchorLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(anchorLabel, lv_palette_main(LV_PALETTE_ORANGE), 0);
+            lv_obj_set_style_text_color(anchorLabel, lv_palette_main(LV_PALETTE_GREY), 0);
             lv_obj_set_style_text_align(anchorLabel, LV_TEXT_ALIGN_RIGHT, 0);
             lv_obj_align(anchorLabel, LV_ALIGN_RIGHT_MID, 0, 0);
             lv_label_set_text(anchorLabel, "");
@@ -1011,15 +1008,9 @@ void UIController::updateBTCEURCard(bool hasNewData)
         lastPriceLblValue = prices[0];
     }
     
-    // Stel tekstkleur in op basis van nieuwe data: blauw bij nieuwe data, grijs bij oude data
+    // Bitcoin waarde linksonderin altijd blauw
     if (::priceLbl[0] != nullptr) {
-        if (hasNewData && prices[0] > 0.0f) {
-            // Nieuwe data: blauw
-            lv_obj_set_style_text_color(::priceLbl[0], lv_palette_main(LV_PALETTE_BLUE), 0);
-        } else {
-            // Oude data: grijs
-            lv_obj_set_style_text_color(::priceLbl[0], lv_palette_main(LV_PALETTE_GREY), 0);
-        }
+        lv_obj_set_style_text_color(::priceLbl[0], lv_palette_main(LV_PALETTE_BLUE), 0);
     }
     
     // Bereken dynamische anchor-waarden op basis van trend voor UI weergave
@@ -1198,9 +1189,11 @@ void UIController::updateAveragePriceCard(uint8_t index)
     // Debug voor 2h box
     if (index == 3) {
         #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        #if !DEBUG_BUTTON_ONLY
         bool shouldShowPct = (index == 3) ? (hasData2hMinimal) : (hasData && pct != 0.0f);
         Serial.printf("[UI] 2h box: hasData=%d, hasData2hMinimal=%d, pct=%.4f, prices[3]=%.4f, shouldShowPct=%d\n", 
                       hasData, hasData2hMinimal, pct, prices[3], shouldShowPct);
+        #endif
         #endif
     }
     #else
@@ -1313,12 +1306,17 @@ void UIController::updateAveragePriceCard(uint8_t index)
 // Helper functie om price card kleuren bij te werken
 void UIController::updatePriceCardColor(uint8_t index, float pct)
 {
+    // BTCEUR (index 0) heeft altijd blauwe tekstkleur, skip deze functie
+    if (index == 0) {
+        return;
+    }
+    
     // Fase 8.6.3: Gebruik globale pointers (synchroniseert met module pointers)
     #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
     // Voor 2h box: gebruik minimaal 2 minuten data (net als voor return berekening) of buffer vol
-    bool hasDataForColor = (index == 0) ? true : ((index == 1) ? secondArrayFilled : ((index == 2) ? (minuteArrayFilled || minuteIndex >= 30) : (minuteArrayFilled || minuteIndex >= 2)));
+    bool hasDataForColor = (index == 1) ? secondArrayFilled : ((index == 2) ? (minuteArrayFilled || minuteIndex >= 30) : (minuteArrayFilled || minuteIndex >= 2));
     #else
-    bool hasDataForColor = (index == 0) ? true : ((index == 1) ? secondArrayFilled : (minuteArrayFilled || minuteIndex >= 30));
+    bool hasDataForColor = (index == 1) ? secondArrayFilled : (minuteArrayFilled || minuteIndex >= 30);
     #endif
     
     // Voor 2h box: toon kleur ook als pct 0.0f is maar er wel data is
@@ -1410,7 +1408,9 @@ void UIController::updateUI()
     // Veiligheid: controleer of chart en dataSeries bestaan
     if (::chart == nullptr || ::dataSeries == nullptr) {
         // Serial_println is een macro, gebruik Serial.println direct
+        #if !DEBUG_BUTTON_ONLY
         Serial.println(F("[UI] WARN: Chart of dataSeries is null, skip update"));
+        #endif
         return;
     }
     

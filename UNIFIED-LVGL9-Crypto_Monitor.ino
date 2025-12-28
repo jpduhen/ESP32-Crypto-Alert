@@ -5,6 +5,7 @@
 #define LV_CONF_INCLUDE_SIMPLE // Use the lv_conf.h included in this project, to configure see https://docs.lvgl.io/master/get-started/platforms/arduino.html
 
 // Platform config moet als eerste, definieert platform-specifieke instellingen
+// MODULE_INCLUDE is NIET gedefinieerd, zodat PINS files worden geïncludeerd
 #include "platform_config.h"
 
 #include <WiFi.h>                   // Included with Espressif ESP32 Dev Module
@@ -47,6 +48,9 @@
 // Net module (M2: streaming HTTP fetch zonder String allocaties)
 #include "src/Net/HttpFetch.h"
 
+// ApiClient module (Fase 6.2: voor geconsolideerde error logging helpers)
+#include "src/ApiClient/ApiClient.h"
+
 // UIController module (Fase 8: UI Module refactoring)
 #include "src/UIController/UIController.h"
 
@@ -73,13 +77,8 @@
 // ============================================================================
 
 // --- Version and Build Configuration ---
-// VERSION_STRING wordt nu gedefinieerd in platform_config.h (beschikbaar voor alle modules)
-// Hier alleen een fallback als het nog niet gedefinieerd is
-#ifndef VERSION_STRING
-#define VERSION_MAJOR 4
-#define VERSION_MINOR 5
-#define VERSION_STRING "4.05"
-#endif
+// VERSION_STRING wordt gedefinieerd in platform_config.h (beschikbaar voor alle modules)
+// Geen fallback nodig omdat platform_config.h altijd wordt geïncludeerd
 
 // --- Debug Configuration ---
 #define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
@@ -845,27 +844,9 @@ static int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t
         logHeap("KLINES_GET_POST");
         
     if (code != 200) {
-            // N1: Betere error logging met errorToString en fase detectie
-            if (code < 0) {
-                // Detecteer fase: connect timeout vs read timeout
-                const char* phase = "unknown";
-                if (code == HTTPC_ERROR_CONNECTION_REFUSED || 
-                    code == HTTPC_ERROR_CONNECTION_LOST) {
-                    phase = "connect";
-                } else if (code == HTTPC_ERROR_READ_TIMEOUT) {
-                    phase = "read";
-                } else if (code == HTTPC_ERROR_SEND_HEADER_FAILED || 
-                          code == HTTPC_ERROR_SEND_PAYLOAD_FAILED) {
-                    phase = "send";
-                }
-                
-                // T2: Gebruik errorToString voor leesbare error messages (deterministisch, geen mojibake)
-                String localErr = http.errorToString(code);
-                Serial.printf(F("[Klines] HTTP error (code=%d, fase=%s, tijd=%lu ms, error=%s)\n"), 
-                              code, phase, requestTime, localErr.c_str());
-            } else {
-                Serial.printf(F("[Klines] HTTP status code=%d, tijd=%lu ms\n"), code, requestTime);
-            }
+            // Fase 6.2: Geconsolideerde error logging - gebruik ApiClient helpers
+            const char* phase = ApiClient::detectHttpErrorPhase(code);
+            ApiClient::logHttpError(code, phase, requestTime, 0, 1, "[Klines]");
             break;
     }
     
@@ -1767,6 +1748,41 @@ static unsigned long mutexTakeTime = 0;
 static const char* mutexHolderContext = nullptr;
 static const unsigned long MAX_MUTEX_HOLD_TIME_MS = 2000; // Max 2 seconden hold time (deadlock threshold)
 
+// Fase 4.1: Geconsolideerde mutex timeout handling
+// Helper: Handle mutex timeout with rate-limited logging
+// Geoptimaliseerd: elimineert code duplicatie voor mutex timeout handling
+static void handleMutexTimeout(uint32_t& timeoutCount, const char* context, const char* symbol = nullptr, uint32_t logInterval = 10, uint32_t resetThreshold = 50)
+{
+    timeoutCount++;
+    // Log alleen bij eerste timeout of elke N-de timeout (rate limiting)
+    if (timeoutCount == 1 || timeoutCount % logInterval == 0) {
+        if (symbol) {
+            Serial_printf(F("[%s] WARN -> %s mutex timeout (count: %lu)\n"), context, symbol, timeoutCount);
+        } else {
+            Serial_printf(F("[%s] WARN: mutex timeout (count: %lu)\n"), context, timeoutCount);
+        }
+    }
+    // Reset counter na te veel timeouts (mogelijk deadlock)
+    if (timeoutCount > resetThreshold) {
+        if (symbol) {
+            Serial_printf(F("[%s] CRIT -> %s mutex timeout te vaak, mogelijk deadlock!\n"), context, symbol);
+        } else {
+            Serial_printf(F("[%s] CRIT: mutex timeout te vaak, mogelijk deadlock!\n"), context);
+        }
+        timeoutCount = 0; // Reset counter
+    }
+}
+
+// Fase 4.2: Geconsolideerde mutex pattern helper
+// Helper: Reset mutex timeout counter bij succes (elimineert code duplicatie)
+// Geoptimaliseerd: elimineert herhaalde "if (timeoutCount > 0) timeoutCount = 0;" pattern
+static void resetMutexTimeoutCounter(uint32_t& timeoutCount)
+{
+    if (timeoutCount > 0) {
+        timeoutCount = 0;
+    }
+}
+
 // Helper: Safe mutex take with deadlock detection
 // Returns true on success, false on failure
 // Fase 6.2: AnchorSystem module gebruikt deze functie (extern declaration in AnchorSystem.h)
@@ -1831,13 +1847,17 @@ void safeMutexGive(SemaphoreHandle_t mutex, const char* context)
 void netMutexLock(const char* taskName)
 {
     if (gNetMutex == NULL) {
+        #if !DEBUG_BUTTON_ONLY
         Serial.printf(F("[NetMutex] WARN: gNetMutex is NULL, HTTP operatie zonder mutex (by %s)\n"), taskName);
+        #endif
         return;
     }
     
     // C2: Debug logging met task name en core id
+    #if !DEBUG_BUTTON_ONLY
     BaseType_t coreId = xPortGetCoreID();
     Serial.printf(F("[NetMutex] lock by %s (core %d)\n"), taskName, coreId);
+    #endif
     
     xSemaphoreTake(gNetMutex, portMAX_DELAY);
 }
@@ -1849,8 +1869,10 @@ void netMutexUnlock(const char* taskName)
     }
     
     // C2: Debug logging met task name en core id
+    #if !DEBUG_BUTTON_ONLY
     BaseType_t coreId = xPortGetCoreID();
     Serial.printf(F("[NetMutex] unlock by %s (core %d)\n"), taskName, coreId);
+    #endif
     
     xSemaphoreGive(gNetMutex);
 }
@@ -3003,6 +3025,68 @@ uint32_t getLastWrittenIndex(uint32_t currentIndex, uint32_t bufferSize)
     return (currentIndex == 0) ? (bufferSize - 1) : (currentIndex - 1);
 }
 
+// Fase 5.2: Geconsolideerde loop helper voor ring buffer iteratie
+// Helper: Iterate through ring buffer and accumulate valid prices
+// Geoptimaliseerd: elimineert code duplicatie voor ring buffer loops
+static void accumulateValidPricesFromRingBuffer(
+    const float* array,
+    bool arrayFilled,
+    uint16_t currentIndex,
+    uint16_t bufferSize,
+    uint16_t startOffset,      // Start offset (1 = newest, 2 = one before newest, etc.)
+    uint16_t count,             // Number of elements to iterate
+    float& sum,
+    uint16_t& validCount
+)
+{
+    sum = 0.0f;
+    validCount = 0;
+    
+    for (uint16_t i = 0; i < count; i++)
+    {
+        uint16_t offset = startOffset + i;
+        uint16_t idx;
+        
+        if (!arrayFilled)
+        {
+            // Direct mode: check bounds
+            if (offset > currentIndex) break;
+            idx = currentIndex - offset;
+        }
+        else
+        {
+            // Ring buffer mode: use helper
+            int32_t idx_temp = getRingBufferIndexAgo(currentIndex, offset, bufferSize);
+            if (idx_temp < 0) break;
+            idx = (uint16_t)idx_temp;
+        }
+        
+        if (isValidPrice(array[idx]))
+        {
+            sum += array[idx];
+            validCount++;
+        }
+    }
+}
+
+// Fase 5.1: Geconsolideerde berekeningen helpers
+// Helper: Calculate available elements in array (elimineert code duplicatie)
+// Geoptimaliseerd: elimineert herhaalde "arrayFilled ? arraySize : index" pattern
+static inline uint16_t calculateAvailableElements(bool arrayFilled, uint16_t currentIndex, uint16_t arraySize)
+{
+    return arrayFilled ? arraySize : currentIndex;
+}
+
+// Helper: Calculate percentage return (elimineert code duplicatie)
+// Geoptimaliseerd: elimineert herhaalde "((priceNow - priceXAgo) / priceXAgo) * 100.0f" pattern
+static inline float calculatePercentageReturn(float priceNow, float priceXAgo)
+{
+    if (priceXAgo == 0.0f || !isValidPrice(priceNow) || !isValidPrice(priceXAgo)) {
+        return 0.0f;
+    }
+    return ((priceNow - priceXAgo) / priceXAgo) * 100.0f;
+}
+
 // Helper: Calculate percentage of SOURCE_LIVE entries in the last windowMinutes of minuteAverages
 // Returns percentage (0-100) of entries that are SOURCE_LIVE
 // Fase 4.2.9: Gebruik PriceData getters (parallel, arrays blijven globaal)
@@ -3017,7 +3101,8 @@ uint8_t calcLivePctMinuteAverages(uint16_t windowMinutes)
     uint8_t index = priceData.getMinuteIndex();
     DataSource* sources = priceData.getMinuteAveragesSource();
     
-    uint8_t availableMinutes = arrayFilled ? MINUTES_FOR_30MIN_CALC : index;
+    // Fase 5.1: Geconsolideerde berekening
+    uint8_t availableMinutes = calculateAvailableElements(arrayFilled, index, MINUTES_FOR_30MIN_CALC);
     if (availableMinutes < windowMinutes) {
         return 0;  // Niet genoeg data beschikbaar
     }
@@ -3038,36 +3123,99 @@ uint8_t calcLivePctMinuteAverages(uint16_t windowMinutes)
     return (liveCount * 100) / windowMinutes;
 }
 
-// Find min and max values in secondPrices array
-// Fase 6.1: AlertEngine module gebruikt deze functie (extern declaration in AlertEngine.cpp)
-void findMinMaxInSecondPrices(float &minVal, float &maxVal)
+// ============================================================================
+// Generic Min/Max Finding Helper (Fase 2.1: Geconsolideerde Min/Max Finding)
+// ============================================================================
+
+// Generic helper: Find min and max values in an array
+// Supports both direct array access and ring buffer access patterns
+// Geoptimaliseerd: elimineert code duplicatie tussen findMinMaxInSecondPrices, findMinMaxInLast30Minutes, findMinMaxInLast2Hours
+static bool findMinMaxInArray(
+    const float* array,           // Array pointer
+    uint16_t arraySize,           // Total array size
+    uint16_t currentIndex,        // Current write index (for ring buffer) or count (for direct)
+    bool arrayFilled,              // Whether array is filled (ring buffer mode)
+    uint16_t elementsToCheck,     // Number of elements to check (0 = all available)
+    bool useRingBuffer,           // true = ring buffer with modulo, false = direct indexing
+    float &minVal,                // Output: minimum value
+    float &maxVal                 // Output: maximum value
+)
 {
-    // Fase 4.2.7: Gebruik PriceData getters (parallel, arrays blijven globaal)
     minVal = 0.0f;
     maxVal = 0.0f;
     
+    if (array == nullptr || arraySize == 0) {
+        return false;
+    }
+    
+    // Determine count of elements to check
+    uint16_t count;
+    if (useRingBuffer) {
+        // Ring buffer mode: use availableMinutes logic
+        uint16_t available = arrayFilled ? arraySize : currentIndex;
+        if (available == 0) {
+            return false;
+        }
+        count = (elementsToCheck == 0 || elementsToCheck > available) ? available : elementsToCheck;
+    } else {
+        // Direct mode: use currentIndex as count
+        if (!arrayFilled && array[0] == 0.0f) {
+            return false;
+        }
+        count = arrayFilled ? arraySize : currentIndex;
+        if (count == 0) {
+            return false;
+        }
+    }
+    
+    // Find first valid price to initialize min/max
+    bool firstValid = false;
+    
+    if (useRingBuffer) {
+        // Ring buffer mode: iterate backwards from currentIndex
+        for (uint16_t i = 1; i <= count; i++) {
+            uint16_t idx = (currentIndex - i + arraySize) % arraySize;
+            if (isValidPrice(array[idx])) {
+                if (!firstValid) {
+                    minVal = array[idx];
+                    maxVal = array[idx];
+                    firstValid = true;
+                } else {
+                    if (array[idx] < minVal) minVal = array[idx];
+                    if (array[idx] > maxVal) maxVal = array[idx];
+                }
+            }
+        }
+    } else {
+        // Direct mode: iterate from start
+        for (uint16_t i = 0; i < count; i++) {
+            if (isValidPrice(array[i])) {
+                if (!firstValid) {
+                    minVal = array[i];
+                    maxVal = array[i];
+                    firstValid = true;
+                } else {
+                    if (array[i] < minVal) minVal = array[i];
+                    if (array[i] > maxVal) maxVal = array[i];
+                }
+            }
+        }
+    }
+    
+    return firstValid;
+}
+
+// Find min and max values in secondPrices array
+// Fase 6.1: AlertEngine module gebruikt deze functie (extern declaration in AlertEngine.cpp)
+// Fase 2.1: Geoptimaliseerd: gebruikt generic findMinMaxInArray() helper
+void findMinMaxInSecondPrices(float &minVal, float &maxVal)
+{
+    // Fase 4.2.7: Gebruik PriceData getters (parallel, arrays blijven globaal)
     float* prices = priceData.getSecondPrices();
     bool arrayFilled = priceData.getSecondArrayFilled();
     uint8_t index = priceData.getSecondIndex();
     
-    if (!arrayFilled && prices[0] == 0.0f)
-        return;
-    
-    uint8_t count = arrayFilled ? SECONDS_PER_MINUTE : index;
-    if (count == 0)
-        return;
-    
-    minVal = prices[0];
-    maxVal = prices[0];
-    
-    for (uint8_t i = 1; i < count; i++)
-    {
-        if (isValidPrice(prices[i]))
-        {
-            if (prices[i] < minVal) minVal = prices[i];
-            if (prices[i] > maxVal) maxVal = prices[i];
-        }
-    }
+    findMinMaxInArray(prices, SECONDS_PER_MINUTE, index, arrayFilled, 0, false, minVal, maxVal);
 }
 
 // ============================================================================
@@ -3078,6 +3226,7 @@ void findMinMaxInSecondPrices(float &minVal, float &maxVal)
 // Generic return calculation function
 // Calculates percentage return: (priceNow - priceXAgo) / priceXAgo * 100
 // Supports different array types (uint8_t, uint16_t indices) and optional average calculation
+// Fase 2.2: Geoptimaliseerd: geconsolideerde validatie checks, early returns, en average reset logica
 static float calculateReturnGeneric(
     const float* priceArray,           // Price array
     uint16_t arraySize,                // Size of the array
@@ -3089,12 +3238,16 @@ static float calculateReturnGeneric(
     uint8_t averagePriceIndex = 255    // Index in averagePrices[] to update (255 = don't update)
 )
 {
-    // Check if we have enough data
-    if (!arrayFilled && currentIndex < positionsAgo)
-    {
+    // Fase 2.2: Helper: Reset average price index (elimineert code duplicatie)
+    auto resetAveragePrice = [averagePriceIndex]() {
         if (averagePriceIndex < 3) {
             averagePrices[averagePriceIndex] = 0.0f;
         }
+    };
+    
+    // Fase 2.2: Geconsolideerde early return - check data availability eerst
+    if (!arrayFilled && currentIndex < positionsAgo) {
+        resetAveragePrice();
         if (logIntervalMs > 0) {
             static uint32_t lastLogTime = 0;
             uint32_t now = millis();
@@ -3106,39 +3259,40 @@ static float calculateReturnGeneric(
         return 0.0f;
     }
     
-    // Get current price
+    // Fase 2.2: Geconsolideerde price retrieval - gebruik helper functies
     float priceNow;
     if (arrayFilled) {
         uint16_t lastWrittenIdx = getLastWrittenIndex(currentIndex, arraySize);
         priceNow = priceArray[lastWrittenIdx];
     } else {
-        if (currentIndex == 0) return 0.0f;
+        if (currentIndex == 0) {
+            resetAveragePrice();
+            return 0.0f;
+        }
         priceNow = priceArray[currentIndex - 1];
     }
     
-    // Get price X positions ago
+    // Fase 2.2: Geconsolideerde price retrieval voor X positions ago
     float priceXAgo;
-    if (arrayFilled)
-    {
+    if (arrayFilled) {
         int32_t idxXAgo = getRingBufferIndexAgo(currentIndex, positionsAgo, arraySize);
         if (idxXAgo < 0) {
+            resetAveragePrice();
             Serial_printf("%s FATAL: idxXAgo invalid, currentIndex=%u\n", logPrefix, currentIndex);
             return 0.0f;
         }
         priceXAgo = priceArray[idxXAgo];
-    }
-    else
-    {
-        if (currentIndex < positionsAgo) return 0.0f;
+    } else {
+        if (currentIndex < positionsAgo) {
+            resetAveragePrice();
+            return 0.0f;
+        }
         priceXAgo = priceArray[currentIndex - positionsAgo];
     }
     
-    // Validate prices
-    if (!areValidPrices(priceNow, priceXAgo))
-    {
-        if (averagePriceIndex < 3) {
-            averagePrices[averagePriceIndex] = 0.0f;
-        }
+    // Fase 2.2: Geconsolideerde validatie - één check voor beide prijzen
+    if (!areValidPrices(priceNow, priceXAgo)) {
+        resetAveragePrice();
         Serial_printf("%s ERROR: priceNow=%.2f, priceXAgo=%.2f - invalid!\n", logPrefix, priceNow, priceXAgo);
         return 0.0f;
     }
@@ -3155,8 +3309,9 @@ static float calculateReturnGeneric(
         }
     }
     
-    // Return percentage: (now - X ago) / X ago * 100
-    return ((priceNow - priceXAgo) / priceXAgo) * 100.0f;
+    // Fase 2.2: Geconsolideerde return calculation
+    // Fase 5.1: Gebruik geconsolideerde percentage berekening helper
+    return calculatePercentageReturn(priceNow, priceXAgo);
 }
 
 // Fase 4.2.8: calculateReturn1Minute() verplaatst naar PriceData
@@ -3194,7 +3349,8 @@ float calculateReturn30Minutes()
     // Need at least 30 minutes of history
     bool arrayFilled = priceData.getMinuteArrayFilled();
     uint8_t index = priceData.getMinuteIndex();
-    uint8_t availableMinutes = arrayFilled ? MINUTES_FOR_30MIN_CALC : index;
+    // Fase 5.1: Geconsolideerde berekening
+    uint8_t availableMinutes = calculateAvailableElements(arrayFilled, index, MINUTES_FOR_30MIN_CALC);
     if (availableMinutes < 30)
     {
         static uint32_t lastLogTime = 0;
@@ -3214,28 +3370,19 @@ float calculateReturn30Minutes()
     bool minuteArrayFilled = arrayFilled;
     uint8_t minuteIndex = index;
     
+    // Fase 5.2: Geconsolideerde loop voor ring buffer iteratie
     float last30Sum = 0.0f;
-    uint8_t last30Count = 0;
-    for (uint8_t i = 0; i < 30; i++)
-    {
-        uint8_t idx;
-        if (!minuteArrayFilled)
-        {
-            if (i >= minuteIndex) break;
-            idx = minuteIndex - 1 - i;
-        }
-        else
-        {
-            int32_t idx_temp = getRingBufferIndexAgo(minuteIndex, i + 1, MINUTES_FOR_30MIN_CALC);
-            if (idx_temp < 0) break;
-            idx = (uint8_t)idx_temp;
-        }
-        if (isValidPrice(averages[idx]))
-        {
-            last30Sum += averages[idx];
-            last30Count++;
-        }
-    }
+    uint16_t last30Count = 0;
+    accumulateValidPricesFromRingBuffer(
+        averages,
+        minuteArrayFilled,
+        minuteIndex,
+        MINUTES_FOR_30MIN_CALC,
+        1,  // Start vanaf 1 positie terug (nieuwste)
+        30, // 30 minuten
+        last30Sum,
+        last30Count
+    );
     if (last30Count > 0)
     {
         averagePrices[2] = last30Sum / last30Count;
@@ -3246,21 +3393,17 @@ float calculateReturn30Minutes()
     }
     
     // Calculate return: use current price vs average of 30 minutes ago
-    // Get current price
+    // Fase 6.1: Geconsolideerde validatie
     float priceNow = prices[0];
-    if (!isValidPrice(priceNow)) {
-        return 0.0f;
-    }
-    
-    // Get average price 30 minutes ago
     float price30mAgo = averagePrices[2];
-    if (!isValidPrice(price30mAgo) || price30mAgo <= 0.0f) {
+    
+    // Fase 6.1: Gebruik geconsolideerde validatie helper
+    if (!areValidPrices(priceNow, price30mAgo) || price30mAgo <= 0.0f) {
         return 0.0f;
     }
     
-    // Calculate return percentage
-    float ret = ((priceNow - price30mAgo) / price30mAgo) * 100.0f;
-    return ret;
+    // Fase 5.1: Geconsolideerde percentage berekening
+    return calculatePercentageReturn(priceNow, price30mAgo);
 }
 
 // OUDE METHODE - behouden voor referentie, maar niet meer gebruikt
@@ -3371,8 +3514,8 @@ static float calculate1MinutePct()
     if (prevMinuteAvg == 0.0f)
         return 0.0f;
     
-    float pct = ((currentAvg - prevMinuteAvg) / prevMinuteAvg) * 100.0f;
-    return pct;
+    // Fase 5.1: Geconsolideerde percentage berekening
+    return calculatePercentageReturn(currentAvg, prevMinuteAvg);
 }
 
 // Bereken lineaire regressie (trend) over de laatste 30 minuten
@@ -3536,8 +3679,8 @@ static float calculate30MinutePct()
         averagePrices[2] = currentAvg; // Sla gemiddelde prijs op
         
         // Vergelijk met eerste minuut gemiddelde
-        float pct = ((currentAvg - firstMinuteAverage) / firstMinuteAverage) * 100.0f;
-        return pct;
+        // Fase 5.1: Geconsolideerde percentage berekening
+        return calculatePercentageReturn(currentAvg, firstMinuteAverage);
     }
     
     // Normale berekening: we hebben minimaal 60 minuten geschiedenis
@@ -3559,19 +3702,21 @@ static float calculate30MinutePct()
     }
     
     // Bereken gemiddelde van 30 minuten daarvoor (oude waarden)
+    // Fase 5.2: Geconsolideerde loop voor ring buffer iteratie
     float prev30Sum = 0.0f;
-    uint8_t prev30Count = 0;
-    for (uint8_t i = 31; i <= 60; i++)
-    {
-        // Start vanaf 31 posities terug tot 60 posities terug
-        uint8_t idx = (minuteIndex - i + MINUTES_FOR_30MIN_CALC) % MINUTES_FOR_30MIN_CALC;
-        if (minuteAverages[idx] != 0.0f)
-        {
-            prev30Sum += minuteAverages[idx];
-            prev30Count++;
-        }
-    }
+    uint16_t prev30Count = 0;
+    accumulateValidPricesFromRingBuffer(
+        minuteAverages,
+        minuteArrayFilled,
+        minuteIndex,
+        MINUTES_FOR_30MIN_CALC,
+        31, // Start vanaf 31 posities terug
+        30, // 30 minuten (tot 60 posities terug)
+        prev30Sum,
+        prev30Count
+    );
     
+    // Fase 4.3: Geconsolideerde early return checks
     if (prev30Count == 0 || prev30Sum == 0.0f || last30Count == 0)
     {
         averagePrices[2] = 0.0f; // Reset gemiddelde prijs
@@ -3582,11 +3727,13 @@ static float calculate30MinutePct()
     averagePrices[2] = last30Avg; // Sla gemiddelde prijs op voor 30 minuten
     float prev30Avg = prev30Sum / prev30Count;
     
+    // Fase 4.3: Geconsolideerde check (prev30Avg == 0.0f is al gecheckt in prev30Sum == 0.0f)
+    // Maar we checken het nog steeds voor veiligheid na deling
     if (prev30Avg == 0.0f)
         return 0.0f;
     
-    float pct = ((last30Avg - prev30Avg) / prev30Avg) * 100.0f;
-    return pct;
+    // Fase 5.1: Geconsolideerde percentage berekening
+    return calculatePercentageReturn(last30Avg, prev30Avg);
 }
 
 // ret_2h: prijs nu vs 120 minuten (2 uur) geleden (gebruik minuteAverages)
@@ -3598,35 +3745,27 @@ static float calculateReturn2Hours()
     uint8_t index = priceData.getMinuteIndex();
     float* averages = priceData.getMinuteAverages();
     
-    uint8_t availableMinutes = arrayFilled ? MINUTES_FOR_30MIN_CALC : index;
+    // Fase 5.1: Geconsolideerde berekening
+    uint8_t availableMinutes = calculateAvailableElements(arrayFilled, index, MINUTES_FOR_30MIN_CALC);
     
     // Bereken gemiddelde van beschikbare minuten voor display (voor 2h box)
     // Dit wordt gedaan ongeacht of er 120 minuten zijn, zodat de waarde getoond kan worden
     #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
     if (availableMinutes > 0) {
+        // Fase 5.2: Geconsolideerde loop voor ring buffer iteratie
         float last120Sum = 0.0f;
-        uint8_t last120Count = 0;
-        uint8_t minutesToUse = (availableMinutes < 120) ? availableMinutes : 120;  // Gebruik beschikbare minuten, max 120
-        for (uint8_t i = 0; i < minutesToUse; i++)
-        {
-            uint8_t idx;
-            if (!arrayFilled)
-            {
-                if (i >= index) break;
-                idx = index - 1 - i;
-            }
-            else
-            {
-                int32_t idx_temp = getRingBufferIndexAgo(index, i + 1, MINUTES_FOR_30MIN_CALC);
-                if (idx_temp < 0) break;
-                idx = (uint8_t)idx_temp;
-            }
-            if (isValidPrice(averages[idx]))
-            {
-                last120Sum += averages[idx];
-                last120Count++;
-            }
-        }
+        uint16_t last120Count = 0;
+        uint16_t minutesToUse = (availableMinutes < 120) ? availableMinutes : 120;  // Gebruik beschikbare minuten, max 120
+        accumulateValidPricesFromRingBuffer(
+            averages,
+            arrayFilled,
+            index,
+            MINUTES_FOR_30MIN_CALC,
+            1,  // Start vanaf 1 positie terug (nieuwste)
+            minutesToUse,
+            last120Sum,
+            last120Count
+        );
         if (last120Count > 0)
         {
             averagePrices[3] = last120Sum / last120Count;
@@ -3775,91 +3914,19 @@ static float calculateReturn2Hours()
 
 // Find min and max values in last 30 minutes of minuteAverages array
 // Fase 6.1: AlertEngine module gebruikt deze functie (extern declaration in AlertEngine.cpp)
+// Fase 2.1: Geoptimaliseerd: gebruikt generic findMinMaxInArray() helper
 void findMinMaxInLast30Minutes(float &minVal, float &maxVal)
 {
-    minVal = 0.0f;
-    maxVal = 0.0f;
-    
-    uint8_t availableMinutes = 0;
-    if (!minuteArrayFilled)
-    {
-        availableMinutes = minuteIndex;
-    }
-    else
-    {
-        availableMinutes = MINUTES_FOR_30MIN_CALC;
-    }
-    
-    if (availableMinutes == 0)
-        return;
-    
-    // Gebruik laatste 30 minuten (of minder als niet beschikbaar)
-    uint8_t count = (availableMinutes < 30) ? availableMinutes : 30;
-    bool firstValid = false;
-    
-    for (uint8_t i = 1; i <= count; i++)
-    {
-        uint8_t idx = (minuteIndex - i + MINUTES_FOR_30MIN_CALC) % MINUTES_FOR_30MIN_CALC;
-        if (isValidPrice(minuteAverages[idx]))
-        {
-            if (!firstValid)
-            {
-                minVal = minuteAverages[idx];
-                maxVal = minuteAverages[idx];
-                firstValid = true;
-            }
-            else
-            {
-                if (minuteAverages[idx] < minVal) minVal = minuteAverages[idx];
-                if (minuteAverages[idx] > maxVal) maxVal = minuteAverages[idx];
-            }
-        }
-    }
+    findMinMaxInArray(minuteAverages, MINUTES_FOR_30MIN_CALC, minuteIndex, minuteArrayFilled, 30, true, minVal, maxVal);
 }
 
 #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
 // Find min and max values in last 2 hours (120 minutes) of minuteAverages array
 // Alleen voor CYD platforms met 2h box
+// Fase 2.1: Geoptimaliseerd: gebruikt generic findMinMaxInArray() helper
 void findMinMaxInLast2Hours(float &minVal, float &maxVal)
 {
-    minVal = 0.0f;
-    maxVal = 0.0f;
-    
-    uint8_t availableMinutes = 0;
-    if (!minuteArrayFilled)
-    {
-        availableMinutes = minuteIndex;
-    }
-    else
-    {
-        availableMinutes = MINUTES_FOR_30MIN_CALC;  // 120 minuten
-    }
-    
-    if (availableMinutes == 0)
-        return;
-    
-    // Gebruik laatste 120 minuten (of minder als niet beschikbaar)
-    uint8_t count = (availableMinutes < 120) ? availableMinutes : 120;
-    bool firstValid = false;
-    
-    for (uint8_t i = 1; i <= count; i++)
-    {
-        uint8_t idx = (minuteIndex - i + MINUTES_FOR_30MIN_CALC) % MINUTES_FOR_30MIN_CALC;
-        if (isValidPrice(minuteAverages[idx]))
-        {
-            if (!firstValid)
-            {
-                minVal = minuteAverages[idx];
-                maxVal = minuteAverages[idx];
-                firstValid = true;
-            }
-            else
-            {
-                if (minuteAverages[idx] < minVal) minVal = minuteAverages[idx];
-                if (minuteAverages[idx] > maxVal) maxVal = minuteAverages[idx];
-            }
-        }
-    }
+    findMinMaxInArray(minuteAverages, MINUTES_FOR_30MIN_CALC, minuteIndex, minuteArrayFilled, 120, true, minVal, maxVal);
 }
 #endif
 
@@ -3993,7 +4060,9 @@ void fetchPrice()
 {
     // Controleer eerst of WiFi verbonden is
     if (WiFi.status() != WL_CONNECTED) {
+        #if !DEBUG_BUTTON_ONLY
         Serial.println(F("[API] WiFi niet verbonden, skip fetch"));
+        #endif
         return;
     }
     
@@ -4007,13 +4076,17 @@ void fetchPrice()
     
     if (!httpSuccess) {
         // Leeg response - kan komen door timeout of netwerkproblemen
+        #if !DEBUG_BUTTON_ONLY
         Serial.printf("[API] WARN -> %s leeg response (tijd: %lu ms) - mogelijk timeout of netwerkprobleem\n", binanceSymbol, fetchTime);
+        #endif
         // Gebruik laatste bekende prijs als fallback (al ingesteld als fetched = prices[0])
     } else {
         // Succesvol opgehaald (alleen loggen bij langzame calls > 1200ms)
+        #if !DEBUG_BUTTON_ONLY
         if (fetchTime > 1200) {
             Serial.printf(F("[API] OK -> %s %.2f (tijd: %lu ms) - langzaam\n"), binanceSymbol, fetched, fetchTime);
         }
+        #endif
         
         // Neem mutex voor data updates (timeout verhoogd om mutex conflicts te verminderen)
         // API task heeft prioriteit: verhoogde timeout om mutex te krijgen zelfs als UI bezig is
@@ -4024,13 +4097,13 @@ void fetchPrice()
         #endif
         
         // Geoptimaliseerd: betere mutex timeout handling met retry logica
+        // Fase 4.1: Gebruik geconsolideerde mutex timeout handling
+        // Fase 4.2: Gebruik geconsolideerde mutex pattern helper
         static uint32_t mutexTimeoutCount = 0;
         if (safeMutexTake(dataMutex, apiMutexTimeout, "apiTask fetchPrice"))
         {
-            // Reset timeout counter bij succes
-            if (mutexTimeoutCount > 0) {
-                mutexTimeoutCount = 0;
-            }
+            // Fase 4.2: Geconsolideerde mutex timeout counter reset
+            resetMutexTimeoutCounter(mutexTimeoutCount);
             
             if (openPrices[0] == 0)
                 openPrices[0] = fetched; // capture session open once
@@ -4165,16 +4238,8 @@ void fetchPrice()
             safeMutexGive(dataMutex, "fetchPrice");
             ok = true;
         } else {
-            // Geoptimaliseerd: log alleen bij meerdere opeenvolgende timeouts
-            mutexTimeoutCount++;
-            if (mutexTimeoutCount == 1 || mutexTimeoutCount % 10 == 0) {
-                Serial.printf(F("[API] WARN -> %s mutex timeout (count: %lu)\n"), binanceSymbol, mutexTimeoutCount);
-            }
-            // Fallback: update prijs zonder mutex als timeout te vaak voorkomt (alleen voor noodgeval)
-            if (mutexTimeoutCount > 50) {
-                Serial.printf(F("[API] CRIT -> %s mutex timeout te vaak, mogelijk deadlock!\n"), binanceSymbol);
-                mutexTimeoutCount = 0; // Reset counter
-            }
+            // Fase 4.1: Geconsolideerde mutex timeout handling
+            handleMutexTimeout(mutexTimeoutCount, "API", binanceSymbol);
         }
     }
 }
@@ -4646,12 +4711,25 @@ static void setupWatchdog()
     }
     #else
     // Configureer task watchdog timeout (10 seconden) voor andere platforms
+    // ESP32 Arduino core initialiseert de watchdog al, dus eerst deinit dan init
+    esp_err_t deinit_err = esp_task_wdt_deinit();
+    if (deinit_err != ESP_OK && deinit_err != ESP_ERR_NOT_FOUND) {
+        #if !DEBUG_BUTTON_ONLY
+        Serial.printf("[WDT] Deinit error: %d\n", deinit_err);
+        #endif
+    }
+    
     esp_task_wdt_config_t wdt_config = {
         .timeout_ms = 10000,
         .idle_core_mask = 0,
         .trigger_panic = true
     };
-    esp_task_wdt_init(&wdt_config);
+    esp_err_t init_err = esp_task_wdt_init(&wdt_config);
+    if (init_err != ESP_OK) {
+        #if !DEBUG_BUTTON_ONLY
+        Serial.printf("[WDT] Init error: %d\n", init_err);
+        #endif
+    }
     #endif
 }
 
@@ -5326,7 +5404,9 @@ void apiTask(void *parameter)
                     Serial_printf(F("[API Task] Anchor updated via pending request: %.2f\n"), 
                                  useCurrentPrice ? prices[0] : anchorValueToSet);
                 } else {
+                    #if !DEBUG_BUTTON_ONLY
                     Serial_println(F("[API Task] WARN: Kon anchor niet instellen (pending request) - mutex timeout of geen prijs beschikbaar"));
+                    #endif
                 }
             }
         } else {
@@ -5343,10 +5423,12 @@ void apiTask(void *parameter)
         uint32_t waitMs = (apiIntervalMs > dur) ? (apiIntervalMs - dur) : 0;
         
         // WARN alleen bij echte overload (dur > apiIntervalMs)
+        #if !DEBUG_BUTTON_ONLY
         if (dur > apiIntervalMs) {
             Serial.printf("[API Task] WARN: Call duurde %lu ms (langer dan interval %lu ms)\n", 
                          dur, apiIntervalMs);
         }
+        #endif
         
         // Wacht tot volgende interval
         vTaskDelay(pdMS_TO_TICKS(waitMs));
@@ -5405,10 +5487,8 @@ void uiTask(void *parameter)
         static uint32_t uiMutexTimeoutCount = 0;
         if (safeMutexTake(dataMutex, mutexTimeout, "uiTask updateUI"))
         {
-            // Reset timeout counter bij succes
-            if (uiMutexTimeoutCount > 0) {
-                uiMutexTimeoutCount = 0;
-            }
+            // Fase 4.2: Geconsolideerde mutex timeout counter reset
+            resetMutexTimeoutCounter(uiMutexTimeoutCount);
             
             // Fase 8.8.1: Gebruik module versie (parallel - oude functie blijft bestaan)
             uiController.updateUI();
@@ -5416,15 +5496,8 @@ void uiTask(void *parameter)
         }
         else
         {
-            // Geoptimaliseerd: log alleen bij meerdere opeenvolgende timeouts
-            uiMutexTimeoutCount++;
-            if (uiMutexTimeoutCount == 1 || uiMutexTimeoutCount % 20 == 0) {
-                Serial_printf("[UI Task] WARN: mutex timeout (count: %lu)\n", uiMutexTimeoutCount);
-            }
-            // Reset counter na lange tijd om te voorkomen dat deze blijft groeien
-            if (uiMutexTimeoutCount > 100) {
-                uiMutexTimeoutCount = 0;
-            }
+            // Fase 4.1: Geconsolideerde mutex timeout handling (UI task: elke 20e, reset bij 100)
+            handleMutexTimeout(uiMutexTimeoutCount, "UI Task", nullptr, 20, 100);
         }
         
         // Meet CPU usage: bereken tijd die deze task gebruikt

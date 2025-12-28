@@ -91,24 +91,24 @@ AnchorConfigEffective AnchorSystem::calculateEffectiveAnchorThresholds(TrendStat
         eff.maxLossPct = baseMaxLoss;
         eff.takeProfitPct = baseTakeProfit;
     } else {
-        // Pas multipliers toe op basis van trend
-        switch (trend) {
-            case TREND_UP:
-                eff.maxLossPct = baseMaxLoss * this->uptrendMaxLossMultiplier;
-                eff.takeProfitPct = baseTakeProfit * this->uptrendTakeProfitMultiplier;
-                break;
-                
-            case TREND_DOWN:
-                eff.maxLossPct = baseMaxLoss * this->downtrendMaxLossMultiplier;
-                eff.takeProfitPct = baseTakeProfit * this->downtrendTakeProfitMultiplier;
-                break;
-                
-            case TREND_SIDEWAYS:
-            default:
-                // Basiswaarden (geen aanpassing)
-                eff.maxLossPct = baseMaxLoss;
-                eff.takeProfitPct = baseTakeProfit;
-                break;
+    // Pas multipliers toe op basis van trend
+    switch (trend) {
+        case TREND_UP:
+            eff.maxLossPct = baseMaxLoss * this->uptrendMaxLossMultiplier;
+            eff.takeProfitPct = baseTakeProfit * this->uptrendTakeProfitMultiplier;
+            break;
+            
+        case TREND_DOWN:
+            eff.maxLossPct = baseMaxLoss * this->downtrendMaxLossMultiplier;
+            eff.takeProfitPct = baseTakeProfit * this->downtrendTakeProfitMultiplier;
+            break;
+            
+        case TREND_SIDEWAYS:
+        default:
+            // Basiswaarden (geen aanpassing)
+            eff.maxLossPct = baseMaxLoss;
+            eff.takeProfitPct = baseTakeProfit;
+            break;
         }
     }
     
@@ -276,11 +276,11 @@ void AnchorSystem::updateAnchorMinMax(float currentPrice)
     
     // Alleen globale variabelen updaten als er iets veranderd is
     if (updated) {
-        // Fase 6.2: Update ook globale variabelen voor backward compatibility
-        extern float anchorMax;
-        extern float anchorMin;
-        anchorMax = this->anchorMax;
-        anchorMin = this->anchorMin;
+    // Fase 6.2: Update ook globale variabelen voor backward compatibility
+    extern float anchorMax;
+    extern float anchorMin;
+    anchorMax = this->anchorMax;
+    anchorMin = this->anchorMin;
     }
 }
 
