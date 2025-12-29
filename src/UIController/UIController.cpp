@@ -203,7 +203,7 @@ extern float lastPrice30MinDiffValue;
 extern float lastPrice2HMaxValue;
 extern float lastPrice2HMinValue;
 extern float lastPrice2HDiffValue;
-extern char lastPriceTitleText[SYMBOL_COUNT][48];
+extern char lastPriceTitleText[SYMBOL_COUNT][32];  // Verkleind van 48 naar 32 bytes
 extern char priceLblBufferArray[SYMBOL_COUNT][24];
 extern float lastPriceLblValueArray[SYMBOL_COUNT];
 
@@ -1215,7 +1215,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
         if (hasData && pct != 0.0f) {
         #endif
             // Format nieuwe tekst
-            char newText[48];
+            char newText[32];  // Verkleind van 48 naar 32 bytes (max: "30 min  +12.34%" = ~20 chars)
             if (pct == 0.0f && index == 3) {
                 // Voor 2h box: toon 0.00% als de return 0 is
                 snprintf(newText, sizeof(newText), "%s  0.00%%", symbols[index]);
