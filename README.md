@@ -1,162 +1,288 @@
-# ESP32 Crypto Alert Monitor (CYD)
+# ESP32 Crypto Alert System
 
-## What is this?
-This project is a **standalone crypto price monitoring system** that runs on an ESP32
-and analyzes real-time price data from Binance.
+**Smart crypto alerts on low-power hardware**
 
-It provides **context-aware notifications**, not just raw price updates.
+## 1. What is this project?
 
-The device includes a display and sends notifications via **ntfy.sh**.
+The ESP32 Crypto Alert System is a standalone crypto market alert device.
+It continuously monitors cryptocurrency prices (via Binance) and sends intelligent notifications when relevant market events occur.
 
-👉 The goal is **market awareness and context**, not automated trading.
+Unlike simple price trackers, this system:
 
----
+- Works without a PC or cloud backend
+- Runs fully on an ESP32
+- Uses multi-timeframe analysis (1m, 5m, 30m, 2h)
+- Understands context: trend, volatility, range, anchor price
+- Filters noise to avoid alert spam
 
-## Who is this for?
-This project is intended for people who:
-- actively follow crypto prices
-- want to know *when something meaningful happens*
-- prefer insight over automated trading
-- are interested in ESP32 or embedded projects
+It is designed for:
 
-You **do not need to be a programmer** to use it.
-All configuration is done through a web interface.
+- Traders who want context-aware alerts
+- Hobbyists building a dedicated crypto display
+- Anyone wanting low-power, always-on alerts
 
----
+## 2. What does the system do?
 
-## What does the system do?
-The system:
-- periodically fetches price data from Binance
-- analyzes price movement across multiple timeframes
-- determines trend and volatility
-- compares price to a user-defined reference (anchor)
-- sends notifications when predefined situations occur
+At a high level, the system:
 
-Everything runs **locally on the device**.
+- Fetches live prices from Binance
+- Builds short-term and medium-term price history
+- Calculates:
+  - Returns (1m / 5m / 30m / 2h)
+  - Trend direction
+  - Volatility regime
+  - Ranges (high / low / average)
+- Compares price behavior against configurable thresholds
+- Sends alerts via NTFY.sh when conditions are met
+- Shows status on a local display
+- Provides a web interface for configuration
 
----
+## 3. Hardware overview
 
-## Key concepts (important)
+**Supported boards:**
+- ESP32-CYD (Cheap Yellow Display)
+- ESP32-S2 / S3 (including SuperMini variants)
 
-### Anchor (reference price)
-The **anchor** is a price you define as a reference point.
-For example:
-- your entry price
-- an important technical level
-- a psychological threshold
+**Optional:**
+- Touchscreen display
+- WiFi connection
+- NTFY.sh account (free)
 
-Many alerts are evaluated **relative to this anchor**.
+No external servers or databases required.
 
----
+## 4. Core concepts (important!)
 
-### Timeframes
-The system does not look at a single moment, but at multiple windows:
+### 4.1 Anchor price
+
+The anchor price is your reference level.
+
+Think of it as:
+- "My important price"
+- "Where I care about profit/loss"
+- "My psychological baseline"
+
+All major alerts are evaluated relative to the anchor.
+
+**Examples:**
+- +5% above anchor → Take profit zone
+- −3% below anchor → Max loss warning
+- Price oscillating near anchor → consolidation
+
+### 4.2 Multi-timeframe logic
+
+The system looks at different time horizons simultaneously:
 
 | Timeframe | Purpose |
-|---------|--------|
-| 1 minute | fast spikes |
-| 5 minutes | short moves |
-| 30 minutes | medium-term moves |
-| 2 hours | market structure & context |
+|-----------|---------|
+| 1m | Detect sudden spikes |
+| 5m | Confirm short-term moves |
+| 30m | Identify meaningful momentum |
+| 2h | Define trend, range, context |
 
-This helps separate noise from meaningful movement.
+This prevents reacting to noise.
+
+### 4.3 Alert philosophy
+
+Alerts are meant to answer:
+
+**"Is something interesting happening that deserves my attention?"**
+
+Not:
+- Every tick
+- Every candle
+- Every small fluctuation
+
+The system prefers:
+- Fewer alerts
+- Higher relevance
+- Context-rich messages
+
+## 5. Types of alerts
+
+### 5.1 Short-term alerts (1m / 5m / 30m)
+
+- **Spike alert** – sudden short-term movement
+- **Move alert** – confirmed directional move
+- **Momentum alert** – sustained movement
+
+These are fast and reactive.
+
+### 5.2 2-hour context alerts (important!)
+
+These alerts describe market structure, not just movement:
+
+- **Breakout** – price leaves the 2h range
+- **Breakdown** – price drops below range
+- **Compression** – volatility collapse (range tightening)
+- **Mean reversion** – price far from 2h average, returning
+- **Anchor outside range** – anchor no longer inside current market context
+- **Trend change** – shift in 2h trend direction
+
+These are slower, more strategic alerts.
+
+## 6. Web interface overview
+
+The device hosts a local web interface where you configure everything.
+
+**You do not need to recompile code to change behavior.**
+
+## 7. Settings explained (plain language)
+
+### 7.1 Basic & connectivity
+
+| Setting | Meaning |
+|---------|---------|
+| NTFY Topic | Where alerts are sent |
+| Binance Symbol | Trading pair (e.g. BTCEUR) |
+| Language | UI & alert language |
+
+### 7.2 Anchor & risk management
+
+| Setting | Meaning |
+|---------|---------|
+| Take Profit | % above anchor that is considered profit |
+| Max Loss | % below anchor considered unacceptable loss |
+
+Used for risk-aware alerts, not trading execution.
+
+### 7.3 Signal generation thresholds
+
+These define how sensitive the system is.
+
+**Examples:**
+- 1m Spike Threshold = minimum % change to trigger a spike
+- 30m Move Threshold = minimum movement to be meaningful
+- Trend Threshold = how strong a 2h move must be to count as a trend
+
+**Higher values = fewer alerts**  
+**Lower values = more alerts**
+
+### 7.4 Volatility levels
+
+The system classifies volatility as:
+- Low
+- Normal
+- High
+
+This affects:
+- Alert sensitivity
+- Trend confidence
+- Filtering
+
+### 7.5 2-hour alert thresholds
+
+These control structural alerts:
+
+| Setting | Purpose |
+|---------|---------|
+| Breakout Margin | How far beyond range = breakout |
+| Cooldown | Minimum time between alerts |
+| Compress Threshold | Defines "tight range" |
+| Mean Reversion Distance | How far price must drift from average |
+
+### 7.6 Smart logic & filters
+
+Optional intelligence layers:
+
+- **Trend-adaptive anchors**  
+  → Risk thresholds adapt to trend direction
+
+- **Confluence mode**  
+  → Alerts only fire when multiple conditions agree
+
+- **Auto-volatility mode**  
+  → Thresholds adapt automatically to market behavior
+
+### 7.7 Cooldowns
+
+Prevent alert spam.
+
+Each timeframe has its own cooldown.
+
+### 7.8 Warm-start (advanced)
+
+On boot, the device can fetch historical candles to avoid waiting hours for context.
+
+This makes the system usable almost immediately after restart.
+
+## 8. Recommended presets
+
+### Conservative (few alerts)
+- Higher thresholds
+- Longer cooldowns
+- Confluence ON
+
+### Balanced (default)
+- Moderate thresholds
+- Mixed alerts
+- Good signal/noise ratio
+
+### Aggressive (many alerts)
+- Lower thresholds
+- Short cooldowns
+- More suitable for scalpers
+
+## 9. How to interpret alerts
+
+**General guidance:**
+
+- 1m alerts → attention
+- 5m / 30m alerts → momentum
+- 2h alerts → context change
+
+**Multiple alerts close together usually indicate:**
+- Transition between regimes
+- Breakout or breakdown
+- Volatility expansion
+
+## 10. What this system is NOT
+
+- ❌ Not a trading bot
+- ❌ Not financial advice
+- ❌ Not predictive AI
+- ❌ Not a price chart replacement
+
+**It is a decision support tool.**
+
+## 11. Who is this for?
+
+- Crypto traders who want alerts with context
+- Makers building a dedicated crypto device
+- People who want insight without staring at charts
 
 ---
 
-### Trend
-Based on **2-hour price change**, the system determines:
-- UP trend
-- DOWN trend
-- FLAT
+## Quick Start
 
-Trend information can influence risk settings and alert behavior.
+1. Flash the firmware
+2. Connect to WiFi
+3. Open the web interface
+4. Configure your settings
+5. Set your anchor price
+6. Done!
 
----
-
-### Volatility
-Volatility describes how calm or aggressive the market is.
-High volatility uses different thresholds than low volatility.
-
-The system can automatically adapt thresholds to volatility.
+See `README_QUICKSTART.md` for detailed installation steps.
 
 ---
 
-## How the system works (high level)
-1. ESP32 connects to WiFi
-2. Price data is fetched from Binance
-3. Data is stored in internal buffers
-4. Indicators are calculated
-5. Logic decides whether a situation is alert-worthy
-6. Notification is sent (if applicable)
-7. Current state is shown on the display
+## Installation
 
----
-
-## Types of alerts
-The system can generate alerts such as:
-
-- ⚡ Fast price spikes (1m)
-- 📈 Short-term moves (5m)
-- 📊 Medium-term moves (30m)
-- 🔄 Mean reversion to 2h average
-- 📦 Volatility compression
-- 🚀 Breakout / breakdown relative to 2h high/low
-- 🎯 Price far outside anchor context
-- 💰 Take profit / max loss signals
-
-Cooldowns prevent alert spam.
-
----
-
-## Configuration (conceptual)
-All settings are configurable through the web interface.
-
-You control:
-- sensitivity of alerts
-- percentage thresholds
-- cooldown times
-- risk boundaries
-- whether thresholds adapt automatically to volatility
-
-You **do not need to understand the internal formulas** to use the system effectively.
-
----
-
-## What this project is NOT
-- ❌ not a trading bot
-- ❌ not an automated buy/sell system
-- ❌ not financial advice
-- ❌ not a high-frequency trading tool
-
-It is designed as a **decision-support and awareness tool**.
-
----
-
-## Hardware
-Tested on:
-- ESP32 (CYD / ESP32-2432S028)
-- 240×320 TFT display
-- No PSRAM required
-
-The system is optimized for **limited-memory environments**.
-
----
-
-## Installation (brief)
-- Flash the firmware
-- Connect to WiFi
-- Open the web interface
+- Flash the firmware to your ESP32
+- Connect the device to WiFi
+- Open the web interface (IP address shown on display)
 - Configure your settings
-- Done
+- Set your anchor price
+- Start receiving alerts
 
-See the installation section in this repository for details.
+No external servers or databases required.
 
 ---
 
 ## Final note
-Use this system as:
-- an extra set of eyes
-- a context generator
-- a way to reduce emotional noise
 
-Not as an automated truth machine.
+Use this system as:
+- An extra set of eyes
+- A context generator
+- A way to reduce emotional noise
+
+**Not as an automated truth machine.**
