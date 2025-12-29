@@ -29,6 +29,7 @@ public:
     void handleNotFound();
     void handleAnchorSet();
     void handleNtfyReset();
+    void handleStatus();  // WEB-PERF-3: JSON status endpoint
     
     // Handler voor webTask (blijft in .ino, maar kan module method aanroepen)
     void handleClient();
@@ -51,6 +52,12 @@ private:
     bool parseFloatArg(const char* argName, float& result, float minVal, float maxVal);
     bool parseIntArg(const char* argName, int& result, int minVal, int maxVal);
     bool parseStringArg(const char* argName, char* dest, size_t destSize);
+    
+    // WEB-PERF-3: HTML caching voor performance
+    static bool sPageCacheValid;
+    static String sPageCache;
+    void invalidatePageCache();
+    String getOrBuildSettingsPage();
     
     // WebServer instance (wordt extern gedeclareerd in .ino)
     // Note: WebServer is een externe library class, we gebruiken een referentie

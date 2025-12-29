@@ -998,7 +998,8 @@ void UIController::updateBTCEURCard(bool hasNewData)
 {
     // Fase 8.6.1: Gebruik globale pointers (synchroniseert met module pointers)
     if (::priceTitle[0] != nullptr) {
-        lv_label_set_text(::priceTitle[0], "BTCEUR");
+        // Gebruik dynamisch symbol i.p.v. hardcoded "BTCEUR"
+        lv_label_set_text(::priceTitle[0], ::symbols[0]);
     }
     
     // Update price label alleen als waarde veranderd is (cache check)

@@ -54,16 +54,56 @@ void TrendDetector::syncStateFromGlobals() {
 }
 
 // Bepaal trend state op basis van 2h en 30m returns
+// FASE X.1: 2h Trend-hysterese (Optie A) - stabiliseer trendstatus om flip-flopping te voorkomen
 // Geoptimaliseerd: geconsolideerde checks, early returns
 TrendState TrendDetector::determineTrendState(float ret_2h_value, float ret_30m_value, float trendThreshold) {
-    // Geconsolideerde checks: check alles in één keer
-    if (ret_2h_value >= trendThreshold && ret_30m_value >= 0.0f) {
-        return TREND_UP;
+    // Hysterese factor: 0.65 (65% van threshold voor verlaten van trend)
+    const float hysteresisFactor = 0.65f;
+    const float exitThreshold = trendThreshold * hysteresisFactor;
+    
+    // Gebruik huidige trend state voor hysterese logica
+    TrendState currentState = this->trendState;
+    
+    // Hysterese logica: verschillende thresholds voor binnenkomen en verlaten van trend
+    switch (currentState) {
+        case TREND_SIDEWAYS:
+            // SIDEWAYS → UP: alleen bij ret2h >= +TrendThreshold (en ret_30m >= 0 voor bevestiging)
+            if (ret_2h_value >= trendThreshold && ret_30m_value >= 0.0f) {
+                return TREND_UP;
+            }
+            // SIDEWAYS → DOWN: alleen bij ret2h <= -TrendThreshold (en ret_30m <= 0 voor bevestiging)
+            if (ret_2h_value <= -trendThreshold && ret_30m_value <= 0.0f) {
+                return TREND_DOWN;
+            }
+            // Blijft SIDEWAYS
+            return TREND_SIDEWAYS;
+            
+        case TREND_UP:
+            // UP → SIDEWAYS: pas als ret2h < +(TrendThreshold * 0.65) OF ret_30m < 0
+            if (ret_2h_value < exitThreshold || ret_30m_value < 0.0f) {
+                return TREND_SIDEWAYS;
+            }
+            // Blijft UP (ret_2h >= exitThreshold && ret_30m >= 0)
+            return TREND_UP;
+            
+        case TREND_DOWN:
+            // DOWN → SIDEWAYS: pas als ret2h > -(TrendThreshold * 0.65) OF ret_30m > 0
+            if (ret_2h_value > -exitThreshold || ret_30m_value > 0.0f) {
+                return TREND_SIDEWAYS;
+            }
+            // Blijft DOWN (ret_2h <= -exitThreshold && ret_30m <= 0)
+            return TREND_DOWN;
+            
+        default:
+            // Fallback: gebruik originele logica
+            if (ret_2h_value >= trendThreshold && ret_30m_value >= 0.0f) {
+                return TREND_UP;
+            }
+            if (ret_2h_value <= -trendThreshold && ret_30m_value <= 0.0f) {
+                return TREND_DOWN;
+            }
+            return TREND_SIDEWAYS;
     }
-    if (ret_2h_value <= -trendThreshold && ret_30m_value <= 0.0f) {
-        return TREND_DOWN;
-    }
-    return TREND_SIDEWAYS;
 }
 
 // Trend change detection en notificatie

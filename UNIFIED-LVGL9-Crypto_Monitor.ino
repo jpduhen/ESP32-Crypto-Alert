@@ -312,8 +312,9 @@ float downtrendTakeProfitMultiplier = DOWNTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT;
 
 // Fase 5.2: EffectiveThresholds struct verplaatst naar VolatilityTracker.h (al geïncludeerd boven)
 
-static float ret_2h = 0.0f;  // 2-hour return percentage
-static float ret_30m = 0.0f;  // 30-minute return percentage (calculated from minuteAverages or warm-start data)
+// WEB-PERF-3: static verwijderd zodat WebServerModule deze variabelen extern kan gebruiken
+float ret_2h = 0.0f;  // 2-hour return percentage
+float ret_30m = 0.0f;  // 30-minute return percentage (calculated from minuteAverages or warm-start data)
 // Fase 8: UI state - gebruikt door UIController module
 bool hasRet2hWarm = false;  // Flag: ret_2h beschikbaar vanuit warm-start (minimaal 2 candles)
 bool hasRet30mWarm = false;  // Flag: ret_30m beschikbaar vanuit warm-start (minimaal 2 candles)
