@@ -1,5 +1,8 @@
 #include "TrendDetector.h"
 
+// FASE X.2: Include AlertEngine voor throttling
+#include "../AlertEngine/AlertEngine.h"
+
 // Forward declarations voor dependencies (worden later via modules)
 extern bool sendNotification(const char *title, const char *message, const char *colorTag = nullptr);
 extern char binanceSymbol[];
@@ -142,8 +145,10 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
                  "Trend change: %s → %s\n2h: %+.2f%%\n30m: %+.2f%%\nVol: %s",
                  fromTrend, toTrend, ret_2h, ret_30m_value, volText);
         
-        sendNotification(title, msg, colorTag);
-        lastTrendChangeNotification = now;
+        // FASE X.2: Gebruik throttling wrapper voor Trend Change
+        if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag)) {
+            lastTrendChangeNotification = now;
+        }
         
         #if !DEBUG_BUTTON_ONLY
         Serial_printf(F("[Trend] Trend change notificatie verzonden: %s → %s (2h: %.2f%%, 30m: %.2f%%, Vol: %s)\n"), 

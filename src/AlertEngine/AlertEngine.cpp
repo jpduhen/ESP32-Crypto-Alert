@@ -842,9 +842,11 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
             snprintf(msg, sizeof(msg), "Range %.2f%% (<%.2f%%). avg %.2f high %.2f low %.2f",
                      metrics.rangePct, alert2HThresholds.compressThresholdPct,
                      metrics.avg2h, metrics.high2h, metrics.low2h);
-            sendNotification(title, msg, "yellow_square,📉");
-            gAlert2H.lastCompressMs = now;
-            gAlert2H.setCompressArmed(false);
+            // FASE X.2: Gebruik throttling wrapper
+            if (send2HNotification(ALERT2H_COMPRESS, title, msg, "yellow_square,📉")) {
+                gAlert2H.lastCompressMs = now;
+                gAlert2H.setCompressArmed(false);
+            }
         }
         
         // Reset arm zodra range weer boven reset threshold komt
@@ -876,11 +878,13 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
             snprintf(title, sizeof(title), "%s 2h mean touch", binanceSymbol);
             snprintf(msg, sizeof(msg), "Touched 2h avg %.2f after %.2f%% away (%s)",
                      metrics.avg2h, distPct, direction);
-            sendNotification(title, msg, "green_square,📊");
-            gAlert2H.lastMeanMs = now;
-            gAlert2H.setMeanArmed(false);
-            gAlert2H.setMeanWasFar(false);
-            gAlert2H.setMeanFarSide(0);
+            // FASE X.2: Gebruik throttling wrapper
+            if (send2HNotification(ALERT2H_MEAN_TOUCH, title, msg, "green_square,📊")) {
+                gAlert2H.lastMeanMs = now;
+                gAlert2H.setMeanArmed(false);
+                gAlert2H.setMeanWasFar(false);
+                gAlert2H.setMeanFarSide(0);
+            }
         }
         
         // Reset arm zodra prijs weer ver genoeg weg is
@@ -907,9 +911,11 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
             snprintf(title, sizeof(title), "%s Anchor buiten 2h", binanceSymbol);
             snprintf(msg, sizeof(msg), "Anchor %.2f outside 2h [%.2f..%.2f] (avg %.2f)",
                      anchorPrice, metrics.low2h, metrics.high2h, metrics.avg2h);
-            sendNotification(title, msg, "purple_square,⚓");
-            gAlert2H.lastAnchorCtxMs = now;
-            gAlert2H.setAnchorCtxArmed(false);
+            // FASE X.2: Gebruik throttling wrapper
+            if (send2HNotification(ALERT2H_ANCHOR_CTX, title, msg, "purple_square,⚓")) {
+                gAlert2H.lastAnchorCtxMs = now;
+                gAlert2H.setAnchorCtxArmed(false);
+            }
         }
         
         // Reset arm zodra anchor weer binnen range komt (inclusief marge)
@@ -937,7 +943,8 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
         snprintf(title, sizeof(title), "%s 2h breakout ↑", binanceSymbol);
         snprintf(msg, sizeof(msg), "Price %.2f > 2h high %.2f (avg %.2f, range %.2f%%)",
                  lastPrice, metrics.high2h, metrics.avg2h, metrics.rangePct);
-        sendNotification(title, msg, "blue_square,🔼");
+        // FASE X.2: Gebruik throttling wrapper (Breakout mag altijd door)
+        send2HNotification(ALERT2H_BREAKOUT_UP, title, msg, "blue_square,🔼");
     } else {
         #if DEBUG_2H_ALERTS
         Serial.printf("[ALERT2H] breakdown_down sent: price=%.2f < low2h=%.2f (avg=%.2f, range=%.2f%%)\n",
@@ -946,7 +953,114 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
         snprintf(title, sizeof(title), "%s 2h breakdown ↓", binanceSymbol);
         snprintf(msg, sizeof(msg), "Price %.2f < 2h low %.2f (avg %.2f, range %.2f%%)",
                  lastPrice, metrics.low2h, metrics.avg2h, metrics.rangePct);
-        sendNotification(title, msg, "orange_square,🔽");
+        // FASE X.2: Gebruik throttling wrapper (Breakdown mag altijd door)
+        send2HNotification(ALERT2H_BREAKOUT_DOWN, title, msg, "orange_square,🔽");
     }
+}
+
+// FASE X.2: 2h alert throttling matrix - static state voor throttling
+static Alert2HType last2HAlertType = ALERT2H_NONE;
+static uint32_t last2HAlertTimestamp = 0;
+
+// FASE X.3: Check of alert PRIMARY is (override throttling)
+bool AlertEngine::isPrimary2HAlert(Alert2HType alertType) {
+    // PRIMARY: Breakout/Breakdown (regime-veranderingen)
+    return (alertType == ALERT2H_BREAKOUT_UP || alertType == ALERT2H_BREAKOUT_DOWN);
+}
+
+// FASE X.2: Check of 2h alert gesuppresseerd moet worden volgens throttling matrix
+// FASE X.3: PRIMARY alerts override throttling (altijd door)
+bool AlertEngine::shouldThrottle2HAlert(Alert2HType alertType, uint32_t now) {
+    // PRIMARY alerts mogen altijd door (override throttling)
+    if (isPrimary2HAlert(alertType)) {
+        return false;  // Geen throttling
+    }
+    
+    // Geen vorige alert = altijd door
+    if (last2HAlertType == ALERT2H_NONE || last2HAlertTimestamp == 0) {
+        return false;  // Geen throttling
+    }
+    
+    uint32_t timeSinceLastAlert = now - last2HAlertTimestamp;
+    
+    // Throttling matrix: verschillende suppressieregels per combinatie
+    switch (last2HAlertType) {
+        case ALERT2H_TREND_CHANGE:
+            // Trend Change → Trend Change binnen 180 min: suppress
+            if (alertType == ALERT2H_TREND_CHANGE && timeSinceLastAlert < (180UL * 60UL * 1000UL)) {
+                return true;  // Suppress
+            }
+            // Trend Change → Mean Touch binnen 60 min: suppress
+            if (alertType == ALERT2H_MEAN_TOUCH && timeSinceLastAlert < (60UL * 60UL * 1000UL)) {
+                return true;  // Suppress
+            }
+            break;
+            
+        case ALERT2H_MEAN_TOUCH:
+            // Mean Touch → Mean Touch binnen 60 min: suppress
+            if (alertType == ALERT2H_MEAN_TOUCH && timeSinceLastAlert < (60UL * 60UL * 1000UL)) {
+                return true;  // Suppress
+            }
+            break;
+            
+        case ALERT2H_COMPRESS:
+            // Compress → Compress binnen 120 min: suppress
+            if (alertType == ALERT2H_COMPRESS && timeSinceLastAlert < (120UL * 60UL * 1000UL)) {
+                return true;  // Suppress
+            }
+            break;
+            
+        default:
+            // Andere combinaties: geen suppressie
+            break;
+    }
+    
+    return false;  // Geen throttling
+}
+
+// FASE X.2: Wrapper voor sendNotification() met 2h throttling
+// FASE X.3: PRIMARY alerts override throttling, SECONDARY alerts onderhevig aan throttling
+bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, const char* msg, const char* colorTag) {
+    uint32_t now = millis();
+    
+    // FASE X.3: PRIMARY alerts override throttling (altijd door)
+    bool isPrimary = isPrimary2HAlert(alertType);
+    
+    // Check throttling alleen voor SECONDARY alerts
+    if (!isPrimary && shouldThrottle2HAlert(alertType, now)) {
+        #if !DEBUG_BUTTON_ONLY
+        const char* alertTypeName = "";
+        switch (alertType) {
+            case ALERT2H_TREND_CHANGE: alertTypeName = "Trend Change"; break;
+            case ALERT2H_MEAN_TOUCH: alertTypeName = "Mean Touch"; break;
+            case ALERT2H_COMPRESS: alertTypeName = "Compress"; break;
+            case ALERT2H_BREAKOUT_UP: alertTypeName = "Breakout Up"; break;
+            case ALERT2H_BREAKOUT_DOWN: alertTypeName = "Breakdown Down"; break;
+            case ALERT2H_ANCHOR_CTX: alertTypeName = "Anchor Context"; break;
+            default: alertTypeName = "Unknown"; break;
+        }
+        Serial_printf(F("[2h throttled] %s: %s\n"), alertTypeName, title);
+        #endif
+        return false;  // Alert gesuppresseerd
+    }
+    
+    // FASE X.3: Voeg classificatie toe aan notificatietekst
+    char titleWithClass[48];  // Buffer voor title met classificatie
+    if (isPrimary) {
+        snprintf(titleWithClass, sizeof(titleWithClass), "[PRIMARY] %s", title);
+    } else {
+        snprintf(titleWithClass, sizeof(titleWithClass), "[Context] %s", title);
+    }
+    
+    // Verstuur notificatie met aangepaste title
+    bool result = sendNotification(titleWithClass, msg, colorTag);
+    
+    // Update throttling state alleen als notificatie succesvol is verstuurd
+    if (result) {
+        last2HAlertType = alertType;
+        last2HAlertTimestamp = now;
+    }
+    
+    return result;
 }
 

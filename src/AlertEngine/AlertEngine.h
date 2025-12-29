@@ -38,6 +38,17 @@ struct TwoHMetrics {
     bool valid = false;
 };
 
+// FASE X.2: 2h alert types voor throttling matrix
+enum Alert2HType {
+    ALERT2H_NONE = 0,
+    ALERT2H_TREND_CHANGE,
+    ALERT2H_MEAN_TOUCH,
+    ALERT2H_COMPRESS,
+    ALERT2H_BREAKOUT_UP,
+    ALERT2H_BREAKOUT_DOWN,
+    ALERT2H_ANCHOR_CTX
+};
+
 // Alert2HState struct - persistent runtime state voor 2h notificaties
 // Geoptimaliseerd met bitfields en compacte layout om geheugen te besparen (24 bytes i.p.v. 32 bytes)
 struct Alert2HState {
@@ -132,6 +143,20 @@ public:
     // Helper: Send 2h breakout/breakdown notification (consolideert up/down logica)
     static void send2HBreakoutNotification(bool isUp, float lastPrice, float threshold, 
                                          const TwoHMetrics& metrics, uint32_t now);
+    
+    // FASE X.2: 2h alert throttling - check of alert gesuppresseerd moet worden
+    // Returns true als alert moet worden gesuppresseerd, false als alert door mag
+    static bool shouldThrottle2HAlert(Alert2HType alertType, uint32_t now);
+    
+    // FASE X.3: Check of alert PRIMARY is (override throttling)
+    // PRIMARY: Breakout/Breakdown (regime-veranderingen)
+    // SECONDARY: Mean Touch, Compress, Trend Change (context-signalen)
+    static bool isPrimary2HAlert(Alert2HType alertType);
+    
+    // FASE X.2: Wrapper voor sendNotification() met 2h throttling
+    // FASE X.3: PRIMARY alerts override throttling, SECONDARY alerts onderhevig aan throttling
+    // Gebruik deze functie in plaats van direct sendNotification() voor 2h alerts
+    static bool send2HNotification(Alert2HType alertType, const char* title, const char* msg, const char* colorTag);
     
     // Sync state: Update AlertEngine state met globale variabelen (voor parallel implementatie)
     void syncStateFromGlobals();
