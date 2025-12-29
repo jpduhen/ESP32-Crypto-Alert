@@ -359,6 +359,15 @@ bool AnchorSystem::setAnchorPrice(float anchorValue, bool shouldUpdateUI, bool s
         
         safeMutexGive(dataMutex, "setAnchorPrice");
         
+        // Reset UI cache variabelen zodat UI de nieuwe anchor waarde zal tonen
+        // Dit moet BUITEN de mutex gebeuren om deadlocks te voorkomen
+        extern float lastAnchorMaxValue;
+        extern float lastAnchorValue;
+        extern float lastAnchorMinValue;
+        lastAnchorMaxValue = -1.0f;  // Force UI update voor anchor max
+        lastAnchorValue = -1.0f;     // Force UI update voor anchor
+        lastAnchorMinValue = -1.0f;  // Force UI update voor anchor min
+        
         // Publiceer anchor event naar MQTT en stuur notificatie alleen als niet overgeslagen
         // Doe dit BUITEN de mutex om blocking operaties te voorkomen
         if (!skipNotifications) {
