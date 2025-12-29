@@ -3,9 +3,9 @@
 // Selecteer je platform door een van de onderstaande defines te activeren:
 
 //#define PLATFORM_CYD24
-#define PLATFORM_CYD28
+//#define PLATFORM_CYD28
 //#define PLATFORM_TTGO
-//#define PLATFORM_ESP32S3_SUPERMINI
+#define PLATFORM_ESP32S3_SUPERMINI
 
 // --- Version Configuration ---
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules

@@ -4477,6 +4477,16 @@ void checkButton() {
 // Setup helper functions - split setup() into logical sections
 static void setupSerialAndDevice()
 {
+    // ESP32-S3 fix: Serial moet als ALLER EERSTE worden geïnitialiseerd
+    #if defined(PLATFORM_ESP32S3_SUPERMINI)
+    Serial.begin(115200);
+    delay(500); // ESP32-S3 heeft tijd nodig voor Serial stabilisatie
+    Serial.println("\n\n=== ESP32-S3 Crypto Monitor Starting ===");
+    Serial.flush(); // Force flush om te zorgen dat output wordt verzonden
+    #else
+    Serial.begin(115200);
+    #endif
+    
     // Load settings from Preferences
     // Initialize SettingsStore
     settingsStore.begin();
@@ -4502,7 +4512,6 @@ static void setupSerialAndDevice()
     
     // Load settings
     loadSettings();
-    Serial.begin(115200);
     DEV_DEVICE_INIT();
     
     // Initialiseer fysieke reset button (voor TTGO en CYD platforms)

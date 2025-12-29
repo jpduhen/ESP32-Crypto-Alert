@@ -17,9 +17,15 @@ if [ -f "$PLATFORM_CONFIG" ]; then
     if grep -q "^#define PLATFORM_TTGO" "$PLATFORM_CONFIG"; then
         PLATFORM_NAME="TTGO T-Display"
         PARTITION_SCHEME="huge_app"  # TTGO: huge_app met 4MB flash
+    elif grep -q "^#define PLATFORM_CYD24" "$PLATFORM_CONFIG"; then
+        PLATFORM_NAME="CYD ESP32-2432S024"
+        PARTITION_SCHEME="huge_app"  # CYD24: huge_app met 4MB flash
     elif grep -q "^#define PLATFORM_CYD28" "$PLATFORM_CONFIG"; then
-        PLATFORM_NAME="CYD 2.8"
-        PARTITION_SCHEME="huge_app"  # CYD: huge_app met 16MB flash
+        PLATFORM_NAME="CYD ESP32-2432S028"
+        PARTITION_SCHEME="huge_app"  # CYD28: huge_app met 16MB flash
+    elif grep -q "^#define PLATFORM_ESP32S3_SUPERMINI" "$PLATFORM_CONFIG"; then
+        PLATFORM_NAME="ESP32-S3 Super Mini"
+        PARTITION_SCHEME="huge_app"  # ESP32-S3: huge_app met 4MB flash
     fi
 fi
 
@@ -27,15 +33,28 @@ fi
 if [ "$PLATFORM_NAME" = "TTGO T-Display" ]; then
     # TTGO: gebruik esp32 board met huge_app partition scheme en expliciet 4MB flash
     FQBN="esp32:esp32:esp32:UploadSpeed=460800,CPUFreq=240,FlashFreq=80,FlashMode=qio,FlashSize=4M,PartitionScheme=${PARTITION_SCHEME},DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=none"
+elif [ "$PLATFORM_NAME" = "ESP32-S3 Super Mini" ]; then
+    # ESP32-S3: gebruik esp32s3 board (FlashFreq optie niet beschikbaar voor ESP32-S3)
+    FQBN="esp32:esp32:esp32s3:UploadSpeed=460800,CPUFreq=240,FlashMode=qio,FlashSize=4M,PartitionScheme=${PARTITION_SCHEME},DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=none"
 else
-    # CYD: gebruik esp32 board met huge_app partition scheme (16MB flash)
+    # CYD24/CYD28: gebruik esp32 board met huge_app partition scheme
     FQBN="esp32:esp32:esp32:UploadSpeed=460800,CPUFreq=240,FlashFreq=80,FlashMode=qio,FlashSize=4M,PartitionScheme=${PARTITION_SCHEME},DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=none"
 fi
 
 echo "=== Compiling $SKETCH_NAME ($PLATFORM_NAME) ==="
 echo "Using partition scheme: $PARTITION_SCHEME"
+
+# Wis build cache om te zorgen dat platform_config.h wijzigingen worden opgepikt
+# Dit voorkomt dat oude preprocessor defines worden gebruikt
+echo "Cleaning build cache to ensure platform_config.h changes are picked up..."
+if [ -d "$SKETCH_DIR/build" ]; then
+    rm -rf "$SKETCH_DIR/build"
+    echo "Build directory cleaned"
+fi
+
 arduino-cli compile \
     --fqbn "$FQBN" \
+    --clean \
     "$SKETCH_DIR"
 
 if [ $? -ne 0 ]; then

@@ -565,25 +565,26 @@ void WebServerModule::handleSave() {
     // M1: Rate-limited heap telemetry in web server (alleen bij "/save")
     logHeap("WEB_SAVE");
     
-    // Handle language setting - geoptimaliseerd: gebruik C-style i.p.v. String
+    // Handle language setting - Fix: gebruik String object eerst
     if (server->hasArg("language")) {
-        const char* langStr = server->arg("language").c_str();
-        int langVal = atoi(langStr);
+        String langStr = server->arg("language");
+        int langVal = atoi(langStr.c_str());
         if (langVal == 0 || langVal == 1) {
             language = static_cast<uint8_t>(langVal);
         }
     }
     
-    // Geoptimaliseerd: gebruik C-style string operaties i.p.v. String objecten
+    // Fix: Gebruik String object eerst (zoals bij anchor) om dangling pointer te voorkomen
+    // ESP32-S3 heeft problemen met direct .c_str() op tijdelijke String objecten
     if (server->hasArg("ntfytopic")) {
-        const char* topicStr = server->arg("ntfytopic").c_str();
+        String topicStr = server->arg("ntfytopic");  // Bewaar String object eerst
         char topicBuffer[64];
-        size_t topicLen = strlen(topicStr);
+        size_t topicLen = topicStr.length();
         
         if (topicLen >= sizeof(topicBuffer)) {
             topicLen = sizeof(topicBuffer) - 1;
         }
-        strncpy(topicBuffer, topicStr, topicLen);
+        strncpy(topicBuffer, topicStr.c_str(), topicLen);
         topicBuffer[topicLen] = '\0';
         
         // Trim leading/trailing whitespace
@@ -606,14 +607,15 @@ void WebServerModule::handleSave() {
         }
     }
     if (server->hasArg("binancesymbol")) {
-        const char* symbolStr = server->arg("binancesymbol").c_str();
+        // Fix: gebruik String object eerst om dangling pointer te voorkomen
+        String symbolStr = server->arg("binancesymbol");
         char symbolBuffer[16];
-        size_t symbolLen = strlen(symbolStr);
+        size_t symbolLen = symbolStr.length();
         
         if (symbolLen >= sizeof(symbolBuffer)) {
             symbolLen = sizeof(symbolBuffer) - 1;
         }
-        strncpy(symbolBuffer, symbolStr, symbolLen);
+        strncpy(symbolBuffer, symbolStr.c_str(), symbolLen);
         symbolBuffer[symbolLen] = '\0';
         
         // Trim leading/trailing whitespace
@@ -1223,8 +1225,10 @@ bool WebServerModule::parseFloatArg(const char* argName, float& result, float mi
     if (!server || !server->hasArg(argName)) {
         return false;
     }
+    // Fix: gebruik String object eerst om dangling pointer te voorkomen
+    String argStr = server->arg(argName);
     float val;
-    if (safeAtof(server->arg(argName).c_str(), val) && val >= minVal && val <= maxVal) {
+    if (safeAtof(argStr.c_str(), val) && val >= minVal && val <= maxVal) {
         result = val;
         return true;
     }
@@ -1236,9 +1240,9 @@ bool WebServerModule::parseIntArg(const char* argName, int& result, int minVal, 
     if (!server || !server->hasArg(argName)) {
         return false;
     }
-    // Geoptimaliseerd: gebruik atoi() i.p.v. String.toInt()
-    const char* argStr = server->arg(argName).c_str();
-    int val = atoi(argStr);
+    // Fix: gebruik String object eerst om dangling pointer te voorkomen
+    String argStr = server->arg(argName);
+    int val = atoi(argStr.c_str());
     if (val >= minVal && val <= maxVal) {
         result = val;
         return true;
@@ -1251,9 +1255,9 @@ bool WebServerModule::parseStringArg(const char* argName, char* dest, size_t des
     if (!server || !server->hasArg(argName)) {
         return false;
     }
-    // Geoptimaliseerd: gebruik C-style string operaties i.p.v. String object
-    const char* str = server->arg(argName).c_str();
-    size_t strLen = strlen(str);
+    // Fix: gebruik String object eerst om dangling pointer te voorkomen
+    String str = server->arg(argName);
+    size_t strLen = str.length();
     
     if (strLen >= destSize) {
         strLen = destSize - 1;
@@ -1264,7 +1268,7 @@ bool WebServerModule::parseStringArg(const char* argName, char* dest, size_t des
     if (strLen >= sizeof(tempBuffer)) {
         strLen = sizeof(tempBuffer) - 1;
     }
-    strncpy(tempBuffer, str, strLen);
+    strncpy(tempBuffer, str.c_str(), strLen);
     tempBuffer[strLen] = '\0';
     
     // Trim leading/trailing whitespace
