@@ -430,6 +430,32 @@ void WebServerModule::renderSettingsHTML() {
                  valueBuf, getText("Cooldown in minuten tussen anchor context alerts", "Cooldown in minutes between anchor context alerts"), 
                  1, 300, 1);
     
+    // FASE X.4: Trend hysteresis en throttling instellingen
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.trendHysteresisFactor);
+    sendInputRow(getText("Trend Hysteresis Factor", "Trend Hysteresis Factor"), "2hTrendHyst", "number", 
+                 valueBuf, getText("Factor voor trend exit threshold (0.65 = 65% van threshold)", "Factor for trend exit threshold (0.65 = 65% of threshold)"), 
+                 0.1f, 1.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.throttlingTrendChangeMs / 1000UL / 60UL);
+    sendInputRow(getText("Throttle: Trend Change (min)", "Throttle: Trend Change (min)"), "2hThrottleTC", "number", 
+                 valueBuf, getText("Cooldown tussen Trend Change alerts", "Cooldown between Trend Change alerts"), 
+                 1, 600, 1);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.throttlingTrendToMeanMs / 1000UL / 60UL);
+    sendInputRow(getText("Throttle: Trend→Mean (min)", "Throttle: Trend→Mean (min)"), "2hThrottleTM", "number", 
+                 valueBuf, getText("Cooldown na Trend Change voor Mean Touch alert", "Cooldown after Trend Change for Mean Touch alert"), 
+                 1, 300, 1);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.throttlingMeanTouchMs / 1000UL / 60UL);
+    sendInputRow(getText("Throttle: Mean Touch (min)", "Throttle: Mean Touch (min)"), "2hThrottleMT", "number", 
+                 valueBuf, getText("Cooldown tussen Mean Touch alerts", "Cooldown between Mean Touch alerts"), 
+                 1, 300, 1);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.throttlingCompressMs / 1000UL / 60UL);
+    sendInputRow(getText("Throttle: Compress (min)", "Throttle: Compress (min)"), "2hThrottleComp", "number", 
+                 valueBuf, getText("Cooldown tussen Compress alerts", "Cooldown between Compress alerts"), 
+                 1, 600, 1);
+    
     sendSectionFooter();
     
     // Slimme logica & filters sectie
@@ -743,6 +769,23 @@ void WebServerModule::handleSave() {
     }
     if (parseIntArg("2hAnchorCD", intVal, 1, 300)) {
         alert2HThresholds.anchorCooldownMs = intVal * 60UL * 1000UL;
+    }
+    
+    // FASE X.4: Trend hysteresis en throttling instellingen
+    if (parseFloatArg("2hTrendHyst", floatVal, 0.1f, 1.0f)) {
+        alert2HThresholds.trendHysteresisFactor = floatVal;
+    }
+    if (parseIntArg("2hThrottleTC", intVal, 1, 600)) {
+        alert2HThresholds.throttlingTrendChangeMs = intVal * 60UL * 1000UL;
+    }
+    if (parseIntArg("2hThrottleTM", intVal, 1, 300)) {
+        alert2HThresholds.throttlingTrendToMeanMs = intVal * 60UL * 1000UL;
+    }
+    if (parseIntArg("2hThrottleMT", intVal, 1, 300)) {
+        alert2HThresholds.throttlingMeanTouchMs = intVal * 60UL * 1000UL;
+    }
+    if (parseIntArg("2hThrottleComp", intVal, 1, 600)) {
+        alert2HThresholds.throttlingCompressMs = intVal * 60UL * 1000UL;
     }
     
     // Geoptimaliseerd: gebruik helper functie i.p.v. gedupliceerde code
@@ -1171,10 +1214,10 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     // HTML doctype en head (lang='en' om punt als decimaal scheidingsteken te forceren)
     server->sendContent(F("<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"));
     
-    // Title - gebruik binanceSymbol in plaats van platformName
+    // Title - gebruik binanceSymbol in plaats van platformName, voeg versie toe
     char titleBuf[128];
-    snprintf(titleBuf, sizeof(titleBuf), "<title>%s %s %s</title>", 
-             getText("Instellingen", "Settings"), binanceSymbol, ntfyTopic);
+    snprintf(titleBuf, sizeof(titleBuf), "<title>%s %s %s v%s</title>", 
+             getText("Instellingen", "Settings"), binanceSymbol, ntfyTopic, VERSION_STRING);
     server->sendContent(titleBuf);
     
     // CSS - Performance optimalisatie: combineer statische CSS in één PROGMEM string
@@ -1341,10 +1384,10 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(F("</head><body>"));
     server->sendContent(F("<div class='container'>"));
     
-    // Title - gebruik binanceSymbol in plaats van platformName
+    // Title - gebruik binanceSymbol in plaats van platformName, voeg versie toe
     char h1Buf[128];
-    snprintf(h1Buf, sizeof(h1Buf), "<h1>%s %s %s</h1>", 
-             getText("Instellingen", "Settings"), binanceSymbol, ntfyTopic);
+    snprintf(h1Buf, sizeof(h1Buf), "<h1>%s %s %s v%s</h1>", 
+             getText("Instellingen", "Settings"), binanceSymbol, ntfyTopic, VERSION_STRING);
     server->sendContent(h1Buf);
 }
 

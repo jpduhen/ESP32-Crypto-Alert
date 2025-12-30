@@ -38,6 +38,12 @@ struct Alert2HThresholds {
     uint32_t compressCooldownMs;
     float anchorOutsideMarginPct;
     uint32_t anchorCooldownMs;
+    // FASE X.4: Trend hysteresis en throttling instellingen
+    float trendHysteresisFactor;        // Hysterese factor voor trend exit (default 0.65)
+    uint32_t throttlingTrendChangeMs;   // Trend Change → Trend Change cooldown (default 180 min)
+    uint32_t throttlingTrendToMeanMs;   // Trend Change → Mean Touch cooldown (default 60 min)
+    uint32_t throttlingMeanTouchMs;     // Mean Touch → Mean Touch cooldown (default 60 min)
+    uint32_t throttlingCompressMs;      // Compress → Compress cooldown (default 120 min)
 };
 
 // Settings struct - bevat alle instelbare waarden
@@ -175,6 +181,12 @@ private:
     static const char* PREF_KEY_2H_COMPRESS_CD;
     static const char* PREF_KEY_2H_ANCHOR_MARGIN;
     static const char* PREF_KEY_2H_ANCHOR_CD;
+    // FASE X.4: Trend hysteresis en throttling preference keys
+    static const char* PREF_KEY_2H_TREND_HYSTERESIS;
+    static const char* PREF_KEY_2H_THROTTLE_TREND_CHANGE;
+    static const char* PREF_KEY_2H_THROTTLE_TREND_MEAN;
+    static const char* PREF_KEY_2H_THROTTLE_MEAN_TOUCH;
+    static const char* PREF_KEY_2H_THROTTLE_COMPRESS;
 };
 
 #endif // SETTINGSSTORE_H

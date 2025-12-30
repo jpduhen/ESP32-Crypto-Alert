@@ -39,6 +39,17 @@ static Alert2HState gAlert2H;
 void findMinMaxInSecondPrices(float &minVal, float &maxVal);
 void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
 void logVolatilityStatus(const EffectiveThresholds& eff);
+// Forward declaration voor generieke findMinMaxInArray() functie (gebruikt voor 5m min/max)
+extern bool findMinMaxInArray(
+    const float* array,
+    uint16_t arraySize,
+    uint16_t currentIndex,
+    bool arrayFilled,
+    uint16_t elementsToCheck,
+    bool useRingBuffer,
+    float &minVal,
+    float &maxVal
+);
 // Fase 6.1.10: fiveMinutePrices kan pointer zijn (CYD/TTGO) of array (andere platforms)
 #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
 extern float *fiveMinutePrices;
@@ -383,10 +394,10 @@ void AlertEngine::cacheAbsoluteValues(float ret_1m, float ret_5m, float ret_30m)
     valuesCached = true;
 }
 
-// Helper: Bereken min/max uit fiveMinutePrices (geoptimaliseerde versie)
-// Geoptimaliseerd: single-pass, early returns, validatie
+// Helper: Bereken min/max uit fiveMinutePrices (gebruikt zelfde logica als 1m en 30m)
+// Fase: Gebruik generieke findMinMaxInArray() functie voor consistentie
 bool AlertEngine::findMinMaxInFiveMinutePrices(float& minVal, float& maxVal) {
-    // Early return: check null pointer
+    // Gebruik PriceData getters (consistent met 1m implementatie)
     const float* fiveMinPrices = priceData.getFiveMinutePrices();
     if (fiveMinPrices == nullptr) {
         // Fallback naar huidige prijs
@@ -402,53 +413,11 @@ bool AlertEngine::findMinMaxInFiveMinutePrices(float& minVal, float& maxVal) {
     
     uint16_t fiveMinIndex = priceData.getFiveMinuteIndex();
     bool fiveMinArrayFilled = priceData.getFiveMinuteArrayFilled();
-    uint16_t elementsToCheck = fiveMinArrayFilled ? SECONDS_PER_5MINUTES : fiveMinIndex;
     
-    // Early return: check array size
-    if (elementsToCheck == 0 || elementsToCheck > SECONDS_PER_5MINUTES) {
-        // Fallback naar huidige prijs
-        if (prices[0] > 0.0f) {
-            minVal = prices[0];
-            maxVal = prices[0];
-        } else {
-            minVal = 0.0f;
-            maxVal = 0.0f;
-        }
-        return false;
-    }
-    
-    // Geoptimaliseerde single-pass min/max berekening
-    bool foundValid = false;
-    for (uint16_t i = 0; i < elementsToCheck; i++) {
-        float val = fiveMinPrices[i];
-        // Validatie: prijs moet redelijk zijn (> 0 en < 1e6)
-        if (val > 0.0f && val < 1000000.0f) {
-            if (!foundValid) {
-                minVal = val;
-                maxVal = val;
-                foundValid = true;
-            } else {
-                // Geoptimaliseerd: gebruik min/max operaties
-                if (val < minVal) minVal = val;
-                if (val > maxVal) maxVal = val;
-            }
-        }
-    }
-    
-    // Final validatie
-    if (!foundValid || minVal <= 0.0f || maxVal <= 0.0f || minVal > 1000000.0f || maxVal > 1000000.0f || minVal > maxVal) {
-        // Fallback naar huidige prijs
-        if (prices[0] > 0.0f) {
-            minVal = prices[0];
-            maxVal = prices[0];
-        } else {
-            minVal = 0.0f;
-            maxVal = 0.0f;
-        }
-        return false;
-    }
-    
-    return true;
+    // Gebruik generieke functie (direct array, geen ring buffer)
+    // elementsToCheck = 0 betekent "check alle beschikbare elementen"
+    return findMinMaxInArray(fiveMinPrices, SECONDS_PER_5MINUTES, fiveMinIndex, 
+                            fiveMinArrayFilled, 0, false, minVal, maxVal);
 }
 
 // Helper: Format notification message (gebruikt class buffers)
@@ -984,28 +953,29 @@ bool AlertEngine::shouldThrottle2HAlert(Alert2HType alertType, uint32_t now) {
     uint32_t timeSinceLastAlert = now - last2HAlertTimestamp;
     
     // Throttling matrix: verschillende suppressieregels per combinatie
+    // FASE X.4: Tijden zijn nu instelbaar via settings
     switch (last2HAlertType) {
         case ALERT2H_TREND_CHANGE:
-            // Trend Change → Trend Change binnen 180 min: suppress
-            if (alertType == ALERT2H_TREND_CHANGE && timeSinceLastAlert < (180UL * 60UL * 1000UL)) {
+            // Trend Change → Trend Change: suppress volgens instelling
+            if (alertType == ALERT2H_TREND_CHANGE && timeSinceLastAlert < alert2HThresholds.throttlingTrendChangeMs) {
                 return true;  // Suppress
             }
-            // Trend Change → Mean Touch binnen 60 min: suppress
-            if (alertType == ALERT2H_MEAN_TOUCH && timeSinceLastAlert < (60UL * 60UL * 1000UL)) {
+            // Trend Change → Mean Touch: suppress volgens instelling
+            if (alertType == ALERT2H_MEAN_TOUCH && timeSinceLastAlert < alert2HThresholds.throttlingTrendToMeanMs) {
                 return true;  // Suppress
             }
             break;
             
         case ALERT2H_MEAN_TOUCH:
-            // Mean Touch → Mean Touch binnen 60 min: suppress
-            if (alertType == ALERT2H_MEAN_TOUCH && timeSinceLastAlert < (60UL * 60UL * 1000UL)) {
+            // Mean Touch → Mean Touch: suppress volgens instelling
+            if (alertType == ALERT2H_MEAN_TOUCH && timeSinceLastAlert < alert2HThresholds.throttlingMeanTouchMs) {
                 return true;  // Suppress
             }
             break;
             
         case ALERT2H_COMPRESS:
-            // Compress → Compress binnen 120 min: suppress
-            if (alertType == ALERT2H_COMPRESS && timeSinceLastAlert < (120UL * 60UL * 1000UL)) {
+            // Compress → Compress: suppress volgens instelling
+            if (alertType == ALERT2H_COMPRESS && timeSinceLastAlert < alert2HThresholds.throttlingCompressMs) {
                 return true;  // Suppress
             }
             break;

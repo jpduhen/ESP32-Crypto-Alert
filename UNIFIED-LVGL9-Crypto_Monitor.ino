@@ -2431,7 +2431,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         {"/config/2hMeanTouch/set", true, 0.01f, 2.0f, &alert2HThresholds.meanTouchBandPct, "/config/2hMeanTouch"},
         {"/config/2hCompressTh/set", true, 0.01f, 5.0f, &alert2HThresholds.compressThresholdPct, "/config/2hCompressTh"},
         {"/config/2hCompressReset/set", true, 0.01f, 10.0f, &alert2HThresholds.compressResetPct, "/config/2hCompressReset"},
-        {"/config/2hAnchorMargin/set", true, 0.01f, 5.0f, &alert2HThresholds.anchorOutsideMarginPct, "/config/2hAnchorMargin"}
+        {"/config/2hAnchorMargin/set", true, 0.01f, 5.0f, &alert2HThresholds.anchorOutsideMarginPct, "/config/2hAnchorMargin"},
+        // FASE X.4: Trend hysteresis en throttling instellingen
+        {"/config/2hTrendHyst/set", true, 0.1f, 1.0f, &alert2HThresholds.trendHysteresisFactor, "/config/2hTrendHyst"}
     };
     
     static const struct {
@@ -2446,7 +2448,12 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         {"/config/2hBreakCD/set", &alert2HThresholds.breakCooldownMs, "/config/2hBreakCD"},
         {"/config/2hMeanCD/set", &alert2HThresholds.meanCooldownMs, "/config/2hMeanCD"},
         {"/config/2hCompressCD/set", &alert2HThresholds.compressCooldownMs, "/config/2hCompressCD"},
-        {"/config/2hAnchorCD/set", &alert2HThresholds.anchorCooldownMs, "/config/2hAnchorCD"}
+        {"/config/2hAnchorCD/set", &alert2HThresholds.anchorCooldownMs, "/config/2hAnchorCD"},
+        // FASE X.4: Throttling tijden
+        {"/config/2hThrottleTC/set", &alert2HThresholds.throttlingTrendChangeMs, "/config/2hThrottleTC"},
+        {"/config/2hThrottleTM/set", &alert2HThresholds.throttlingTrendToMeanMs, "/config/2hThrottleTM"},
+        {"/config/2hThrottleMT/set", &alert2HThresholds.throttlingMeanTouchMs, "/config/2hThrottleMT"},
+        {"/config/2hThrottleComp/set", &alert2HThresholds.throttlingCompressMs, "/config/2hThrottleComp"}
     };
     
     // Process float settings
@@ -3131,7 +3138,8 @@ uint8_t calcLivePctMinuteAverages(uint16_t windowMinutes)
 // Generic helper: Find min and max values in an array
 // Supports both direct array access and ring buffer access patterns
 // Geoptimaliseerd: elimineert code duplicatie tussen findMinMaxInSecondPrices, findMinMaxInLast30Minutes, findMinMaxInLast2Hours
-static bool findMinMaxInArray(
+// Fase: static verwijderd zodat AlertEngine module deze functie kan gebruiken voor 5m min/max
+bool findMinMaxInArray(
     const float* array,           // Array pointer
     uint16_t arraySize,           // Total array size
     uint16_t currentIndex,        // Current write index (for ring buffer) or count (for direct)
@@ -4513,7 +4521,11 @@ static void setupSerialAndDevice()
     
     // Load settings
     loadSettings();
+    // ESP32-S3 fix: DEV_DEVICE_INIT() overslaan - backlight wordt later ingesteld via setDisplayBrigthness() met PWM
+    // Dit voorkomt conflict tussen digitalWrite en ledcAttachChannel
+    #if !defined(PLATFORM_ESP32S3_SUPERMINI)
     DEV_DEVICE_INIT();
+    #endif
     
     // Initialiseer fysieke reset button (voor TTGO en CYD platforms)
     #if HAS_PHYSICAL_BUTTON
@@ -4544,6 +4556,14 @@ static void setupDisplay()
     gfx->invertDisplay(true); // Invert colors (as defined in Setup902_CYD28R_2USB.h with TFT_INVERSION_ON)
     #endif
     gfx->fillScreen(RGB565_BLACK);
+    
+    // ESP32-S3 fix: Backlight moet opnieuw worden ingesteld na display initialisatie
+    // DEV_DEVICE_INIT() wordt eerder aangeroepen, maar ledc kan conflicteren
+    #if defined(PLATFORM_ESP32S3_SUPERMINI)
+    // Zet backlight eerst uit, dan weer aan met PWM
+    digitalWrite(GFX_BL, LOW);
+    delay(10);
+    #endif
     setDisplayBrigthness();
     
     // Geef display tijd om te stabiliseren na initialisatie (vooral belangrijk voor CYD displays en ESP32-S3)
@@ -5407,8 +5427,9 @@ void apiTask(void *parameter)
                 // Bepaal waarde: gebruik zojuist opgehaalde prijs als useCurrentPrice, anders opgegeven waarde
                 float valueToSet = useCurrentPrice ? 0.0f : anchorValueToSet;
                 
-                // C1: Gebruik AnchorSystem module om anchor in te stellen (skipNotifications=true om blocking te voorkomen)
-                if (anchorSystem.setAnchorPrice(valueToSet, false, true)) {
+                // C1: Gebruik AnchorSystem module om anchor in te stellen (skipNotifications=false om notificatie te versturen)
+                // Notificatie wordt BUITEN mutex verstuurd, dus geen blocking probleem
+                if (anchorSystem.setAnchorPrice(valueToSet, false, false)) {
                     // C1: Persist settings na succesvolle anchor set
                     saveSettings();
                     Serial_printf(F("[API Task] Anchor updated via pending request: %.2f\n"), 

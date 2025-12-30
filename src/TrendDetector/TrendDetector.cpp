@@ -12,6 +12,9 @@ extern char binanceSymbol[];
 #include "../VolatilityTracker/VolatilityTracker.h"
 extern VolatilityState volatilityState;  // Hoort bij VolatilityTracker module
 
+// FASE X.4: Include SettingsStore voor Alert2HThresholds
+#include "../SettingsStore/SettingsStore.h"
+
 // Constants
 #define TREND_CHANGE_COOLDOWN_MS 600000UL  // 10 minuten cooldown voor trend change notificaties
 
@@ -58,10 +61,14 @@ void TrendDetector::syncStateFromGlobals() {
 
 // Bepaal trend state op basis van 2h en 30m returns
 // FASE X.1: 2h Trend-hysterese (Optie A) - stabiliseer trendstatus om flip-flopping te voorkomen
+// FASE X.4: Hysterese factor is nu instelbaar via settings
 // Geoptimaliseerd: geconsolideerde checks, early returns
 TrendState TrendDetector::determineTrendState(float ret_2h_value, float ret_30m_value, float trendThreshold) {
-    // Hysterese factor: 0.65 (65% van threshold voor verlaten van trend)
-    const float hysteresisFactor = 0.65f;
+    // Forward declaration voor alert2HThresholds (uit SettingsStore)
+    extern Alert2HThresholds alert2HThresholds;
+    
+    // Hysterese factor uit settings (default 0.65)
+    const float hysteresisFactor = alert2HThresholds.trendHysteresisFactor;
     const float exitThreshold = trendThreshold * hysteresisFactor;
     
     // Gebruik huidige trend state voor hysterese logica

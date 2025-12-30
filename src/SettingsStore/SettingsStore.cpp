@@ -177,6 +177,12 @@ const char* SettingsStore::PREF_KEY_2H_COMPRESS_RESET = "2hCompressReset";
 const char* SettingsStore::PREF_KEY_2H_COMPRESS_CD = "2hCompressCD";
 const char* SettingsStore::PREF_KEY_2H_ANCHOR_MARGIN = "2hAnchorMargin";
 const char* SettingsStore::PREF_KEY_2H_ANCHOR_CD = "2hAnchorCD";
+// FASE X.4: Trend hysteresis en throttling preference keys
+const char* SettingsStore::PREF_KEY_2H_TREND_HYSTERESIS = "2hTrendHyst";
+const char* SettingsStore::PREF_KEY_2H_THROTTLE_TREND_CHANGE = "2hThrottleTC";
+const char* SettingsStore::PREF_KEY_2H_THROTTLE_TREND_MEAN = "2hThrottleTM";
+const char* SettingsStore::PREF_KEY_2H_THROTTLE_MEAN_TOUCH = "2hThrottleMT";
+const char* SettingsStore::PREF_KEY_2H_THROTTLE_COMPRESS = "2hThrottleComp";
 
 // Helper: Generate unique ESP32 device ID using Crockford Base32 encoding
 // Deze functie moet extern beschikbaar zijn voor generateDefaultNtfyTopic
@@ -335,6 +341,12 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     alert2HThresholds.compressCooldownMs = 2UL * 60UL * 60UL * 1000UL; // 2 uur
     alert2HThresholds.anchorOutsideMarginPct = 0.25f;
     alert2HThresholds.anchorCooldownMs = 3UL * 60UL * 60UL * 1000UL; // 3 uur
+    // FASE X.4: Trend hysteresis en throttling defaults
+    alert2HThresholds.trendHysteresisFactor = 0.65f;  // 65% van threshold voor trend exit
+    alert2HThresholds.throttlingTrendChangeMs = 180UL * 60UL * 1000UL; // 180 min
+    alert2HThresholds.throttlingTrendToMeanMs = 60UL * 60UL * 1000UL;   // 60 min
+    alert2HThresholds.throttlingMeanTouchMs = 60UL * 60UL * 1000UL;    // 60 min
+    alert2HThresholds.throttlingCompressMs = 120UL * 60UL * 1000UL;    // 120 min
 }
 
 CryptoMonitorSettings SettingsStore::load() {
@@ -441,6 +453,12 @@ CryptoMonitorSettings SettingsStore::load() {
     settings.alert2HThresholds.compressCooldownMs = prefs.getULong(PREF_KEY_2H_COMPRESS_CD, 2UL * 60UL * 60UL * 1000UL);
     settings.alert2HThresholds.anchorOutsideMarginPct = prefs.getFloat(PREF_KEY_2H_ANCHOR_MARGIN, 0.25f);
     settings.alert2HThresholds.anchorCooldownMs = prefs.getULong(PREF_KEY_2H_ANCHOR_CD, 3UL * 60UL * 60UL * 1000UL);
+    // FASE X.4: Trend hysteresis en throttling settings
+    settings.alert2HThresholds.trendHysteresisFactor = prefs.getFloat(PREF_KEY_2H_TREND_HYSTERESIS, 0.65f);
+    settings.alert2HThresholds.throttlingTrendChangeMs = prefs.getULong(PREF_KEY_2H_THROTTLE_TREND_CHANGE, 180UL * 60UL * 1000UL);
+    settings.alert2HThresholds.throttlingTrendToMeanMs = prefs.getULong(PREF_KEY_2H_THROTTLE_TREND_MEAN, 60UL * 60UL * 1000UL);
+    settings.alert2HThresholds.throttlingMeanTouchMs = prefs.getULong(PREF_KEY_2H_THROTTLE_MEAN_TOUCH, 60UL * 60UL * 1000UL);
+    settings.alert2HThresholds.throttlingCompressMs = prefs.getULong(PREF_KEY_2H_THROTTLE_COMPRESS, 120UL * 60UL * 1000UL);
     
     prefs.end();
     return settings;
@@ -521,6 +539,12 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     prefs.putULong(PREF_KEY_2H_COMPRESS_CD, settings.alert2HThresholds.compressCooldownMs);
     prefs.putFloat(PREF_KEY_2H_ANCHOR_MARGIN, settings.alert2HThresholds.anchorOutsideMarginPct);
     prefs.putULong(PREF_KEY_2H_ANCHOR_CD, settings.alert2HThresholds.anchorCooldownMs);
+    // FASE X.4: Trend hysteresis en throttling settings
+    prefs.putFloat(PREF_KEY_2H_TREND_HYSTERESIS, settings.alert2HThresholds.trendHysteresisFactor);
+    prefs.putULong(PREF_KEY_2H_THROTTLE_TREND_CHANGE, settings.alert2HThresholds.throttlingTrendChangeMs);
+    prefs.putULong(PREF_KEY_2H_THROTTLE_TREND_MEAN, settings.alert2HThresholds.throttlingTrendToMeanMs);
+    prefs.putULong(PREF_KEY_2H_THROTTLE_MEAN_TOUCH, settings.alert2HThresholds.throttlingMeanTouchMs);
+    prefs.putULong(PREF_KEY_2H_THROTTLE_COMPRESS, settings.alert2HThresholds.throttlingCompressMs);
     
     prefs.end();
 }
