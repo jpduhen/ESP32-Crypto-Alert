@@ -63,3 +63,33 @@ mqtt:
     - name: "Crypto Alert Verandering %"
       state_topic: "cryptoalert/change_pct"
       unit_of_measurement: "%"
+```
+
+### 8.3.4 Home Assistant Dashboard Voorbeelden
+Met de beschikbare sensors kun je prachtige Lovelace-dashboards bouwen.
+
+![Home Assistant crypto dashboard 1](img/ha-dashboard-1.jpg)  
+*Eenvoudig dashboard met prijs, verandering en laatste alert.*
+
+![Home Assistant crypto dashboard 2](img/ha-dashboard-2.jpg)  
+*Geavanceerd dashboard met history graph, trend-indicator en alerts.*
+
+### 8.3.5 Voorbeelden van Automations
+Enkele ideeën voor Home Assistant automations:
+- Lampen laten knipperen bij een **BREAKOUT** of **SPIKE**.
+- Een TTS-melding op een Google Nest speaker bij een **Trend Change**.
+- Notificatie sturen via Telegram of WhatsApp bij benadering van de **Max Loss-zone**.
+
+![Home Assistant automation voorbeeld](img/ha-automation-example.jpg)  
+*Voorbeeld van een automation die een lamp activeert bij een breakout-alert.*
+
+## 8.4 Andere Integratiemogelijkheden
+- **Node-RED**: Subscribe op de topics en bouw complexe flows.
+- **OpenHAB / Domoticz**: MQTT-ondersteuning aanwezig.
+- **Custom scripts**: Gebruik een MQTT-client (Python, Node.js) voor eigen logica.
+
+Met deze integraties wordt jouw ESP32-Crypto-Alert een volwaardig onderdeel van je smarthome of monitoring-setup.
+
+---
+
+*Ga naar [Hoofdstuk 7: Alert Types en Voorbeelden](07-Alert-Types-en-Voorbeelden.md) | [Hoofdstuk 9: Geavanceerde Gebruik en Aanpassingen](09-Geavanceerd-Gebruik-en-Aanpassingen.md)*
