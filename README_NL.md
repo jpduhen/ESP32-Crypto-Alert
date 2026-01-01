@@ -15,9 +15,6 @@ Geen constante notificaties, maar alleen relevante signalen zoals spikes, breako
 - Ondersteuning voor populaire ESP32-boards met TFT-display
 - Volledig configureerbaar zonder hercompilatie
 
-![Project overview](docs/img/esp32-boards-overview.jpg)  
-*Voorbeelden van compatibele boards: Cheap Yellow Display, TTGO T-Display, T-Display S3 en Waveshare ESP32-S3-GEEK.*
-
 ## 📚 Gedetailleerde Handleiding
 
 De volledige Nederlandstalige handleiding is onderverdeeld in aparte hoofdstukken voor betere leesbaarheid:
