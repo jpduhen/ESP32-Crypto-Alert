@@ -36,6 +36,7 @@ In de projectcode activeer je het juiste board met defines bovenaan:
 ```cpp
 #define CYD_2432S028R      1  // Voor Cheap Yellow Display
 // #define LILYGO_TDISPLAY  0  // etc.
+```
 
 ##9.4 Custom Thresholds en Alert-Logica Wijzigen
 De meeste parameters staan als constante variabelen in de code en kunnen eenvoudig aangepast worden.
