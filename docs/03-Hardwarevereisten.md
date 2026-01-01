@@ -27,7 +27,7 @@ De meest gebruikte en goedkoopste optie (€10-15). 2.8" resistive touchscreen (
 ### 3.2.2 LilyGO TTGO T-Display
 Compact board met 1.14" IPS-display (ST7789). Ideaal voor kleine bureau-opstelling.
 
-![TTGO T-Display](img/ttgo-t-display.jpg)  
+![TTGO T-Display](img/ttgo-t-display.webp)  
 *LilyGO TTGO T-Display.*
 
 ### 3.2.3 Waveshare ESP32-S3-GEEK
