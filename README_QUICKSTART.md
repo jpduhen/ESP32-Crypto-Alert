@@ -2,7 +2,7 @@
 
 ## What do I need?
 
-- ESP32 with display (CYD, ESP32-S3 SuperMini, or similar)
+- ESP32 with display (CYD, ESP32-S3 SuperMini, ESP32-S3 GEEK, TTGO T-Display, or similar)
 - WiFi connection
 - NTFY.sh account (or public topic)
 - Binance API (public endpoints, no key required)

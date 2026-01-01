@@ -40,8 +40,10 @@ At a high level, the system:
 ## 3. Hardware overview
 
 **Supported boards:**
-- ESP32-CYD (Cheap Yellow Display)
-- ESP32-S2 / S3 (including SuperMini variants)
+- ESP32-CYD (Cheap Yellow Display) - 2.4" and 2.8" variants
+- ESP32-S3 SuperMini (1.54" display)
+- ESP32-S3 GEEK (1.14" display, 2MB PSRAM)
+- TTGO T-Display (1.14" display)
 
 **Optional:**
 - Touchscreen display

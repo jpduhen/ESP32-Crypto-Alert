@@ -5,7 +5,8 @@
 //#define PLATFORM_CYD24
 //#define PLATFORM_CYD28
 //#define PLATFORM_TTGO
-#define PLATFORM_ESP32S3_SUPERMINI
+//#define PLATFORM_ESP32S3_SUPERMINI
+#define PLATFORM_ESP32S3_GEEK 
 
 // --- Version Configuration ---
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
@@ -153,8 +154,38 @@
     #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_10
     #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
     #define SYMBOL_COUNT 3  // TTGO/ESP32-S3: BTCEUR, 1m, 30m
+#elif defined(PLATFORM_ESP32S3_GEEK)
+    #if !defined(UICONTROLLER_INCLUDE) && !defined(MODULE_INCLUDE)
+    #include "PINS_ESP32S3_GEEK_ST7789_114.h"
+    #endif
+    #define MQTT_TOPIC_PREFIX "esp32s3geek_crypto"
+    #define DEVICE_NAME "ESP32-S3 GEEK Crypto Monitor"
+    #define DEVICE_MODEL "ESP32-S3 GEEK"
+    #define HAS_TOUCHSCREEN false
+    #define HAS_PHYSICAL_BUTTON true
+    #define BUTTON_PIN 0
+    #define SYMBOL_1MIN_LABEL "1m"
+    #define SYMBOL_30MIN_LABEL "30m"
+    #define CHART_WIDTH 135
+    #define CHART_HEIGHT 60
+    #define CHART_ALIGN_Y 26
+    #define PRICE_BOX_Y_START 85
+    #define FONT_SIZE_TITLE_BTCEUR &lv_font_montserrat_14
+    #define FONT_SIZE_TITLE_OTHER &lv_font_montserrat_12
+    #define FONT_SIZE_PRICE_BTCEUR &lv_font_montserrat_12
+    #define FONT_SIZE_PRICE_OTHER &lv_font_montserrat_12
+    #define FONT_SIZE_ANCHOR &lv_font_montserrat_10
+    #define FONT_SIZE_TREND_VOLATILITY &lv_font_montserrat_12
+    #define FONT_SIZE_FOOTER &lv_font_montserrat_12
+    #define FONT_SIZE_IP_PREFIX &lv_font_montserrat_14
+    #define FONT_SIZE_IP &lv_font_montserrat_12
+    #define FONT_SIZE_CHART_DATE_TIME &lv_font_montserrat_10
+    #define FONT_SIZE_CHART_VERSION &lv_font_montserrat_10
+    #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_10
+    #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
+    #define SYMBOL_COUNT 3  // GEEK: BTCEUR, 1m, 30m
 #else
-    #error "Please define PLATFORM_TTGO, PLATFORM_CYD24, PLATFORM_CYD28 or PLATFORM_ESP32S3_SUPERMINI in platform_config.h"
+    #error "Please define PLATFORM_TTGO, PLATFORM_CYD24, PLATFORM_CYD28, PLATFORM_ESP32S3_SUPERMINI or PLATFORM_ESP32S3_GEEK in platform_config.h"
 #endif
 
 // Fallback: als SYMBOL_COUNT nog niet gedefinieerd is, gebruik default 3

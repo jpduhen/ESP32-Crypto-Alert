@@ -492,7 +492,7 @@ bool newPriceDataAvailable = false;  // Flag om aan te geven of er nieuwe prijsd
 float *fiveMinutePrices = nullptr;  // Dynamisch gealloceerd voor CYD/TTGO zonder PSRAM
 DataSource *fiveMinutePricesSource = nullptr;  // Dynamisch gealloceerd
 #else
-float fiveMinutePrices[SECONDS_PER_5MINUTES];
+float fiveMinutePrices[SECONDS_PER_5MINUTES];  // Statische arrays voor platforms met PSRAM (ESP32-S3 SuperMini, GEEK)
 DataSource fiveMinutePricesSource[SECONDS_PER_5MINUTES];  // Source tracking per sample
 #endif
 uint16_t fiveMinuteIndex = 0;
@@ -508,7 +508,7 @@ bool fiveMinuteArrayFilled = false;
 float *minuteAverages = nullptr;  // Dynamisch gealloceerd voor CYD/TTGO zonder PSRAM
 DataSource *minuteAveragesSource = nullptr;  // Dynamisch gealloceerd
 #else
-float minuteAverages[MINUTES_FOR_30MIN_CALC];
+float minuteAverages[MINUTES_FOR_30MIN_CALC];  // Statische arrays voor platforms met PSRAM (ESP32-S3 SuperMini, GEEK)
 DataSource minuteAveragesSource[MINUTES_FOR_30MIN_CALC];  // Source tracking per sample
 #endif
 // Fase 4.2.9: static verwijderd zodat PriceData getters deze kunnen gebruiken
@@ -3295,7 +3295,7 @@ static float calculateReturnGeneric(
         if (currentIndex < positionsAgo) {
             resetAveragePrice();
             return 0.0f;
-        }
+    }
         priceXAgo = priceArray[currentIndex - positionsAgo];
     }
     
@@ -4099,8 +4099,8 @@ void fetchPrice()
         
         // Neem mutex voor data updates (timeout verhoogd om mutex conflicts te verminderen)
         // API task heeft prioriteit: verhoogde timeout om mutex te krijgen zelfs als UI bezig is
-        #ifdef PLATFORM_TTGO
-        const TickType_t apiMutexTimeout = pdMS_TO_TICKS(500); // TTGO: 500ms
+        #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
+        const TickType_t apiMutexTimeout = pdMS_TO_TICKS(500); // TTGO/GEEK: 500ms
         #else
         const TickType_t apiMutexTimeout = pdMS_TO_TICKS(400); // CYD/ESP32-S3: 400ms voor betere mutex acquisitie
         #endif
@@ -4286,7 +4286,7 @@ static char lastTimeText[9] = {0};   // Cache voor time label
 // Fase 8: updateFooter() gebruikt nog globale pointers (kan later naar UIController module verplaatst worden)
 void updateFooter()
 {
-    #ifdef PLATFORM_TTGO
+    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
     if (ipLabel != nullptr) {
         if (WiFi.status() == WL_CONNECTED) {
             // Geoptimaliseerd: gebruik char array i.p.v. String
@@ -4487,7 +4487,7 @@ void checkButton() {
 static void setupSerialAndDevice()
 {
     // ESP32-S3 fix: Serial moet als ALLER EERSTE worden geïnitialiseerd
-    #if defined(PLATFORM_ESP32S3_SUPERMINI)
+    #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     Serial.begin(115200);
     delay(500); // ESP32-S3 heeft tijd nodig voor Serial stabilisatie
     Serial.println("\n\n=== ESP32-S3 Crypto Monitor Starting ===");
@@ -4550,8 +4550,8 @@ static void setupDisplay()
         }
     }
     gfx->setRotation(0);
-    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI)
-    gfx->invertDisplay(false); // TTGO/ESP32-S3 T-Display heeft geen inversie nodig (ST7789)
+    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
+    gfx->invertDisplay(false); // TTGO/ESP32-S3 T-Display/GEEK heeft geen inversie nodig (ST7789)
     #else
     gfx->invertDisplay(true); // Invert colors (as defined in Setup902_CYD28R_2USB.h with TFT_INVERSION_ON)
     #endif
@@ -4559,15 +4559,21 @@ static void setupDisplay()
     
     // ESP32-S3 fix: Backlight moet opnieuw worden ingesteld na display initialisatie
     // DEV_DEVICE_INIT() wordt eerder aangeroepen, maar ledc kan conflicteren
+    // GEEK gebruikt digitalWrite (geen PWM), dus alleen voor SUPERMINI
     #if defined(PLATFORM_ESP32S3_SUPERMINI)
     // Zet backlight eerst uit, dan weer aan met PWM
     digitalWrite(GFX_BL, LOW);
     delay(10);
-    #endif
     setDisplayBrigthness();
+    #elif defined(PLATFORM_ESP32S3_GEEK)
+    // GEEK gebruikt digitalWrite, geen PWM nodig - backlight is al aan via DEV_DEVICE_INIT()
+    // Geen extra actie nodig
+    #else
+    setDisplayBrigthness();
+    #endif
     
     // Geef display tijd om te stabiliseren na initialisatie (vooral belangrijk voor CYD displays en ESP32-S3)
-    #if !defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI)
+    #if !defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     delay(200); // ESP32-S3 heeft extra tijd nodig voor SPI stabilisatie
     #endif
 }
@@ -4599,6 +4605,9 @@ static void setupLVGL()
     #elif defined(PLATFORM_ESP32S3_SUPERMINI)
         // ESP32-S3: double buffer alleen als PSRAM beschikbaar is
         useDoubleBuffer = psramAvailable;
+    #elif defined(PLATFORM_ESP32S3_GEEK)
+        // ESP32-S3 GEEK: double buffer alleen als PSRAM beschikbaar is
+        useDoubleBuffer = psramAvailable;
     #elif defined(PLATFORM_TTGO)
         // TTGO: double buffer alleen als PSRAM beschikbaar is
         useDoubleBuffer = psramAvailable;
@@ -4626,6 +4635,13 @@ static void setupLVGL()
             bufLines = 30;
         } else {
             bufLines = 2;  // ESP32-S3 zonder PSRAM: 2 regels
+        }
+    #elif defined(PLATFORM_ESP32S3_GEEK)
+        // ESP32-S3 GEEK: 30 regels met PSRAM, 2 zonder
+        if (psramAvailable) {
+            bufLines = 30;
+        } else {
+            bufLines = 2;
         }
     #elif defined(PLATFORM_TTGO)
         // TTGO: 30 regels met PSRAM, 2 zonder
@@ -4655,6 +4671,8 @@ static void setupLVGL()
         boardName = "CYD28";
     #elif defined(PLATFORM_ESP32S3_SUPERMINI)
         boardName = "ESP32-S3";
+    #elif defined(PLATFORM_ESP32S3_GEEK)
+        boardName = "ESP32-S3 GEEK";
     #elif defined(PLATFORM_TTGO)
         boardName = "TTGO";
     #else
@@ -4941,14 +4959,14 @@ void setup()
     }
     // Initialize fiveMinutePricesSource (alleen als array bestaat, niet nullptr)
     if (fiveMinutePricesSource != nullptr) {
-        for (uint16_t i = 0; i < SECONDS_PER_5MINUTES; i++) {
-            fiveMinutePricesSource[i] = SOURCE_LIVE;
-        }
+    for (uint16_t i = 0; i < SECONDS_PER_5MINUTES; i++) {
+        fiveMinutePricesSource[i] = SOURCE_LIVE;
+    }
     }
     // Initialize minuteAveragesSource (alleen als array bestaat, niet nullptr)
     if (minuteAveragesSource != nullptr) {
-        for (uint8_t i = 0; i < MINUTES_FOR_30MIN_CALC; i++) {
-            minuteAveragesSource[i] = SOURCE_LIVE;
+    for (uint8_t i = 0; i < MINUTES_FOR_30MIN_CALC; i++) {
+        minuteAveragesSource[i] = SOURCE_LIVE;
         }
     }
     

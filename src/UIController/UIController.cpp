@@ -382,7 +382,7 @@ void UIController::createChart() {
     lv_label_set_text(volatilityLabel, "--");
     
     // Platform-specifieke layout voor chart title
-    #if !defined(PLATFORM_TTGO) && !defined(PLATFORM_ESP32S3_SUPERMINI)
+    #if !defined(PLATFORM_TTGO) && !defined(PLATFORM_ESP32S3_SUPERMINI) && !defined(PLATFORM_ESP32S3_GEEK)
     chartTitle = lv_label_create(lv_scr_act());
     ::chartTitle = chartTitle;  // Fase 8.4.3: Synchroniseer met globale pointer
     lv_obj_set_style_text_font(chartTitle, &lv_font_montserrat_16, 0);
@@ -396,8 +396,8 @@ void UIController::createChart() {
 
 // Fase 8.3.2: createHeaderLabels() verplaatst naar UIController module (parallel implementatie)
 void UIController::createHeaderLabels() {
-    #ifdef PLATFORM_TTGO
-    // TTGO: Compacte layout met datum op regel 1, beginletters/versie/tijd op regel 2
+    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
+    // TTGO/GEEK: Compacte layout met datum op regel 1, beginletters/versie/tijd op regel 2
     chartDateLabel = lv_label_create(lv_scr_act());
     ::chartDateLabel = chartDateLabel;  // Fase 8.4.3: Synchroniseer met globale pointer
     lv_obj_set_style_text_font(chartDateLabel, &lv_font_montserrat_10, 0);
@@ -516,7 +516,7 @@ void UIController::createPriceBoxes() {
             lv_obj_set_style_text_font(priceLbl[i], FONT_SIZE_PRICE_OTHER, 0);
         }
         
-        #ifdef PLATFORM_TTGO
+        #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
         if (i == 0) {
             lv_obj_set_style_text_align(priceLbl[i], LV_TEXT_ALIGN_LEFT, 0);
             lv_obj_set_style_text_color(priceLbl[i], lv_palette_main(LV_PALETTE_BLUE), 0);
@@ -697,8 +697,8 @@ void UIController::updateDateTimeLabels()
         struct tm timeinfo;
         if (getLocalTime(&timeinfo))
         {
-            #ifdef PLATFORM_TTGO
-            // TTGO: compact formaat dd-mm-yy voor lagere resolutie
+            #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
+            // TTGO/GEEK: compact formaat dd-mm-yy voor lagere resolutie
             char dateStr[9]; // dd-mm-yy + null terminator = 9 karakters
             strftime(dateStr, sizeof(dateStr), "%d-%m-%y", &timeinfo);
             #else
@@ -735,8 +735,8 @@ void UIController::updateDateTimeLabels()
 
 // Fase 8.3.4: createFooter() verplaatst naar UIController module (parallel implementatie)
 void UIController::createFooter() {
-    #ifdef PLATFORM_TTGO
-    // TTGO: IP-adres links, versienummer rechts
+    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
+    // TTGO/GEEK: IP-adres links, versienummer rechts
     ipLabel = lv_label_create(lv_scr_act());
     ::ipLabel = ipLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(ipLabel, FONT_SIZE_FOOTER, 0);
@@ -919,11 +919,11 @@ void UIController::updateTrendLabel()
                 // Nog niet genoeg data: toon minuten tot 30
                 // Geoptimaliseerd: language check geëlimineerd (beide branches identiek)
                 uint8_t minutesNeeded = 30 - availableMinutes;
-                snprintf(waitText, sizeof(waitText), "Warm-up 30m %um", minutesNeeded);
+                    snprintf(waitText, sizeof(waitText), "Warm-up 30m %um", minutesNeeded);
             } else if (livePct30 < 80) {
                 // Genoeg data maar niet genoeg live: toon percentage live
                 // Geoptimaliseerd: language check geëlimineerd (beide branches identiek)
-                snprintf(waitText, sizeof(waitText), "Warm-up 30m %u%%", livePct30);
+                    snprintf(waitText, sizeof(waitText), "Warm-up 30m %u%%", livePct30);
             } else {
                 // Zou niet moeten voorkomen (livePct30 >= 80 maar hasRet30m is false)
                 lv_label_set_text(::trendLabel, "--");
@@ -938,11 +938,11 @@ void UIController::updateTrendLabel()
                 // Nog niet genoeg data: toon minuten tot 120
                 // Geoptimaliseerd: language check geëlimineerd (beide branches identiek)
                 uint8_t minutesNeeded = 120 - availableMinutes;
-                snprintf(waitText, sizeof(waitText), "Warm-up 2h %um", minutesNeeded);
+                    snprintf(waitText, sizeof(waitText), "Warm-up 2h %um", minutesNeeded);
             } else if (livePct120 < 80) {
                 // Genoeg data maar niet genoeg live: toon percentage live
                 // Geoptimaliseerd: language check geëlimineerd (beide branches identiek)
-                snprintf(waitText, sizeof(waitText), "Warm-up 2h %u%%", livePct120);
+                    snprintf(waitText, sizeof(waitText), "Warm-up 2h %u%%", livePct120);
             } else {
                 // Zou niet moeten voorkomen (livePct120 >= 80 maar hasRet2h is false)
                 lv_label_set_text(::trendLabel, "--");
@@ -1011,7 +1011,7 @@ void UIController::updateBTCEURCard(bool hasNewData)
     
     // Bitcoin waarde linksonderin altijd blauw
     if (::priceLbl[0] != nullptr) {
-        lv_obj_set_style_text_color(::priceLbl[0], lv_palette_main(LV_PALETTE_BLUE), 0);
+            lv_obj_set_style_text_color(::priceLbl[0], lv_palette_main(LV_PALETTE_BLUE), 0);
     }
     
     // Bereken dynamische anchor-waarden op basis van trend voor UI weergave
@@ -1023,7 +1023,7 @@ void UIController::updateBTCEURCard(bool hasNewData)
         effAnchorUI = anchorSystem.calcEffectiveAnchor(anchorMaxLoss, anchorTakeProfit, currentTrend);
     }
     
-    #ifdef PLATFORM_TTGO
+    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
     if (::anchorMaxLabel != nullptr) {
         if (anchorActive && anchorPrice > 0.0f) {
             // Gebruik dynamische take profit waarde
@@ -1392,7 +1392,7 @@ void UIController::updateChartSection(int32_t currentPrice, bool hasNewPriceData
     }
     
     // Update chart begin letters label (TTGO displays)
-    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI)
+    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     if (::chartBeginLettersLabel != nullptr) {
         char deviceIdBuffer[16];
         getDeviceIdFromTopic(ntfyTopic, deviceIdBuffer, sizeof(deviceIdBuffer));
@@ -1514,6 +1514,9 @@ void UIController::setupLVGL()
     #elif defined(PLATFORM_ESP32S3_SUPERMINI)
         // ESP32-S3: double buffer alleen als PSRAM beschikbaar is
         useDoubleBuffer = psramAvailable;
+    #elif defined(PLATFORM_ESP32S3_GEEK)
+        // ESP32-S3 GEEK: double buffer alleen als PSRAM beschikbaar is
+        useDoubleBuffer = psramAvailable;
     #elif defined(PLATFORM_TTGO)
         // TTGO: double buffer alleen als PSRAM beschikbaar is
         useDoubleBuffer = psramAvailable;
@@ -1541,6 +1544,13 @@ void UIController::setupLVGL()
             bufLines = 30;
         } else {
             bufLines = 2;  // ESP32-S3 zonder PSRAM: 2 regels
+        }
+    #elif defined(PLATFORM_ESP32S3_GEEK)
+        // ESP32-S3 GEEK: 30 regels met PSRAM, 2 zonder
+        if (psramAvailable) {
+            bufLines = 30;
+        } else {
+            bufLines = 2;
         }
     #elif defined(PLATFORM_TTGO)
         // TTGO: 30 regels met PSRAM, 2 zonder
