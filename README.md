@@ -37,6 +37,7 @@ At a high level, the system:
 - Shows status on a local display
 - Provides a web interface for configuration
 - Integrates with Home Assistant via MQTT (optional)
+- Supports NTFY mobile apps (iOS and Android) for push notifications
 
 ## 3. Hardware overview
 
@@ -131,7 +132,7 @@ The device hosts a local web interface where you configure everything.
 
 ## 7. Settings explained (plain language)
 
-### 7.1 Basic & connectivity
+### 8.1 Basic & connectivity
 
 | Setting | Meaning |
 |---------|---------|
@@ -139,7 +140,7 @@ The device hosts a local web interface where you configure everything.
 | Binance Symbol | Trading pair (e.g. BTCEUR) |
 | Language | UI & alert language |
 
-### 7.2 Anchor & risk management
+### 8.2 Anchor & risk management
 
 | Setting | Meaning |
 |---------|---------|
@@ -148,7 +149,7 @@ The device hosts a local web interface where you configure everything.
 
 Used for risk-aware alerts, not trading execution.
 
-### 7.3 Signal generation thresholds
+### 8.3 Signal generation thresholds
 
 These define how sensitive the system is.
 
@@ -160,7 +161,7 @@ These define how sensitive the system is.
 **Higher values = fewer alerts**  
 **Lower values = more alerts**
 
-### 7.4 Volatility levels
+### 8.4 Volatility levels
 
 The system classifies volatility as:
 - Low
@@ -172,7 +173,7 @@ This affects:
 - Trend confidence
 - Filtering
 
-### 7.5 2-hour alert thresholds
+### 8.5 2-hour alert thresholds
 
 These control structural alerts:
 
@@ -183,7 +184,7 @@ These control structural alerts:
 | Compress Threshold | Defines "tight range" |
 | Mean Reversion Distance | How far price must drift from average |
 
-### 7.6 Smart logic & filters
+### 8.6 Smart logic & filters
 
 Optional intelligence layers:
 
@@ -196,19 +197,19 @@ Optional intelligence layers:
 - **Auto-volatility mode**  
   → Thresholds adapt automatically to market behavior
 
-### 7.7 Cooldowns
+### 8.7 Cooldowns
 
 Prevent alert spam.
 
 Each timeframe has its own cooldown.
 
-### 7.8 Warm-start (advanced)
+### 8.8 Warm-start (advanced)
 
 On boot, the device can fetch historical candles to avoid waiting hours for context.
 
 This makes the system usable almost immediately after restart.
 
-## 8. Recommended presets
+## 9. Recommended presets
 
 ### Conservative (few alerts)
 - Higher thresholds
@@ -225,7 +226,7 @@ This makes the system usable almost immediately after restart.
 - Short cooldowns
 - More suitable for scalpers
 
-## 9. How to interpret alerts
+## 10. How to interpret alerts
 
 **General guidance:**
 
@@ -238,7 +239,7 @@ This makes the system usable almost immediately after restart.
 - Breakout or breakdown
 - Volatility expansion
 
-## 10. What this system is NOT
+## 11. What this system is NOT
 
 - ❌ Not a trading bot
 - ❌ Not financial advice
@@ -247,7 +248,7 @@ This makes the system usable almost immediately after restart.
 
 **It is a decision support tool.**
 
-## 11. Who is this for?
+## 12. Who is this for?
 
 - Crypto traders who want alerts with context
 - Makers building a dedicated crypto device

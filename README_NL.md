@@ -12,6 +12,7 @@ Het:
 - Begrijpt trend, volatiliteit en context
 - Stuurt gerichte notificaties
 - Werkt zonder PC, cloud of abonnement
+- Ondersteunt NTFY mobiele apps (iOS en Android) voor push notificaties
 
 ## 2. Waarvoor is het bedoeld?
 
@@ -151,7 +152,7 @@ Deze bepalen structurele alerts:
 | Compress Drempel | Definieert "strakke range" |
 | Mean Reversion Afstand | Hoe ver prijs moet afdrijven van gemiddelde |
 
-### 5.6 Slimme logica & filters
+### 7.6 Slimme logica & filters
 
 Optionele intelligentie lagen:
 
@@ -164,19 +165,19 @@ Optionele intelligentie lagen:
 - **Auto-volatiliteit modus**  
   → Drempels passen zich automatisch aan aan marktgedrag
 
-### 5.7 Cooldowns
+### 7.7 Cooldowns
 
 Voorkom alert spam.
 
 Elke tijdschaal heeft zijn eigen cooldown.
 
-### 5.8 Warm-start (geavanceerd)
+### 7.8 Warm-start (geavanceerd)
 
 Bij opstarten kan het apparaat historische candles ophalen om niet uren te hoeven wachten op context.
 
 Dit maakt het systeem bijna direct bruikbaar na herstart.
 
-## 6. Aanbevolen presets
+## 8. Aanbevolen presets
 
 ### Conservatief (weinig alerts)
 - Hogere drempels
@@ -193,7 +194,7 @@ Dit maakt het systeem bijna direct bruikbaar na herstart.
 - Korte cooldowns
 - Meer geschikt voor scalpers
 
-## 7. Hoe alerts te interpreteren
+## 9. Hoe alerts te interpreteren
 
 **Algemene richtlijnen:**
 
@@ -206,13 +207,13 @@ Dit maakt het systeem bijna direct bruikbaar na herstart.
 - Breakout of breakdown
 - Volatiliteit expansie
 
-## 8. Voor wie is dit?
+## 10. Voor wie is dit?
 
 - Traders die rust willen
 - Mensen die niet continu grafieken willen volgen
 - Bouwers van slimme ESP32-projecten
 
-## 9. Wat dit systeem NIET is
+## 11. Wat dit systeem NIET is
 
 - ❌ Geen trading bot
 - ❌ Geen financieel advies
@@ -221,7 +222,7 @@ Dit maakt het systeem bijna direct bruikbaar na herstart.
 
 **Het is een beslissingsondersteunend hulpmiddel.**
 
-## 10. MQTT / Home Assistant Integratie
+## 12. MQTT / Home Assistant Integratie
 
 Het systeem ondersteunt MQTT-integratie voor Home Assistant auto-discovery. Alle instellingen en live waarden worden blootgesteld als MQTT-entiteiten.
 
@@ -251,7 +252,7 @@ Het systeem ondersteunt MQTT-integratie voor Home Assistant auto-discovery. Alle
 
 ---
 
-## 11. Samenvatting
+## 13. Samenvatting
 
 Dit systeem:
 - Filtert ruis
