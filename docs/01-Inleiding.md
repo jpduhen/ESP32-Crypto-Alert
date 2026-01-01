@@ -45,4 +45,4 @@ In de volgende hoofdstukken gaan we dieper in op de functies, hardware, installa
 
 ---
 
-*Ga naar [Hoofdstuk 2: Functies en Mogelijkheden](02-Functies-en-Mogelijkheden)*
+*Ga naar [Hoofdstuk 2: Functies en Mogelijkheden](02-Functies-en-Mogelijkheden.md)*
