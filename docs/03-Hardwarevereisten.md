@@ -42,8 +42,8 @@ Compact board met ESP32-S3, 1.14" IPS LCD (ST7789, 240×135), 16MB Flash, 2MB PS
 ## 3.3 Custom Builds
 Bij gebruik van een generieke ESP32 (bijv. DevKit) kun je een los TFT-display aansluiten via SPI.
 
-![Generieke ESP32 pinout](img/esp32-devkit-pinout.jpg)  
-*Pinout van een standaard ESP32 DevKit board.*
+![Generieke ESP32 pinout](img/esp32-s3-supermini-pinout.webp)  
+*Pinout van een ESP32-S3-Supermini board.*
 
 ![TFT SPI bedrading](img/tft-spi-wiring.jpg)  
 *Typische SPI-bedrading voor een ILI9341 of ST7789 TFT-display.*
