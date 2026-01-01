@@ -13,15 +13,12 @@ Het project ondersteunt zowel **kant-en-klare boards met display** als **custom 
 
 Een display is sterk aanbevolen, maar niet verplicht (headless gebruik met alleen notificaties is mogelijk).
 
-![ESP32 boards overzicht](img/esp32-boards-overview.jpg)  
-*Overzicht van populaire ESP32-boards geschikt voor dit project.*
-
 ## 3.2 Aanbevolen Kant-en-Klare Boards
 
 ### 3.2.1 ESP32-2432S028R "Cheap Yellow Display" (CYD)
 De meest gebruikte en goedkoopste optie (€10-15). 2.8" resistive touchscreen (ILI9341), SD-kaartslot en veel GPIO.
 
-![Cheap Yellow Display voorkant](img/cyd-front.jpg)  
+![Cheap Yellow Display voorkant](img/cyd-front.webp)  
 *Voorkant van de ESP32-2432S028R "Cheap Yellow Display".*
 
 ![Cheap Yellow Display achterkant](img/cyd-back.jpg)  
@@ -45,7 +42,7 @@ Bij gebruik van een generieke ESP32 (bijv. DevKit) kun je een los TFT-display aa
 ![Generieke ESP32 pinout](img/esp32-s3-supermini-pinout.webp)  
 *Pinout van een ESP32-S3-Supermini board.*
 
-![TFT SPI bedrading](img/tft-spi-wiring.jpg)  
+![TFT SPI bedrading](img/tft-spi-wiring.webp)  
 *Typische SPI-bedrading voor een ILI9341 of ST7789 TFT-display.*
 
 ## 3.4 Voeding en Accessoires
