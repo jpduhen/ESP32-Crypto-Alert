@@ -90,7 +90,7 @@ Bij succes zie je "Done uploading" en start het board opnieuw.
 
 ## 4.6 Eerste Opstart en WiFi-Setup
 - Na upload start het board in **Access Point (AP) mode**.
-- Zoek in je WiFi-lijst naar "CryptoAlert-Setup" en verbind ermee.
+- Zoek in je WiFi-lijst naar "no-net" en verbind ermee.
 - Open in je browser http://192.168.4.1
 - Vul je thuis-WiFi-gegevens in en sla op.
 - Het board herstart en verbindt met je netwerk.
