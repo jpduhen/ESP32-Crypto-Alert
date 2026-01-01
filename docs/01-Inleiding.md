@@ -12,7 +12,7 @@ Het apparaat werkt volledig lokaal, zonder afhankelijkheid van externe servers o
 *LilyGO TTGO T-Display – compact board met 1.14" scherm.*
 
 ![ESP32-S3 Supermini](img/esp32-s3-supermini.webp)  
-*LilyGO T-Display S3 – modernere variant met ESP32-S3.*
+*ESP32-S3 Supermini – minivariant met ESP32-S3.*
 
 ![Waveshare ESP32-S3-GEEK](img/waveshare-s3-geek.jpg)  
 *Waveshare ESP32-S3-GEEK – krachtige S3 met 1.14" IPS-display.*
@@ -45,4 +45,4 @@ In de volgende hoofdstukken gaan we dieper in op de functies, hardware, installa
 
 ---
 
-*Ga naar [Hoofdstuk 2: Functies en Mogelijkheden](02-Functies.md)*
+*Ga naar [Hoofdstuk 2: Functies en Mogelijkheden](02-Functies-en-Mogelijkheden)*
