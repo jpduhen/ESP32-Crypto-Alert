@@ -38,7 +38,7 @@ In de projectcode activeer je het juiste board met defines bovenaan:
 // #define LILYGO_TDISPLAY  0  // etc.
 ```
 
-##9.4 Custom Thresholds en Alert-Logica Wijzigen
+## 9.4 Custom Thresholds en Alert-Logica Wijzigen
 De meeste parameters staan als constante variabelen in de code en kunnen eenvoudig aangepast worden.
 Voorbeelden van veelgebruikte variabelen:
 const float SPIKE_THRESHOLD       = 1.8;   // % voor spike-alert
@@ -47,7 +47,7 @@ const int   COOLDOWN_SHORT_SEC    = 300;   // 5 minuten cooldown korte alerts
 const int   COOLDOWN_LONG_SEC     = 1800;  // 30 minuten cooldown 2h alerts
 Pas deze aan naar jouw trading-stijl (lagere waarden = meer alerts).
 
-##9.5 toekomstige Aanpassingen
+## 9.5 toekomstige Aanpassingen
 Enkele toekomstige modificaties:
 - Meerdere trading pairs monitoren (bijv. automatisch switchen elke 10 minuten).
 - SD-kaart logging activeren (voor boards met SD-slot).
@@ -60,7 +60,7 @@ Risico-Management Uitbreiden
 - Automatische anchor-reset bij bevestigde trend change.
 - Waarschuwingen bij extreme drawdown vanaf anchor.
 
-##9.6 Veilig Experimenteren
+## 9.6 Veilig Experimenteren
 Gebruik GitHub branches voor verschillende versies.
 Test wijzigingen eerst met de Serial Monitor (baud 115200) voor debug-output.
 Begin met kleine aanpassingen en bouw geleidelijk op.
