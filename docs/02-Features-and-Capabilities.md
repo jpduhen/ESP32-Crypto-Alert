@@ -28,7 +28,7 @@ The **anchor price** is your personal reference price (e.g., entry price). The s
 - **Max Loss zone**: Percentage below the anchor.
 - Trend-adaptive adjustment.
 
-![Anchor zones example 1](img/anchor-zones-1.jpg)  
+![Anchor zones example 1](img/anchor-zones-1.png)  
 *Example of anchor zones with profit and loss areas.*
 
 ## 2.4 Alert Types
