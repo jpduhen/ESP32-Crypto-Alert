@@ -1,298 +1,72 @@
-# ESP32 Crypto Alert Systeem
+# ESP32-Crypto-Alert
 
-**Slimme crypto-alerts met meerdere tijdschalen**
+[![GitHub stars](https://img.shields.io/github/stars/jpduhen/ESP32-Crypto-Alert?style=social)](https://github.com/jpduhen/ESP32-Crypto-Alert/stargazers)
+[![GitHub license](https://img.shields.io/github/license/jpduhen/ESP32-Crypto-Alert)](https://github.com/jpduhen/ESP32-Crypto-Alert/blob/main/LICENSE)
 
-## 1. Wat is dit systeem?
+Een standalone ESP32-apparaat dat cryptocurrency-prijzen realtime monitort via Binance en **contextuele alerts** genereert op basis van multi-timeframe analyse.  
+Geen constante notificaties, maar alleen relevante signalen zoals spikes, breakouts, compression en trend changes – met slimme filters en jouw persoonlijke **anchor price** als referentie.
 
-Dit project is een zelfstandig crypto-alarmapparaat op basis van een ESP32.
+### Belangrijkste features
+- Multi-timeframe analyse (1m, 5m, 30m, 2h)
+- Contextuele alerts met anchor price en risicobeheer-zones
+- Notificaties via NTFY.sh (push naar telefoon)
+- Lokale web-interface voor configuratie en monitoring
+- MQTT-integratie (o.a. Home Assistant)
+- Ondersteuning voor populaire ESP32-boards met TFT-display
+- Volledig configureerbaar zonder hercompilatie
 
-Het:
-- Haalt live prijzen op bij Binance
-- Analyseert meerdere tijdschalen
-- Begrijpt trend, volatiliteit en context
-- Stuurt gerichte notificaties
-- Werkt zonder PC, cloud of abonnement
-- Ondersteunt NTFY mobiele apps (iOS en Android) voor push notificaties
+![Project overview](docs/img/esp32-boards-overview.jpg)  
+*Voorbeelden van compatibele boards: Cheap Yellow Display, TTGO T-Display, T-Display S3 en Waveshare ESP32-S3-GEEK.*
 
-## 2. Waarvoor is het bedoeld?
+## 📚 Gedetailleerde Handleiding
 
-Niet om elke koersbeweging te volgen, maar om:
+De volledige Nederlandstalige handleiding is onderverdeeld in aparte hoofdstukken voor betere leesbaarheid:
 
-**"Op tijd te zien wanneer er écht iets relevants gebeurt."**
+1. [Hoofdstuk 1: Inleiding](docs/01-Inleiding.md)  
+   Overzicht, doelgroep en unieke features
 
-## 3. Kernbegrippen
+2. [Hoofdstuk 2: Functies en Mogelijkheden](docs/02-Functies-en-Mogelijkheden.md)  
+   Kernfuncties, multi-timeframe analyse en alert-types
 
-### 3.1 Anchor prijs
+3. [Hoofdstuk 3: Hardwarevereisten](docs/03-Hardwarevereisten.md)  
+   Aanbevolen boards, pinouts en compatibiliteit
 
-Jouw referentiepunt.  
-Alles wordt hieraan gerelateerd.
+4. [Hoofdstuk 4: Installatie](docs/04-Installatie.md)  
+   Arduino IDE setup, flashing en eerste WiFi-configuratie
 
-Denk aan:
-- "Mijn belangrijke prijs"
-- "Waar ik winst/verlies belangrijk vind"
-- "Mijn psychologische basislijn"
+5. [Hoofdstuk 5: Configuratie via de Web Interface](docs/05-Configuratie-Web-Interface.md)  
+   Dashboard, basis- en geavanceerde instellingen, NTFY setup
 
-**Voorbeelden:**
-- +5% boven anchor → Take profit zone
-- −3% onder anchor → Max loss waarschuwing
-- Prijs oscilleert rond anchor → consolidatie
+6. [Hoofdstuk 6: Begrip van Kernconcepten](docs/06-Kernconcepten.md)  
+   Multi-timeframe, anchor price, 2h-context en confluence
 
-### 3.2 Multi-timeframe
+7. [Hoofdstuk 7: Alert Types en Voorbeelden](docs/07-Alert-Types-en-Voorbeelden.md)  
+   Alle alert-types met voorbeeldberichten en charts
 
-Het systeem kijkt tegelijk naar:
+8. [Hoofdstuk 8: Integratie met Externe Systemen](docs/08-Integratie-Externe-Systemen.md)  
+   MQTT, Home Assistant dashboards en automations
 
-| Tijdschaal | Doel |
-|------------|------|
-| 1 minuut | Detecteer plotselinge spikes |
-| 5 minuten | Bevestig korte bewegingen |
-| 30 minuten | Identificeer betekenisvol momentum |
-| 2 uur | Definieer trend, range, context |
+9. [Hoofdstuk 9: Geavanceerde Gebruik en Aanpassingen](docs/09-Geavanceerd-Gebruik-en-Aanpassingen.md)  
+   Code wijzigen, custom thresholds, OTA en meer
 
-Dit voorkomt reageren op ruis.
+10. [Hoofdstuk 10: Troubleshooting en FAQ](docs/10-Troubleshooting-FAQ.md)  
+    Veelvoorkomende problemen en oplossingen
 
-### 3.3 Alert filosofie
+## 🚀 Quick Start
+1. Kies een compatibel board (bijv. Cheap Yellow Display).
+2. Volg [Hoofdstuk 4: Installatie](docs/04-Installatie.md).
+3. Configureer via de web-interface ([Hoofdstuk 5](docs/05-Configuratie-Web-Interface.md)).
+4. Ontvang je eerste alerts!
 
-Alerts beantwoorden de vraag:
+## 🤝 Bijdragen
+Suggesties, bugreports en pull requests zijn van harte welkom!  
+Open een issue of PR op [GitHub](https://github.com/jpduhen/ESP32-Crypto-Alert).
 
-**"Gebeurd er iets interessants dat mijn aandacht verdient?"**
-
-Niet:
-- Elke tick
-- Elke candle
-- Elke kleine fluctuatie
-
-Het systeem geeft de voorkeur aan:
-- Minder alerts
-- Hogere relevantie
-- Context-rijke berichten
-
-## 4. Soorten meldingen
-
-### 4.1 Korte-termijn alerts (1m / 5m / 30m)
-
-- **Spike alert** – plotselinge korte beweging
-- **Move alert** – bevestigde directionele move
-- **Momentum alert** – aanhoudende beweging
-
-Deze zijn snel en reactief.
-
-### 4.2 2-uur context alerts (belangrijk!)
-
-Deze alerts beschrijven marktstructuur, niet alleen beweging:
-
-- **Breakout** – prijs verlaat de 2h range
-- **Breakdown** – prijs daalt onder range
-- **Compressie** – volatiliteit instorting (range verstrakt)
-- **Mean reversion** – prijs ver van 2h gemiddelde, keert terug
-- **Anchor buiten range** – anchor niet meer binnen huidige marktcontext
-- **Trend change** – verschuiving in 2h trendrichting
-
-Deze zijn langzamer, strategischer.
-
-## 5. Instellingen in begrijpelijke taal
-
-Alle instellingen zijn ontworpen om één vraag te beantwoorden:
-
-**"Wanneer wil ik dat het systeem mij stoort?"**
-
-Je bepaalt zelf:
-- Hoe gevoelig
-- Hoe vaak
-- In welke context
-
-### 5.1 Basis & connectiviteit
-
-| Instelling | Betekenis |
-|-----------|----------|
-| NTFY Topic | Waar alerts worden verstuurd |
-| Binance Symbol | Trading pair (bijv. BTCEUR) |
-| Taal | UI & alert taal |
-
-### 5.2 Anchor & risicobeheer
-
-| Instelling | Betekenis |
-|-----------|----------|
-| Take Profit | % boven anchor dat als winst wordt beschouwd |
-| Max Loss | % onder anchor dat als onacceptabel verlies wordt beschouwd |
-
-Gebruikt voor risicobewuste alerts, niet voor trading uitvoering.
-
-### 5.3 Signaal generatie drempels
-
-Deze bepalen hoe gevoelig het systeem is.
-
-**Voorbeelden:**
-- 1m Spike Drempel = minimum % verandering om een spike te triggeren
-- 30m Move Drempel = minimum beweging om betekenisvol te zijn
-- Trend Drempel = hoe sterk een 2h move moet zijn om als trend te tellen
-
-**Hogere waarden = minder alerts**  
-**Lagere waarden = meer alerts**
-
-### 5.4 Volatiliteitsniveaus
-
-Het systeem classificeert volatiliteit als:
-- Laag
-- Normaal
-- Hoog
-
-Dit beïnvloedt:
-- Alert gevoeligheid
-- Trend vertrouwen
-- Filtering
-
-### 5.5 2-uur alert drempels
-
-Deze bepalen structurele alerts:
-
-| Instelling | Doel |
-|-----------|------|
-| Breakout Marge | Hoe ver buiten range = breakout |
-| Cooldown | Minimum tijd tussen alerts |
-| Compress Drempel | Definieert "strakke range" |
-| Mean Reversion Afstand | Hoe ver prijs moet afdrijven van gemiddelde |
-
-### 7.6 Slimme logica & filters
-
-Optionele intelligentie lagen:
-
-- **Trend-adaptieve anchors**  
-  → Risico drempels passen zich aan aan trendrichting
-
-- **Confluence modus**  
-  → Alerts vuren alleen af wanneer meerdere condities overeenkomen
-
-- **Auto-volatiliteit modus**  
-  → Drempels passen zich automatisch aan aan marktgedrag
-
-### 7.7 Cooldowns
-
-Voorkom alert spam.
-
-Elke tijdschaal heeft zijn eigen cooldown.
-
-### 7.8 Warm-start (geavanceerd)
-
-Bij opstarten kan het apparaat historische candles ophalen om niet uren te hoeven wachten op context.
-
-Dit maakt het systeem bijna direct bruikbaar na herstart.
-
-## 8. Aanbevolen presets
-
-### Conservatief (weinig alerts)
-- Hogere drempels
-- Langere cooldowns
-- Confluence AAN
-
-### Gebalanceerd (standaard)
-- Matige drempels
-- Gemengde alerts
-- Goede signaal/ruis verhouding
-
-### Agressief (veel alerts)
-- Lagere drempels
-- Korte cooldowns
-- Meer geschikt voor scalpers
-
-## 9. Hoe alerts te interpreteren
-
-**Algemene richtlijnen:**
-
-- 1m alerts → aandacht
-- 5m / 30m alerts → momentum
-- 2h alerts → context verandering
-
-**Meerdere alerts kort na elkaar duiden meestal op:**
-- Transitie tussen regimes
-- Breakout of breakdown
-- Volatiliteit expansie
-
-## 10. Voor wie is dit?
-
-- Traders die rust willen
-- Mensen die niet continu grafieken willen volgen
-- Bouwers van slimme ESP32-projecten
-
-## 11. Wat dit systeem NIET is
-
-- ❌ Geen trading bot
-- ❌ Geen financieel advies
-- ❌ Geen voorspellende AI
-- ❌ Geen prijsgrafiek vervanging
-
-**Het is een beslissingsondersteunend hulpmiddel.**
-
-## 12. MQTT / Home Assistant Integratie
-
-Het systeem ondersteunt MQTT-integratie voor Home Assistant auto-discovery. Alle instellingen en live waarden worden blootgesteld als MQTT-entiteiten.
-
-### Beschikbare Entiteiten
-
-**Instellingen (configureerbaar via MQTT):**
-- Alle alert drempels (1m, 5m, 30m, 2h)
-- Anchor prijs instellingen (Take Profit, Max Loss)
-- **Reset Anchor Price** (number entity - stel anchor prijs in, default: huidige prijs)
-- Cooldowns en throttling instellingen
-- Slimme logica instellingen (Trend-Adaptive, Confluence, Auto-Volatility)
-- Warm-Start instellingen
-- MQTT verbindingsinstellingen
-
-**Live Waarden (alleen-lezen sensoren):**
-- Huidige prijs
-- Returns (1m, 5m, 30m)
-- Anchor events
-- IP-adres
-
-### Setup
-
-1. Configureer MQTT broker instellingen in de web-interface
-2. Home Assistant ontdekt automatisch alle entiteiten
-3. Alle instellingen kunnen worden bestuurd via Home Assistant
-4. Gebruik de **Reset Anchor Price** number entity om je anchor in te stellen (voer een waarde in of gebruik 0/"current" voor huidige prijs)
+## ⚠️ Disclaimer
+Dit project biedt **geen financieel advies**. Cryptocurrency-markten zijn volatiel. Gebruik op eigen risico.
 
 ---
 
-## 13. Samenvatting
+**Laatste update handleiding: Januari 2026**
 
-Dit systeem:
-- Filtert ruis
-- Geeft context
-- Helpt beslissingen nemen
-- Doet niet aan automatisch handelen
-
----
-
-## Quick Start
-
-1. Flash de firmware
-2. Verbind met WiFi
-3. Open de web-interface
-4. Stel je instellingen in
-5. Stel je anchor prijs in
-6. Klaar!
-
-Zie `README_QUICKSTART.md` voor gedetailleerde installatiestappen.
-
----
-
-## Installatie
-
-- Flash de firmware naar je ESP32
-- Verbind het apparaat met WiFi
-- Open de web-interface (IP-adres staat op het scherm)
-- Configureer je instellingen
-- Stel je anchor prijs in
-- Begin alerts te ontvangen
-
-Geen externe servers of databases vereist.
-
----
-
-## Tot slot
-
-Gebruik dit systeem als:
-- Extra paar ogen
-- Context-generator
-- Rustbrenger in volatiele markten
-
-**Niet als automatische waarheid.**
+Veel plezier met je ESP32-Crypto-Alert! 🚀
