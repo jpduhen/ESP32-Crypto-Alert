@@ -36,6 +36,7 @@ At a high level, the system:
 - Sends alerts via NTFY.sh when conditions are met
 - Shows status on a local display
 - Provides a web interface for configuration
+- Integrates with Home Assistant via MQTT (optional)
 
 ## 3. Hardware overview
 

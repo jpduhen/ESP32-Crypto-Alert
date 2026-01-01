@@ -221,7 +221,37 @@ Dit maakt het systeem bijna direct bruikbaar na herstart.
 
 **Het is een beslissingsondersteunend hulpmiddel.**
 
-## 10. Samenvatting
+## 10. MQTT / Home Assistant Integratie
+
+Het systeem ondersteunt MQTT-integratie voor Home Assistant auto-discovery. Alle instellingen en live waarden worden blootgesteld als MQTT-entiteiten.
+
+### Beschikbare Entiteiten
+
+**Instellingen (configureerbaar via MQTT):**
+- Alle alert drempels (1m, 5m, 30m, 2h)
+- Anchor prijs instellingen (Take Profit, Max Loss)
+- **Reset Anchor Price** (number entity - stel anchor prijs in, default: huidige prijs)
+- Cooldowns en throttling instellingen
+- Slimme logica instellingen (Trend-Adaptive, Confluence, Auto-Volatility)
+- Warm-Start instellingen
+- MQTT verbindingsinstellingen
+
+**Live Waarden (alleen-lezen sensoren):**
+- Huidige prijs
+- Returns (1m, 5m, 30m)
+- Anchor events
+- IP-adres
+
+### Setup
+
+1. Configureer MQTT broker instellingen in de web-interface
+2. Home Assistant ontdekt automatisch alle entiteiten
+3. Alle instellingen kunnen worden bestuurd via Home Assistant
+4. Gebruik de **Reset Anchor Price** number entity om je anchor in te stellen (voer een waarde in of gebruik 0/"current" voor huidige prijs)
+
+---
+
+## 11. Samenvatting
 
 Dit systeem:
 - Filtert ruis
