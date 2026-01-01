@@ -77,4 +77,4 @@ Met dit begrip kun je in het volgende hoofdstuk de verschillende alert-types en 
 
 ---
 
-*Ga naar [Hoofdstuk 5: Configuratie via de Web Interface](05-Configuratie-Web-Interface.md) | [Hoofdstuk 7: Alert Types en Voorbeelden](07-Alert-Types.md)*
+*Ga naar [Hoofdstuk 5: Configuratie via de Web Interface](05-Configuratie-Web-Interface.md) | [Hoofdstuk 7: Alert Types en Voorbeelden](07-Alert-Types-en-voorbeelden.md)*
