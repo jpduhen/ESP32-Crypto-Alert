@@ -21,7 +21,7 @@ De meest gebruikte en goedkoopste optie (€10-15). 2.8" resistive touchscreen (
 ![Cheap Yellow Display voorkant](img/cyd-front.webp)  
 *Voorkant van de ESP32-2432S028R "Cheap Yellow Display".*
 
-![Cheap Yellow Display achterkant](img/cyd-back.jpg)  
+![Cheap Yellow Display achterkant](img/cyd-back.webp)  
 *Achterkant met pin-labels.*
 
 ### 3.2.2 LilyGO TTGO T-Display
