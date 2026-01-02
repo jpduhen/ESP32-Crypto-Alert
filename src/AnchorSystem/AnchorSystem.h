@@ -7,6 +7,8 @@
 extern bool sendNotification(const char *title, const char *message, const char *colorTag);
 extern char binanceSymbol[];
 extern float prices[];  // Voor anchor price checks
+extern uint8_t language;  // Taalinstelling (0 = Nederlands, 1 = English)
+extern const char* getText(const char* nlText, const char* enText);  // Taalvertaling functie
 void getFormattedTimestamp(char* buffer, size_t bufferSize);  // Voor notificaties
 void getFormattedTimestampForNotification(char* buffer, size_t bufferSize);  // Nieuwe functie voor notificaties met slash formaat
 void publishMqttAnchorEvent(float anchor_price, const char* event_type);  // Voor MQTT events

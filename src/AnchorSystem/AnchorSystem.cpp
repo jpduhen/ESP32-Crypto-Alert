@@ -2,6 +2,8 @@
 
 // Forward declarations voor dependencies (worden later via modules)
 extern float openPrices[];  // Voor setAnchorPrice
+extern uint8_t language;  // Taalinstelling (0 = Nederlands, 1 = English)
+extern const char* getText(const char* nlText, const char* enText);  // Taalvertaling functie
 // Fase 8.11.2: updateUI() is verplaatst naar UIController module (header al geïncludeerd via AnchorSystem.h)
 
 // Forward declarations voor Serial macros
@@ -139,38 +141,52 @@ void AnchorSystem::formatAnchorNotification(AnchorEventType eventType, float anc
                                             char* timestampBuffer, size_t timestampSize) {
     getFormattedTimestampForNotification(timestampBuffer, timestampSize);
     
-    // Vertaal trend naar Nederlands
-    const char* trendNameNL = trendName;
-    if (strcmp(trendName, "UP") == 0) trendNameNL = "OP";
-    else if (strcmp(trendName, "DOWN") == 0) trendNameNL = "NEER";
-    else if (strcmp(trendName, "SIDEWAYS") == 0) trendNameNL = "ZIJWAARTS";
+    // Vertaal trend naar juiste taal
+    const char* trendNameTranslated = trendName;
+    if (strcmp(trendName, "UP") == 0) trendNameTranslated = getText("OP", "UP");
+    else if (strcmp(trendName, "DOWN") == 0) trendNameTranslated = getText("NEER", "DOWN");
+    else if (strcmp(trendName, "SIDEWAYS") == 0) trendNameTranslated = getText("ZIJWAARTS", "SIDEWAYS");
     
     // Geoptimaliseerd: enum switch i.p.v. strcmp (sneller, geen string vergelijkingen)
     if (eventType == ANCHOR_EVENT_TAKE_PROFIT) {
-        snprintf(titleBuffer, titleSize, "%s Anker: Winstpakker", binanceSymbol);
+        snprintf(titleBuffer, titleSize, "%s %s: %s", binanceSymbol, 
+                 getText("Anker", "Anchor"), getText("Winstpakker", "Take Profit"));
         if (this->trendAdaptiveAnchorsEnabled) {
             snprintf(msgBuffer, msgSize, 
-                     "%.2f (%s)\nTrend: %s\nAnker: %.2f | Winst: +%.2f\nTP: +%.2f%% (thr: +%.2f%%, basis: +%.2f%%)",
-                     prices[0], timestampBuffer, trendNameNL, this->anchorPrice, prices[0] - this->anchorPrice,
-                     anchorPct, effAnchor.takeProfitPct, this->anchorTakeProfit);
+                     "%.2f (%s)\n%s: %s\n%s: %.2f | %s: +%.2f\nTP: +%.2f%% (%s: +%.2f%%, %s: +%.2f%%)",
+                     prices[0], timestampBuffer,
+                     getText("Trend", "Trend"), trendNameTranslated,
+                     getText("Anker", "Anchor"), this->anchorPrice,
+                     getText("Winst", "Profit"), prices[0] - this->anchorPrice,
+                     anchorPct, getText("thr", "thr"), effAnchor.takeProfitPct,
+                     getText("basis", "basis"), this->anchorTakeProfit);
         } else {
             snprintf(msgBuffer, msgSize, 
-                     "%.2f (%s)\nAnker: %.2f | Winst: +%.2f\nTP: +%.2f%% (thr: +%.2f%%)",
-                     prices[0], timestampBuffer, this->anchorPrice, prices[0] - this->anchorPrice,
-                     anchorPct, effAnchor.takeProfitPct);
+                     "%.2f (%s)\n%s: %.2f | %s: +%.2f\nTP: +%.2f%% (%s: +%.2f%%)",
+                     prices[0], timestampBuffer,
+                     getText("Anker", "Anchor"), this->anchorPrice,
+                     getText("Winst", "Profit"), prices[0] - this->anchorPrice,
+                     anchorPct, getText("thr", "thr"), effAnchor.takeProfitPct);
         }
     } else {  // ANCHOR_EVENT_MAX_LOSS
-        snprintf(titleBuffer, titleSize, "%s Anker: Verliesbeperker", binanceSymbol);
+        snprintf(titleBuffer, titleSize, "%s %s: %s", binanceSymbol,
+                 getText("Anker", "Anchor"), getText("Verliesbeperker", "Max Loss"));
         if (this->trendAdaptiveAnchorsEnabled) {
             snprintf(msgBuffer, msgSize, 
-                     "%.2f (%s)\nTrend: %s\nAnker: %.2f | Verlies: %.2f\nML: %.2f%% (thr: %.2f%%, basis: %.2f%%)",
-                     prices[0], timestampBuffer, trendNameNL, this->anchorPrice, prices[0] - this->anchorPrice,
-                     anchorPct, effAnchor.maxLossPct, this->anchorMaxLoss);
+                     "%.2f (%s)\n%s: %s\n%s: %.2f | %s: %.2f\nML: %.2f%% (%s: %.2f%%, %s: %.2f%%)",
+                     prices[0], timestampBuffer,
+                     getText("Trend", "Trend"), trendNameTranslated,
+                     getText("Anker", "Anchor"), this->anchorPrice,
+                     getText("Verlies", "Loss"), prices[0] - this->anchorPrice,
+                     anchorPct, getText("thr", "thr"), effAnchor.maxLossPct,
+                     getText("basis", "basis"), this->anchorMaxLoss);
         } else {
             snprintf(msgBuffer, msgSize, 
-                     "%.2f (%s)\nAnker: %.2f | Verlies: %.2f\nML: %.2f%% (thr: %.2f%%)",
-                     prices[0], timestampBuffer, this->anchorPrice, prices[0] - this->anchorPrice,
-                     anchorPct, effAnchor.maxLossPct);
+                     "%.2f (%s)\n%s: %.2f | %s: %.2f\nML: %.2f%% (%s: %.2f%%)",
+                     prices[0], timestampBuffer,
+                     getText("Anker", "Anchor"), this->anchorPrice,
+                     getText("Verlies", "Loss"), prices[0] - this->anchorPrice,
+                     anchorPct, getText("thr", "thr"), effAnchor.maxLossPct);
         }
     }
 }

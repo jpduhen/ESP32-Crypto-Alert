@@ -7,6 +7,8 @@
 extern bool sendNotification(const char *title, const char *message, const char *colorTag = nullptr);
 extern char binanceSymbol[];
 extern float prices[];  // Voor notificatie formaat
+extern uint8_t language;  // Taalinstelling (0 = Nederlands, 1 = English)
+extern const char* getText(const char* nlText, const char* enText);  // Taalvertaling functie
 void getFormattedTimestampForNotification(char* buffer, size_t bufferSize);  // Nieuwe functie voor notificaties met slash formaat
 
 // VolatilityState enum (hoort bij VolatilityTracker module - Fase 5.2)
@@ -152,26 +154,33 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
         char timestamp[32];
         getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
         
-        // Vertaal trends naar Nederlands
-        const char* fromTrendNL = fromTrend;
-        const char* toTrendNL = toTrend;
-        if (strcmp(fromTrend, "UP") == 0) fromTrendNL = "OP";
-        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendNL = "NEER";
-        else if (strcmp(fromTrend, "SIDEWAYS") == 0) fromTrendNL = "ZIJWAARTS";
-        if (strcmp(toTrend, "UP") == 0) toTrendNL = "OP";
-        else if (strcmp(toTrend, "DOWN") == 0) toTrendNL = "NEER";
-        else if (strcmp(toTrend, "SIDEWAYS") == 0) toTrendNL = "ZIJWAARTS";
+        // Vertaal trends naar juiste taal
+        const char* fromTrendTranslated = fromTrend;
+        const char* toTrendTranslated = toTrend;
+        if (strcmp(fromTrend, "UP") == 0) fromTrendTranslated = getText("OP", "UP");
+        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = getText("NEER", "DOWN");
+        else if (strcmp(fromTrend, "SIDEWAYS") == 0) fromTrendTranslated = getText("ZIJWAARTS", "SIDEWAYS");
+        if (strcmp(toTrend, "UP") == 0) toTrendTranslated = getText("OP", "UP");
+        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = getText("NEER", "DOWN");
+        else if (strcmp(toTrend, "SIDEWAYS") == 0) toTrendTranslated = getText("ZIJWAARTS", "SIDEWAYS");
         
-        // Vertaal volatiliteit naar Nederlands
-        const char* volTextNL = volText;
-        if (strcmp(volText, "Low") == 0) volTextNL = "Laag";
-        else if (strcmp(volText, "Normal") == 0) volTextNL = "Normal";
-        else if (strcmp(volText, "High") == 0) volTextNL = "Hoog";
+        // VolText is al in Nederlands (getVolatilityText geeft "Rustig", "Gemiddeld", "Volatiel")
+        // Vertaal naar Engels indien nodig
+        const char* volTextTranslated = volText;
+        if (language == 1) {  // English
+            if (strcmp(volText, "Rustig") == 0) volTextTranslated = "Low";
+            else if (strcmp(volText, "Gemiddeld") == 0) volTextTranslated = "Normal";
+            else if (strcmp(volText, "Volatiel") == 0) volTextTranslated = "High";
+        }
         
-        snprintf(title, sizeof(title), "[Context] %s Trend Wijziging", binanceSymbol);
+        snprintf(title, sizeof(title), "[%s] %s %s", 
+                 getText("Context", "Context"), binanceSymbol, getText("Trend Wijziging", "Trend Change"));
         snprintf(msg, sizeof(msg), 
-                 "%.2f (%s)\nTrend change: %s → %s\n2h: %+.2f%%\n30m: %+.2f%%\nVolatiliteit: %s",
-                 prices[0], timestamp, fromTrendNL, toTrendNL, ret_2h, ret_30m_value, volTextNL);
+                 "%.2f (%s)\n%s: %s → %s\n2h: %+.2f%%\n30m: %+.2f%%\n%s: %s",
+                 prices[0], timestamp,
+                 getText("Trend change", "Trend change"), fromTrendTranslated, toTrendTranslated,
+                 ret_2h, ret_30m_value,
+                 getText("Volatiliteit", "Volatility"), volTextTranslated);
         
         // FASE X.2: Gebruik throttling wrapper voor Trend Change
         if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag)) {

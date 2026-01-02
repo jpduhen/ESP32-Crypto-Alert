@@ -26,6 +26,8 @@ extern PriceData priceData;  // Voor getFiveMinutePrices()
 extern bool sendNotification(const char *title, const char *message, const char *colorTag = nullptr);
 extern char binanceSymbol[];
 extern float prices[];  // Fase 6.1.4: Voor formatNotificationMessage
+extern uint8_t language;  // Taalinstelling (0 = Nederlands, 1 = English)
+extern const char* getText(const char* nlText, const char* enText);  // Taalvertaling functie
 void getFormattedTimestamp(char* buffer, size_t bufferSize);  // Fase 6.1.4: Voor formatNotificationMessage
 void getFormattedTimestampForNotification(char* buffer, size_t bufferSize);  // Nieuwe functie voor notificaties met slash formaat
 extern bool smartConfluenceEnabled;  // Fase 6.1.9: Voor checkAndSendConfluenceAlert
@@ -343,28 +345,31 @@ bool AlertEngine::checkAndSendConfluenceAlert(unsigned long now, float ret_30m)
     
     // Hergebruik class buffers i.p.v. lokale stack allocaties
     getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
-    snprintf(titleBuffer, sizeof(titleBuffer), "%s Samenloop (1m+5m+Trend)", binanceSymbol);
+    snprintf(titleBuffer, sizeof(titleBuffer), "%s %s (1m+5m+Trend)", binanceSymbol, 
+             getText("Samenloop", "Confluence"));
     
-    // Vertaal trend naar Nederlands
-    const char* trendTextNL = trendText;
-    if (strcmp(trendText, "UP") == 0) trendTextNL = "OP";
-    else if (strcmp(trendText, "DOWN") == 0) trendTextNL = "NEER";
-    else if (strcmp(trendText, "SIDEWAYS") == 0) trendTextNL = "ZIJWAARTS";
+    // Vertaal trend naar juiste taal
+    const char* trendTextTranslated = trendText;
+    if (strcmp(trendText, "UP") == 0) trendTextTranslated = getText("OP", "UP");
+    else if (strcmp(trendText, "DOWN") == 0) trendTextTranslated = getText("NEER", "DOWN");
+    else if (strcmp(trendText, "SIDEWAYS") == 0) trendTextTranslated = getText("ZIJWAARTS", "SIDEWAYS");
     
     if (direction == EVENT_UP) {
         snprintf(msgBuffer, sizeof(msgBuffer),
-                 "%.2f (%s)\nEensgezind OMHOOG\n1m: +%.2f%%\n5m: +%.2f%%\n30m Trend: %s (%+.2f%%)",
+                 "%.2f (%s)\n%s\n1m: +%.2f%%\n5m: +%.2f%%\n30m %s: %s (%+.2f%%)",
                  prices[0], timestampBuffer,
+                 getText("Eensgezind OMHOOG", "Confluence UP"),
                  last1mEvent.magnitude,
                  last5mEvent.magnitude,
-                 trendTextNL, ret_30m);
+                 getText("Trend", "Trend"), trendTextTranslated, ret_30m);
     } else {
         snprintf(msgBuffer, sizeof(msgBuffer),
-                 "%.2f (%s)\nEensgezind OMLAAG\n1m: %.2f%%\n5m: %.2f%%\n30m Trend: %s (%.2f%%)",
+                 "%.2f (%s)\n%s\n1m: %.2f%%\n5m: %.2f%%\n30m %s: %s (%.2f%%)",
                  prices[0], timestampBuffer,
+                 getText("Eensgezind OMLAAG", "Confluence DOWN"),
                  -last1mEvent.magnitude,
                  -last5mEvent.magnitude,
-                 trendTextNL, ret_30m);
+                 getText("Trend", "Trend"), trendTextTranslated, ret_30m);
     }
     
     const char* colorTag = (direction == EVENT_UP) ? "green_square,📈" : "red_square,📉";
@@ -546,16 +551,22 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                         getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
                         if (ret_1m >= 0) {
                             snprintf(msgBuffer, sizeof(msgBuffer), 
-                                     "%.2f (%s)\n1m OP spike: +%.2f%% (5m: +%.2f%%)\n1m Top: %.2f\n1m Dal: %.2f", 
-                                     prices[0], timestampBuffer, ret_1m, ret_5m, maxVal, minVal);
+                                     "%.2f (%s)\n1m %s spike: +%.2f%% (5m: +%.2f%%)\n1m %s: %.2f\n1m %s: %.2f", 
+                                     prices[0], timestampBuffer, 
+                                     getText("OP", "UP"), ret_1m, ret_5m,
+                                     getText("Top", "Top"), maxVal,
+                                     getText("Dal", "Low"), minVal);
                         } else {
                             snprintf(msgBuffer, sizeof(msgBuffer), 
-                                     "%.2f (%s)\n1m NEER spike: %.2f%% (5m: %.2f%%)\n1m Top: %.2f\n1m Dal: %.2f", 
-                                     prices[0], timestampBuffer, ret_1m, ret_5m, maxVal, minVal);
+                                     "%.2f (%s)\n1m %s spike: %.2f%% (5m: %.2f%%)\n1m %s: %.2f\n1m %s: %.2f", 
+                                     prices[0], timestampBuffer,
+                                     getText("NEER", "DOWN"), ret_1m, ret_5m,
+                                     getText("Top", "Top"), maxVal,
+                                     getText("Dal", "Low"), minVal);
                         }
                         
                         const char* colorTag = determineColorTag(ret_1m, effThresh.spike1m, effThresh.spike1m * 1.5f);
-                        snprintf(titleBuffer, sizeof(titleBuffer), "%s 1m Spike", binanceSymbol);
+                        snprintf(titleBuffer, sizeof(titleBuffer), "%s 1m %s", binanceSymbol, getText("Spike", "Spike"));
                         
                         // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
                         if (checkAlertConditions(now, lastNotification1Min, notificationCooldowns.cooldown1MinMs, 
@@ -607,16 +618,22 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                 getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
                 if (ret_30m >= 0) {
                     snprintf(msgBuffer, sizeof(msgBuffer), 
-                             "%.2f (%s)\n30m OP move: +%.2f%% (5m: +%.2f%%)\n30m Top: %.2f\n30m Dal: %.2f", 
-                             prices[0], timestampBuffer, ret_30m, ret_5m, maxVal, minVal);
+                             "%.2f (%s)\n30m %s move: +%.2f%% (5m: +%.2f%%)\n30m %s: %.2f\n30m %s: %.2f", 
+                             prices[0], timestampBuffer,
+                             getText("OP", "UP"), ret_30m, ret_5m,
+                             getText("Top", "Top"), maxVal,
+                             getText("Dal", "Low"), minVal);
                 } else {
                     snprintf(msgBuffer, sizeof(msgBuffer), 
-                             "%.2f (%s)\n30m NEER move: %.2f%% (5m: %.2f%%)\n30m Top: %.2f\n30m Dal: %.2f", 
-                             prices[0], timestampBuffer, ret_30m, ret_5m, maxVal, minVal);
+                             "%.2f (%s)\n30m %s move: %.2f%% (5m: %.2f%%)\n30m %s: %.2f\n30m %s: %.2f", 
+                             prices[0], timestampBuffer,
+                             getText("NEER", "DOWN"), ret_30m, ret_5m,
+                             getText("Top", "Top"), maxVal,
+                             getText("Dal", "Low"), minVal);
                 }
                 
                 const char* colorTag = determineColorTag(ret_30m, effThresh.move30m, effThresh.move30m * 1.5f);
-                snprintf(titleBuffer, sizeof(titleBuffer), "%s 30m Move", binanceSymbol);
+                snprintf(titleBuffer, sizeof(titleBuffer), "%s 30m %s", binanceSymbol, getText("Move", "Move"));
                 
                 // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
                 if (checkAlertConditions(now, lastNotification30Min, notificationCooldowns.cooldown30MinMs, 
@@ -682,16 +699,22 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                         // ret_30m is beschikbaar in checkAndNotify scope
                         if (ret_5m >= 0) {
                             snprintf(msgBuffer, sizeof(msgBuffer), 
-                                     "%.2f (%s)\n5m OP move: +%.2f%% (30m: %+.2f%%)\n5m Top: %.2f\n5m Dal: %.2f", 
-                                     prices[0], timestampBuffer, ret_5m, ret_30m, maxVal, minVal);
+                                     "%.2f (%s)\n5m %s move: +%.2f%% (30m: %+.2f%%)\n5m %s: %.2f\n5m %s: %.2f", 
+                                     prices[0], timestampBuffer,
+                                     getText("OP", "UP"), ret_5m, ret_30m,
+                                     getText("Top", "Top"), maxVal,
+                                     getText("Dal", "Low"), minVal);
                         } else {
                             snprintf(msgBuffer, sizeof(msgBuffer), 
-                                     "%.2f (%s)\n5m NEER move: %.2f%% (30m: %+.2f%%)\n5m Top: %.2f\n5m Dal: %.2f", 
-                                     prices[0], timestampBuffer, ret_5m, ret_30m, maxVal, minVal);
+                                     "%.2f (%s)\n5m %s move: %.2f%% (30m: %+.2f%%)\n5m %s: %.2f\n5m %s: %.2f", 
+                                     prices[0], timestampBuffer,
+                                     getText("NEER", "DOWN"), ret_5m, ret_30m,
+                                     getText("Top", "Top"), maxVal,
+                                     getText("Dal", "Low"), minVal);
                         }
                         
                         const char* colorTag = determineColorTag(ret_5m, effThresh.move5m, effThresh.move5m * 1.5f);
-                        snprintf(titleBuffer, sizeof(titleBuffer), "%s 5m Move", binanceSymbol);
+                        snprintf(titleBuffer, sizeof(titleBuffer), "%s 5m %s", binanceSymbol, getText("Move", "Move"));
                         
                         // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
                         if (checkAlertConditions(now, lastNotification5Min, notificationCooldowns.cooldown5MinMs, 
@@ -817,10 +840,14 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                          metrics.avg2h, metrics.high2h, metrics.low2h);
             #endif
             getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
-            snprintf(title, sizeof(title), "[Context] %s 2h Compressie", binanceSymbol);
-            snprintf(msg, sizeof(msg), "%.2f (%s)\nBand: %.2f%% (<%.2f%%)\n2h Top: %.2f\n2h Gem: %.2f\n2h Dal: %.2f",
-                     lastPrice, timestamp, metrics.rangePct, alert2HThresholds.compressThresholdPct,
-                     metrics.high2h, metrics.avg2h, metrics.low2h);
+            snprintf(title, sizeof(title), "[%s] %s 2h %s", 
+                     getText("Context", "Context"), binanceSymbol, getText("Compressie", "Compression"));
+            snprintf(msg, sizeof(msg), "%.2f (%s)\n%s: %.2f%% (<%.2f%%)\n2h %s: %.2f\n2h %s: %.2f\n2h %s: %.2f",
+                     lastPrice, timestamp,
+                     getText("Band", "Range"), metrics.rangePct, alert2HThresholds.compressThresholdPct,
+                     getText("Top", "High"), metrics.high2h,
+                     getText("Gem", "Avg"), metrics.avg2h,
+                     getText("Dal", "Low"), metrics.low2h);
             // FASE X.2: Gebruik throttling wrapper
             if (send2HNotification(ALERT2H_COMPRESS, title, msg, "yellow_square,📉")) {
                 gAlert2H.lastCompressMs = now;
@@ -855,10 +882,15 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                          lastPrice, metrics.avg2h, distPct, direction);
             #endif
             getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
-            snprintf(title, sizeof(title), "[Context] %s 2h Raakt Gemiddelde", binanceSymbol);
-            const char* directionNL = (gAlert2H.getMeanFarSide() > 0) ? "van boven" : "van onderen";
-            snprintf(msg, sizeof(msg), "%.2f (%s)\nRaakt 2h gem. %s\nna %.2f%% verwijdering",
-                     lastPrice, timestamp, directionNL, distPct);
+            snprintf(title, sizeof(title), "[%s] %s 2h %s", 
+                     getText("Context", "Context"), binanceSymbol, getText("Raakt Gemiddelde", "Mean Touch"));
+            const char* directionText = (gAlert2H.getMeanFarSide() > 0) ? 
+                                        getText("van boven", "from above") : 
+                                        getText("van onderen", "from below");
+            snprintf(msg, sizeof(msg), "%.2f (%s)\n%s 2h %s %s\n%s %.2f%% %s",
+                     lastPrice, timestamp,
+                     getText("Raakt", "Touched"), getText("gem.", "avg"), directionText,
+                     getText("na", "after"), distPct, getText("verwijdering", "away"));
             // FASE X.2: Gebruik throttling wrapper
             if (send2HNotification(ALERT2H_MEAN_TOUCH, title, msg, "green_square,📊")) {
                 gAlert2H.lastMeanMs = now;
@@ -890,9 +922,15 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                          anchorPrice, metrics.low2h, metrics.high2h, metrics.avg2h);
             #endif
             getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
-            snprintf(title, sizeof(title), "[Context] %s Anker buiten 2h", binanceSymbol);
-            snprintf(msg, sizeof(msg), "%.2f (%s)\nAnker %.2f outside 2h\n2h Top: %.2f\n2h Gem: %.2f\n2h Dal: %.2f",
-                     lastPrice, timestamp, anchorPrice, metrics.high2h, metrics.avg2h, metrics.low2h);
+            snprintf(title, sizeof(title), "[%s] %s %s %s 2h", 
+                     getText("Context", "Context"), binanceSymbol, 
+                     getText("Anker buiten", "Anchor outside"), getText("2h", "2h"));
+            snprintf(msg, sizeof(msg), "%.2f (%s)\n%s %.2f %s 2h\n2h %s: %.2f\n2h %s: %.2f\n2h %s: %.2f",
+                     lastPrice, timestamp,
+                     getText("Anker", "Anchor"), anchorPrice, getText("outside", "outside"),
+                     getText("Top", "High"), metrics.high2h,
+                     getText("Gem", "Avg"), metrics.avg2h,
+                     getText("Dal", "Low"), metrics.low2h);
             // FASE X.2: Gebruik throttling wrapper
             if (send2HNotification(ALERT2H_ANCHOR_CTX, title, msg, "purple_square,⚓")) {
                 gAlert2H.lastAnchorCtxMs = now;
@@ -926,9 +964,12 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
         Serial.printf("[ALERT2H] breakout_up sent: price=%.2f > high2h=%.2f (avg=%.2f, range=%.2f%%)\n",
                      lastPrice, metrics.high2h, metrics.avg2h, metrics.rangePct);
         #endif
-        snprintf(title, sizeof(title), "[PRIMAIR] %s 2h breakout ↑", binanceSymbol);
-        snprintf(msg, sizeof(msg), "%.2f (%s)\nPrijs > 2h Top %.2f\nGem: %.2f Band: %.2f%%",
-                 lastPrice, timestamp, metrics.high2h, metrics.avg2h, metrics.rangePct);
+        snprintf(title, sizeof(title), "[%s] %s 2h %s ↑", 
+                 getText("PRIMAIR", "PRIMARY"), binanceSymbol, getText("breakout", "breakout"));
+        snprintf(msg, sizeof(msg), "%.2f (%s)\n%s > 2h %s %.2f\n%s: %.2f %s: %.2f%%",
+                 lastPrice, timestamp,
+                 getText("Prijs", "Price"), getText("Top", "High"), metrics.high2h,
+                 getText("Gem", "Avg"), metrics.avg2h, getText("Band", "Range"), metrics.rangePct);
         // FASE X.2: Gebruik throttling wrapper (Breakout mag altijd door)
         send2HNotification(ALERT2H_BREAKOUT_UP, title, msg, "blue_square,🔼");
     } else {
@@ -936,9 +977,12 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
         Serial.printf("[ALERT2H] breakdown_down sent: price=%.2f < low2h=%.2f (avg=%.2f, range=%.2f%%)\n",
                      lastPrice, metrics.low2h, metrics.avg2h, metrics.rangePct);
         #endif
-        snprintf(title, sizeof(title), "[PRIMAIR] %s 2h breakdown ↓", binanceSymbol);
-        snprintf(msg, sizeof(msg), "%.2f (%s)\nPrijs < 2h Dal: %.2f\nGem: %.2f Band: %.2f%%",
-                 lastPrice, timestamp, metrics.low2h, metrics.avg2h, metrics.rangePct);
+        snprintf(title, sizeof(title), "[%s] %s 2h %s ↓", 
+                 getText("PRIMAIR", "PRIMARY"), binanceSymbol, getText("breakdown", "breakdown"));
+        snprintf(msg, sizeof(msg), "%.2f (%s)\n%s < 2h %s: %.2f\n%s: %.2f %s: %.2f%%",
+                 lastPrice, timestamp,
+                 getText("Prijs", "Price"), getText("Dal", "Low"), metrics.low2h,
+                 getText("Gem", "Avg"), metrics.avg2h, getText("Band", "Range"), metrics.rangePct);
         // FASE X.2: Gebruik throttling wrapper (Breakdown mag altijd door)
         send2HNotification(ALERT2H_BREAKOUT_DOWN, title, msg, "orange_square,🔽");
     }
@@ -1109,9 +1153,10 @@ static bool flushPendingSecondaryAlertInternal(uint32_t now) {
     }
     
     // Verstuur pending alert
-    char titleWithClass[48];
-    snprintf(titleWithClass, sizeof(titleWithClass), "[Context] %s", pendingSecondaryTitle);
-    bool result = sendNotification(titleWithClass, pendingSecondaryMsg, pendingSecondaryColorTag);
+        char titleWithClass[48];
+        snprintf(titleWithClass, sizeof(titleWithClass), "[%s] %s", 
+                 getText("Context", "Context"), pendingSecondaryTitle);
+        bool result = sendNotification(titleWithClass, pendingSecondaryMsg, pendingSecondaryColorTag);
     
     // Update throttling state alleen als notificatie succesvol is verstuurd
     if (result) {
@@ -1148,7 +1193,8 @@ bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, c
         
         // Verstuur PRIMARY alert
         char titleWithClass[48];
-        snprintf(titleWithClass, sizeof(titleWithClass), "[PRIMARY] %s", title);
+        snprintf(titleWithClass, sizeof(titleWithClass), "[%s] %s", 
+                 getText("PRIMAIR", "PRIMARY"), title);
         bool result = sendNotification(titleWithClass, msg, colorTag);
         
         // Update throttling state alleen als notificatie succesvol is verstuurd
