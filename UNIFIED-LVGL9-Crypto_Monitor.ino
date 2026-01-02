@@ -540,6 +540,7 @@ WarmStartStats warmStartStats = {0, 0, 0, 0, false, false, false, false, WS_MODE
 // DEFAULT_LANGUAGE wordt gedefinieerd in platform_config.h (fallback als er nog geen waarde in Preferences staat)
 // Fase 9.1.4: static verwijderd zodat WebServerModule deze variabele kan gebruiken
 uint8_t language = DEFAULT_LANGUAGE;  // 0 = Nederlands, 1 = English
+uint8_t displayRotation = 0;  // Display rotatie: 0 = normaal, 2 = 180 graden gedraaid
 
 // Settings structs voor betere organisatie
 // NOTE: AlertThresholds en NotificationCooldowns zijn nu gedefinieerd in SettingsStore.h
@@ -2182,6 +2183,7 @@ static void loadSettings()
     // Update symbols array with the loaded binance symbol
     safeStrncpy(symbolsArray[0], binanceSymbol, sizeof(symbolsArray[0]));
     language = settings.language;
+    displayRotation = settings.displayRotation;
     
     // Copy alert thresholds
     alertThresholds = settings.alertThresholds;
@@ -2569,16 +2571,16 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         for (size_t i = 0; i < sizeof(cooldownSettings) / sizeof(cooldownSettings[0]); i++) {
             snprintf(topicBufferFull, sizeof(topicBufferFull), "%s%s", prefixBuffer, cooldownSettings[i].suffix);
             if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                int seconds = atoi(msgBuffer);
+                                int seconds = atoi(msgBuffer);
                 // 2h cooldowns en throttling kunnen groter zijn (tot 10 uur = 36000 seconden)
                 int maxSeconds = (strstr(cooldownSettings[i].suffix, "2h") != nullptr) ? 36000 : 3600;
                 if (seconds >= 1 && seconds <= maxSeconds) {
-                    uint32_t resultMs;
-                    if (!safeSecondsToMs(seconds, resultMs)) {
-                        Serial_printf(F("[MQTT] Overflow check failed for cooldown: %d seconds\n"), seconds);
-                        break;
-                    }
-                    *cooldownSettings[i].targetMs = resultMs;
+                                    uint32_t resultMs;
+                                    if (!safeSecondsToMs(seconds, resultMs)) {
+                                        Serial_printf(F("[MQTT] Overflow check failed for cooldown: %d seconds\n"), seconds);
+                                        break;
+                                    }
+                                    *cooldownSettings[i].targetMs = resultMs;
                     snprintf(topicBufferFull, sizeof(topicBufferFull), "%s%s", prefixBuffer, cooldownSettings[i].stateSuffix);
                     snprintf(valueBuffer, sizeof(valueBuffer), "%lu", *cooldownSettings[i].targetMs / 1000);
                     mqttClient.publish(topicBufferFull, valueBuffer, true);
@@ -2588,6 +2590,40 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                     Serial_printf(F("[MQTT] Invalid cooldown value (range: 1-%d seconds): %s\n"), maxSeconds, msgBuffer);
                 }
                 break;
+            }
+        }
+    }
+    
+    // FASE X.5: Secondary global cooldown en coalescing settings (in seconden, niet milliseconden)
+    // Deze worden apart verwerkt omdat ze al in seconden zijn opgeslagen
+    if (!handled) {
+        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/2hSecGlobalCD/set", prefixBuffer);
+        if (strcmp(topicBuffer, topicBufferFull) == 0) {
+            int seconds = atoi(msgBuffer);
+            if (seconds >= 60 && seconds <= 86400) {  // 1 min tot 24 uur
+                alert2HThresholds.twoHSecondaryGlobalCooldownSec = seconds;
+                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/2hSecGlobalCD", prefixBuffer);
+                snprintf(valueBuffer, sizeof(valueBuffer), "%lu", alert2HThresholds.twoHSecondaryGlobalCooldownSec);
+                mqttClient.publish(topicBufferFull, valueBuffer, true);
+                settingChanged = true;
+                handled = true;
+            } else {
+                Serial_printf(F("[MQTT] Invalid 2hSecGlobalCD value (range: 60-86400 seconds): %s\n"), msgBuffer);
+            }
+        }
+        
+        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/2hSecCoalesce/set", prefixBuffer);
+        if (strcmp(topicBuffer, topicBufferFull) == 0) {
+            int seconds = atoi(msgBuffer);
+            if (seconds >= 10 && seconds <= 600) {  // 10 sec tot 10 min
+                alert2HThresholds.twoHSecondaryCoalesceWindowSec = seconds;
+                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/2hSecCoalesce", prefixBuffer);
+                snprintf(valueBuffer, sizeof(valueBuffer), "%lu", alert2HThresholds.twoHSecondaryCoalesceWindowSec);
+                mqttClient.publish(topicBufferFull, valueBuffer, true);
+                settingChanged = true;
+                handled = true;
+            } else {
+                Serial_printf(F("[MQTT] Invalid 2hSecCoalesce value (range: 10-600 seconds): %s\n"), msgBuffer);
             }
         }
     }
@@ -2662,6 +2698,25 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                         settingChanged = true;
                     }
                 } else {
+                    // displayRotation - speciale logica (saveSettings call + direct toepassen)
+                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/displayRotation/set", prefixBuffer);
+                    if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                        uint8_t newRotation = atoi(msgBuffer);
+                        if (newRotation == 0 || newRotation == 2) {
+                            displayRotation = newRotation;
+                            // Wis scherm eerst om residu te voorkomen
+                            gfx->fillScreen(RGB565_BLACK);
+                            // Pas rotatie direct toe
+                            gfx->setRotation(newRotation);
+                            // Wis scherm opnieuw na rotatie
+                            gfx->fillScreen(RGB565_BLACK);
+                            saveSettings(); // Save displayRotation to Preferences
+                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/displayRotation", prefixBuffer);
+                            snprintf(valueBuffer, sizeof(valueBuffer), "%u", displayRotation);
+                        mqttClient.publish(topicBufferFull, valueBuffer, true);
+                        settingChanged = true;
+                    }
+                } else {
                     // anchorValue/set - speciale logica (queue voor asynchrone verwerking)
                     snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorValue/set", prefixBuffer);
                     if (strcmp(topicBuffer, topicBufferFull) == 0) {
@@ -2693,27 +2748,28 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                         snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorValue", prefixBuffer);
                         if (valid) {
                             if (useCurrentPrice) {
-                                // Publiceer huidige prijs als state (default waarde)
-                                extern float prices[];
-                                if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "mqttCallback anchorValue")) {
-                                    float currentPrice = prices[0];
-                                    safeMutexGive(dataMutex, "mqttCallback anchorValue");
-                                    snprintf(valueBuffer, sizeof(valueBuffer), "%.2f", currentPrice);
-                                    mqttClient.publish(topicBufferFull, valueBuffer, true);
-                                } else {
-                                    // Fallback: gebruik 0 als placeholder (wordt later geupdate)
-                                    mqttClient.publish(topicBufferFull, "0.00", true);
-                                }
+                                    // Publiceer huidige prijs als state (default waarde)
+                                    extern float prices[];
+                                    if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "mqttCallback anchorValue")) {
+                                        float currentPrice = prices[0];
+                                        safeMutexGive(dataMutex, "mqttCallback anchorValue");
+                                        snprintf(valueBuffer, sizeof(valueBuffer), "%.2f", currentPrice);
+                                        mqttClient.publish(topicBufferFull, valueBuffer, true);
+                                    } else {
+                                        // Fallback: gebruik 0 als placeholder (wordt later geupdate)
+                                        mqttClient.publish(topicBufferFull, "0.00", true);
+                                    }
                             } else {
                                 snprintf(valueBuffer, sizeof(valueBuffer), "%.2f", val);
-                                mqttClient.publish(topicBufferFull, valueBuffer, true);
+                                    mqttClient.publish(topicBufferFull, valueBuffer, true);
                             }
                         } else {
                             mqttClient.publish(topicBufferFull, "ERROR: Invalid value", false);
                         }
                         handled = true;
                     }
-                    // button/reset handler verwijderd - gebruik nu anchorValue number entity
+                        // button/reset handler verwijderd - gebruik nu anchorValue number entity
+                    }
                 }
             }
         }
@@ -2868,6 +2924,7 @@ void publishMqttSettings() {
     publishMqttUint("cooldown30min", notificationCooldown30MinMs / 1000);
     publishMqttUint("cooldown5min", notificationCooldown5MinMs / 1000);
     publishMqttUint("language", language);
+    publishMqttUint("displayRotation", displayRotation);
     
     // 2-hour alert cooldowns (in seconds)
     publishMqttUint("2hBreakCD", alert2HThresholds.breakCooldownMs / 1000);
@@ -2878,6 +2935,9 @@ void publishMqttSettings() {
     publishMqttUint("2hThrottleTM", alert2HThresholds.throttlingTrendToMeanMs / 1000);
     publishMqttUint("2hThrottleMT", alert2HThresholds.throttlingMeanTouchMs / 1000);
     publishMqttUint("2hThrottleComp", alert2HThresholds.throttlingCompressMs / 1000);
+    // FASE X.5: Secondary global cooldown en coalescing (in seconden)
+    publishMqttUint("2hSecGlobalCD", alert2HThresholds.twoHSecondaryGlobalCooldownSec);
+    publishMqttUint("2hSecCoalesce", alert2HThresholds.twoHSecondaryCoalesceWindowSec);
     
     // Integer settings (uint8_t)
     publishMqttUint("autoVolWin", autoVolatilityWindowMinutes);
@@ -3117,6 +3177,12 @@ void publishMqttDiscovery() {
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
+    // Display Rotation discovery
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_displayRotation/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Display Rotation\",\"unique_id\":\"%s_displayRotation\",\"state_topic\":\"%s/config/displayRotation\",\"command_topic\":\"%s/config/displayRotation/set\",\"min\":0,\"max\":2,\"step\":2,\"icon\":\"mdi:rotate-3d-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
     // IP Address sensor
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_ip_address/config", deviceId);
     snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"IP Address\",\"unique_id\":\"%s_ip_address\",\"state_topic\":\"%s/values/ip_address\",\"icon\":\"mdi:ip-network\",%s}", deviceId, mqttPrefix, deviceJson);
@@ -3126,6 +3192,12 @@ void publishMqttDiscovery() {
     // Language select
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/select/%s_language/config", deviceId);
     snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Language\",\"unique_id\":\"%s_language\",\"state_topic\":\"%s/config/language\",\"command_topic\":\"%s/config/language/set\",\"options\":[\"0\",\"1\"],\"icon\":\"mdi:translate\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    // Display Rotation discovery
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_displayRotation/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Display Rotation\",\"unique_id\":\"%s_displayRotation\",\"state_topic\":\"%s/config/displayRotation\",\"command_topic\":\"%s/config/displayRotation/set\",\"min\":0,\"max\":2,\"step\":2,\"icon\":\"mdi:rotate-3d-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
@@ -3208,6 +3280,17 @@ void publishMqttDiscovery() {
     
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hThrottleComp/config", deviceId);
     snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Throttle Compress\",\"unique_id\":\"%s_2hThrottleComp\",\"state_topic\":\"%s/config/2hThrottleComp\",\"command_topic\":\"%s/config/2hThrottleComp/set\",\"min\":1,\"max\":36000,\"step\":1,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    // FASE X.5: Secondary global cooldown en coalescing discovery
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hSecGlobalCD/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Secondary Global Cooldown\",\"unique_id\":\"%s_2hSecGlobalCD\",\"state_topic\":\"%s/config/2hSecGlobalCD\",\"command_topic\":\"%s/config/2hSecGlobalCD/set\",\"min\":60,\"max\":86400,\"step\":60,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer-outline\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hSecCoalesce/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Secondary Coalesce Window\",\"unique_id\":\"%s_2hSecCoalesce\",\"state_topic\":\"%s/config/2hSecCoalesce\",\"command_topic\":\"%s/config/2hSecCoalesce/set\",\"min\":10,\"max\":600,\"step\":1,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer-sand\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
@@ -3346,6 +3429,8 @@ void connectMQTT() {
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/anchorValue/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/language/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/displayRotation/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
         
         // Subscribe to 2h alert threshold settings
@@ -5002,7 +5087,10 @@ static void setupDisplay()
             /* no need to continue */
         }
     }
-    gfx->setRotation(0);
+    // Pas display rotatie toe (0 = normaal, 2 = 180 graden)
+    // Alleen 0 en 2 zijn geldig voor 180 graden rotatie
+    uint8_t rotation = (displayRotation == 2) ? 2 : 0;
+    gfx->setRotation(rotation);
     #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     gfx->invertDisplay(false); // TTGO/ESP32-S3 T-Display/GEEK heeft geen inversie nodig (ST7789)
     #else

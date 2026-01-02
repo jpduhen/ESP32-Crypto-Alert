@@ -127,6 +127,7 @@ const char* SettingsStore::PREF_NAMESPACE = "crypto";
 const char* SettingsStore::PREF_KEY_NTFY_TOPIC = "ntfyTopic";
 const char* SettingsStore::PREF_KEY_BINANCE_SYMBOL = "binanceSymbol";
 const char* SettingsStore::PREF_KEY_LANGUAGE = "language";
+const char* SettingsStore::PREF_KEY_DISPLAY_ROTATION = "displayRotation";
 const char* SettingsStore::PREF_KEY_TH1_UP = "th1Up";
 const char* SettingsStore::PREF_KEY_TH1_DOWN = "th1Down";
 const char* SettingsStore::PREF_KEY_TH30_UP = "th30Up";
@@ -183,6 +184,9 @@ const char* SettingsStore::PREF_KEY_2H_THROTTLE_TREND_CHANGE = "2hThrottleTC";
 const char* SettingsStore::PREF_KEY_2H_THROTTLE_TREND_MEAN = "2hThrottleTM";
 const char* SettingsStore::PREF_KEY_2H_THROTTLE_MEAN_TOUCH = "2hThrottleMT";
 const char* SettingsStore::PREF_KEY_2H_THROTTLE_COMPRESS = "2hThrottleComp";
+// FASE X.5: Secondary global cooldown en coalescing preference keys
+const char* SettingsStore::PREF_KEY_2H_SEC_GLOBAL_CD = "2hSecGlobalCD";
+const char* SettingsStore::PREF_KEY_2H_SEC_COALESCE = "2hSecCoalesce";
 
 // Helper: Generate unique ESP32 device ID using Crockford Base32 encoding
 // Deze functie moet extern beschikbaar zijn voor generateDefaultNtfyTopic
@@ -270,6 +274,7 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     strncpy(binanceSymbol, BINANCE_SYMBOL_DEFAULT, sizeof(binanceSymbol) - 1);
     binanceSymbol[sizeof(binanceSymbol) - 1] = '\0';
     language = DEFAULT_LANGUAGE;
+    displayRotation = 0;  // Default: normaal (0 graden)
     
     // Alert thresholds defaults
     alertThresholds.spike1m = SPIKE_1M_THRESHOLD_DEFAULT;
@@ -347,6 +352,9 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     alert2HThresholds.throttlingTrendToMeanMs = 60UL * 60UL * 1000UL;   // 60 min
     alert2HThresholds.throttlingMeanTouchMs = 60UL * 60UL * 1000UL;    // 60 min
     alert2HThresholds.throttlingCompressMs = 120UL * 60UL * 1000UL;    // 120 min
+    // FASE X.5: Secondary global cooldown en coalescing defaults
+    alert2HThresholds.twoHSecondaryGlobalCooldownSec = 7200UL;  // 120 minuten (default)
+    alert2HThresholds.twoHSecondaryCoalesceWindowSec = 90UL;      // 90 seconden (default)
 }
 
 CryptoMonitorSettings SettingsStore::load() {
@@ -382,6 +390,9 @@ CryptoMonitorSettings SettingsStore::load() {
     
     // Load language
     settings.language = prefs.getUChar(PREF_KEY_LANGUAGE, DEFAULT_LANGUAGE);
+    
+    // Load display rotation
+    settings.displayRotation = prefs.getUChar(PREF_KEY_DISPLAY_ROTATION, 0);
     
     // Load alert thresholds
     settings.alertThresholds.threshold1MinUp = prefs.getFloat(PREF_KEY_TH1_UP, THRESHOLD_1MIN_UP_DEFAULT);
@@ -459,6 +470,9 @@ CryptoMonitorSettings SettingsStore::load() {
     settings.alert2HThresholds.throttlingTrendToMeanMs = prefs.getULong(PREF_KEY_2H_THROTTLE_TREND_MEAN, 60UL * 60UL * 1000UL);
     settings.alert2HThresholds.throttlingMeanTouchMs = prefs.getULong(PREF_KEY_2H_THROTTLE_MEAN_TOUCH, 60UL * 60UL * 1000UL);
     settings.alert2HThresholds.throttlingCompressMs = prefs.getULong(PREF_KEY_2H_THROTTLE_COMPRESS, 120UL * 60UL * 1000UL);
+    // FASE X.5: Secondary global cooldown en coalescing settings
+    settings.alert2HThresholds.twoHSecondaryGlobalCooldownSec = prefs.getULong(PREF_KEY_2H_SEC_GLOBAL_CD, 7200UL);
+    settings.alert2HThresholds.twoHSecondaryCoalesceWindowSec = prefs.getULong(PREF_KEY_2H_SEC_COALESCE, 90UL);
     
     prefs.end();
     return settings;
@@ -471,6 +485,7 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     prefs.putString(PREF_KEY_NTFY_TOPIC, settings.ntfyTopic);
     prefs.putString(PREF_KEY_BINANCE_SYMBOL, settings.binanceSymbol);
     prefs.putUChar(PREF_KEY_LANGUAGE, settings.language);
+    prefs.putUChar(PREF_KEY_DISPLAY_ROTATION, settings.displayRotation);
     
     // Save alert thresholds
     prefs.putFloat(PREF_KEY_TH1_UP, settings.alertThresholds.threshold1MinUp);
@@ -545,6 +560,9 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     prefs.putULong(PREF_KEY_2H_THROTTLE_TREND_MEAN, settings.alert2HThresholds.throttlingTrendToMeanMs);
     prefs.putULong(PREF_KEY_2H_THROTTLE_MEAN_TOUCH, settings.alert2HThresholds.throttlingMeanTouchMs);
     prefs.putULong(PREF_KEY_2H_THROTTLE_COMPRESS, settings.alert2HThresholds.throttlingCompressMs);
+    // FASE X.5: Secondary global cooldown en coalescing settings
+    prefs.putULong(PREF_KEY_2H_SEC_GLOBAL_CD, settings.alert2HThresholds.twoHSecondaryGlobalCooldownSec);
+    prefs.putULong(PREF_KEY_2H_SEC_COALESCE, settings.alert2HThresholds.twoHSecondaryCoalesceWindowSec);
     
     prefs.end();
 }

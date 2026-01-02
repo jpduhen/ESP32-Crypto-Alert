@@ -44,6 +44,9 @@ struct Alert2HThresholds {
     uint32_t throttlingTrendToMeanMs;   // Trend Change → Mean Touch cooldown (default 60 min)
     uint32_t throttlingMeanTouchMs;     // Mean Touch → Mean Touch cooldown (default 60 min)
     uint32_t throttlingCompressMs;      // Compress → Compress cooldown (default 120 min)
+    // FASE X.5: Secondary global cooldown en coalescing
+    uint32_t twoHSecondaryGlobalCooldownSec;  // Global cooldown voor SECONDARY alerts (default 7200 = 120 min)
+    uint32_t twoHSecondaryCoalesceWindowSec;  // Coalescing window voor burst-demping (default 90 sec)
 };
 
 // Settings struct - bevat alle instelbare waarden
@@ -52,6 +55,7 @@ struct CryptoMonitorSettings {
     char ntfyTopic[64];
     char binanceSymbol[16];
     uint8_t language;
+    uint8_t displayRotation;  // Display rotatie: 0 = normaal, 2 = 180 graden gedraaid
     
     // Alert thresholds
     AlertThresholds alertThresholds;
@@ -131,6 +135,7 @@ private:
     static const char* PREF_KEY_NTFY_TOPIC;
     static const char* PREF_KEY_BINANCE_SYMBOL;
     static const char* PREF_KEY_LANGUAGE;
+    static const char* PREF_KEY_DISPLAY_ROTATION;
     static const char* PREF_KEY_TH1_UP;
     static const char* PREF_KEY_TH1_DOWN;
     static const char* PREF_KEY_TH30_UP;
@@ -187,6 +192,9 @@ private:
     static const char* PREF_KEY_2H_THROTTLE_TREND_MEAN;
     static const char* PREF_KEY_2H_THROTTLE_MEAN_TOUCH;
     static const char* PREF_KEY_2H_THROTTLE_COMPRESS;
+    // FASE X.5: Secondary global cooldown en coalescing preference keys
+    static const char* PREF_KEY_2H_SEC_GLOBAL_CD;
+    static const char* PREF_KEY_2H_SEC_COALESCE;
 };
 
 #endif // SETTINGSSTORE_H

@@ -28,6 +28,7 @@ extern char binanceSymbol[];
 extern float prices[];  // Fase 6.1.4: Voor formatNotificationMessage
 void getFormattedTimestamp(char* buffer, size_t bufferSize);  // Fase 6.1.4: Voor formatNotificationMessage
 extern bool smartConfluenceEnabled;  // Fase 6.1.9: Voor checkAndSendConfluenceAlert
+void safeStrncpy(char *dest, const char *src, size_t destSize);  // FASE X.5: Voor coalescing
 
 // Forward declaration voor computeTwoHMetrics()
 TwoHMetrics computeTwoHMetrics();
@@ -717,6 +718,8 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
     // Geconsolideerde validatie: check alle voorwaarden in één keer (sneller, minder branches)
     if (isnan(lastPrice) || isinf(lastPrice) || isnan(anchorPrice) || isinf(anchorPrice) ||
         WiFi.status() != WL_CONNECTED || lastPrice <= 0.0f) {
+        // FASE X.5: Flush pending alert ook bij invalid state (voorkomt hangende alerts)
+        flushPendingSecondaryAlert();
         return;  // Skip checks bij ongeldige waarden of geen WiFi
     }
     
@@ -725,10 +728,15 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
     
     // Early return: check validiteit van metrics
     if (!metrics.valid) {
+        // FASE X.5: Flush pending alert ook bij invalid metrics
+        flushPendingSecondaryAlert();
         return;
     }
     
     uint32_t now = millis();
+    
+    // FASE X.5: Flush pending SECONDARY alert als coalesce window is verstreken
+    flushPendingSecondaryAlert();
     
     // Geconsolideerde berekeningen: bereken breakMargin en thresholds één keer
     float breakMargin = alert2HThresholds.breakMarginPct;
@@ -931,29 +939,116 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
 static Alert2HType last2HAlertType = ALERT2H_NONE;
 static uint32_t last2HAlertTimestamp = 0;
 
+// FASE X.5: Secondary global cooldown state
+static Alert2HType lastSecondaryType = ALERT2H_NONE;
+static uint32_t lastSecondarySentMillis = 0;
+
+// FASE X.5: Coalescing state voor burst-demping
+static Alert2HType pendingSecondaryType = ALERT2H_NONE;
+static uint32_t pendingSecondaryCreatedMillis = 0;
+static char pendingSecondaryTitle[48];
+static char pendingSecondaryMsg[80];
+static char pendingSecondaryColorTag[32];
+
 // FASE X.3: Check of alert PRIMARY is (override throttling)
 bool AlertEngine::isPrimary2HAlert(Alert2HType alertType) {
     // PRIMARY: Breakout/Breakdown (regime-veranderingen)
     return (alertType == ALERT2H_BREAKOUT_UP || alertType == ALERT2H_BREAKOUT_DOWN);
 }
 
+// FASE X.5: Bepaal prioriteit van SECONDARY alert (voor coalescing)
+// Hogere waarde = hogere prioriteit
+static uint8_t getSecondaryAlertPriority(Alert2HType alertType) {
+    switch (alertType) {
+        case ALERT2H_TREND_CHANGE: return 4;  // Hoogste prioriteit
+        case ALERT2H_ANCHOR_CTX: return 3;
+        case ALERT2H_MEAN_TOUCH: return 2;
+        case ALERT2H_COMPRESS: return 1;      // Laagste prioriteit
+        default: return 0;  // PRIMARY alerts hebben geen prioriteit (worden niet gecoalesced)
+    }
+}
+
+// FASE X.5: Bepaal cooldown op basis van matrix (in seconden)
+// Eerst specifieke pair-regels, dan fallback regels, dan default
+static uint32_t getSecondaryCooldownSec(Alert2HType lastType, Alert2HType nextType) {
+    // Specifieke pair-regels (hardcoded defaults, later uitbreidbaar)
+    switch (lastType) {
+        case ALERT2H_TREND_CHANGE:
+            if (nextType == ALERT2H_TREND_CHANGE) return 180UL * 60UL;  // 180 min
+            if (nextType == ALERT2H_MEAN_TOUCH) return 60UL * 60UL;     // 60 min (bestaat)
+            if (nextType == ALERT2H_ANCHOR_CTX) return 120UL * 60UL;    // 120 min
+            if (nextType == ALERT2H_COMPRESS) return 120UL * 60UL;      // 120 min
+            break;
+        case ALERT2H_MEAN_TOUCH:
+            if (nextType == ALERT2H_MEAN_TOUCH) return 60UL * 60UL;      // 60 min (bestaat)
+            if (nextType == ALERT2H_COMPRESS) return 90UL * 60UL;       // 90 min
+            break;
+        case ALERT2H_COMPRESS:
+            if (nextType == ALERT2H_COMPRESS) return 120UL * 60UL;      // 120 min (bestaat)
+            if (nextType == ALERT2H_MEAN_TOUCH) return 90UL * 60UL;     // 90 min
+            break;
+        case ALERT2H_ANCHOR_CTX:
+            if (nextType == ALERT2H_ANCHOR_CTX) return 180UL * 60UL;     // 180 min
+            break;
+        default:
+            break;
+    }
+    
+    // Fallback regels: "Any Secondary → nextType"
+    switch (nextType) {
+        case ALERT2H_ANCHOR_CTX: return 120UL * 60UL;  // 120 min
+        case ALERT2H_COMPRESS: return 120UL * 60UL;    // 120 min
+        case ALERT2H_MEAN_TOUCH: return 60UL * 60UL;   // 60 min
+        case ALERT2H_TREND_CHANGE: return 180UL * 60UL; // 180 min
+        default: return 120UL * 60UL;  // Default fallback: 120 min
+    }
+}
+
 // FASE X.2: Check of 2h alert gesuppresseerd moet worden volgens throttling matrix
 // FASE X.3: PRIMARY alerts override throttling (altijd door)
+// FASE X.5: Uitgebreid met global cooldown en uitgebreide matrix
 bool AlertEngine::shouldThrottle2HAlert(Alert2HType alertType, uint32_t now) {
     // PRIMARY alerts mogen altijd door (override throttling)
     if (isPrimary2HAlert(alertType)) {
         return false;  // Geen throttling
     }
     
-    // Geen vorige alert = altijd door
+    // FASE X.5: Check global cooldown voor SECONDARY alerts (hard cap)
+    if (lastSecondarySentMillis > 0) {
+        uint32_t timeSinceLastSecondary = (now - lastSecondarySentMillis) / 1000UL;  // in seconden
+        uint32_t globalCooldownSec = alert2HThresholds.twoHSecondaryGlobalCooldownSec;
+        if (timeSinceLastSecondary < globalCooldownSec) {
+            #ifdef DEBUG_ALERT_THROTTLE
+            Serial_printf(F("[2h throttled] SECONDARY dropped by global cooldown (%lu < %lu sec)\n"),
+                         timeSinceLastSecondary, globalCooldownSec);
+            #endif
+            return true;  // Suppress door global cooldown
+        }
+    }
+    
+    // Geen vorige alert = altijd door (na global cooldown check)
     if (last2HAlertType == ALERT2H_NONE || last2HAlertTimestamp == 0) {
         return false;  // Geen throttling
     }
     
     uint32_t timeSinceLastAlert = now - last2HAlertTimestamp;
     
-    // Throttling matrix: verschillende suppressieregels per combinatie
-    // FASE X.4: Tijden zijn nu instelbaar via settings
+    // FASE X.5: Gebruik uitgebreide matrix met getSecondaryCooldownSec()
+    // Bepaal cooldown op basis van matrix (in milliseconden)
+    uint32_t matrixCooldownSec = getSecondaryCooldownSec(last2HAlertType, alertType);
+    uint32_t matrixCooldownMs = matrixCooldownSec * 1000UL;
+    
+    // Check matrix cooldown (maar global cooldown heeft voorrang als die langer is)
+    if (timeSinceLastAlert < matrixCooldownMs) {
+        #ifdef DEBUG_ALERT_THROTTLE
+        Serial_printf(F("[2h throttled] SECONDARY allowed by matrix cooldown (%lu < %lu ms)\n"),
+                     timeSinceLastAlert, matrixCooldownMs);
+        #endif
+        return true;  // Suppress door matrix cooldown
+    }
+    
+    // Legacy matrix checks (voor backward compatibility met instelbare settings)
+    // Deze worden alleen gebruikt als getSecondaryCooldownSec geen match geeft
     switch (last2HAlertType) {
         case ALERT2H_TREND_CHANGE:
             // Trend Change → Trend Change: suppress volgens instelling
@@ -988,24 +1083,84 @@ bool AlertEngine::shouldThrottle2HAlert(Alert2HType alertType, uint32_t now) {
     return false;  // Geen throttling
 }
 
+// FASE X.5: Flush pending SECONDARY alert (verstuur als er een pending is)
+// Interne helper functie (gebruikt uint32_t now parameter)
+static bool flushPendingSecondaryAlertInternal(uint32_t now) {
+    if (pendingSecondaryType == ALERT2H_NONE || pendingSecondaryCreatedMillis == 0) {
+        return false;  // Geen pending alert
+    }
+    
+    // Check of pending alert nog steeds binnen throttling window valt
+    // Gebruik AlertEngine::shouldThrottle2HAlert omdat het een member functie is
+    if (AlertEngine::shouldThrottle2HAlert(pendingSecondaryType, now)) {
+        // Pending alert is nu gesuppresseerd, reset pending state
+        pendingSecondaryType = ALERT2H_NONE;
+        pendingSecondaryCreatedMillis = 0;
+        return false;
+    }
+    
+    // Verstuur pending alert
+    char titleWithClass[48];
+    snprintf(titleWithClass, sizeof(titleWithClass), "[Context] %s", pendingSecondaryTitle);
+    bool result = sendNotification(titleWithClass, pendingSecondaryMsg, pendingSecondaryColorTag);
+    
+    // Update throttling state alleen als notificatie succesvol is verstuurd
+    if (result) {
+        last2HAlertType = pendingSecondaryType;
+        last2HAlertTimestamp = now;
+        lastSecondaryType = pendingSecondaryType;
+        lastSecondarySentMillis = now;
+    }
+    
+    // Reset pending state
+    pendingSecondaryType = ALERT2H_NONE;
+    pendingSecondaryCreatedMillis = 0;
+    
+    return result;
+}
+
 // FASE X.2: Wrapper voor sendNotification() met 2h throttling
 // FASE X.3: PRIMARY alerts override throttling, SECONDARY alerts onderhevig aan throttling
+// FASE X.5: Uitgebreid met coalescing voor SECONDARY alerts
 bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, const char* msg, const char* colorTag) {
     uint32_t now = millis();
     
-    // FASE X.3: PRIMARY alerts override throttling (altijd door)
+    // FASE X.3: PRIMARY alerts override throttling (altijd door, geen coalescing)
     bool isPrimary = isPrimary2HAlert(alertType);
     
-    // Check throttling alleen voor SECONDARY alerts
-    if (!isPrimary && shouldThrottle2HAlert(alertType, now)) {
+    if (isPrimary) {
+        // PRIMARY: direct versturen, flush pending SECONDARY eerst
+        flushPendingSecondaryAlertInternal(now);
+        
+        // Check throttling (voor PRIMARY is dit altijd false, maar voor consistentie)
+        if (shouldThrottle2HAlert(alertType, now)) {
+            return false;
+        }
+        
+        // Verstuur PRIMARY alert
+        char titleWithClass[48];
+        snprintf(titleWithClass, sizeof(titleWithClass), "[PRIMARY] %s", title);
+        bool result = sendNotification(titleWithClass, msg, colorTag);
+        
+        // Update throttling state alleen als notificatie succesvol is verstuurd
+        if (result) {
+            last2HAlertType = alertType;
+            last2HAlertTimestamp = now;
+            // PRIMARY alerts tellen niet mee voor secondary global cooldown
+        }
+        
+        return result;
+    }
+    
+    // SECONDARY alerts: coalescing logica
+    // Check throttling eerst
+    if (shouldThrottle2HAlert(alertType, now)) {
         #if !DEBUG_BUTTON_ONLY
         const char* alertTypeName = "";
         switch (alertType) {
             case ALERT2H_TREND_CHANGE: alertTypeName = "Trend Change"; break;
             case ALERT2H_MEAN_TOUCH: alertTypeName = "Mean Touch"; break;
             case ALERT2H_COMPRESS: alertTypeName = "Compress"; break;
-            case ALERT2H_BREAKOUT_UP: alertTypeName = "Breakout Up"; break;
-            case ALERT2H_BREAKOUT_DOWN: alertTypeName = "Breakdown Down"; break;
             case ALERT2H_ANCHOR_CTX: alertTypeName = "Anchor Context"; break;
             default: alertTypeName = "Unknown"; break;
         }
@@ -1014,23 +1169,52 @@ bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, c
         return false;  // Alert gesuppresseerd
     }
     
-    // FASE X.3: Voeg classificatie toe aan notificatietekst
-    char titleWithClass[48];  // Buffer voor title met classificatie
-    if (isPrimary) {
-        snprintf(titleWithClass, sizeof(titleWithClass), "[PRIMARY] %s", title);
-    } else {
-        snprintf(titleWithClass, sizeof(titleWithClass), "[Context] %s", title);
+    // Coalescing: check of er al een pending SECONDARY alert is
+    uint32_t coalesceWindowMs = alert2HThresholds.twoHSecondaryCoalesceWindowSec * 1000UL;
+    
+    if (pendingSecondaryType != ALERT2H_NONE && pendingSecondaryCreatedMillis > 0) {
+        uint32_t timeSincePending = now - pendingSecondaryCreatedMillis;
+        
+        if (timeSincePending < coalesceWindowMs) {
+            // Binnen coalesce window: update pending als nieuwe type hogere prioriteit heeft
+            uint8_t pendingPriority = getSecondaryAlertPriority(pendingSecondaryType);
+            uint8_t newPriority = getSecondaryAlertPriority(alertType);
+            
+            if (newPriority > pendingPriority) {
+                #ifdef DEBUG_ALERT_THROTTLE
+                Serial_printf(F("[2h coalesced] old->new: %d->%d (priority %d->%d)\n"),
+                             pendingSecondaryType, alertType, pendingPriority, newPriority);
+                #endif
+                // Update pending met nieuwe (hogere prioriteit) alert
+                pendingSecondaryType = alertType;
+                safeStrncpy(pendingSecondaryTitle, title, sizeof(pendingSecondaryTitle));
+                safeStrncpy(pendingSecondaryMsg, msg, sizeof(pendingSecondaryMsg));
+                safeStrncpy(pendingSecondaryColorTag, colorTag ? colorTag : "", sizeof(pendingSecondaryColorTag));
+                pendingSecondaryCreatedMillis = now;
+            }
+            // Anders: behoud bestaande pending (hogere prioriteit)
+            return false;  // Alert gecoalesced, niet direct verstuurd
+        } else {
+            // Buiten coalesce window: flush pending eerst
+            flushPendingSecondaryAlertInternal(now);
+        }
     }
     
-    // Verstuur notificatie met aangepaste title
-    bool result = sendNotification(titleWithClass, msg, colorTag);
+    // Geen pending of pending geflusht: start nieuw pending
+    // (We versturen niet direct, maar wachten op coalesce window of flush)
+    pendingSecondaryType = alertType;
+    safeStrncpy(pendingSecondaryTitle, title, sizeof(pendingSecondaryTitle));
+    safeStrncpy(pendingSecondaryMsg, msg, sizeof(pendingSecondaryMsg));
+    safeStrncpy(pendingSecondaryColorTag, colorTag ? colorTag : "", sizeof(pendingSecondaryColorTag));
+    pendingSecondaryCreatedMillis = now;
     
-    // Update throttling state alleen als notificatie succesvol is verstuurd
-    if (result) {
-        last2HAlertType = alertType;
-        last2HAlertTimestamp = now;
-    }
-    
-    return result;
+    // Verstuur direct als er geen andere pending was (eerste alert in nieuwe window)
+    // Dit voorkomt dat de eerste alert blijft hangen
+    return false;  // Alert wordt gecoalesced, wordt later geflusht
+}
+
+// FASE X.5: Publieke flush functie (gebruikt millis() intern)
+void AlertEngine::flushPendingSecondaryAlert() {
+    flushPendingSecondaryAlertInternal(millis());
 }
 

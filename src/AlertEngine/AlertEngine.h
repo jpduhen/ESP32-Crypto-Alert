@@ -142,7 +142,10 @@ public:
     
     // Helper: Send 2h breakout/breakdown notification (consolideert up/down logica)
     static void send2HBreakoutNotification(bool isUp, float lastPrice, float threshold, 
-                                         const TwoHMetrics& metrics, uint32_t now);
+                                             const TwoHMetrics& metrics, uint32_t now);
+    
+    // FASE X.5: Flush pending SECONDARY alert (aanroepen periodiek of na check2HNotifications)
+    static void flushPendingSecondaryAlert();
     
     // FASE X.2: 2h alert throttling - check of alert gesuppresseerd moet worden
     // Returns true als alert moet worden gesuppresseerd, false als alert door mag

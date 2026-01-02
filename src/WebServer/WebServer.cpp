@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ESP.h>  // Voor ESP.restart()
+#include <Arduino_GFX_Library.h>  // Voor Arduino_GFX type
 #include "../SettingsStore/SettingsStore.h"
 // Platform config voor platform naam detectie
 #define MODULE_INCLUDE  // Flag om PINS includes te voorkomen
@@ -14,6 +15,7 @@ extern WebServer server;  // Globale WebServer instance (gedefinieerd in .ino)
 extern TrendDetector trendDetector;
 extern VolatilityTracker volatilityTracker;
 extern AnchorSystem anchorSystem;
+extern Arduino_GFX* gfx;  // Display object voor rotatie aanpassing
 
 // Externe variabelen en functies die nodig zijn voor web server
 extern SemaphoreHandle_t dataMutex;
@@ -23,6 +25,7 @@ extern float anchorPrice;
 extern char ntfyTopic[];
 extern char binanceSymbol[];
 extern uint8_t language;
+extern uint8_t displayRotation;
 extern char mqttHost[];
 extern char mqttUser[];
 extern char mqttPass[];
@@ -303,6 +306,9 @@ void WebServerModule::renderSettingsHTML() {
                  getText("Bijv. BTCEUR, ETHBTC", "E.g. BTCEUR, ETHBTC"));
     sendInputRow(getText("Taal", "Language"), "language", "number", (language == 0) ? "0" : "1", 
                  getText("0 = Nederlands, 1 = English", "0 = Dutch, 1 = English"), 0, 1, 1);
+    sendInputRow(getText("Display Rotatie", "Display Rotation"), "displayRotation", "number", 
+                 (displayRotation == 2) ? "2" : "0", 
+                 getText("0 = normaal, 2 = 180 graden gedraaid", "0 = normal, 2 = rotated 180 degrees"), 0, 2, 2);
     
     sendSectionFooter();
     
@@ -456,6 +462,17 @@ void WebServerModule::renderSettingsHTML() {
     sendInputRow(getText("Throttle: Compress (min)", "Throttle: Compress (min)"), "2hThrottleComp", "number", 
                  valueBuf, getText("Cooldown tussen Compress alerts", "Cooldown between Compress alerts"), 
                  1, 600, 1);
+    
+    // FASE X.5: Secondary global cooldown en coalescing instellingen
+    snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.twoHSecondaryGlobalCooldownSec / 60UL);
+    sendInputRow(getText("2h Secondary Global Cooldown (min)", "2h Secondary Global Cooldown (min)"), "2hSecGlobalCD", "number", 
+                 valueBuf, getText("Globale cooldown voor alle SECONDARY alerts (hard cap)", "Global cooldown for all SECONDARY alerts (hard cap)"), 
+                 1, 1440, 1);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.twoHSecondaryCoalesceWindowSec);
+    sendInputRow(getText("2h Secondary Coalesce Window (sec)", "2h Secondary Coalesce Window (sec)"), "2hSecCoalesce", "number", 
+                 valueBuf, getText("Tijdvenster voor burst-demping (meerdere alerts binnen window = 1 melding)", "Time window for burst suppression (multiple alerts within window = 1 notification)"), 
+                 10, 600, 1);
     
     sendSectionFooter();
     
@@ -641,6 +658,21 @@ void WebServerModule::handleSave() {
         }
     }
     
+    // Handle display rotation setting
+    if (server->hasArg("displayRotation")) {
+        String rotStr = server->arg("displayRotation");
+        int rotVal = atoi(rotStr.c_str());
+        if (rotVal == 0 || rotVal == 2) {
+            displayRotation = static_cast<uint8_t>(rotVal);
+            // Wis scherm eerst om residu te voorkomen
+            gfx->fillScreen(RGB565_BLACK);
+            // Pas rotatie direct toe
+            gfx->setRotation(rotVal);
+            // Wis scherm opnieuw na rotatie
+            gfx->fillScreen(RGB565_BLACK);
+        }
+    }
+    
     // Fix: Gebruik String object eerst (zoals bij anchor) om dangling pointer te voorkomen
     // ESP32-S3 heeft problemen met direct .c_str() op tijdelijke String objecten
     if (server->hasArg("ntfytopic")) {
@@ -802,6 +834,14 @@ void WebServerModule::handleSave() {
     }
     if (parseIntArg("2hThrottleComp", intVal, 1, 600)) {
         alert2HThresholds.throttlingCompressMs = intVal * 60UL * 1000UL;
+    }
+    
+    // FASE X.5: Secondary global cooldown en coalescing instellingen
+    if (parseIntArg("2hSecGlobalCD", intVal, 1, 1440)) {
+        alert2HThresholds.twoHSecondaryGlobalCooldownSec = intVal * 60UL;  // Convert minuten naar seconden
+    }
+    if (parseIntArg("2hSecCoalesce", intVal, 10, 600)) {
+        alert2HThresholds.twoHSecondaryCoalesceWindowSec = intVal;  // Al in seconden
     }
     
     // Geoptimaliseerd: gebruik helper functie i.p.v. gedupliceerde code
