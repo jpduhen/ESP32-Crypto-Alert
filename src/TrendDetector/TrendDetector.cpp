@@ -6,6 +6,8 @@
 // Forward declarations voor dependencies (worden later via modules)
 extern bool sendNotification(const char *title, const char *message, const char *colorTag = nullptr);
 extern char binanceSymbol[];
+extern float prices[];  // Voor notificatie formaat
+void getFormattedTimestampForNotification(char* buffer, size_t bufferSize);  // Nieuwe functie voor notificaties met slash formaat
 
 // VolatilityState enum (hoort bij VolatilityTracker module - Fase 5.2)
 // Forward declaration - VolatilityTracker.h wordt geïncludeerd in .ino
@@ -147,10 +149,29 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
         // Gebruik lokale buffers (stack geheugen i.p.v. DRAM)
         char title[64];
         char msg[256];
-        snprintf(title, sizeof(title), "%s Trend Change", binanceSymbol);
+        char timestamp[32];
+        getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
+        
+        // Vertaal trends naar Nederlands
+        const char* fromTrendNL = fromTrend;
+        const char* toTrendNL = toTrend;
+        if (strcmp(fromTrend, "UP") == 0) fromTrendNL = "OP";
+        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendNL = "NEER";
+        else if (strcmp(fromTrend, "SIDEWAYS") == 0) fromTrendNL = "ZIJWAARTS";
+        if (strcmp(toTrend, "UP") == 0) toTrendNL = "OP";
+        else if (strcmp(toTrend, "DOWN") == 0) toTrendNL = "NEER";
+        else if (strcmp(toTrend, "SIDEWAYS") == 0) toTrendNL = "ZIJWAARTS";
+        
+        // Vertaal volatiliteit naar Nederlands
+        const char* volTextNL = volText;
+        if (strcmp(volText, "Low") == 0) volTextNL = "Laag";
+        else if (strcmp(volText, "Normal") == 0) volTextNL = "Normal";
+        else if (strcmp(volText, "High") == 0) volTextNL = "Hoog";
+        
+        snprintf(title, sizeof(title), "[Context] %s Trend Wijziging", binanceSymbol);
         snprintf(msg, sizeof(msg), 
-                 "Trend change: %s → %s\n2h: %+.2f%%\n30m: %+.2f%%\nVol: %s",
-                 fromTrend, toTrend, ret_2h, ret_30m_value, volText);
+                 "%.2f (%s)\nTrend change: %s → %s\n2h: %+.2f%%\n30m: %+.2f%%\nVolatiliteit: %s",
+                 prices[0], timestamp, fromTrendNL, toTrendNL, ret_2h, ret_30m_value, volTextNL);
         
         // FASE X.2: Gebruik throttling wrapper voor Trend Change
         if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag)) {

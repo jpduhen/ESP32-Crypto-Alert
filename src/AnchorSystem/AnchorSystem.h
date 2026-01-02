@@ -8,6 +8,7 @@ extern bool sendNotification(const char *title, const char *message, const char 
 extern char binanceSymbol[];
 extern float prices[];  // Voor anchor price checks
 void getFormattedTimestamp(char* buffer, size_t bufferSize);  // Voor notificaties
+void getFormattedTimestampForNotification(char* buffer, size_t bufferSize);  // Nieuwe functie voor notificaties met slash formaat
 void publishMqttAnchorEvent(float anchor_price, const char* event_type);  // Voor MQTT events
 bool isValidPrice(float price);  // Voor price validatie
 bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const char* caller);  // Voor thread-safe operaties

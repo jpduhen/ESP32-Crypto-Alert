@@ -412,8 +412,8 @@ static unsigned long lastHeapTelemetryLog = 0;   // Timestamp van laatste heap t
 static const unsigned long HEAP_TELEMETRY_INTERVAL_MS = 60000UL; // Elke 60 seconden
 
 // Static buffers voor hot paths (voorkomt String allocaties)
-static char httpResponseBuffer[384];  // Buffer voor HTTP responses (NTFY, etc.) - verkleind van 512 naar 384 bytes
-static char notificationMsgBuffer[384];  // Buffer voor notification messages - verkleind van 512 naar 384 bytes
+static char httpResponseBuffer[320];  // Buffer voor HTTP responses (NTFY, etc.) - verkleind van 384 naar 320 bytes (bespaart 64 bytes DRAM)
+static char notificationMsgBuffer[320];  // Buffer voor notification messages - verkleind van 384 naar 320 bytes (bespaart 64 bytes DRAM)
 static char notificationTitleBuffer[96];  // Buffer voor notification titles - verkleind van 128 naar 96 bytes
 
 // M2: Globale herbruikbare buffer voor HTTP responses (voorkomt String allocaties)
@@ -423,7 +423,7 @@ char gApiResp[384];  // Verkleind van 512 naar 384 bytes     // Buffer voor API 
 // gKlinesResp verwijderd: fetchBinanceKlines gebruikt streaming parsing met binanceStreamBuffer
 
 // Streaming buffer voor Binance klines parsing (geen grote heap allocaties)
-static char binanceStreamBuffer[768];  // Fixed-size buffer voor chunked JSON parsing - verkleind van 1024 naar 768 bytes
+static char binanceStreamBuffer[640];  // Fixed-size buffer voor chunked JSON parsing - verkleind van 768 naar 640 bytes (bespaart 128 bytes DRAM)
 
 // LVGL UI buffers en cache (voorkomt herhaalde allocaties en onnodige updates)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
@@ -1695,6 +1695,18 @@ void getFormattedTimestamp(char *buffer, size_t bufferSize) {
     }
 }
 
+// Get formatted timestamp string with slash (dd-mm-yyyy/hh:mm:ss) voor notificaties
+// Nieuwe functie voor consistente notificatie-indeling
+void getFormattedTimestampForNotification(char *buffer, size_t bufferSize) {
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+        strftime(buffer, bufferSize, "%d-%m-%Y/%H:%M:%S", &timeinfo);
+    } else {
+        // Fallback als tijd niet beschikbaar is
+        snprintf(buffer, bufferSize, "?\\?-?\\?-????/??:??:??");
+    }
+}
+
 // Format IP address to string (geoptimaliseerd: gebruik char array i.p.v. String)
 // ============================================================================
 // Helper Functions
@@ -2414,8 +2426,8 @@ static bool handleMqttStringSetting(const char* value, size_t valueLen, char* ta
 // Geoptimaliseerd: gebruik lookup table i.p.v. geneste if-else chain
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
     // Geoptimaliseerd: gebruik char arrays i.p.v. String om geheugenfragmentatie te voorkomen
-    char topicBuffer[128];
-    char msgBuffer[128];
+    char topicBuffer[96];  // Verkleind van 128 naar 96 bytes (bespaart 32 bytes DRAM)
+    char msgBuffer[96];     // Verkleind van 128 naar 96 bytes (bespaart 32 bytes DRAM)
     char prefixBuffer[64];
     
     // Kopieer topic naar buffer (max 127 chars)
@@ -2835,7 +2847,7 @@ static void processMqttQueue() {
 // Helper functies voor MQTT publishing - reduceert code duplicatie
 // Gebruikt queue om message loss te voorkomen
 static void publishMqttFloat(const char* topicSuffix, float value) {
-    char topicBuffer[128];
+    char topicBuffer[96];  // Verkleind van 128 naar 96 bytes (bespaart 32 bytes DRAM)
     char buffer[32];
     char mqttPrefix[64];
     getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
@@ -2852,7 +2864,7 @@ static void publishMqttFloat(const char* topicSuffix, float value) {
 }
 
 static void publishMqttUint(const char* topicSuffix, unsigned long value) {
-    char topicBuffer[128];
+    char topicBuffer[96];  // Verkleind van 128 naar 96 bytes (bespaart 32 bytes DRAM)
     char buffer[32];
     char mqttPrefix[64];
     getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
@@ -2869,7 +2881,7 @@ static void publishMqttUint(const char* topicSuffix, unsigned long value) {
 }
 
 static void publishMqttString(const char* topicSuffix, const char* value) {
-    char topicBuffer[128];
+    char topicBuffer[96];  // Verkleind van 128 naar 96 bytes (bespaart 32 bytes DRAM)
     char mqttPrefix[64];
     getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
     snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/%s", mqttPrefix, topicSuffix);
@@ -3061,7 +3073,7 @@ void publishMqttDiscovery() {
     
     // Buffers voor topic en payload
     char topicBuffer[128];
-    char payloadBuffer[512];
+    char payloadBuffer[400];  // Verkleind van 512 naar 400 bytes (bespaart 112 bytes DRAM)
     
     // Discovery berichten met char arrays (geen String concatenatie)
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_spike1m/config", deviceId);

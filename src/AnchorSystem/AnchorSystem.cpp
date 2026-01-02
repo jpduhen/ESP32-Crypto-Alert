@@ -137,34 +137,40 @@ void AnchorSystem::formatAnchorNotification(AnchorEventType eventType, float anc
                                             char* msgBuffer, size_t msgSize,
                                             char* titleBuffer, size_t titleSize,
                                             char* timestampBuffer, size_t timestampSize) {
-    getFormattedTimestamp(timestampBuffer, timestampSize);
+    getFormattedTimestampForNotification(timestampBuffer, timestampSize);
+    
+    // Vertaal trend naar Nederlands
+    const char* trendNameNL = trendName;
+    if (strcmp(trendName, "UP") == 0) trendNameNL = "OP";
+    else if (strcmp(trendName, "DOWN") == 0) trendNameNL = "NEER";
+    else if (strcmp(trendName, "SIDEWAYS") == 0) trendNameNL = "ZIJWAARTS";
     
     // Geoptimaliseerd: enum switch i.p.v. strcmp (sneller, geen string vergelijkingen)
     if (eventType == ANCHOR_EVENT_TAKE_PROFIT) {
-        snprintf(titleBuffer, titleSize, "%s Take Profit", binanceSymbol);
+        snprintf(titleBuffer, titleSize, "%s Anker: Winstpakker", binanceSymbol);
         if (this->trendAdaptiveAnchorsEnabled) {
-            // Gecompacteerde versie: minder tekst, behoudt essentiële info
             snprintf(msgBuffer, msgSize, 
-                     "TP: +%.2f%% (thr: +%.2f%%, basis: +%.2f%%)\nTrend: %s\nAnchor: %.2f | Prijs: %.2f | Winst: +%.2f",
-                     anchorPct, effAnchor.takeProfitPct, this->anchorTakeProfit, trendName,
-                     this->anchorPrice, prices[0], prices[0] - this->anchorPrice);
+                     "%.2f (%s)\nTrend: %s\nAnker: %.2f | Winst: +%.2f\nTP: +%.2f%% (thr: +%.2f%%, basis: +%.2f%%)",
+                     prices[0], timestampBuffer, trendNameNL, this->anchorPrice, prices[0] - this->anchorPrice,
+                     anchorPct, effAnchor.takeProfitPct, this->anchorTakeProfit);
         } else {
             snprintf(msgBuffer, msgSize, 
-                     "TP: +%.2f%% (thr: +%.2f%%)\nAnchor: %.2f | Prijs: %.2f | Winst: +%.2f",
-                     anchorPct, effAnchor.takeProfitPct, this->anchorPrice, prices[0], prices[0] - this->anchorPrice);
+                     "%.2f (%s)\nAnker: %.2f | Winst: +%.2f\nTP: +%.2f%% (thr: +%.2f%%)",
+                     prices[0], timestampBuffer, this->anchorPrice, prices[0] - this->anchorPrice,
+                     anchorPct, effAnchor.takeProfitPct);
         }
     } else {  // ANCHOR_EVENT_MAX_LOSS
-        snprintf(titleBuffer, titleSize, "%s Max Loss", binanceSymbol);
+        snprintf(titleBuffer, titleSize, "%s Anker: Verliesbeperker", binanceSymbol);
         if (this->trendAdaptiveAnchorsEnabled) {
-            // Gecompacteerde versie: minder tekst, behoudt essentiële info
             snprintf(msgBuffer, msgSize, 
-                     "ML: %.2f%% (thr: %.2f%%, basis: %.2f%%)\nTrend: %s\nAnchor: %.2f | Prijs: %.2f | Verlies: %.2f",
-                     anchorPct, effAnchor.maxLossPct, this->anchorMaxLoss, trendName,
-                     this->anchorPrice, prices[0], prices[0] - this->anchorPrice);
+                     "%.2f (%s)\nTrend: %s\nAnker: %.2f | Verlies: %.2f\nML: %.2f%% (thr: %.2f%%, basis: %.2f%%)",
+                     prices[0], timestampBuffer, trendNameNL, this->anchorPrice, prices[0] - this->anchorPrice,
+                     anchorPct, effAnchor.maxLossPct, this->anchorMaxLoss);
         } else {
             snprintf(msgBuffer, msgSize, 
-                     "ML: %.2f%% (thr: %.2f%%)\nAnchor: %.2f | Prijs: %.2f | Verlies: %.2f",
-                     anchorPct, effAnchor.maxLossPct, this->anchorPrice, prices[0], prices[0] - this->anchorPrice);
+                     "%.2f (%s)\nAnker: %.2f | Verlies: %.2f\nML: %.2f%% (thr: %.2f%%)",
+                     prices[0], timestampBuffer, this->anchorPrice, prices[0] - this->anchorPrice,
+                     anchorPct, effAnchor.maxLossPct);
         }
     }
 }
