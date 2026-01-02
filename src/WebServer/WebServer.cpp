@@ -63,6 +63,7 @@ extern const char* getText(const char* dutch, const char* english);
 extern void logHeap(const char* context);
 extern void formatIPAddress(IPAddress ip, char* buffer, size_t bufferSize);
 extern void generateDefaultNtfyTopic(char* buffer, size_t bufferSize);
+extern void getMqttTopicPrefix(char* buffer, size_t bufferSize);  // Forward declaration
 extern SettingsStore settingsStore;
 extern AlertThresholds alertThresholds;
 extern Alert2HThresholds alert2HThresholds;
@@ -582,6 +583,21 @@ void WebServerModule::renderSettingsHTML() {
     
     sendInputRow(getText("MQTT Password", "MQTT Password"), "mqttpass", "text", mqttPass, 
                  getText("MQTT wachtwoord (optioneel)", "MQTT password (optional)"));
+    
+    // MQTT Topic Prefix (read-only, ter referentie)
+    char mqttPrefix[64];
+    getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div style='margin:15px 0;padding:10px;background:#2a2a2a;border:1px solid #444;border-radius:4px;'>");
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<label style='display:block;margin-bottom:5px;color:#ccc;font-weight:bold;'>%s:</label>", 
+             getText("MQTT Topic Prefix", "MQTT Topic Prefix"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div style='padding:8px;background:#1a1a1a;border:1px solid #555;border-radius:4px;color:#fff;font-family:monospace;font-size:14px;word-break:break-all;'>%s</div>", mqttPrefix);
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='info' style='margin-top:5px;font-size:12px;color:#888;'>%s</div>", 
+             getText("Unieke prefix gebaseerd op NTFY topic (alleen ter referentie)", "Unique prefix based on NTFY topic (reference only)"));
+    server->sendContent(tmpBuf);
+    server->sendContent(F("</div>"));
     
     sendSectionFooter();
     

@@ -659,8 +659,8 @@ char mqttHost[64] = MQTT_HOST_DEFAULT;    // MQTT broker IP
 uint16_t mqttPort = MQTT_PORT_DEFAULT;    // MQTT poort
 char mqttUser[64] = MQTT_USER_DEFAULT;     // MQTT gebruiker
 char mqttPass[64] = MQTT_PASS_DEFAULT;     // MQTT wachtwoord
-// MQTT_CLIENT_ID_PREFIX wordt nu gedefinieerd in platform_config.h als MQTT_TOPIC_PREFIX
-#define MQTT_CLIENT_ID_PREFIX MQTT_TOPIC_PREFIX "_"
+// MQTT_CLIENT_ID_PREFIX wordt nu dynamisch gegenereerd op basis van NTFY topic
+// (niet meer nodig als macro, wordt nu direct in connectMQTT() gegenereerd)
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -1998,7 +1998,10 @@ void publishMqttAnchorEvent(float anchor_price, const char* event_type) {
     
     // Geoptimaliseerd: gebruik char array i.p.v. String
     char topic[128];
-    snprintf(topic, sizeof(topic), "%s/anchor/event", MQTT_TOPIC_PREFIX);
+    // Gebruik dynamische MQTT prefix (gebaseerd op NTFY topic)
+    char mqttPrefix[64];
+    getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
+    snprintf(topic, sizeof(topic), "%s/anchor/event", mqttPrefix);
     
     // Try direct publish, queue if failed
     if (mqttConnected && mqttClient.publish(topic, payload, false)) {
@@ -2076,14 +2079,53 @@ void generateDefaultNtfyTopic(char* buffer, size_t bufferSize) {
     SettingsStore::generateDefaultNtfyTopic(buffer, bufferSize);
 }
 
+// Helper: Get MQTT topic prefix from NTFY topic (uniek per device)
+// Format: NTFY topic zonder "-alert" suffix
+// Bijvoorbeeld: "9MK28H3Q-alert" -> "9MK28H3Q"
+// Dit zorgt ervoor dat elke device een unieke MQTT prefix heeft, zelfs als er meerdere devices van hetzelfde type zijn
+// Fase: static verwijderd zodat WebServerModule deze functie kan gebruiken
+void getMqttTopicPrefix(char* buffer, size_t bufferSize) {
+    if (buffer == nullptr || bufferSize == 0) return;
+    
+    // Gebruik NTFY topic als basis (uniek per device)
+    // Verwijder "-alert" suffix als die aanwezig is
+    size_t topicLen = strlen(ntfyTopic);
+    if (topicLen == 0) {
+        // Fallback: gebruik default NTFY topic generatie
+        generateDefaultNtfyTopic(buffer, bufferSize);
+        // Verwijder "-alert" suffix
+        size_t len = strlen(buffer);
+        if (len > 6 && strcmp(buffer + len - 6, "-alert") == 0) {
+            buffer[len - 6] = '\0';
+        }
+        return;
+    }
+    
+    // Kopieer NTFY topic
+    size_t copyLen = (topicLen < bufferSize) ? topicLen : bufferSize - 1;
+    strncpy(buffer, ntfyTopic, copyLen);
+    buffer[copyLen] = '\0';
+    
+    // Verwijder "-alert" suffix als die aanwezig is
+    size_t len = strlen(buffer);
+    if (len > 6 && strcmp(buffer + len - 6, "-alert") == 0) {
+        buffer[len - 6] = '\0';
+    }
+}
+
 // Helper: Generate MQTT device ID with prefix (char array version - voorkomt String gebruik)
-// Format: [PREFIX]_[ESP32-ID-HEX]
+// Format: [MQTT-PREFIX]_[ESP32-ID-HEX]
+// Gebruikt nu NTFY topic als basis voor unieke identificatie
 static void getMqttDeviceId(char* buffer, size_t bufferSize) {
     if (buffer == nullptr || bufferSize == 0) return;
     
+    // Haal MQTT prefix op (gebaseerd op NTFY topic)
+    char prefix[64];
+    getMqttTopicPrefix(prefix, sizeof(prefix));
+    
     // Generate device ID from MAC address (lower 32 bits as HEX)
     uint32_t macLower = (uint32_t)ESP.getEfuseMac();
-    snprintf(buffer, bufferSize, "%s_%08x", MQTT_TOPIC_PREFIX, macLower);
+    snprintf(buffer, bufferSize, "%s_%08x", prefix, macLower);
 }
 
 // Helper: Extract device ID from topic (char array version - voorkomt String gebruik)
@@ -2395,8 +2437,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     
     Serial_printf(F("[MQTT] Message: %s => %s\n"), topicBuffer, msgBuffer);
     
-    // Helper: maak MQTT topic prefix
-    snprintf(prefixBuffer, sizeof(prefixBuffer), "%s", MQTT_TOPIC_PREFIX);
+    // Helper: maak MQTT topic prefix (gebaseerd op NTFY topic voor unieke identificatie)
+    getMqttTopicPrefix(prefixBuffer, sizeof(prefixBuffer));
     
     bool settingChanged = false;
     char topicBufferFull[192]; // Voor volledige topic strings
@@ -2433,7 +2475,16 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         {"/config/2hCompressReset/set", true, 0.01f, 10.0f, &alert2HThresholds.compressResetPct, "/config/2hCompressReset"},
         {"/config/2hAnchorMargin/set", true, 0.01f, 5.0f, &alert2HThresholds.anchorOutsideMarginPct, "/config/2hAnchorMargin"},
         // FASE X.4: Trend hysteresis en throttling instellingen
-        {"/config/2hTrendHyst/set", true, 0.1f, 1.0f, &alert2HThresholds.trendHysteresisFactor, "/config/2hTrendHyst"}
+        {"/config/2hTrendHyst/set", true, 0.1f, 1.0f, &alert2HThresholds.trendHysteresisFactor, "/config/2hTrendHyst"},
+        // Trend-adaptive anchor multipliers
+        {"/config/upMLMult/set", true, 0.5f, 2.0f, &uptrendMaxLossMultiplier, "/config/upMLMult"},
+        {"/config/upTPMult/set", true, 0.5f, 2.0f, &uptrendTakeProfitMultiplier, "/config/upTPMult"},
+        {"/config/downMLMult/set", true, 0.5f, 2.0f, &downtrendMaxLossMultiplier, "/config/downMLMult"},
+        {"/config/downTPMult/set", true, 0.5f, 2.0f, &downtrendTakeProfitMultiplier, "/config/downTPMult"},
+        // Auto-Volatility settings
+        {"/config/autoVolBase/set", true, 0.01f, 1.0f, &autoVolatilityBaseline1mStdPct, "/config/autoVolBase"},
+        {"/config/autoVolMin/set", true, 0.1f, 1.0f, &autoVolatilityMinMultiplier, "/config/autoVolMin"},
+        {"/config/autoVolMax/set", true, 1.0f, 3.0f, &autoVolatilityMaxMultiplier, "/config/autoVolMax"}
     };
     
     static const struct {
@@ -2454,6 +2505,33 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         {"/config/2hThrottleTM/set", &alert2HThresholds.throttlingTrendToMeanMs, "/config/2hThrottleTM"},
         {"/config/2hThrottleMT/set", &alert2HThresholds.throttlingMeanTouchMs, "/config/2hThrottleMT"},
         {"/config/2hThrottleComp/set", &alert2HThresholds.throttlingCompressMs, "/config/2hThrottleComp"}
+    };
+    
+    // Integer settings (uint8_t) - voor warm-start en auto-volatility window
+    static const struct {
+        const char* suffix;
+        uint8_t* targetVar;
+        int minVal;
+        int maxVal;
+        const char* stateSuffix;
+    } intSettings[] = {
+        {"/config/autoVolWin/set", &autoVolatilityWindowMinutes, 10, 120, "/config/autoVolWin"},
+        {"/config/ws1mExtra/set", &warmStart1mExtraCandles, 0, 100, "/config/ws1mExtra"},
+        {"/config/ws5m/set", &warmStart5mCandles, 2, 200, "/config/ws5m"},
+        {"/config/ws30m/set", &warmStart30mCandles, 2, 200, "/config/ws30m"},
+        {"/config/ws2h/set", &warmStart2hCandles, 2, 200, "/config/ws2h"}
+    };
+    
+    // Boolean settings (switch entities)
+    static const struct {
+        const char* suffix;
+        bool* targetVar;
+        const char* stateSuffix;
+    } boolSettings[] = {
+        {"/config/trendAdapt/set", &trendAdaptiveAnchorsEnabled, "/config/trendAdapt"},
+        {"/config/smartConf/set", &smartConfluenceEnabled, "/config/smartConf"},
+        {"/config/autoVol/set", &autoVolatilityEnabled, "/config/autoVol"},
+        {"/config/warmStart/set", &warmStartEnabled, "/config/warmStart"}
     };
     
     // Process float settings
@@ -2486,26 +2564,69 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     }
     
     // Process cooldown settings (int -> ms conversion)
+    // Note: 2h cooldowns en throttling zijn in seconden (niet minuten zoals in web interface)
     if (!handled) {
         for (size_t i = 0; i < sizeof(cooldownSettings) / sizeof(cooldownSettings[0]); i++) {
             snprintf(topicBufferFull, sizeof(topicBufferFull), "%s%s", prefixBuffer, cooldownSettings[i].suffix);
             if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                                int seconds = atoi(msgBuffer);
-                                if (seconds >= 1 && seconds <= 3600) {
-                                    uint32_t resultMs;
-                                    if (!safeSecondsToMs(seconds, resultMs)) {
-                                        Serial_printf(F("[MQTT] Overflow check failed for cooldown: %d seconds\n"), seconds);
-                                        break;
-                                    }
-                                    *cooldownSettings[i].targetMs = resultMs;
+                int seconds = atoi(msgBuffer);
+                // 2h cooldowns en throttling kunnen groter zijn (tot 10 uur = 36000 seconden)
+                int maxSeconds = (strstr(cooldownSettings[i].suffix, "2h") != nullptr) ? 36000 : 3600;
+                if (seconds >= 1 && seconds <= maxSeconds) {
+                    uint32_t resultMs;
+                    if (!safeSecondsToMs(seconds, resultMs)) {
+                        Serial_printf(F("[MQTT] Overflow check failed for cooldown: %d seconds\n"), seconds);
+                        break;
+                    }
+                    *cooldownSettings[i].targetMs = resultMs;
                     snprintf(topicBufferFull, sizeof(topicBufferFull), "%s%s", prefixBuffer, cooldownSettings[i].stateSuffix);
                     snprintf(valueBuffer, sizeof(valueBuffer), "%lu", *cooldownSettings[i].targetMs / 1000);
                     mqttClient.publish(topicBufferFull, valueBuffer, true);
                     settingChanged = true;
                     handled = true;
                 } else {
-                    Serial_printf(F("[MQTT] Invalid cooldown value (range: 1-3600 seconds): %s\n"), msgBuffer);
+                    Serial_printf(F("[MQTT] Invalid cooldown value (range: 1-%d seconds): %s\n"), maxSeconds, msgBuffer);
                 }
+                break;
+            }
+        }
+    }
+    
+    // Process integer settings (uint8_t)
+    if (!handled) {
+        for (size_t i = 0; i < sizeof(intSettings) / sizeof(intSettings[0]); i++) {
+            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s%s", prefixBuffer, intSettings[i].suffix);
+            if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                int val = atoi(msgBuffer);
+                if (val >= intSettings[i].minVal && val <= intSettings[i].maxVal) {
+                    *intSettings[i].targetVar = static_cast<uint8_t>(val);
+                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s%s", prefixBuffer, intSettings[i].stateSuffix);
+                    snprintf(valueBuffer, sizeof(valueBuffer), "%u", *intSettings[i].targetVar);
+                    mqttClient.publish(topicBufferFull, valueBuffer, true);
+                    settingChanged = true;
+                    handled = true;
+                } else {
+                    Serial_printf(F("[MQTT] Invalid value for %s (range: %d-%d): %s\n"), 
+                                 intSettings[i].suffix, intSettings[i].minVal, intSettings[i].maxVal, msgBuffer);
+                }
+                break;
+            }
+        }
+    }
+    
+    // Process boolean settings (switch entities)
+    if (!handled) {
+        for (size_t i = 0; i < sizeof(boolSettings) / sizeof(boolSettings[0]); i++) {
+            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s%s", prefixBuffer, boolSettings[i].suffix);
+            if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                // Home Assistant switch: "ON" = true, "OFF" = false
+                bool newValue = (strcmp(msgBuffer, "ON") == 0 || strcmp(msgBuffer, "on") == 0 || 
+                                strcmp(msgBuffer, "1") == 0 || strcmp(msgBuffer, "true") == 0);
+                *boolSettings[i].targetVar = newValue;
+                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s%s", prefixBuffer, boolSettings[i].stateSuffix);
+                mqttClient.publish(topicBufferFull, newValue ? "ON" : "OFF", true);
+                settingChanged = true;
+                handled = true;
                 break;
             }
         }
@@ -2572,37 +2693,27 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                         snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorValue", prefixBuffer);
                         if (valid) {
                             if (useCurrentPrice) {
-                                mqttClient.publish(topicBufferFull, "QUEUED: current price", false);
+                                // Publiceer huidige prijs als state (default waarde)
+                                extern float prices[];
+                                if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "mqttCallback anchorValue")) {
+                                    float currentPrice = prices[0];
+                                    safeMutexGive(dataMutex, "mqttCallback anchorValue");
+                                    snprintf(valueBuffer, sizeof(valueBuffer), "%.2f", currentPrice);
+                                    mqttClient.publish(topicBufferFull, valueBuffer, true);
+                                } else {
+                                    // Fallback: gebruik 0 als placeholder (wordt later geupdate)
+                                    mqttClient.publish(topicBufferFull, "0.00", true);
+                                }
                             } else {
                                 snprintf(valueBuffer, sizeof(valueBuffer), "%.2f", val);
-                                mqttClient.publish(topicBufferFull, valueBuffer, false);
+                                mqttClient.publish(topicBufferFull, valueBuffer, true);
                             }
                         } else {
                             mqttClient.publish(topicBufferFull, "ERROR: Invalid value", false);
                         }
                         handled = true;
                     }
-                    // button/reset - speciale logica (gebruik queue voor asynchrone verwerking)
-                    if (!handled) {
-                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/button/reset/set", prefixBuffer);
-                        if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                            // Reset button pressed via MQTT - gebruik als anchor (via queue)
-                            if (strcmp(msgBuffer, "PRESS") == 0 || strcmp(msgBuffer, "press") == 0 || 
-                                strcmp(msgBuffer, "1") == 0 || strcmp(msgBuffer, "ON") == 0 || 
-                                strcmp(msgBuffer, "on") == 0) {
-                                // Gebruik queue voor asynchrone verwerking (voorkomt crashes)
-                                if (queueAnchorSetting(0.0f, true)) {
-                                    Serial_println("[MQTT] Reset/Anchor button pressed via MQTT - queued");
-                                    handled = true;
-                                    // Publish state back (button entities don't need state, but we can acknowledge)
-                                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/button/reset", prefixBuffer);
-                                    mqttClient.publish(topicBufferFull, "PRESSED", false);
-                                } else {
-                                    Serial_println("[MQTT] WARN: Kon anchor setting niet in queue zetten");
-                                }
-                            }
-                        }
-                    }
+                    // button/reset handler verwijderd - gebruik nu anchorValue number entity
                 }
             }
         }
@@ -2670,8 +2781,10 @@ static void processMqttQueue() {
 static void publishMqttFloat(const char* topicSuffix, float value) {
     char topicBuffer[128];
     char buffer[32];
+    char mqttPrefix[64];
+    getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
     dtostrf(value, 0, 2, buffer);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/%s", MQTT_TOPIC_PREFIX, topicSuffix);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/%s", mqttPrefix, topicSuffix);
     
     if (mqttConnected && mqttClient.publish(topicBuffer, buffer, true)) {
         // Direct publish succeeded
@@ -2685,8 +2798,10 @@ static void publishMqttFloat(const char* topicSuffix, float value) {
 static void publishMqttUint(const char* topicSuffix, unsigned long value) {
     char topicBuffer[128];
     char buffer[32];
+    char mqttPrefix[64];
+    getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
     snprintf(buffer, sizeof(buffer), "%lu", value);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/%s", MQTT_TOPIC_PREFIX, topicSuffix);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/%s", mqttPrefix, topicSuffix);
     
     if (mqttConnected && mqttClient.publish(topicBuffer, buffer, true)) {
         // Direct publish succeeded
@@ -2699,7 +2814,9 @@ static void publishMqttUint(const char* topicSuffix, unsigned long value) {
 
 static void publishMqttString(const char* topicSuffix, const char* value) {
     char topicBuffer[128];
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/%s", MQTT_TOPIC_PREFIX, topicSuffix);
+    char mqttPrefix[64];
+    getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/%s", mqttPrefix, topicSuffix);
     
     if (mqttConnected && mqttClient.publish(topicBuffer, value, true)) {
         // Direct publish succeeded
@@ -2725,15 +2842,104 @@ void publishMqttSettings() {
     publishMqttFloat("volatilityLowThreshold", volatilityLowThreshold);
     publishMqttFloat("volatilityHighThreshold", volatilityHighThreshold);
     
+    // 2-hour alert thresholds
+    publishMqttFloat("2hBreakMargin", alert2HThresholds.breakMarginPct);
+    publishMqttFloat("2hBreakReset", alert2HThresholds.breakResetMarginPct);
+    publishMqttFloat("2hMeanMinDist", alert2HThresholds.meanMinDistancePct);
+    publishMqttFloat("2hMeanTouch", alert2HThresholds.meanTouchBandPct);
+    publishMqttFloat("2hCompressTh", alert2HThresholds.compressThresholdPct);
+    publishMqttFloat("2hCompressReset", alert2HThresholds.compressResetPct);
+    publishMqttFloat("2hAnchorMargin", alert2HThresholds.anchorOutsideMarginPct);
+    publishMqttFloat("2hTrendHyst", alert2HThresholds.trendHysteresisFactor);
+    
+    // Trend-adaptive anchor multipliers
+    publishMqttFloat("upMLMult", uptrendMaxLossMultiplier);
+    publishMqttFloat("upTPMult", uptrendTakeProfitMultiplier);
+    publishMqttFloat("downMLMult", downtrendMaxLossMultiplier);
+    publishMqttFloat("downTPMult", downtrendTakeProfitMultiplier);
+    
+    // Auto-Volatility settings
+    publishMqttFloat("autoVolBase", autoVolatilityBaseline1mStdPct);
+    publishMqttFloat("autoVolMin", autoVolatilityMinMultiplier);
+    publishMqttFloat("autoVolMax", autoVolatilityMaxMultiplier);
+    
     // Unsigned int settings (cooldowns in seconds)
     publishMqttUint("cooldown1min", notificationCooldown1MinMs / 1000);
     publishMqttUint("cooldown30min", notificationCooldown30MinMs / 1000);
     publishMqttUint("cooldown5min", notificationCooldown5MinMs / 1000);
     publishMqttUint("language", language);
     
+    // 2-hour alert cooldowns (in seconds)
+    publishMqttUint("2hBreakCD", alert2HThresholds.breakCooldownMs / 1000);
+    publishMqttUint("2hMeanCD", alert2HThresholds.meanCooldownMs / 1000);
+    publishMqttUint("2hCompressCD", alert2HThresholds.compressCooldownMs / 1000);
+    publishMqttUint("2hAnchorCD", alert2HThresholds.anchorCooldownMs / 1000);
+    publishMqttUint("2hThrottleTC", alert2HThresholds.throttlingTrendChangeMs / 1000);
+    publishMqttUint("2hThrottleTM", alert2HThresholds.throttlingTrendToMeanMs / 1000);
+    publishMqttUint("2hThrottleMT", alert2HThresholds.throttlingMeanTouchMs / 1000);
+    publishMqttUint("2hThrottleComp", alert2HThresholds.throttlingCompressMs / 1000);
+    
+    // Integer settings (uint8_t)
+    publishMqttUint("autoVolWin", autoVolatilityWindowMinutes);
+    publishMqttUint("ws1mExtra", warmStart1mExtraCandles);
+    publishMqttUint("ws5m", warmStart5mCandles);
+    publishMqttUint("ws30m", warmStart30mCandles);
+    publishMqttUint("ws2h", warmStart2hCandles);
+    
+    // Boolean settings (switch entities)
+    char mqttPrefix[64];
+    getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
+    char topicBuffer[128];
+    char valueBuffer[8];
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/trendAdapt", mqttPrefix);
+    snprintf(valueBuffer, sizeof(valueBuffer), "%s", trendAdaptiveAnchorsEnabled ? "ON" : "OFF");
+    enqueueMqttMessage(topicBuffer, valueBuffer, true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/smartConf", mqttPrefix);
+    snprintf(valueBuffer, sizeof(valueBuffer), "%s", smartConfluenceEnabled ? "ON" : "OFF");
+    enqueueMqttMessage(topicBuffer, valueBuffer, true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/autoVol", mqttPrefix);
+    snprintf(valueBuffer, sizeof(valueBuffer), "%s", autoVolatilityEnabled ? "ON" : "OFF");
+    enqueueMqttMessage(topicBuffer, valueBuffer, true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/warmStart", mqttPrefix);
+    snprintf(valueBuffer, sizeof(valueBuffer), "%s", warmStartEnabled ? "ON" : "OFF");
+    enqueueMqttMessage(topicBuffer, valueBuffer, true);
+    
     // String settings
     publishMqttString("binanceSymbol", binanceSymbol);
     publishMqttString("ntfyTopic", ntfyTopic);
+    
+    // Anchor value - publish current price as default (or current anchor if set)
+    char mqttPrefixAnchor[64];
+    getMqttTopicPrefix(mqttPrefixAnchor, sizeof(mqttPrefixAnchor));
+    char topicBufferAnchor[128];
+    char valueBufferAnchor[32];
+    snprintf(topicBufferAnchor, sizeof(topicBufferAnchor), "%s/config/anchorValue", mqttPrefixAnchor);
+    
+    // Try to get current anchor price, otherwise use current price
+    extern float anchorPrice;
+    extern float prices[];
+    float anchorValueToPublish = 0.0f;
+    
+    if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "publishMqttSettings anchorValue")) {
+        // Check if anchor is active, otherwise use current price
+        extern bool anchorActive;
+        if (anchorActive && anchorPrice > 0.0f && isValidPrice(anchorPrice)) {
+            anchorValueToPublish = anchorPrice;
+        } else if (isValidPrice(prices[0])) {
+            anchorValueToPublish = prices[0]; // Use current price as default
+        }
+        safeMutexGive(dataMutex, "publishMqttSettings anchorValue");
+    } else {
+        // Fallback: use current price if mutex unavailable
+        if (isValidPrice(prices[0])) {
+            anchorValueToPublish = prices[0];
+        }
+    }
+    
+    if (anchorValueToPublish > 0.0f) {
+        snprintf(valueBufferAnchor, sizeof(valueBufferAnchor), "%.2f", anchorValueToPublish);
+        enqueueMqttMessage(topicBufferAnchor, valueBufferAnchor, true);
+    }
 }
 
 // Publiceer waarden naar MQTT (prijzen, percentages, etc.)
@@ -2743,32 +2949,34 @@ void publishMqttValues(float price, float ret_1m, float ret_5m, float ret_30m) {
     
     char topicBuffer[128];
     char buffer[32];
+    char mqttPrefix[64];
+    getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
     
     dtostrf(price, 0, 2, buffer);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/price", MQTT_TOPIC_PREFIX);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/price", mqttPrefix);
     mqttClient.publish(topicBuffer, buffer, false);
     
     dtostrf(ret_1m, 0, 2, buffer);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/return_1m", MQTT_TOPIC_PREFIX);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/return_1m", mqttPrefix);
     mqttClient.publish(topicBuffer, buffer, false);
     
     dtostrf(ret_5m, 0, 2, buffer);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/return_5m", MQTT_TOPIC_PREFIX);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/return_5m", mqttPrefix);
     mqttClient.publish(topicBuffer, buffer, false);
     
     dtostrf(ret_30m, 0, 2, buffer);
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/return_30m", MQTT_TOPIC_PREFIX);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/return_30m", mqttPrefix);
     mqttClient.publish(topicBuffer, buffer, false);
     
     snprintf(buffer, sizeof(buffer), "%lu", millis());
-    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/timestamp", MQTT_TOPIC_PREFIX);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/timestamp", mqttPrefix);
     mqttClient.publish(topicBuffer, buffer, false);
     
     // Publiceer IP-adres (alleen als WiFi verbonden is)
     if (WiFi.status() == WL_CONNECTED) {
         char ipBuffer[16];
         formatIPAddress(WiFi.localIP(), ipBuffer, sizeof(ipBuffer));
-        snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/ip_address", MQTT_TOPIC_PREFIX);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/ip_address", mqttPrefix);
         mqttClient.publish(topicBuffer, ipBuffer, false);
     }
 }
@@ -2782,6 +2990,10 @@ void publishMqttDiscovery() {
     char deviceId[64];
     getMqttDeviceId(deviceId, sizeof(deviceId));
     
+    // Haal MQTT prefix op (gebaseerd op NTFY topic voor unieke identificatie)
+    char mqttPrefix[64];
+    getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
+    
     char deviceJson[256];
     snprintf(deviceJson, sizeof(deviceJson), 
         "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"%s\",\"manufacturer\":\"JanP\",\"model\":\"%s\"}",
@@ -2793,132 +3005,291 @@ void publishMqttDiscovery() {
     
     // Discovery berichten met char arrays (geen String concatenatie)
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_spike1m/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"1m Spike Threshold\",\"unique_id\":\"%s_spike1m\",\"state_topic\":\"%s/config/spike1m\",\"command_topic\":\"%s/config/spike1m/set\",\"min\":0.01,\"max\":5.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-line-variant\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"1m Spike Threshold\",\"unique_id\":\"%s_spike1m\",\"state_topic\":\"%s/config/spike1m\",\"command_topic\":\"%s/config/spike1m/set\",\"min\":0.01,\"max\":5.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-line-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_spike5m/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"5m Spike Filter\",\"unique_id\":\"%s_spike5m\",\"state_topic\":\"%s/config/spike5m\",\"command_topic\":\"%s/config/spike5m/set\",\"min\":0.01,\"max\":10.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:filter\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"5m Spike Filter\",\"unique_id\":\"%s_spike5m\",\"state_topic\":\"%s/config/spike5m\",\"command_topic\":\"%s/config/spike5m/set\",\"min\":0.01,\"max\":10.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:filter\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_move30m/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"30m Move Threshold\",\"unique_id\":\"%s_move30m\",\"state_topic\":\"%s/config/move30m\",\"command_topic\":\"%s/config/move30m/set\",\"min\":0.5,\"max\":20.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:trending-up\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"30m Move Threshold\",\"unique_id\":\"%s_move30m\",\"state_topic\":\"%s/config/move30m\",\"command_topic\":\"%s/config/move30m/set\",\"min\":0.5,\"max\":20.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:trending-up\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_move5m/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"5m Move Filter\",\"unique_id\":\"%s_move5m\",\"state_topic\":\"%s/config/move5m\",\"command_topic\":\"%s/config/move5m/set\",\"min\":0.1,\"max\":10.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:filter-variant\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"5m Move Filter\",\"unique_id\":\"%s_move5m\",\"state_topic\":\"%s/config/move5m\",\"command_topic\":\"%s/config/move5m/set\",\"min\":0.1,\"max\":10.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:filter-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_move5mAlert/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"5m Move Alert Threshold\",\"unique_id\":\"%s_move5mAlert\",\"state_topic\":\"%s/config/move5mAlert\",\"command_topic\":\"%s/config/move5mAlert/set\",\"min\":0.1,\"max\":10.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:alert\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"5m Move Alert Threshold\",\"unique_id\":\"%s_move5mAlert\",\"state_topic\":\"%s/config/move5mAlert\",\"command_topic\":\"%s/config/move5mAlert/set\",\"min\":0.1,\"max\":10.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:alert\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_cooldown1min/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"1m Cooldown\",\"unique_id\":\"%s_cooldown1min\",\"state_topic\":\"%s/config/cooldown1min\",\"command_topic\":\"%s/config/cooldown1min/set\",\"min\":10,\"max\":3600,\"step\":10,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"1m Cooldown\",\"unique_id\":\"%s_cooldown1min\",\"state_topic\":\"%s/config/cooldown1min\",\"command_topic\":\"%s/config/cooldown1min/set\",\"min\":10,\"max\":3600,\"step\":10,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_cooldown30min/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"30m Cooldown\",\"unique_id\":\"%s_cooldown30min\",\"state_topic\":\"%s/config/cooldown30min\",\"command_topic\":\"%s/config/cooldown30min/set\",\"min\":10,\"max\":3600,\"step\":10,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer-outline\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"30m Cooldown\",\"unique_id\":\"%s_cooldown30min\",\"state_topic\":\"%s/config/cooldown30min\",\"command_topic\":\"%s/config/cooldown30min/set\",\"min\":10,\"max\":3600,\"step\":10,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer-outline\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_cooldown5min/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"5m Cooldown\",\"unique_id\":\"%s_cooldown5min\",\"state_topic\":\"%s/config/cooldown5min\",\"command_topic\":\"%s/config/cooldown5min/set\",\"min\":10,\"max\":3600,\"step\":10,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer-sand\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"5m Cooldown\",\"unique_id\":\"%s_cooldown5min\",\"state_topic\":\"%s/config/cooldown5min\",\"command_topic\":\"%s/config/cooldown5min/set\",\"min\":10,\"max\":3600,\"step\":10,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer-sand\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/text/%s_binanceSymbol/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Binance Symbol\",\"unique_id\":\"%s_binanceSymbol\",\"state_topic\":\"%s/config/binanceSymbol\",\"command_topic\":\"%s/config/binanceSymbol/set\",\"icon\":\"mdi:currency-btc\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Binance Symbol\",\"unique_id\":\"%s_binanceSymbol\",\"state_topic\":\"%s/config/binanceSymbol\",\"command_topic\":\"%s/config/binanceSymbol/set\",\"icon\":\"mdi:currency-btc\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/text/%s_ntfyTopic/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"NTFY Topic\",\"unique_id\":\"%s_ntfyTopic\",\"state_topic\":\"%s/config/ntfyTopic\",\"command_topic\":\"%s/config/ntfyTopic/set\",\"icon\":\"mdi:bell-ring\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"NTFY Topic\",\"unique_id\":\"%s_ntfyTopic\",\"state_topic\":\"%s/config/ntfyTopic\",\"command_topic\":\"%s/config/ntfyTopic/set\",\"icon\":\"mdi:bell-ring\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_price/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Crypto Price\",\"unique_id\":\"%s_price\",\"state_topic\":\"%s/values/price\",\"unit_of_measurement\":\"EUR\",\"icon\":\"mdi:currency-btc\",\"device_class\":\"monetary\",%s}", deviceId, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Crypto Price\",\"unique_id\":\"%s_price\",\"state_topic\":\"%s/values/price\",\"unit_of_measurement\":\"EUR\",\"icon\":\"mdi:currency-btc\",\"device_class\":\"monetary\",%s}", deviceId, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_return_1m/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"1m Return\",\"unique_id\":\"%s_return_1m\",\"state_topic\":\"%s/values/return_1m\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-line-variant\",%s}", deviceId, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"1m Return\",\"unique_id\":\"%s_return_1m\",\"state_topic\":\"%s/values/return_1m\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-line-variant\",%s}", deviceId, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_return_5m/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"5m Return\",\"unique_id\":\"%s_return_5m\",\"state_topic\":\"%s/values/return_5m\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-timeline-variant\",%s}", deviceId, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"5m Return\",\"unique_id\":\"%s_return_5m\",\"state_topic\":\"%s/values/return_5m\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-timeline-variant\",%s}", deviceId, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_return_30m/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"30m Return\",\"unique_id\":\"%s_return_30m\",\"state_topic\":\"%s/values/return_30m\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:trending-up\",%s}", deviceId, MQTT_TOPIC_PREFIX, deviceJson);
-    mqttClient.publish(topicBuffer, payloadBuffer, true);
-    delay(50);
-    
-    // Reset button
-    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/button/%s_reset/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Reset Open Price\",\"unique_id\":\"%s_reset\",\"command_topic\":\"%s/button/reset/set\",\"icon\":\"mdi:restart\",%s}", deviceId, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"30m Return\",\"unique_id\":\"%s_return_30m\",\"state_topic\":\"%s/values/return_30m\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:trending-up\",%s}", deviceId, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     // Anchor take profit
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_anchorTakeProfit/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Anchor Take Profit\",\"unique_id\":\"%s_anchorTakeProfit\",\"state_topic\":\"%s/config/anchorTakeProfit\",\"command_topic\":\"%s/config/anchorTakeProfit/set\",\"min\":0.1,\"max\":100.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:cash-plus\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Anchor Take Profit\",\"unique_id\":\"%s_anchorTakeProfit\",\"state_topic\":\"%s/config/anchorTakeProfit\",\"command_topic\":\"%s/config/anchorTakeProfit/set\",\"min\":0.1,\"max\":100.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:cash-plus\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     // Anchor max loss
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_anchorMaxLoss/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Anchor Max Loss\",\"unique_id\":\"%s_anchorMaxLoss\",\"state_topic\":\"%s/config/anchorMaxLoss\",\"command_topic\":\"%s/config/anchorMaxLoss/set\",\"min\":-100.0,\"max\":-0.1,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:cash-minus\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Anchor Max Loss\",\"unique_id\":\"%s_anchorMaxLoss\",\"state_topic\":\"%s/config/anchorMaxLoss\",\"command_topic\":\"%s/config/anchorMaxLoss/set\",\"min\":-100.0,\"max\":-0.1,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:cash-minus\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
-    // Anchor value (number entity for setting anchor price)
+    // Anchor value (number entity for setting anchor price) - renamed to "Reset Anchor Price"
+    // Default value will be set to current price when publishing state
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_anchorValue/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Anchor Value\",\"unique_id\":\"%s_anchorValue\",\"state_topic\":\"%s/config/anchorValue\",\"command_topic\":\"%s/config/anchorValue/set\",\"min\":0.01,\"max\":1000000.0,\"step\":0.01,\"unit_of_measurement\":\"EUR\",\"icon\":\"mdi:anchor\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Reset Anchor Price\",\"unique_id\":\"%s_anchorValue\",\"state_topic\":\"%s/config/anchorValue\",\"command_topic\":\"%s/config/anchorValue/set\",\"min\":0.01,\"max\":1000000.0,\"step\":0.01,\"unit_of_measurement\":\"EUR\",\"icon\":\"mdi:anchor\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     // Anchor event sensor
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_anchor_event/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Anchor Event\",\"unique_id\":\"%s_anchor_event\",\"state_topic\":\"%s/anchor/event\",\"json_attributes_topic\":\"%s/anchor/event\",\"value_template\":\"{{ value_json.event }}\",\"icon\":\"mdi:anchor\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Anchor Event\",\"unique_id\":\"%s_anchor_event\",\"state_topic\":\"%s/anchor/event\",\"json_attributes_topic\":\"%s/anchor/event\",\"value_template\":\"{{ value_json.event }}\",\"icon\":\"mdi:anchor\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     // Trend threshold
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_trendThreshold/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Trend Threshold\",\"unique_id\":\"%s_trendThreshold\",\"state_topic\":\"%s/config/trendThreshold\",\"command_topic\":\"%s/config/trendThreshold/set\",\"min\":0.1,\"max\":10.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-line\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Trend Threshold\",\"unique_id\":\"%s_trendThreshold\",\"state_topic\":\"%s/config/trendThreshold\",\"command_topic\":\"%s/config/trendThreshold/set\",\"min\":0.1,\"max\":10.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-line\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     // Volatility low threshold
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_volatilityLowThreshold/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Volatility Low Threshold\",\"unique_id\":\"%s_volatilityLowThreshold\",\"state_topic\":\"%s/config/volatilityLowThreshold\",\"command_topic\":\"%s/config/volatilityLowThreshold/set\",\"min\":0.01,\"max\":1.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-timeline-variant\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Volatility Low Threshold\",\"unique_id\":\"%s_volatilityLowThreshold\",\"state_topic\":\"%s/config/volatilityLowThreshold\",\"command_topic\":\"%s/config/volatilityLowThreshold/set\",\"min\":0.01,\"max\":1.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-timeline-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     // Volatility high threshold
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_volatilityHighThreshold/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Volatility High Threshold\",\"unique_id\":\"%s_volatilityHighThreshold\",\"state_topic\":\"%s/config/volatilityHighThreshold\",\"command_topic\":\"%s/config/volatilityHighThreshold/set\",\"min\":0.01,\"max\":1.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-timeline-variant-shimmer\",\"mode\":\"box\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Volatility High Threshold\",\"unique_id\":\"%s_volatilityHighThreshold\",\"state_topic\":\"%s/config/volatilityHighThreshold\",\"command_topic\":\"%s/config/volatilityHighThreshold/set\",\"min\":0.01,\"max\":1.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-timeline-variant-shimmer\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     // IP Address sensor
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_ip_address/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"IP Address\",\"unique_id\":\"%s_ip_address\",\"state_topic\":\"%s/values/ip_address\",\"icon\":\"mdi:ip-network\",%s}", deviceId, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"IP Address\",\"unique_id\":\"%s_ip_address\",\"state_topic\":\"%s/values/ip_address\",\"icon\":\"mdi:ip-network\",%s}", deviceId, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
     // Language select
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/select/%s_language/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Language\",\"unique_id\":\"%s_language\",\"state_topic\":\"%s/config/language\",\"command_topic\":\"%s/config/language/set\",\"options\":[\"0\",\"1\"],\"icon\":\"mdi:translate\",%s}", deviceId, MQTT_TOPIC_PREFIX, MQTT_TOPIC_PREFIX, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Language\",\"unique_id\":\"%s_language\",\"state_topic\":\"%s/config/language\",\"command_topic\":\"%s/config/language/set\",\"options\":[\"0\",\"1\"],\"icon\":\"mdi:translate\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    // 2-hour Alert Thresholds
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hBreakMargin/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Breakout Margin\",\"unique_id\":\"%s_2hBreakMargin\",\"state_topic\":\"%s/config/2hBreakMargin\",\"command_topic\":\"%s/config/2hBreakMargin/set\",\"min\":0.01,\"max\":5.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-timeline-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hBreakReset/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Breakout Reset\",\"unique_id\":\"%s_2hBreakReset\",\"state_topic\":\"%s/config/2hBreakReset\",\"command_topic\":\"%s/config/2hBreakReset/set\",\"min\":0.01,\"max\":5.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-timeline-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hBreakCD/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Breakout Cooldown\",\"unique_id\":\"%s_2hBreakCD\",\"state_topic\":\"%s/config/2hBreakCD\",\"command_topic\":\"%s/config/2hBreakCD/set\",\"min\":1,\"max\":10800,\"step\":1,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hMeanMinDist/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Mean Min Distance\",\"unique_id\":\"%s_2hMeanMinDist\",\"state_topic\":\"%s/config/2hMeanMinDist\",\"command_topic\":\"%s/config/2hMeanMinDist/set\",\"min\":0.01,\"max\":10.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-timeline-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hMeanTouch/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Mean Touch Band\",\"unique_id\":\"%s_2hMeanTouch\",\"state_topic\":\"%s/config/2hMeanTouch\",\"command_topic\":\"%s/config/2hMeanTouch/set\",\"min\":0.01,\"max\":2.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-timeline-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hMeanCD/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Mean Cooldown\",\"unique_id\":\"%s_2hMeanCD\",\"state_topic\":\"%s/config/2hMeanCD\",\"command_topic\":\"%s/config/2hMeanCD/set\",\"min\":1,\"max\":10800,\"step\":1,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hCompressTh/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Compress Threshold\",\"unique_id\":\"%s_2hCompressTh\",\"state_topic\":\"%s/config/2hCompressTh\",\"command_topic\":\"%s/config/2hCompressTh/set\",\"min\":0.01,\"max\":5.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-timeline-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hCompressReset/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Compress Reset\",\"unique_id\":\"%s_2hCompressReset\",\"state_topic\":\"%s/config/2hCompressReset\",\"command_topic\":\"%s/config/2hCompressReset/set\",\"min\":0.01,\"max\":10.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-timeline-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hCompressCD/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Compress Cooldown\",\"unique_id\":\"%s_2hCompressCD\",\"state_topic\":\"%s/config/2hCompressCD\",\"command_topic\":\"%s/config/2hCompressCD/set\",\"min\":1,\"max\":18000,\"step\":1,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hAnchorMargin/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Anchor Margin\",\"unique_id\":\"%s_2hAnchorMargin\",\"state_topic\":\"%s/config/2hAnchorMargin\",\"command_topic\":\"%s/config/2hAnchorMargin/set\",\"min\":0.01,\"max\":5.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:anchor\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hAnchorCD/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Anchor Cooldown\",\"unique_id\":\"%s_2hAnchorCD\",\"state_topic\":\"%s/config/2hAnchorCD\",\"command_topic\":\"%s/config/2hAnchorCD/set\",\"min\":1,\"max\":18000,\"step\":1,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    // Trend Hysteresis and Throttling
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hTrendHyst/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Trend Hysteresis\",\"unique_id\":\"%s_2hTrendHyst\",\"state_topic\":\"%s/config/2hTrendHyst\",\"command_topic\":\"%s/config/2hTrendHyst/set\",\"min\":0.1,\"max\":1.0,\"step\":0.01,\"icon\":\"mdi:chart-line\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hThrottleTC/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Throttle Trend Change\",\"unique_id\":\"%s_2hThrottleTC\",\"state_topic\":\"%s/config/2hThrottleTC\",\"command_topic\":\"%s/config/2hThrottleTC/set\",\"min\":1,\"max\":36000,\"step\":1,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hThrottleTM/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Throttle Trend→Mean\",\"unique_id\":\"%s_2hThrottleTM\",\"state_topic\":\"%s/config/2hThrottleTM\",\"command_topic\":\"%s/config/2hThrottleTM/set\",\"min\":1,\"max\":18000,\"step\":1,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hThrottleMT/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Throttle Mean Touch\",\"unique_id\":\"%s_2hThrottleMT\",\"state_topic\":\"%s/config/2hThrottleMT\",\"command_topic\":\"%s/config/2hThrottleMT/set\",\"min\":1,\"max\":18000,\"step\":1,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hThrottleComp/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Throttle Compress\",\"unique_id\":\"%s_2hThrottleComp\",\"state_topic\":\"%s/config/2hThrottleComp\",\"command_topic\":\"%s/config/2hThrottleComp/set\",\"min\":1,\"max\":36000,\"step\":1,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    // Smart Logic & Filters
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/switch/%s_trendAdapt/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Trend-Adaptive Anchors\",\"unique_id\":\"%s_trendAdapt\",\"state_topic\":\"%s/config/trendAdapt\",\"command_topic\":\"%s/config/trendAdapt/set\",\"icon\":\"mdi:chart-line-variant\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_upMLMult/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"UP Trend Max Loss Mult\",\"unique_id\":\"%s_upMLMult\",\"state_topic\":\"%s/config/upMLMult\",\"command_topic\":\"%s/config/upMLMult/set\",\"min\":0.5,\"max\":2.0,\"step\":0.01,\"icon\":\"mdi:chart-line-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_upTPMult/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"UP Trend Take Profit Mult\",\"unique_id\":\"%s_upTPMult\",\"state_topic\":\"%s/config/upTPMult\",\"command_topic\":\"%s/config/upTPMult/set\",\"min\":0.5,\"max\":2.0,\"step\":0.01,\"icon\":\"mdi:chart-line-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_downMLMult/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"DOWN Trend Max Loss Mult\",\"unique_id\":\"%s_downMLMult\",\"state_topic\":\"%s/config/downMLMult\",\"command_topic\":\"%s/config/downMLMult/set\",\"min\":0.5,\"max\":2.0,\"step\":0.01,\"icon\":\"mdi:chart-line-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_downTPMult/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"DOWN Trend Take Profit Mult\",\"unique_id\":\"%s_downTPMult\",\"state_topic\":\"%s/config/downTPMult\",\"command_topic\":\"%s/config/downTPMult/set\",\"min\":0.5,\"max\":2.0,\"step\":0.01,\"icon\":\"mdi:chart-line-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/switch/%s_smartConf/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Smart Confluence Mode\",\"unique_id\":\"%s_smartConf\",\"state_topic\":\"%s/config/smartConf\",\"command_topic\":\"%s/config/smartConf/set\",\"icon\":\"mdi:chart-timeline-variant\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/switch/%s_autoVol/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Auto-Volatility Mode\",\"unique_id\":\"%s_autoVol\",\"state_topic\":\"%s/config/autoVol\",\"command_topic\":\"%s/config/autoVol/set\",\"icon\":\"mdi:chart-timeline-variant-shimmer\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_autoVolWin/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Auto-Volatility Window\",\"unique_id\":\"%s_autoVolWin\",\"state_topic\":\"%s/config/autoVolWin\",\"command_topic\":\"%s/config/autoVolWin/set\",\"min\":10,\"max\":120,\"step\":1,\"unit_of_measurement\":\"min\",\"icon\":\"mdi:timer\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_autoVolBase/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Auto-Volatility Baseline\",\"unique_id\":\"%s_autoVolBase\",\"state_topic\":\"%s/config/autoVolBase\",\"command_topic\":\"%s/config/autoVolBase/set\",\"min\":0.01,\"max\":1.0,\"step\":0.0001,\"icon\":\"mdi:chart-timeline-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_autoVolMin/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Auto-Volatility Min Mult\",\"unique_id\":\"%s_autoVolMin\",\"state_topic\":\"%s/config/autoVolMin\",\"command_topic\":\"%s/config/autoVolMin/set\",\"min\":0.1,\"max\":1.0,\"step\":0.01,\"icon\":\"mdi:chart-timeline-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_autoVolMax/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Auto-Volatility Max Mult\",\"unique_id\":\"%s_autoVolMax\",\"state_topic\":\"%s/config/autoVolMax\",\"command_topic\":\"%s/config/autoVolMax/set\",\"min\":1.0,\"max\":3.0,\"step\":0.01,\"icon\":\"mdi:chart-timeline-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    // Warm-Start
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/switch/%s_warmStart/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Warm-Start Enabled\",\"unique_id\":\"%s_warmStart\",\"state_topic\":\"%s/config/warmStart\",\"command_topic\":\"%s/config/warmStart/set\",\"icon\":\"mdi:fire\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_ws1mExtra/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Warm-Start 1m Extra\",\"unique_id\":\"%s_ws1mExtra\",\"state_topic\":\"%s/config/ws1mExtra\",\"command_topic\":\"%s/config/ws1mExtra/set\",\"min\":0,\"max\":100,\"step\":1,\"icon\":\"mdi:fire\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_ws5m/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Warm-Start 5m Candles\",\"unique_id\":\"%s_ws5m\",\"state_topic\":\"%s/config/ws5m\",\"command_topic\":\"%s/config/ws5m/set\",\"min\":2,\"max\":200,\"step\":1,\"icon\":\"mdi:fire\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_ws30m/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Warm-Start 30m Candles\",\"unique_id\":\"%s_ws30m\",\"state_topic\":\"%s/config/ws30m\",\"command_topic\":\"%s/config/ws30m/set\",\"min\":2,\"max\":200,\"step\":1,\"icon\":\"mdi:fire\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_ws2h/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Warm-Start 2h Candles\",\"unique_id\":\"%s_ws2h\",\"state_topic\":\"%s/config/ws2h\",\"command_topic\":\"%s/config/ws2h/set\",\"min\":2,\"max\":200,\"step\":1,\"icon\":\"mdi:fire\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
@@ -2933,9 +3304,12 @@ void connectMQTT() {
     mqttClient.setCallback(mqttCallback);
     
     // Geoptimaliseerd: gebruik char array i.p.v. String
+    // Gebruik dynamische MQTT prefix (gebaseerd op NTFY topic voor unieke identificatie)
+    char mqttPrefix[64];
+    getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
     char clientId[64];
     uint32_t macLower = (uint32_t)ESP.getEfuseMac();
-    snprintf(clientId, sizeof(clientId), "%s%08x", MQTT_CLIENT_ID_PREFIX, macLower);
+    snprintf(clientId, sizeof(clientId), "%s_%08x", mqttPrefix, macLower);
     Serial_printf(F("[MQTT] Connecting to %s:%d as %s...\n"), mqttHost, mqttPort, clientId);
     
     if (mqttClient.connect(clientId, mqttUser, mqttPass)) {
@@ -2944,32 +3318,112 @@ void connectMQTT() {
         mqttReconnectAttemptCount = 0; // Reset counter bij succesvolle verbinding
         
         // Geoptimaliseerd: gebruik char arrays i.p.v. String voor subscribe topics
+        // Gebruik dynamische MQTT prefix (gebaseerd op NTFY topic voor unieke identificatie)
+        char mqttPrefix[64];
+        getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
         char topicBuffer[128];
-        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/spike1m/set", MQTT_TOPIC_PREFIX);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/spike1m/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
-        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/spike5m/set", MQTT_TOPIC_PREFIX);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/spike5m/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
-        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/move30m/set", MQTT_TOPIC_PREFIX);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/move30m/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
-        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/move5m/set", MQTT_TOPIC_PREFIX);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/move5m/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
-        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/cooldown1min/set", MQTT_TOPIC_PREFIX);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/cooldown1min/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
-        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/cooldown30min/set", MQTT_TOPIC_PREFIX);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/cooldown30min/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
-        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/binanceSymbol/set", MQTT_TOPIC_PREFIX);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/binanceSymbol/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
-        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/ntfyTopic/set", MQTT_TOPIC_PREFIX);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/ntfyTopic/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
-        snprintf(topicBuffer, sizeof(topicBuffer), "%s/button/reset/set", MQTT_TOPIC_PREFIX);
+        // button/reset subscribe verwijderd - gebruik nu anchorValue number entity
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/anchorTakeProfit/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
-        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/anchorTakeProfit/set", MQTT_TOPIC_PREFIX);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/anchorMaxLoss/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
-        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/anchorMaxLoss/set", MQTT_TOPIC_PREFIX);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/anchorValue/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
-        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/anchorValue/set", MQTT_TOPIC_PREFIX);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/language/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
-        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/language/set", MQTT_TOPIC_PREFIX);
+        
+        // Subscribe to 2h alert threshold settings
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/2hBreakMargin/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/2hBreakReset/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/2hBreakCD/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/2hMeanMinDist/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/2hMeanTouch/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/2hMeanCD/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/2hCompressTh/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/2hCompressReset/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/2hCompressCD/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/2hAnchorMargin/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/2hAnchorCD/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/2hTrendHyst/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/2hThrottleTC/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/2hThrottleTM/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/2hThrottleMT/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/2hThrottleComp/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        
+        // Subscribe to smart logic & filters
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/trendAdapt/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/upMLMult/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/upTPMult/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/downMLMult/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/downTPMult/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/smartConf/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/autoVol/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/autoVolWin/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/autoVolBase/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/autoVolMin/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/autoVolMax/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        
+        // Subscribe to warm-start settings
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/warmStart/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/ws1mExtra/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/ws5m/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/ws30m/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/ws2h/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        
+        // Subscribe to cooldown5min (was missing)
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/cooldown5min/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        
+        // Subscribe to move5mAlert (was missing)
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/move5mAlert/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
         
         publishMqttSettings();
@@ -4470,8 +4924,7 @@ void checkButton() {
         
         // Publish to MQTT if connected (optional, for logging)
         if (mqttConnected) {
-            String topic = String(MQTT_TOPIC_PREFIX) + "/button/reset";
-            mqttClient.publish(topic.c_str(), "PRESSED", false);
+            // button/reset publish verwijderd - gebruik nu anchorValue number entity
         }
     }
     
@@ -4809,7 +5262,9 @@ static void setupWiFiEventHandlers()
                     // Publiceer IP-adres naar MQTT (als MQTT verbonden is)
                     if (mqttConnected) {
                         char topicBuffer[128];
-                        snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/ip_address", MQTT_TOPIC_PREFIX);
+                        char mqttPrefixTemp[64];
+                        getMqttTopicPrefix(mqttPrefixTemp, sizeof(mqttPrefixTemp));
+                        snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/ip_address", mqttPrefixTemp);
                         mqttClient.publish(topicBuffer, ipBuffer, false);
                     }
                 }
