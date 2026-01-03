@@ -173,8 +173,8 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
             else if (strcmp(volText, "Volatiel") == 0) volTextTranslated = "High";
         }
         
-        snprintf(title, sizeof(title), "[%s] %s %s", 
-                 getText("Context", "Context"), binanceSymbol, getText("Trend Wijziging", "Trend Change"));
+        snprintf(title, sizeof(title), "%s %s", 
+                 binanceSymbol, getText("Trend Wijziging", "Trend Change"));
         snprintf(msg, sizeof(msg), 
                  "%.2f (%s)\n%s: %s → %s\n2h: %+.2f%%\n30m: %+.2f%%\n%s: %s",
                  prices[0], timestamp,

@@ -1703,7 +1703,7 @@ void getFormattedTimestampForNotification(char *buffer, size_t bufferSize) {
         strftime(buffer, bufferSize, "%d-%m-%Y/%H:%M:%S", &timeinfo);
     } else {
         // Fallback als tijd niet beschikbaar is (geen trigraphs gebruiken)
-        snprintf(buffer, bufferSize, "??-??-????/??:??:??");
+        snprintf(buffer, bufferSize, "--/--/----/--:--:--");
     }
 }
 

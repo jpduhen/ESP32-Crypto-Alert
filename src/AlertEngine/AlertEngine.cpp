@@ -840,8 +840,8 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                          metrics.avg2h, metrics.high2h, metrics.low2h);
             #endif
             getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
-            snprintf(title, sizeof(title), "[%s] %s 2h %s", 
-                     getText("Context", "Context"), binanceSymbol, getText("Compressie", "Compression"));
+            snprintf(title, sizeof(title), "%s 2h %s", 
+                     binanceSymbol, getText("Compressie", "Compression"));
             snprintf(msg, sizeof(msg), "%.2f (%s)\n%s: %.2f%% (<%.2f%%)\n2h %s: %.2f\n2h %s: %.2f\n2h %s: %.2f",
                      lastPrice, timestamp,
                      getText("Band", "Range"), metrics.rangePct, alert2HThresholds.compressThresholdPct,
@@ -882,8 +882,8 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                          lastPrice, metrics.avg2h, distPct, direction);
             #endif
             getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
-            snprintf(title, sizeof(title), "[%s] %s 2h %s", 
-                     getText("Context", "Context"), binanceSymbol, getText("Raakt Gemiddelde", "Mean Touch"));
+            snprintf(title, sizeof(title), "%s 2h %s", 
+                     binanceSymbol, getText("Raakt Gemiddelde", "Mean Touch"));
             const char* directionText = (gAlert2H.getMeanFarSide() > 0) ? 
                                         getText("van boven", "from above") : 
                                         getText("van onderen", "from below");
@@ -922,8 +922,8 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                          anchorPrice, metrics.low2h, metrics.high2h, metrics.avg2h);
             #endif
             getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
-            snprintf(title, sizeof(title), "[%s] %s %s %s 2h", 
-                     getText("Context", "Context"), binanceSymbol, 
+            snprintf(title, sizeof(title), "%s %s %s 2h", 
+                     binanceSymbol, 
                      getText("Anker buiten", "Anchor outside"), getText("2h", "2h"));
             snprintf(msg, sizeof(msg), "%.2f (%s)\n%s %.2f %s 2h\n2h %s: %.2f\n2h %s: %.2f\n2h %s: %.2f",
                      lastPrice, timestamp,
@@ -964,8 +964,8 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
         Serial.printf("[ALERT2H] breakout_up sent: price=%.2f > high2h=%.2f (avg=%.2f, range=%.2f%%)\n",
                      lastPrice, metrics.high2h, metrics.avg2h, metrics.rangePct);
         #endif
-        snprintf(title, sizeof(title), "[%s] %s 2h %s ↑", 
-                 getText("PRIMAIR", "PRIMARY"), binanceSymbol, getText("breakout", "breakout"));
+        snprintf(title, sizeof(title), "%s 2h %s ↑", 
+                 binanceSymbol, getText("breakout", "breakout"));
         snprintf(msg, sizeof(msg), "%.2f (%s)\n%s > 2h %s %.2f\n%s: %.2f %s: %.2f%%",
                  lastPrice, timestamp,
                  getText("Prijs", "Price"), getText("Top", "High"), metrics.high2h,
@@ -977,8 +977,8 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
         Serial.printf("[ALERT2H] breakdown_down sent: price=%.2f < low2h=%.2f (avg=%.2f, range=%.2f%%)\n",
                      lastPrice, metrics.low2h, metrics.avg2h, metrics.rangePct);
         #endif
-        snprintf(title, sizeof(title), "[%s] %s 2h %s ↓", 
-                 getText("PRIMAIR", "PRIMARY"), binanceSymbol, getText("breakdown", "breakdown"));
+        snprintf(title, sizeof(title), "%s 2h %s ↓", 
+                 binanceSymbol, getText("breakdown", "breakdown"));
         snprintf(msg, sizeof(msg), "%.2f (%s)\n%s < 2h %s: %.2f\n%s: %.2f %s: %.2f%%",
                  lastPrice, timestamp,
                  getText("Prijs", "Price"), getText("Dal", "Low"), metrics.low2h,
