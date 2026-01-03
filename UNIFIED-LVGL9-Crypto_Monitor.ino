@@ -541,6 +541,7 @@ WarmStartStats warmStartStats = {0, 0, 0, 0, false, false, false, false, WS_MODE
 // Fase 9.1.4: static verwijderd zodat WebServerModule deze variabele kan gebruiken
 uint8_t language = DEFAULT_LANGUAGE;  // 0 = Nederlands, 1 = English
 uint8_t displayRotation = 0;  // Display rotatie: 0 = normaal, 2 = 180 graden gedraaid
+bool displayInversion = false;  // Display kleurinversie: false = geen inversie, true = inversie
 
 // Settings structs voor betere organisatie
 // NOTE: AlertThresholds en NotificationCooldowns zijn nu gedefinieerd in SettingsStore.h
@@ -2196,6 +2197,8 @@ static void loadSettings()
     safeStrncpy(symbolsArray[0], binanceSymbol, sizeof(symbolsArray[0]));
     language = settings.language;
     displayRotation = settings.displayRotation;
+    displayInversion = settings.displayInversion;
+    displayInversion = settings.displayInversion;
     
     // Copy alert thresholds
     alertThresholds = settings.alertThresholds;
@@ -2261,6 +2264,7 @@ void saveSettings()
     safeStrncpy(settings.ntfyTopic, ntfyTopic, sizeof(settings.ntfyTopic));
     safeStrncpy(settings.binanceSymbol, binanceSymbol, sizeof(settings.binanceSymbol));
     settings.language = language;
+    settings.displayInversion = displayInversion;
     
     // Copy alert thresholds
     settings.alertThresholds = alertThresholds;
@@ -2728,6 +2732,23 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                         mqttClient.publish(topicBufferFull, valueBuffer, true);
                         settingChanged = true;
                     }
+                }
+                // displayInversion - speciale logica (saveSettings call + direct toepassen)
+                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/displayInversion/set", prefixBuffer);
+                if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                    bool newInversion = (strcmp(msgBuffer, "ON") == 0 || strcmp(msgBuffer, "1") == 0 || strcmp(msgBuffer, "true") == 0);
+                    displayInversion = newInversion;
+                    // Wis scherm eerst om residu te voorkomen
+                    gfx->fillScreen(RGB565_BLACK);
+                    // Pas inversie direct toe
+                    gfx->invertDisplay(newInversion);
+                    // Wis scherm opnieuw na inversie
+                    gfx->fillScreen(RGB565_BLACK);
+                    saveSettings(); // Save displayInversion to Preferences
+                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/displayInversion", prefixBuffer);
+                    snprintf(valueBuffer, sizeof(valueBuffer), "%s", newInversion ? "ON" : "OFF");
+                    mqttClient.publish(topicBufferFull, valueBuffer, true);
+                    settingChanged = true;
                 } else {
                     // anchorValue/set - speciale logica (queue voor asynchrone verwerking)
                     snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorValue/set", prefixBuffer);
@@ -2937,6 +2958,7 @@ void publishMqttSettings() {
     publishMqttUint("cooldown5min", notificationCooldown5MinMs / 1000);
     publishMqttUint("language", language);
     publishMqttUint("displayRotation", displayRotation);
+    publishMqttString("displayInversion", displayInversion ? "ON" : "OFF");
     
     // 2-hour alert cooldowns (in seconds)
     publishMqttUint("2hBreakCD", alert2HThresholds.breakCooldownMs / 1000);
@@ -5103,10 +5125,13 @@ static void setupDisplay()
     // Alleen 0 en 2 zijn geldig voor 180 graden rotatie
     uint8_t rotation = (displayRotation == 2) ? 2 : 0;
     gfx->setRotation(rotation);
+    // Gebruik displayInversion setting (instelbaar via web UI en MQTT)
+    // TTGO/ESP32-S3: altijd false (ST7789 heeft geen inversie nodig)
+    // CYD24/CYD28: gebruikt de instelling
     #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     gfx->invertDisplay(false); // TTGO/ESP32-S3 T-Display/GEEK heeft geen inversie nodig (ST7789)
     #else
-    gfx->invertDisplay(true); // Invert colors (as defined in Setup902_CYD28R_2USB.h with TFT_INVERSION_ON)
+    gfx->invertDisplay(displayInversion); // Gebruik instelling (CYD24/CYD28)
     #endif
     gfx->fillScreen(RGB565_BLACK);
     

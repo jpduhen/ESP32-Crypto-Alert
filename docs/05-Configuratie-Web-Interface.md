@@ -52,9 +52,15 @@ Alle pairs die Binance ondersteunt werken.
 ![Anchor instellingen](img/web-anchor-price.jpg)  
 *Instellingen voor anchor price en profit/loss-zones.*
 
-### 5.4.3 NTFY.sh Notificaties
+### 5.4.3 Display Instellingen
+- **Display Rotatie**: Draai het display 180 graden (0 = normaal, 2 = gedraaid)
+- **Display Kleurinversie**: Keer de display kleuren om (handig voor verschillende CYD board varianten)
+  - Aan = inversie ingeschakeld
+  - Uit = geen inversie (standaard voor CYD 2.8 met 1 USB-C poort)
+
+### 5.4.4 NTFY.sh Notificaties
 1. Maak een gratis topic aan op https://ntfy.sh (bijv. `mijn-crypto-alerts`).
-2. Download de NTFY-app op je telefoon en subscribe op je topic (LEET OP: je topic staat ook linksbovenin je scherm MAAR krijgt wel '-alert' als toevoeging. Vergeet die toevoeging niet in je NTFY-app ook op te geven als je de topic invult waarop je je abonneert, anders komen de meldongen niet binnen!).
+2. Download de NTFY-app op je telefoon en subscribe op je topic (LET OP: je topic staat ook linksbovenin je scherm MAAR krijgt wel '-alert' als toevoeging. Vergeet die toevoeging niet in je NTFY-app ook op te geven als je de topic invult waarop je je abonneert, anders komen de meldingen niet binnen!).
 3. Vul de volledige topic-URL in (bijv. `https://ntfy.sh/mijn-crypto-alerts`).
 
 ![NTFY configuratie](img/web-ntfy-setup.jpg)  

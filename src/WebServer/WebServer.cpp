@@ -26,6 +26,7 @@ extern char ntfyTopic[];
 extern char binanceSymbol[];
 extern uint8_t language;
 extern uint8_t displayRotation;
+extern bool displayInversion;
 extern char mqttHost[];
 extern char mqttUser[];
 extern char mqttPass[];
@@ -309,6 +310,10 @@ void WebServerModule::renderSettingsHTML() {
     sendInputRow(getText("Display Rotatie", "Display Rotation"), "displayRotation", "number", 
                  (displayRotation == 2) ? "2" : "0", 
                  getText("0 = normaal, 2 = 180 graden gedraaid", "0 = normal, 2 = rotated 180 degrees"), 0, 2, 2);
+    
+    sendInputRow(getText("Display Kleurinversie", "Display Color Inversion"), "displayInversion", "checkbox", 
+                 displayInversion ? "checked" : "", 
+                 getText("Aan = inversie, Uit = geen inversie", "On = inversion, Off = no inversion"));
     
     sendSectionFooter();
     

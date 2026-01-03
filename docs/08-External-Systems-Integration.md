@@ -43,6 +43,12 @@ The device sends periodically (every few seconds) and on alerts the following to
 - `cryptoalert/volatility` → classification (low/normal/high)
 - `cryptoalert/status` → connection status and last update time
 
+**Configuration topics** (read/write):
+- `cryptoalert/config/displayRotation` → display rotation (0 or 2)
+- `cryptoalert/config/displayRotation/set` → set display rotation
+- `cryptoalert/config/displayInversion` → display color inversion (ON/OFF)
+- `cryptoalert/config/displayInversion/set` → set display color inversion
+
 ![MQTT topics example](img/mqtt-topics.jpg)  
 *Example of MQTT topics in a broker client (e.g., MQTT Explorer).*
 

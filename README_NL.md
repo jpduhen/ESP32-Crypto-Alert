@@ -13,6 +13,7 @@ Geen constante notificaties, maar alleen relevante signalen zoals spikes, breako
 - Lokale web-interface voor configuratie en monitoring
 - MQTT-integratie (o.a. Home Assistant)
 - Ondersteuning voor populaire ESP32-boards met TFT-display
+- Display rotatie en kleurinversie instellingen
 - Volledig configureerbaar zonder hercompilatie
 
 ## 📚 Gedetailleerde Handleiding

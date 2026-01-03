@@ -56,6 +56,7 @@ struct CryptoMonitorSettings {
     char binanceSymbol[16];
     uint8_t language;
     uint8_t displayRotation;  // Display rotatie: 0 = normaal, 2 = 180 graden gedraaid
+    bool displayInversion;   // Display kleurinversie: false = geen inversie, true = inversie
     
     // Alert thresholds
     AlertThresholds alertThresholds;
@@ -136,6 +137,7 @@ private:
     static const char* PREF_KEY_BINANCE_SYMBOL;
     static const char* PREF_KEY_LANGUAGE;
     static const char* PREF_KEY_DISPLAY_ROTATION;
+    static const char* PREF_KEY_DISPLAY_INVERSION;
     static const char* PREF_KEY_TH1_UP;
     static const char* PREF_KEY_TH1_DOWN;
     static const char* PREF_KEY_TH30_UP;

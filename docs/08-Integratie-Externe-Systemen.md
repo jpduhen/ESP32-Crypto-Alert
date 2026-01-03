@@ -43,6 +43,12 @@ Het apparaat stuurt periodiek (elke paar seconden) en bij alerts de volgende top
 - `cryptoalert/volatility` → classificatie (low/normal/high)
 - `cryptoalert/status` → verbindingsstatus en laatste update-tijd
 
+**Configuratie topics** (lezen/schrijven):
+- `cryptoalert/config/displayRotation` → display rotatie (0 of 2)
+- `cryptoalert/config/displayRotation/set` → stel display rotatie in
+- `cryptoalert/config/displayInversion` → display kleurinversie (ON/OFF)
+- `cryptoalert/config/displayInversion/set` → stel display kleurinversie in
+
 ![MQTT topics voorbeeld](img/mqtt-topics.jpg)  
 *Voorbeeld van MQTT-topics in een broker-client (bijv. MQTT Explorer).*
 

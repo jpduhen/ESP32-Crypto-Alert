@@ -15,10 +15,8 @@ No constant notifications — only meaningful signals like spikes, breakouts, co
 - Local web interface for configuration and monitoring
 - MQTT integration (e.g., Home Assistant)
 - Support for popular ESP32 boards with TFT displays
+- Display rotation and color inversion settings
 - Fully configurable without recompiling
-
-![Project overview](docs/img/esp32-boards-overview.jpg)  
-*Examples of compatible boards: Cheap Yellow Display, TTGO T-Display, T-Display S3, and Waveshare ESP32-S3-GEEK.*
 
 ## Detailed User Guide
 
