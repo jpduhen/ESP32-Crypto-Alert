@@ -128,7 +128,6 @@ const char* SettingsStore::PREF_KEY_NTFY_TOPIC = "ntfyTopic";
 const char* SettingsStore::PREF_KEY_BINANCE_SYMBOL = "binanceSymbol";
 const char* SettingsStore::PREF_KEY_LANGUAGE = "language";
 const char* SettingsStore::PREF_KEY_DISPLAY_ROTATION = "displayRotation";
-const char* SettingsStore::PREF_KEY_DISPLAY_INVERSION = "displayInversion";
 const char* SettingsStore::PREF_KEY_TH1_UP = "th1Up";
 const char* SettingsStore::PREF_KEY_TH1_DOWN = "th1Down";
 const char* SettingsStore::PREF_KEY_TH30_UP = "th30Up";
@@ -276,7 +275,6 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     binanceSymbol[sizeof(binanceSymbol) - 1] = '\0';
     language = DEFAULT_LANGUAGE;
     displayRotation = 0;  // Default: normaal (0 graden)
-    displayInversion = false;  // Default: geen inversie (kan per platform verschillen)
     
     // Alert thresholds defaults
     alertThresholds.spike1m = SPIKE_1M_THRESHOLD_DEFAULT;
@@ -396,9 +394,6 @@ CryptoMonitorSettings SettingsStore::load() {
     // Load display rotation
     settings.displayRotation = prefs.getUChar(PREF_KEY_DISPLAY_ROTATION, 0);
     
-    // Load display inversion (default: false, kan per platform verschillen)
-    settings.displayInversion = prefs.getBool(PREF_KEY_DISPLAY_INVERSION, false);
-    
     // Load alert thresholds
     settings.alertThresholds.threshold1MinUp = prefs.getFloat(PREF_KEY_TH1_UP, THRESHOLD_1MIN_UP_DEFAULT);
     settings.alertThresholds.threshold1MinDown = prefs.getFloat(PREF_KEY_TH1_DOWN, THRESHOLD_1MIN_DOWN_DEFAULT);
@@ -491,7 +486,6 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     prefs.putString(PREF_KEY_BINANCE_SYMBOL, settings.binanceSymbol);
     prefs.putUChar(PREF_KEY_LANGUAGE, settings.language);
     prefs.putUChar(PREF_KEY_DISPLAY_ROTATION, settings.displayRotation);
-    prefs.putBool(PREF_KEY_DISPLAY_INVERSION, settings.displayInversion);
     
     // Save alert thresholds
     prefs.putFloat(PREF_KEY_TH1_UP, settings.alertThresholds.threshold1MinUp);

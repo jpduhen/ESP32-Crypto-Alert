@@ -541,7 +541,15 @@ WarmStartStats warmStartStats = {0, 0, 0, 0, false, false, false, false, WS_MODE
 // Fase 9.1.4: static verwijderd zodat WebServerModule deze variabele kan gebruiken
 uint8_t language = DEFAULT_LANGUAGE;  // 0 = Nederlands, 1 = English
 uint8_t displayRotation = 0;  // Display rotatie: 0 = normaal, 2 = 180 graden gedraaid
-bool displayInversion = false;  // Display kleurinversie: false = geen inversie, true = inversie
+
+// Forward declarations (moet vroeg in het bestand staan)
+static bool enqueueMqttMessage(const char* topic, const char* payload, bool retained);
+void publishMqttAnchorEvent(float anchor_price, const char* event_type);
+void apiTask(void *parameter);
+void uiTask(void *parameter);
+void webTask(void *parameter);
+void wifiConnectionAndFetchPrice();
+void setDisplayBrigthness();
 
 // Settings structs voor betere organisatie
 // NOTE: AlertThresholds en NotificationCooldowns zijn nu gedefinieerd in SettingsStore.h
@@ -2197,8 +2205,6 @@ static void loadSettings()
     safeStrncpy(symbolsArray[0], binanceSymbol, sizeof(symbolsArray[0]));
     language = settings.language;
     displayRotation = settings.displayRotation;
-    displayInversion = settings.displayInversion;
-    displayInversion = settings.displayInversion;
     
     // Copy alert thresholds
     alertThresholds = settings.alertThresholds;
@@ -2264,7 +2270,6 @@ void saveSettings()
     safeStrncpy(settings.ntfyTopic, ntfyTopic, sizeof(settings.ntfyTopic));
     safeStrncpy(settings.binanceSymbol, binanceSymbol, sizeof(settings.binanceSymbol));
     settings.language = language;
-    settings.displayInversion = displayInversion;
     
     // Copy alert thresholds
     settings.alertThresholds = alertThresholds;
@@ -2729,58 +2734,42 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                             saveSettings(); // Save displayRotation to Preferences
                             snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/displayRotation", prefixBuffer);
                             snprintf(valueBuffer, sizeof(valueBuffer), "%u", displayRotation);
-                        mqttClient.publish(topicBufferFull, valueBuffer, true);
-                        settingChanged = true;
-                    }
-                }
-                // displayInversion - speciale logica (saveSettings call + direct toepassen)
-                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/displayInversion/set", prefixBuffer);
-                if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                    bool newInversion = (strcmp(msgBuffer, "ON") == 0 || strcmp(msgBuffer, "1") == 0 || strcmp(msgBuffer, "true") == 0);
-                    displayInversion = newInversion;
-                    // Wis scherm eerst om residu te voorkomen
-                    gfx->fillScreen(RGB565_BLACK);
-                    // Pas inversie direct toe
-                    gfx->invertDisplay(newInversion);
-                    // Wis scherm opnieuw na inversie
-                    gfx->fillScreen(RGB565_BLACK);
-                    saveSettings(); // Save displayInversion to Preferences
-                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/displayInversion", prefixBuffer);
-                    snprintf(valueBuffer, sizeof(valueBuffer), "%s", newInversion ? "ON" : "OFF");
-                    mqttClient.publish(topicBufferFull, valueBuffer, true);
-                    settingChanged = true;
-                } else {
-                    // anchorValue/set - speciale logica (queue voor asynchrone verwerking)
-                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorValue/set", prefixBuffer);
-                    if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                        // Verwerk anchor waarde via MQTT
-                        float val = 0.0f;
-                        bool useCurrentPrice = false;
-                        bool valid = false;
-                        
-                        // Lege waarde of "current" = gebruik huidige prijs
-                        if (strlen(msgBuffer) == 0 || strcmp(msgBuffer, "current") == 0 || 
-                            strcmp(msgBuffer, "CURRENT") == 0 || strcmp(msgBuffer, "0") == 0) {
-                            useCurrentPrice = true;
-                            valid = queueAnchorSetting(0.0f, true);
-                            if (valid) {
-                                Serial_println("[MQTT] Anchor setting queued: gebruik huidige prijs");
-                            }
-                        } else if (safeAtof(msgBuffer, val) && val > 0.0f && isValidPrice(val)) {
-                            // Valide waarde - zet in queue voor asynchrone verwerking
-                            useCurrentPrice = false;
-                            valid = queueAnchorSetting(val, false);
-                            if (valid) {
-                                Serial_printf(F("[MQTT] Anchor setting queued: %.2f\n"), val);
-                            }
-                        } else {
-                            Serial_printf(F("[MQTT] WARN: Ongeldige anchor waarde opgegeven: %s\n"), msgBuffer);
+                            mqttClient.publish(topicBufferFull, valueBuffer, true);
+                            settingChanged = true;
                         }
-                        
-                        // Publiceer bevestiging terug
-                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorValue", prefixBuffer);
-                        if (valid) {
-                            if (useCurrentPrice) {
+                        handled = true;
+                    } else {
+                        // anchorValue/set - speciale logica (queue voor asynchrone verwerking)
+                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorValue/set", prefixBuffer);
+                        if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                            // Verwerk anchor waarde via MQTT
+                            float val = 0.0f;
+                            bool useCurrentPrice = false;
+                            bool valid = false;
+                            
+                            // Lege waarde of "current" = gebruik huidige prijs
+                            if (strlen(msgBuffer) == 0 || strcmp(msgBuffer, "current") == 0 || 
+                                strcmp(msgBuffer, "CURRENT") == 0 || strcmp(msgBuffer, "0") == 0) {
+                                useCurrentPrice = true;
+                                valid = queueAnchorSetting(0.0f, true);
+                                if (valid) {
+                                    Serial_println("[MQTT] Anchor setting queued: gebruik huidige prijs");
+                                }
+                            } else if (safeAtof(msgBuffer, val) && val > 0.0f && isValidPrice(val)) {
+                                // Valide waarde - zet in queue voor asynchrone verwerking
+                                useCurrentPrice = false;
+                                valid = queueAnchorSetting(val, false);
+                                if (valid) {
+                                    Serial_printf(F("[MQTT] Anchor setting queued: %.2f\n"), val);
+                                }
+                            } else {
+                                Serial_printf(F("[MQTT] WARN: Ongeldige anchor waarde opgegeven: %s\n"), msgBuffer);
+                            }
+                            
+                            // Publiceer bevestiging terug
+                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorValue", prefixBuffer);
+                            if (valid) {
+                                if (useCurrentPrice) {
                                     // Publiceer huidige prijs als state (default waarde)
                                     extern float prices[];
                                     if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "mqttCallback anchorValue")) {
@@ -2792,16 +2781,15 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                                         // Fallback: gebruik 0 als placeholder (wordt later geupdate)
                                         mqttClient.publish(topicBufferFull, "0.00", true);
                                     }
-                            } else {
-                                snprintf(valueBuffer, sizeof(valueBuffer), "%.2f", val);
+                                } else {
+                                    snprintf(valueBuffer, sizeof(valueBuffer), "%.2f", val);
                                     mqttClient.publish(topicBufferFull, valueBuffer, true);
+                                }
+                            } else {
+                                mqttClient.publish(topicBufferFull, "ERROR: Invalid value", false);
                             }
-                        } else {
-                            mqttClient.publish(topicBufferFull, "ERROR: Invalid value", false);
+                            handled = true;
                         }
-                        handled = true;
-                    }
-                        // button/reset handler verwijderd - gebruik nu anchorValue number entity
                     }
                 }
             }
@@ -2958,7 +2946,6 @@ void publishMqttSettings() {
     publishMqttUint("cooldown5min", notificationCooldown5MinMs / 1000);
     publishMqttUint("language", language);
     publishMqttUint("displayRotation", displayRotation);
-    publishMqttString("displayInversion", displayInversion ? "ON" : "OFF");
     
     // 2-hour alert cooldowns (in seconds)
     publishMqttUint("2hBreakCD", alert2HThresholds.breakCooldownMs / 1000);
@@ -5125,13 +5112,12 @@ static void setupDisplay()
     // Alleen 0 en 2 zijn geldig voor 180 graden rotatie
     uint8_t rotation = (displayRotation == 2) ? 2 : 0;
     gfx->setRotation(rotation);
-    // Gebruik displayInversion setting (instelbaar via web UI en MQTT)
     // TTGO/ESP32-S3: altijd false (ST7789 heeft geen inversie nodig)
-    // CYD24/CYD28: gebruikt de instelling
+    // CYD24/CYD28: altijd false (geen inversie instelling meer)
     #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     gfx->invertDisplay(false); // TTGO/ESP32-S3 T-Display/GEEK heeft geen inversie nodig (ST7789)
     #else
-    gfx->invertDisplay(displayInversion); // Gebruik instelling (CYD24/CYD28)
+    gfx->invertDisplay(false); // CYD24/CYD28: geen inversie (instelling verwijderd)
     #endif
     gfx->fillScreen(RGB565_BLACK);
     
