@@ -102,6 +102,8 @@ struct CryptoMonitorSettings {
     
     // Trend and volatility settings
     float trendThreshold;
+    float trendThreshold1d;
+    float trendThreshold7d;
     float volatilityLowThreshold;
     float volatilityHighThreshold;
     
@@ -171,6 +173,8 @@ private:
     static const char* PREF_KEY_AUTO_VOL_MIN;
     static const char* PREF_KEY_AUTO_VOL_MAX;
     static const char* PREF_KEY_TREND_TH;
+    static const char* PREF_KEY_TREND_TH_1D;
+    static const char* PREF_KEY_TREND_TH_7D;
     static const char* PREF_KEY_VOL_LOW;
     static const char* PREF_KEY_VOL_HIGH;
     
@@ -198,6 +202,5 @@ private:
 };
 
 #endif // SETTINGSSTORE_H
-
 
 

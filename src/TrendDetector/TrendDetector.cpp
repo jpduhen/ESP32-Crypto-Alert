@@ -41,6 +41,8 @@ const char* TrendDetector::getVolatilityText(VolatilityState volState) {
 TrendDetector::TrendDetector() {
     trendState = TREND_SIDEWAYS;
     previousTrendState = TREND_SIDEWAYS;
+    mediumTrendState = TREND_SIDEWAYS;
+    longTrendState = TREND_SIDEWAYS;
     lastTrendChangeNotification = 0;
 }
 
@@ -118,6 +120,53 @@ TrendState TrendDetector::determineTrendState(float ret_2h_value, float ret_30m_
             }
             return TREND_SIDEWAYS;
     }
+}
+
+TrendState TrendDetector::determineTrendStateSimple(float ret_value, float trendThreshold, TrendState currentState) {
+    extern Alert2HThresholds alert2HThresholds;
+    
+    const float hysteresisFactor = alert2HThresholds.trendHysteresisFactor;
+    const float exitThreshold = trendThreshold * hysteresisFactor;
+    
+    switch (currentState) {
+        case TREND_SIDEWAYS:
+            if (ret_value >= trendThreshold) {
+                return TREND_UP;
+            }
+            if (ret_value <= -trendThreshold) {
+                return TREND_DOWN;
+            }
+            return TREND_SIDEWAYS;
+            
+        case TREND_UP:
+            if (ret_value < exitThreshold) {
+                return TREND_SIDEWAYS;
+            }
+            return TREND_UP;
+            
+        case TREND_DOWN:
+            if (ret_value > -exitThreshold) {
+                return TREND_SIDEWAYS;
+            }
+            return TREND_DOWN;
+            
+        default:
+            if (ret_value >= trendThreshold) {
+                return TREND_UP;
+            }
+            if (ret_value <= -trendThreshold) {
+                return TREND_DOWN;
+            }
+            return TREND_SIDEWAYS;
+    }
+}
+
+void TrendDetector::updateMediumTrendState(float ret_1d_value, float trendThreshold) {
+    mediumTrendState = determineTrendStateSimple(ret_1d_value, trendThreshold, mediumTrendState);
+}
+
+void TrendDetector::updateLongTrendState(float ret_7d_value, float trendThreshold) {
+    longTrendState = determineTrendStateSimple(ret_7d_value, trendThreshold, longTrendState);
 }
 
 // Trend change detection en notificatie
@@ -202,5 +251,4 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
     trendState = this->trendState;
     previousTrendState = this->previousTrendState;
 }
-
 
