@@ -530,7 +530,7 @@ bool minuteArrayFilled = false;
 static unsigned long lastMinuteUpdate = 0;
 static float firstMinuteAverage = 0.0f; // Eerste minuut gemiddelde prijs als basis voor 30-min berekening
 // Uur-aggregatie buffer voor lange perioden (max 7 dagen)
-float hourlyAverages[HOURS_FOR_7D] = {0.0f};
+float *hourlyAverages = nullptr;
 uint16_t hourIndex = 0;
 bool hourArrayFilled = false;
 uint8_t minutesSinceHourUpdate = 0;
@@ -4639,6 +4639,9 @@ static float calculateReturn2Hours()
 // Helper: beschikbare uren in hourly buffer
 static inline uint16_t getAvailableHours()
 {
+    if (hourlyAverages == nullptr) {
+        return 0;
+    }
     return calculateAvailableElements(hourArrayFilled, hourIndex, HOURS_FOR_7D);
 }
 
@@ -4848,7 +4851,10 @@ static void updateHourlyAverage()
     if (!isValidPrice(hourAvg)) {
         return;
     }
-    
+
+    if (hourlyAverages == nullptr) {
+        return;
+    }
     hourlyAverages[hourIndex] = hourAvg;
     hourIndex = (hourIndex + 1) % HOURS_FOR_7D;
     if (hourIndex == 0) {
@@ -5791,6 +5797,28 @@ static void allocateDynamicArrays()
                      MINUTES_FOR_30MIN_CALC * sizeof(float) + MINUTES_FOR_30MIN_CALC * sizeof(DataSource));
     }
     #endif
+
+    if (hourlyAverages == nullptr) {
+        if (hasPSRAM()) {
+            hourlyAverages = (float *)heap_caps_malloc(HOURS_FOR_7D * sizeof(float), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        }
+        if (!hourlyAverages) {
+            hourlyAverages = (float *)heap_caps_malloc(HOURS_FOR_7D * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        }
+        if (!hourlyAverages) {
+            Serial.println(F("[Memory] FATAL: Hourly buffer allocatie gefaald!"));
+            Serial.printf("[Memory] Free heap: %u bytes\n", ESP.getFreeHeap());
+            while (true) {
+                /* no need to continue */
+            }
+        }
+
+        for (uint16_t i = 0; i < HOURS_FOR_7D; i++) {
+            hourlyAverages[i] = 0.0f;
+        }
+        Serial.printf("[Memory] Hourly buffer gealloceerd: hourlyAverages=%u bytes\n",
+                      HOURS_FOR_7D * sizeof(float));
+    }
 }
 
 static void startFreeRTOSTasks()
