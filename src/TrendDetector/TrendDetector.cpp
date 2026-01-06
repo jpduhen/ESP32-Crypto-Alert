@@ -123,6 +123,7 @@ TrendState TrendDetector::determineTrendState(float ret_2h_value, float ret_30m_
     }
 }
 
+<<<<<<< HEAD
 // Lange termijn trend detection op basis van 4h en 1d returns
 TrendState TrendDetector::determineLongTermTrendState(float ret_4h_value, float ret_1d_value, float longTermThreshold) {
     // Gebruik een hogere threshold voor lange termijn (default 2.0%)
@@ -257,6 +258,7 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
     previousTrendState = this->previousTrendState;
 }
 
+<<<<<<< HEAD
 // Lange termijn trend change detection en notificatie
 void TrendDetector::checkLongTermTrendChange(float ret_4h_value, float ret_1d_value, float longTermThreshold) {
     unsigned long now = millis();
@@ -338,5 +340,3 @@ void TrendDetector::checkLongTermTrendChange(float ret_4h_value, float ret_1d_va
     this->previousLongTermTrendState = this->longTermTrendState;
     this->longTermTrendState = newLongTermTrend;
 }
-
-

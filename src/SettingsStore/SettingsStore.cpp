@@ -112,6 +112,12 @@ extern bool hasPSRAM();
 #ifndef TREND_THRESHOLD_DEFAULT
 #define TREND_THRESHOLD_DEFAULT 1.30f
 #endif
+#ifndef TREND_THRESHOLD_1D_DEFAULT
+#define TREND_THRESHOLD_1D_DEFAULT TREND_THRESHOLD_DEFAULT
+#endif
+#ifndef TREND_THRESHOLD_7D_DEFAULT
+#define TREND_THRESHOLD_7D_DEFAULT TREND_THRESHOLD_DEFAULT
+#endif
 #ifndef VOLATILITY_LOW_THRESHOLD_DEFAULT
 #define VOLATILITY_LOW_THRESHOLD_DEFAULT 0.05f
 #endif
@@ -167,6 +173,8 @@ const char* SettingsStore::PREF_KEY_AUTO_VOL_BASE = "autoVolBase";
 const char* SettingsStore::PREF_KEY_AUTO_VOL_MIN = "autoVolMin";
 const char* SettingsStore::PREF_KEY_AUTO_VOL_MAX = "autoVolMax";
 const char* SettingsStore::PREF_KEY_TREND_TH = "trendTh";
+const char* SettingsStore::PREF_KEY_TREND_TH_1D = "trendTh1d";
+const char* SettingsStore::PREF_KEY_TREND_TH_7D = "trendTh7d";
 const char* SettingsStore::PREF_KEY_VOL_LOW = "volLow";
 const char* SettingsStore::PREF_KEY_VOL_HIGH = "volHigh";
 
@@ -352,6 +360,8 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     
     // Trend and volatility defaults
     trendThreshold = TREND_THRESHOLD_DEFAULT;
+    trendThreshold1d = TREND_THRESHOLD_1D_DEFAULT;
+    trendThreshold7d = TREND_THRESHOLD_7D_DEFAULT;
     volatilityLowThreshold = VOLATILITY_LOW_THRESHOLD_DEFAULT;
     volatilityHighThreshold = VOLATILITY_HIGH_THRESHOLD_DEFAULT;
     
@@ -486,6 +496,8 @@ CryptoMonitorSettings SettingsStore::load() {
     
     // Load trend and volatility settings
     settings.trendThreshold = prefs.getFloat(PREF_KEY_TREND_TH, TREND_THRESHOLD_DEFAULT);
+    settings.trendThreshold1d = prefs.getFloat(PREF_KEY_TREND_TH_1D, TREND_THRESHOLD_1D_DEFAULT);
+    settings.trendThreshold7d = prefs.getFloat(PREF_KEY_TREND_TH_7D, TREND_THRESHOLD_7D_DEFAULT);
     settings.volatilityLowThreshold = prefs.getFloat(PREF_KEY_VOL_LOW, VOLATILITY_LOW_THRESHOLD_DEFAULT);
     settings.volatilityHighThreshold = prefs.getFloat(PREF_KEY_VOL_HIGH, VOLATILITY_HIGH_THRESHOLD_DEFAULT);
     
@@ -657,6 +669,8 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     
     // Save trend and volatility settings
     prefs.putFloat(PREF_KEY_TREND_TH, settings.trendThreshold);
+    prefs.putFloat(PREF_KEY_TREND_TH_1D, settings.trendThreshold1d);
+    prefs.putFloat(PREF_KEY_TREND_TH_7D, settings.trendThreshold7d);
     prefs.putFloat(PREF_KEY_VOL_LOW, settings.volatilityLowThreshold);
     prefs.putFloat(PREF_KEY_VOL_HIGH, settings.volatilityHighThreshold);
     
@@ -733,6 +747,4 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     
     prefs.end();
 }
-
-
 
