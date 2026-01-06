@@ -536,6 +536,10 @@ uint16_t hourIndex = 0;
 bool hourArrayFilled = false;
 uint8_t minutesSinceHourUpdate = 0;
 
+// Laatste kline snapshots voor volume/range confirmatie
+KlineMetrics lastKline1m;
+KlineMetrics lastKline5m;
+
 // Warm-Start state
 // Fase 9.1.4: static verwijderd zodat WebServerModule deze variabelen kan gebruiken
 bool warmStartEnabled = WARM_START_ENABLED_DEFAULT;
@@ -905,7 +909,11 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
     char fieldBuf[64];
     int fieldBufIdx = 0;
     unsigned long openTime = 0;
+    float highPrice = 0.0f;
+    float lowPrice = 0.0f;
     float closePrice = 0.0f;
+    float volume = 0.0f;
+    KlineMetrics lastParsedKline = {};
     float highPrice = 0.0f;
     float lowPrice = 0.0f;
     float volumeValue = 0.0f;
@@ -983,7 +991,10 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
                     fieldIdx = 0;
                     fieldBufIdx = 0;
                     openTime = 0;
+                    highPrice = 0.0f;
+                    lowPrice = 0.0f;
                     closePrice = 0.0f;
+                    volume = 0.0f;
                     highPrice = 0.0f;
                     lowPrice = 0.0f;
                     volumeValue = 0.0f;
@@ -1008,23 +1019,18 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
                             }
                         }
                         openTime = time;
-                    } else if (fieldIdx == 2) {
-                        // high price (3rd field, index 2)
-                        float price;
-                        if (safeAtof(fieldBuf, price) && isValidPrice(price)) {
-                            highPrice = price;
-                        }
-                    } else if (fieldIdx == 3) {
-                        // low price (4th field, index 3)
-                        float price;
-                        if (safeAtof(fieldBuf, price) && isValidPrice(price)) {
-                            lowPrice = price;
-                        }
-                    } else if (fieldIdx == 4) {
-                        // close price (5th field, index 4)
-                        float price;
-                        if (safeAtof(fieldBuf, price) && isValidPrice(price)) {
-                            closePrice = price;
+                    } else if (fieldIdx == 2 || fieldIdx == 3 || fieldIdx == 4 || fieldIdx == 5) {
+                        float value;
+                        if (safeAtof(fieldBuf, value)) {
+                            if (fieldIdx == 2 && isValidPrice(value)) {
+                                highPrice = value;
+                            } else if (fieldIdx == 3 && isValidPrice(value)) {
+                                lowPrice = value;
+                            } else if (fieldIdx == 4 && isValidPrice(value)) {
+                                closePrice = value;
+                            } else if (fieldIdx == 5 && value >= 0.0f) {
+                                volume = value;
+                            }
                         }
                     } else if (fieldIdx == 5) {
                         // volume (6th field, index 5)
@@ -1042,20 +1048,18 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
                     if (fieldBufIdx > 0) {
                         // Process last field
                         fieldBuf[fieldBufIdx] = '\0';
-                        if (fieldIdx == 2) {
-                            float price;
-                            if (safeAtof(fieldBuf, price) && isValidPrice(price)) {
-                                highPrice = price;
-                            }
-                        } else if (fieldIdx == 3) {
-                            float price;
-                            if (safeAtof(fieldBuf, price) && isValidPrice(price)) {
-                                lowPrice = price;
-                            }
-                        } else if (fieldIdx == 4) {
-                            float price;
-                            if (safeAtof(fieldBuf, price) && isValidPrice(price)) {
-                                closePrice = price;
+                        if (fieldIdx == 2 || fieldIdx == 3 || fieldIdx == 4 || fieldIdx == 5) {
+                            float value;
+                            if (safeAtof(fieldBuf, value)) {
+                                if (fieldIdx == 2 && isValidPrice(value)) {
+                                    highPrice = value;
+                                } else if (fieldIdx == 3 && isValidPrice(value)) {
+                                    lowPrice = value;
+                                } else if (fieldIdx == 4 && isValidPrice(value)) {
+                                    closePrice = value;
+                                } else if (fieldIdx == 5 && value >= 0.0f) {
+                                    volume = value;
+                                }
                             }
                         } else if (fieldIdx == 5) {
                             float volume;
@@ -1098,6 +1102,15 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
                     }
                     totalParsed++;
                     
+                    if (highPrice > 0.0f && lowPrice > 0.0f && highPrice >= lowPrice) {
+                        lastParsedKline.high = highPrice;
+                        lastParsedKline.low = lowPrice;
+                        lastParsedKline.close = closePrice;
+                        lastParsedKline.volume = volume;
+                        lastParsedKline.openTime = openTime;
+                        lastParsedKline.valid = true;
+                    }
+
                     if (totalParsed >= (int)limit) {
                         goto parse_done;
                     }
@@ -1109,7 +1122,10 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
                     fieldIdx = 0;
                     fieldBufIdx = 0;
                     openTime = 0;
+                    highPrice = 0.0f;
+                    lowPrice = 0.0f;
                     closePrice = 0.0f;
+                    volume = 0.0f;
                     highPrice = 0.0f;
                     lowPrice = 0.0f;
                     volumeValue = 0.0f;
@@ -1122,7 +1138,10 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
                     fieldIdx = 0;
                     fieldBufIdx = 0;
                     openTime = 0;
+                    highPrice = 0.0f;
+                    lowPrice = 0.0f;
                     closePrice = 0.0f;
+                    volume = 0.0f;
                     highPrice = 0.0f;
                     lowPrice = 0.0f;
                     volumeValue = 0.0f;
@@ -1134,6 +1153,14 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
 parse_done:
     // M1: Heap telemetry na JSON parse
     logHeap("KLINES_PARSE_POST");
+    
+    if (lastParsedKline.valid && interval != nullptr) {
+        if (strcmp(interval, "1m") == 0) {
+            lastKline1m = lastParsedKline;
+        } else if (strcmp(interval, "5m") == 0) {
+            lastKline5m = lastParsedKline;
+        }
+    }
     
     // Bereken resultaat
     int storedCount = bufferFilled ? (int)maxCount : writeIdx;
@@ -5100,6 +5127,33 @@ static void updateMinuteAverage()
 
 // Fetch the symbols' current prices (thread-safe met mutex)
 // Fase 8.9.1: static verwijderd zodat UIController module deze kan gebruiken
+static void updateLatestKlineMetricsIfNeeded()
+{
+    if (WiFi.status() != WL_CONNECTED) {
+        return;
+    }
+    
+    static unsigned long last1mFetchMs = 0;
+    static unsigned long last5mFetchMs = 0;
+    unsigned long now = millis();
+    
+    if (last1mFetchMs == 0 || (now - last1mFetchMs) >= 60000UL) {
+        float temp1mPrices[2];
+        int fetched1m = fetchBinanceKlines(binanceSymbol, "1m", 2, temp1mPrices, nullptr, 2);
+        if (fetched1m > 0) {
+            last1mFetchMs = now;
+        }
+    }
+    
+    if (last5mFetchMs == 0 || (now - last5mFetchMs) >= 300000UL) {
+        float temp5mPrices[2];
+        int fetched5m = fetchBinanceKlines(binanceSymbol, "5m", 2, temp5mPrices, nullptr, 2);
+        if (fetched5m > 0) {
+            last5mFetchMs = now;
+        }
+    }
+}
+
 void fetchPrice()
 {
     // Controleer eerst of WiFi verbonden is
@@ -6574,6 +6628,7 @@ void apiTask(void *parameter)
         if (WiFi.status() == WL_CONNECTED) {
             // Voer 1 API call uit
             fetchPrice();
+            updateLatestKlineMetricsIfNeeded();
             
             // C1: Verwerk pending anchor setting (network-safe: gebeurt in apiTask waar HTTPS calls al zijn)
             if (pendingAnchorSetting.pending) {
