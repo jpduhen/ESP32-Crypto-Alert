@@ -161,14 +161,6 @@ const char* AlertEngine::determineColorTag(float ret, float threshold, float str
     }
 }
 
-struct VolumeRangeStatus {
-    bool valid = false;
-    bool volumeOk = false;
-    bool rangeOk = false;
-    float volumeDeltaPct = 0.0f;
-    float rangePct = 0.0f;
-};
-
 static EmaAccumulator volumeEma1m;
 static EmaAccumulator volumeEma5m;
 static bool volumeEma1mInitialized = false;
@@ -176,6 +168,8 @@ static bool volumeEma5mInitialized = false;
 static unsigned long lastVolumeEventMs = 0;
 static unsigned long lastKline1mOpenTime = 0;
 static unsigned long lastKline5mOpenTime = 0;
+extern VolumeRangeStatus lastVolumeRange1m;
+extern VolumeRangeStatus lastVolumeRange5m;
 
 static void updateVolumeEmaIfNewCandle(const KlineMetrics& kline, EmaAccumulator& ema, bool& initialized,
                                       unsigned long& lastOpenTime, uint16_t windowSize)
@@ -596,6 +590,12 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                                lastKline1mOpenTime, VOLUME_EMA_WINDOW_1M);
     updateVolumeEmaIfNewCandle(lastKline5m, volumeEma5m, volumeEma5mInitialized,
                                lastKline5mOpenTime, VOLUME_EMA_WINDOW_5M);
+
+    VolumeRangeStatus volumeRange1m = evaluateVolumeRange(lastKline1m, volumeEma1m);
+    VolumeRangeStatus volumeRange5m = evaluateVolumeRange(lastKline5m, volumeEma5m);
+    lastVolumeRange1m = volumeRange1m;
+    lastVolumeRange5m = volumeRange5m;
+
     
     // ===== 1-MINUUT SPIKE ALERT =====
     // Voorwaarde: |ret_1m| >= effectiveSpike1mThreshold EN |ret_5m| >= spike5mThreshold in dezelfde richting
@@ -615,14 +615,13 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
             // Threshold check: ret_1m >= effectiveSpike1mThreshold EN ret_5m >= spike5mThreshold
             // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
             bool spikeDetected = sameDirection;
-            VolumeRangeStatus volumeRange1m = evaluateVolumeRange(lastKline1m, volumeEma1m);
             bool volumeRangeOk1m = (volumeRange1m.valid && volumeRange1m.volumeOk && volumeRange1m.rangeOk);
             
             // Update 1m event state voor Smart Confluence Mode (alleen bij volume/range confirmatie)
             if (spikeDetected && volumeRangeOk1m) {
                 update1mEvent(ret_1m, now, effThresh.spike1m);
             }
-        
+            
             // Debug logging alleen bij spike detectie
             if (spikeDetected) {
                 #if !DEBUG_BUTTON_ONLY
@@ -719,7 +718,6 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
             // Note: move5mThreshold is de filter threshold, niet de alert threshold
             // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
             bool moveDetected = sameDirection;
-            VolumeRangeStatus volumeRange5m = evaluateVolumeRange(lastKline5m, volumeEma5m);
             bool volumeRangeOk5m = (volumeRange5m.valid && volumeRange5m.volumeOk && volumeRange5m.rangeOk);
             
             // Debug logging alleen bij move detectie
@@ -792,7 +790,6 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         } else {
             // Threshold check: ret_5m >= effectiveMove5mThreshold
             bool move5mDetected = true;
-            VolumeRangeStatus volumeRange5m = evaluateVolumeRange(lastKline5m, volumeEma5m);
             bool volumeRangeOk5m = (volumeRange5m.valid && volumeRange5m.volumeOk && volumeRange5m.rangeOk);
             
             // Update 5m event state voor Smart Confluence Mode (alleen bij volume/range confirmatie)

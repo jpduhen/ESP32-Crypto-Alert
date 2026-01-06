@@ -48,6 +48,15 @@ struct KlineMetrics {
     bool valid = false;
 };
 
+// VolumeRangeStatus struct - compacte snapshot voor volume/range UI indicators
+struct VolumeRangeStatus {
+    bool valid = false;
+    bool volumeOk = false;
+    bool rangeOk = false;
+    float volumeDeltaPct = 0.0f;
+    float rangePct = 0.0f;
+};
+
 // Streaming EMA accumulator (heap-safe)
 struct EmaAccumulator {
     float ema;
