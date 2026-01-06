@@ -1482,7 +1482,7 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
     }
     
     // Forward declaration voor fetchBinanceKlines (gedefinieerd in .ino)
-    extern int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit, float* prices, unsigned long* timestamps, uint16_t maxCount);
+    extern int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit, float* prices, unsigned long* timestamps, uint16_t maxCount, float* highs = nullptr, float* lows = nullptr, float* volumes = nullptr);
     
     // Fetch 4h candles
     uint8_t count4h = alert2HThresholds.autoAnchor4hCandles;
