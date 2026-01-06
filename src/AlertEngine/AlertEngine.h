@@ -216,9 +216,9 @@ private:
     unsigned long lastConfluenceAlert;
     
     // Geheugen optimalisatie: hergebruik buffers i.p.v. lokale stack allocaties
-    // Verkleind om DRAM overflow te voorkomen: 200+48+32 = 280 bytes (was 352 bytes, bespaart 72 bytes)
-    char msgBuffer[200];      // Hergebruik voor alle notification messages (verkleind van 256)
-    char titleBuffer[48];     // Hergebruik voor alle notification titles (verkleind van 64)
+    // Vergroot om volledige notificatieteksten te ondersteunen
+    char msgBuffer[256];      // Hergebruik voor alle notification messages
+    char titleBuffer[64];     // Hergebruik voor alle notification titles
     char timestampBuffer[32]; // Hergebruik voor timestamp formatting
     
     // CPU optimalisatie: cache berekende waarden
@@ -242,4 +242,3 @@ private:
 };
 
 #endif // ALERTENGINE_H
-

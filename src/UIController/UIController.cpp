@@ -1076,8 +1076,8 @@ void UIController::updateLongTermTrendLabel()
         extern float ret_7d;
         extern TrendDetector trendDetector;
         
-        // Gebruik threshold van 2.0% voor lange termijn trend
-        const float longTermThreshold = 2.0f;
+        // Gebruik threshold van 1.0% voor lange termijn trend
+        const float longTermThreshold = 1.0f;
         TrendState longTermTrend = trendDetector.determineLongTermTrendState(ret_7d, longTermThreshold);
         
         const char* trendText = "";
@@ -1654,7 +1654,7 @@ void UIController::setupLVGL()
         // CYD zonder PSRAM: compile-time instelbaar (default 4, kan 1/2/4 zijn voor testen)
         // Na geheugenoptimalisaties kunnen we meer buffer gebruiken voor betere performance
         #ifndef CYD_BUF_LINES_NO_PSRAM
-        #define CYD_BUF_LINES_NO_PSRAM 4  // Default: 4 regels (was 1->2->4, verhoogd na geheugenoptimalisaties)
+        #define CYD_BUF_LINES_NO_PSRAM 2  // Default: 2 regels (was 1->2->4, verlaagd voor extra DRAM ruimte op CYD)
         #endif
         if (psramAvailable) {
             bufLines = 40;  // CYD met PSRAM: 40 regels
