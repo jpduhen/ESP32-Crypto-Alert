@@ -1046,12 +1046,12 @@ void UIController::updateVolumeConfirmLabel()
 
     if (lastVolumeRange1m.valid) {
         if (fabsf(lastVolumeRange1m.volumeDeltaPct) >= VOLUME_BADGE_THRESHOLD_PCT) {
-            volumeText = (lastVolumeRange1m.volumeDeltaPct >= 0.0f) ? "volume+" : "volume-";
+            volumeText = (lastVolumeRange1m.volumeDeltaPct >= 0.0f) ? "VOLUME+" : "VOLUME-";
             volumeColor = (lastVolumeRange1m.volumeDeltaPct >= 0.0f)
                               ? lv_palette_main(LV_PALETTE_GREEN)
                               : lv_palette_main(LV_PALETTE_RED);
         } else {
-            volumeText = "volume=";
+            volumeText = "VOLUME=";
             volumeColor = lv_palette_main(LV_PALETTE_GREY);
         }
     }
