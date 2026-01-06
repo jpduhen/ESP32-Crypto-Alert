@@ -310,8 +310,20 @@ void AnchorSystem::updateAnchorMinMax(float currentPrice)
 // Fase 6.2.5: Verplaatst naar AnchorSystem (parallel implementatie)
 bool AnchorSystem::setAnchorPrice(float anchorValue, bool shouldUpdateUI, bool skipNotifications)
 {
-    // Kortere timeout voor web server thread om watchdog te voorkomen
-    TickType_t timeout = skipNotifications ? pdMS_TO_TICKS(100) : pdMS_TO_TICKS(500);
+    // Timeout: korter voor web server thread (100ms), langer voor auto anchor updates (2000ms), normaal voor andere (500ms)
+    TickType_t timeout;
+    if (skipNotifications && !shouldUpdateUI) {
+        // Auto anchor update (skipNotifications=true, shouldUpdateUI=false): langere timeout
+        timeout = pdMS_TO_TICKS(2000);
+    } else if (skipNotifications && shouldUpdateUI) {
+        // Web server thread: korte timeout
+        timeout = pdMS_TO_TICKS(100);
+    } else {
+        // Normale update: medium timeout
+        timeout = pdMS_TO_TICKS(500);
+    }
+    
+    // Probeer mutex te krijgen (geen retry, gewoon langere timeout)
     if (safeMutexTake(dataMutex, timeout, "setAnchorPrice")) {
         float priceToSet = anchorValue;
         

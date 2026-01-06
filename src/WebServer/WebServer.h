@@ -41,6 +41,7 @@ private:
     void sendInputRow(const char* label, const char* name, const char* type, const char* value, 
                      const char* placeholder, float minVal = 0, float maxVal = 0, float step = 0);
     void sendCheckboxRow(const char* label, const char* name, bool checked);
+    void sendDropdownRow(const char* label, const char* name, int value, const char* options[], int optionCount);
     void sendStatusRow(const char* label, const char* value);
     void sendSectionHeader(const char* title, const char* sectionId, bool expanded = false);
     void sendSectionFooter();

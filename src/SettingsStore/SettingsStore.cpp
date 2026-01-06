@@ -2,6 +2,9 @@
 #include <Arduino.h>
 #include <esp_system.h>
 
+// Forward declaration voor hasPSRAM (gedefinieerd in main sketch)
+extern bool hasPSRAM();
+
 // Include default constants (moet vanuit hoofdbestand komen)
 // Voor nu gebruiken we de waarden direct - deze worden later via includes opgelost
 #ifndef THRESHOLD_1MIN_UP_DEFAULT
@@ -146,6 +149,7 @@ const char* SettingsStore::PREF_KEY_MQTT_USER = "mqttUser";
 const char* SettingsStore::PREF_KEY_MQTT_PASS = "mqttPass";
 const char* SettingsStore::PREF_KEY_ANCHOR_TP = "anchorTP";
 const char* SettingsStore::PREF_KEY_ANCHOR_ML = "anchorML";
+const char* SettingsStore::PREF_KEY_ANCHOR_STRATEGY = "anchorStrategy";
 const char* SettingsStore::PREF_KEY_TREND_ADAPT = "trendAdapt";
 const char* SettingsStore::PREF_KEY_UP_ML_MULT = "upMLMult";
 const char* SettingsStore::PREF_KEY_UP_TP_MULT = "upTPMult";
@@ -187,6 +191,22 @@ const char* SettingsStore::PREF_KEY_2H_THROTTLE_COMPRESS = "2hThrottleComp";
 // FASE X.5: Secondary global cooldown en coalescing preference keys
 const char* SettingsStore::PREF_KEY_2H_SEC_GLOBAL_CD = "2hSecGlobalCD";
 const char* SettingsStore::PREF_KEY_2H_SEC_COALESCE = "2hSecCoalesce";
+
+// Auto Anchor preference keys
+const char* SettingsStore::PREF_KEY_ANCHOR_SOURCE_MODE = "anchorSourceMode";
+const char* SettingsStore::PREF_KEY_AUTO_ANCHOR_LAST_VALUE = "autoAnchorLastValue";
+const char* SettingsStore::PREF_KEY_AUTO_ANCHOR_LAST_UPDATE_EPOCH = "autoAnchorLastUpdateEpoch";
+const char* SettingsStore::PREF_KEY_AUTO_ANCHOR_UPDATE_MINUTES = "autoAnchorUpdateMinutes";
+const char* SettingsStore::PREF_KEY_AUTO_ANCHOR_FORCE_UPDATE_MINUTES = "autoAnchorForceUpdateMinutes";
+const char* SettingsStore::PREF_KEY_AUTO_ANCHOR_4H_CANDLES = "autoAnchor4hCandles";
+const char* SettingsStore::PREF_KEY_AUTO_ANCHOR_1D_CANDLES = "autoAnchor1dCandles";
+const char* SettingsStore::PREF_KEY_AUTO_ANCHOR_MIN_UPDATE_PCT = "autoAnchorMinUpdatePct";
+const char* SettingsStore::PREF_KEY_AUTO_ANCHOR_TREND_PIVOT_PCT = "autoAnchorTrendPivotPct";
+const char* SettingsStore::PREF_KEY_AUTO_ANCHOR_W4H_BASE = "autoAnchorW4hBase";
+const char* SettingsStore::PREF_KEY_AUTO_ANCHOR_W4H_TREND_BOOST = "autoAnchorW4hTrendBoost";
+const char* SettingsStore::PREF_KEY_AUTO_ANCHOR_INTERVAL_MODE = "autoAnchorIntervalMode";
+const char* SettingsStore::PREF_KEY_AUTO_ANCHOR_NOTIFY_ENABLED = "autoAnchorNotifyEnabled";
+const char* SettingsStore::PREF_KEY_AUTO_ANCHOR_BLOB = "autoAnchorBlob";  // Één key voor config-blob
 
 // Helper: Generate unique ESP32 device ID using Crockford Base32 encoding
 // Deze functie moet extern beschikbaar zijn voor generateDefaultNtfyTopic
@@ -304,6 +324,7 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     // Anchor defaults
     anchorTakeProfit = ANCHOR_TAKE_PROFIT_DEFAULT;
     anchorMaxLoss = ANCHOR_MAX_LOSS_DEFAULT;
+    anchorStrategy = 0;  // Default: 0 = handmatig
     
     // Trend-adaptive anchor defaults
     trendAdaptiveAnchorsEnabled = TREND_ADAPTIVE_ANCHORS_ENABLED_DEFAULT;
@@ -355,6 +376,21 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     // FASE X.5: Secondary global cooldown en coalescing defaults
     alert2HThresholds.twoHSecondaryGlobalCooldownSec = 7200UL;  // 120 minuten (default)
     alert2HThresholds.twoHSecondaryCoalesceWindowSec = 90UL;      // 90 seconden (default)
+    
+    // Auto Anchor defaults (geoptimaliseerd: gebruik compacte representatie)
+    // Note: hasPSRAM() wordt later aangeroepen in load() voor dynamische defaults
+    alert2HThresholds.anchorSourceMode = 0;  // MANUAL
+    alert2HThresholds.autoAnchorLastValue = 0.0f;
+    alert2HThresholds.autoAnchorLastUpdateEpoch = 0;
+    alert2HThresholds.autoAnchorUpdateMinutes = 120;
+    alert2HThresholds.autoAnchorForceUpdateMinutes = 720;
+    alert2HThresholds.autoAnchor4hCandles = 24;  // Default zonder PSRAM, wordt overschreven in load()
+    alert2HThresholds.autoAnchor1dCandles = 14;  // Default zonder PSRAM, wordt overschreven in load()
+    alert2HThresholds.autoAnchorMinUpdatePct_x100 = 15;  // 0.15% * 100
+    alert2HThresholds.autoAnchorTrendPivotPct_x100 = 100;  // 1.00% * 100
+    alert2HThresholds.autoAnchorW4hBase_x100 = 35;  // 0.35 * 100
+    alert2HThresholds.autoAnchorW4hTrendBoost_x100 = 35;  // 0.35 * 100
+    alert2HThresholds.autoAnchorFlags = 0;  // intervalMode=0, notifyEnabled=false
 }
 
 CryptoMonitorSettings SettingsStore::load() {
@@ -422,6 +458,7 @@ CryptoMonitorSettings SettingsStore::load() {
     // Load anchor settings
     settings.anchorTakeProfit = prefs.getFloat(PREF_KEY_ANCHOR_TP, ANCHOR_TAKE_PROFIT_DEFAULT);
     settings.anchorMaxLoss = prefs.getFloat(PREF_KEY_ANCHOR_ML, ANCHOR_MAX_LOSS_DEFAULT);
+    settings.anchorStrategy = prefs.getUChar(PREF_KEY_ANCHOR_STRATEGY, 0);
     
     // Load trend-adaptive anchor settings
     settings.trendAdaptiveAnchorsEnabled = prefs.getBool(PREF_KEY_TREND_ADAPT, TREND_ADAPTIVE_ANCHORS_ENABLED_DEFAULT);
@@ -474,6 +511,86 @@ CryptoMonitorSettings SettingsStore::load() {
     settings.alert2HThresholds.twoHSecondaryGlobalCooldownSec = prefs.getULong(PREF_KEY_2H_SEC_GLOBAL_CD, 7200UL);
     settings.alert2HThresholds.twoHSecondaryCoalesceWindowSec = prefs.getULong(PREF_KEY_2H_SEC_COALESCE, 90UL);
     
+    // Load Auto Anchor settings (gebruik config-blob indien beschikbaar, anders individuele keys)
+    bool psramAvailable = hasPSRAM();
+    AutoAnchorPersist blob;
+    size_t blobSize = prefs.getBytes(PREF_KEY_AUTO_ANCHOR_BLOB, &blob, sizeof(blob));
+    
+    if (blobSize == sizeof(AutoAnchorPersist) && blob.version == 1) {
+        // Config-blob gevonden en valide
+        settings.alert2HThresholds.anchorSourceMode = blob.anchorSourceMode;
+        settings.alert2HThresholds.autoAnchorLastValue = blob.autoAnchorLastValue;
+        settings.alert2HThresholds.autoAnchorLastUpdateEpoch = blob.autoAnchorLastUpdateEpoch;
+        settings.alert2HThresholds.autoAnchorUpdateMinutes = blob.autoAnchorUpdateMinutes;
+        settings.alert2HThresholds.autoAnchorForceUpdateMinutes = blob.autoAnchorForceUpdateMinutes;
+        settings.alert2HThresholds.autoAnchor4hCandles = blob.autoAnchor4hCandles;
+        settings.alert2HThresholds.autoAnchor1dCandles = blob.autoAnchor1dCandles;
+        settings.alert2HThresholds.autoAnchorMinUpdatePct_x100 = blob.autoAnchorMinUpdatePct_x100;
+        settings.alert2HThresholds.autoAnchorTrendPivotPct_x100 = blob.autoAnchorTrendPivotPct_x100;
+        settings.alert2HThresholds.autoAnchorW4hBase_x100 = blob.autoAnchorW4hBase_x100;
+        settings.alert2HThresholds.autoAnchorW4hTrendBoost_x100 = blob.autoAnchorW4hTrendBoost_x100;
+        settings.alert2HThresholds.setAutoAnchorIntervalMode(blob.getAutoAnchorIntervalMode());
+        settings.alert2HThresholds.setAutoAnchorNotifyEnabled(blob.getAutoAnchorNotifyEnabled());
+    } else {
+        // Fallback: laad individuele keys (backward compatibility)
+        uint8_t loadedMode = prefs.getUChar(PREF_KEY_ANCHOR_SOURCE_MODE, 255);
+        if (loadedMode == 255) {
+            // Workaround: lees uit warmStart2hCandles bit 7
+            uint8_t ws2hValue = prefs.getUChar(PREF_KEY_WS2H, WARM_START_2H_CANDLES_DEFAULT);
+            loadedMode = (ws2hValue >> 7) & 0x01;
+            uint8_t ws2hOriginal = ws2hValue & 0x7F;
+            
+            if ((ws2hValue & 0x80) != 0) {
+                Serial.printf("[SettingsStore] Loaded anchorSourceMode=%d via workaround (warmStart2hCandles bit 7)\n", loadedMode);
+                Serial.printf("[SettingsStore] NOTE: Restored warmStart2hCandles to %d (was %d with bit 7 set)\n", 
+                            ws2hOriginal, ws2hValue);
+                settings.warmStart2hCandles = ws2hOriginal;
+            } else {
+                loadedMode = 0;  // Default: MANUAL
+            }
+        }
+        settings.alert2HThresholds.anchorSourceMode = loadedMode;
+        
+        settings.alert2HThresholds.autoAnchorLastValue = prefs.getFloat(PREF_KEY_AUTO_ANCHOR_LAST_VALUE, 0.0f);
+        settings.alert2HThresholds.autoAnchorLastUpdateEpoch = prefs.getULong(PREF_KEY_AUTO_ANCHOR_LAST_UPDATE_EPOCH, 0);
+        settings.alert2HThresholds.autoAnchorUpdateMinutes = prefs.getUShort(PREF_KEY_AUTO_ANCHOR_UPDATE_MINUTES, 120);
+        settings.alert2HThresholds.autoAnchorForceUpdateMinutes = prefs.getUShort(PREF_KEY_AUTO_ANCHOR_FORCE_UPDATE_MINUTES, 720);
+        settings.alert2HThresholds.autoAnchor4hCandles = prefs.getUChar(PREF_KEY_AUTO_ANCHOR_4H_CANDLES, psramAvailable ? 48 : 24);
+        settings.alert2HThresholds.autoAnchor1dCandles = prefs.getUChar(PREF_KEY_AUTO_ANCHOR_1D_CANDLES, psramAvailable ? 30 : 14);
+        // Load floats en converteer naar compacte types
+        float minUpdatePct = prefs.getFloat(PREF_KEY_AUTO_ANCHOR_MIN_UPDATE_PCT, 0.15f);
+        settings.alert2HThresholds.setAutoAnchorMinUpdatePct(minUpdatePct);
+        float trendPivotPct = prefs.getFloat(PREF_KEY_AUTO_ANCHOR_TREND_PIVOT_PCT, 1.00f);
+        settings.alert2HThresholds.setAutoAnchorTrendPivotPct(trendPivotPct);
+        float w4hBase = prefs.getFloat(PREF_KEY_AUTO_ANCHOR_W4H_BASE, 0.35f);
+        settings.alert2HThresholds.setAutoAnchorW4hBase(w4hBase);
+        float w4hTrendBoost = prefs.getFloat(PREF_KEY_AUTO_ANCHOR_W4H_TREND_BOOST, 0.35f);
+        settings.alert2HThresholds.setAutoAnchorW4hTrendBoost(w4hTrendBoost);
+        uint8_t intervalMode = prefs.getUChar(PREF_KEY_AUTO_ANCHOR_INTERVAL_MODE, 0);
+        settings.alert2HThresholds.setAutoAnchorIntervalMode(intervalMode);
+        bool notifyEnabled = prefs.getBool(PREF_KEY_AUTO_ANCHOR_NOTIFY_ENABLED, false);
+        settings.alert2HThresholds.setAutoAnchorNotifyEnabled(notifyEnabled);
+    }
+    
+    // Clamp waarden (helper functies moeten nog worden toegevoegd)
+    if (settings.alert2HThresholds.autoAnchorUpdateMinutes < 10) settings.alert2HThresholds.autoAnchorUpdateMinutes = 10;
+    if (settings.alert2HThresholds.autoAnchorUpdateMinutes > 1440) settings.alert2HThresholds.autoAnchorUpdateMinutes = 1440;
+    if (settings.alert2HThresholds.autoAnchorForceUpdateMinutes < 60) settings.alert2HThresholds.autoAnchorForceUpdateMinutes = 60;
+    if (settings.alert2HThresholds.autoAnchorForceUpdateMinutes > 2880) settings.alert2HThresholds.autoAnchorForceUpdateMinutes = 2880;
+    uint8_t max4h = psramAvailable ? 100 : 50;
+    uint8_t max1d = psramAvailable ? 60 : 30;
+    if (settings.alert2HThresholds.autoAnchor4hCandles < 2) settings.alert2HThresholds.autoAnchor4hCandles = 2;
+    if (settings.alert2HThresholds.autoAnchor4hCandles > max4h) settings.alert2HThresholds.autoAnchor4hCandles = max4h;
+    if (settings.alert2HThresholds.autoAnchor1dCandles < 2) settings.alert2HThresholds.autoAnchor1dCandles = 2;
+    if (settings.alert2HThresholds.autoAnchor1dCandles > max1d) settings.alert2HThresholds.autoAnchor1dCandles = max1d;
+    // Clamp compacte types
+    if (settings.alert2HThresholds.autoAnchorMinUpdatePct_x100 < 1) settings.alert2HThresholds.autoAnchorMinUpdatePct_x100 = 1;  // 0.01%
+    if (settings.alert2HThresholds.autoAnchorMinUpdatePct_x100 > 500) settings.alert2HThresholds.autoAnchorMinUpdatePct_x100 = 500;  // 5.0%
+    if (settings.alert2HThresholds.autoAnchorTrendPivotPct_x100 < 10) settings.alert2HThresholds.autoAnchorTrendPivotPct_x100 = 10;  // 0.1%
+    if (settings.alert2HThresholds.autoAnchorTrendPivotPct_x100 > 1000) settings.alert2HThresholds.autoAnchorTrendPivotPct_x100 = 1000;  // 10.0%
+    if (settings.alert2HThresholds.autoAnchorW4hBase_x100 > 100) settings.alert2HThresholds.autoAnchorW4hBase_x100 = 100;  // 1.0
+    if (settings.alert2HThresholds.autoAnchorW4hTrendBoost_x100 > 100) settings.alert2HThresholds.autoAnchorW4hTrendBoost_x100 = 100;  // 1.0
+    
     prefs.end();
     return settings;
 }
@@ -512,6 +629,7 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     // Save anchor settings
     prefs.putFloat(PREF_KEY_ANCHOR_TP, settings.anchorTakeProfit);
     prefs.putFloat(PREF_KEY_ANCHOR_ML, settings.anchorMaxLoss);
+    prefs.putUChar(PREF_KEY_ANCHOR_STRATEGY, settings.anchorStrategy);
     
     // Save trend-adaptive anchor settings
     prefs.putBool(PREF_KEY_TREND_ADAPT, settings.trendAdaptiveAnchorsEnabled);
@@ -541,6 +659,55 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     prefs.putFloat(PREF_KEY_TREND_TH, settings.trendThreshold);
     prefs.putFloat(PREF_KEY_VOL_LOW, settings.volatilityLowThreshold);
     prefs.putFloat(PREF_KEY_VOL_HIGH, settings.volatilityHighThreshold);
+    
+    // Save Auto Anchor settings (gebruik config-blob)
+    AutoAnchorPersist blob;
+    blob.version = 1;
+    blob.anchorSourceMode = settings.alert2HThresholds.anchorSourceMode;
+    blob.autoAnchorLastValue = settings.alert2HThresholds.autoAnchorLastValue;
+    blob.autoAnchorLastUpdateEpoch = settings.alert2HThresholds.autoAnchorLastUpdateEpoch;
+    blob.autoAnchorUpdateMinutes = settings.alert2HThresholds.autoAnchorUpdateMinutes;
+    blob.autoAnchorForceUpdateMinutes = settings.alert2HThresholds.autoAnchorForceUpdateMinutes;
+    blob.autoAnchor4hCandles = settings.alert2HThresholds.autoAnchor4hCandles;
+    blob.autoAnchor1dCandles = settings.alert2HThresholds.autoAnchor1dCandles;
+    blob.autoAnchorMinUpdatePct_x100 = settings.alert2HThresholds.autoAnchorMinUpdatePct_x100;
+    blob.autoAnchorTrendPivotPct_x100 = settings.alert2HThresholds.autoAnchorTrendPivotPct_x100;
+    blob.autoAnchorW4hBase_x100 = settings.alert2HThresholds.autoAnchorW4hBase_x100;
+    blob.autoAnchorW4hTrendBoost_x100 = settings.alert2HThresholds.autoAnchorW4hTrendBoost_x100;
+    blob.setAutoAnchorIntervalMode(settings.alert2HThresholds.getAutoAnchorIntervalMode());
+    blob.setAutoAnchorNotifyEnabled(settings.alert2HThresholds.getAutoAnchorNotifyEnabled());
+    blob.crc = blob.calculateCRC();
+    
+    size_t blobResult = prefs.putBytes(PREF_KEY_AUTO_ANCHOR_BLOB, &blob, sizeof(blob));
+    if (blobResult == sizeof(blob)) {
+        Serial.printf("[SettingsStore] Saved auto anchor config-blob (version 1, %d bytes)\n", sizeof(blob));
+    } else {
+        Serial.printf("[SettingsStore] WARNING: Failed to save auto anchor config-blob, falling back to individual keys\n");
+        // Fallback: save individuele keys (backward compatibility)
+        size_t result = prefs.putUChar(PREF_KEY_ANCHOR_SOURCE_MODE, settings.alert2HThresholds.anchorSourceMode);
+        if (result == 0) {
+            // Workaround: sla op in warmStart2hCandles bit 7
+            uint8_t existingWs2h = prefs.getUChar(PREF_KEY_WS2H, WARM_START_2H_CANDLES_DEFAULT);
+            uint8_t combinedValue = (existingWs2h & 0x7F) | ((settings.alert2HThresholds.anchorSourceMode & 0x01) << 7);
+            size_t combinedResult = prefs.putUChar(PREF_KEY_WS2H, combinedValue);
+            if (combinedResult > 0) {
+                Serial.printf("[SettingsStore] Workaround: stored anchorSourceMode in warmStart2hCandles (bit 7)\n");
+            }
+        }
+        prefs.putFloat(PREF_KEY_AUTO_ANCHOR_LAST_VALUE, settings.alert2HThresholds.autoAnchorLastValue);
+        prefs.putULong(PREF_KEY_AUTO_ANCHOR_LAST_UPDATE_EPOCH, settings.alert2HThresholds.autoAnchorLastUpdateEpoch);
+        prefs.putUShort(PREF_KEY_AUTO_ANCHOR_UPDATE_MINUTES, settings.alert2HThresholds.autoAnchorUpdateMinutes);
+        prefs.putUShort(PREF_KEY_AUTO_ANCHOR_FORCE_UPDATE_MINUTES, settings.alert2HThresholds.autoAnchorForceUpdateMinutes);
+        prefs.putUChar(PREF_KEY_AUTO_ANCHOR_4H_CANDLES, settings.alert2HThresholds.autoAnchor4hCandles);
+        prefs.putUChar(PREF_KEY_AUTO_ANCHOR_1D_CANDLES, settings.alert2HThresholds.autoAnchor1dCandles);
+        // Save als floats voor backward compatibility
+        prefs.putFloat(PREF_KEY_AUTO_ANCHOR_MIN_UPDATE_PCT, settings.alert2HThresholds.getAutoAnchorMinUpdatePct());
+        prefs.putFloat(PREF_KEY_AUTO_ANCHOR_TREND_PIVOT_PCT, settings.alert2HThresholds.getAutoAnchorTrendPivotPct());
+        prefs.putFloat(PREF_KEY_AUTO_ANCHOR_W4H_BASE, settings.alert2HThresholds.getAutoAnchorW4hBase());
+        prefs.putFloat(PREF_KEY_AUTO_ANCHOR_W4H_TREND_BOOST, settings.alert2HThresholds.getAutoAnchorW4hTrendBoost());
+        prefs.putUChar(PREF_KEY_AUTO_ANCHOR_INTERVAL_MODE, settings.alert2HThresholds.getAutoAnchorIntervalMode());
+        prefs.putBool(PREF_KEY_AUTO_ANCHOR_NOTIFY_ENABLED, settings.alert2HThresholds.getAutoAnchorNotifyEnabled());
+    }
     
     // Save 2-hour alert thresholds
     prefs.putFloat(PREF_KEY_2H_BREAK_MARGIN, settings.alert2HThresholds.breakMarginPct);

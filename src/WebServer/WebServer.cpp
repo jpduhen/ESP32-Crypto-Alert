@@ -42,6 +42,7 @@ extern float volatilityLowThreshold;
 extern float volatilityHighThreshold;
 extern float anchorTakeProfit;
 extern float anchorMaxLoss;
+extern uint8_t anchorStrategy;
 extern bool trendAdaptiveAnchorsEnabled;
 extern float uptrendMaxLossMultiplier;
 extern float uptrendTakeProfitMultiplier;
@@ -316,6 +317,14 @@ void WebServerModule::renderSettingsHTML() {
     sendSectionHeader(getText("Anchor & Risicokader", "Anchor & Risk Framework"), "anchor", true);
     sendSectionDesc(getText("Anchor prijs instellingen en risicobeheer", "Anchor price settings and risk management"));
     
+    // TP/SL Strategie dropdown
+    const char* strategyOptions[] = {
+        getText("Handmatig", "Manual"),
+        getText("Conservatief (TP +1.8%, SL -1.2%)", "Conservative (TP +1.8%, SL -1.2%)"),
+        getText("Actief (TP +1.2%, SL -0.9%)", "Active (TP +1.2%, SL -0.9%)")
+    };
+    sendDropdownRow(getText("TP/SL Strategie", "TP/SL Strategy"), "anchorStrategy", anchorStrategy, strategyOptions, 3);
+    
     snprintf(valueBuf, sizeof(valueBuf), "%.2f", anchorTakeProfit);
     sendInputRow(getText("Take Profit", "Take Profit"), "anchorTP", "number", 
                  valueBuf, getText("Take profit percentage boven anchor", "Take profit percentage above anchor"), 
@@ -473,6 +482,66 @@ void WebServerModule::renderSettingsHTML() {
     sendInputRow(getText("2h Secondary Coalesce Window (sec)", "2h Secondary Coalesce Window (sec)"), "2hSecCoalesce", "number", 
                  valueBuf, getText("Tijdvenster voor burst-demping (meerdere alerts binnen window = 1 melding)", "Time window for burst suppression (multiple alerts within window = 1 notification)"), 
                  10, 600, 1);
+    
+    sendSectionFooter();
+    
+    // Auto Anchor sectie
+    sendSectionHeader(getText("Auto Anchor", "Auto Anchor"), "autoAnchor", false);
+    sendSectionDesc(getText("Automatische anchor berekening op basis van 4h en 1d EMA", "Automatic anchor calculation based on 4h and 1d EMA"));
+    
+    // Anchor Source Mode dropdown
+    const char* anchorSourceOptions[] = {"MANUAL", "AUTO", "AUTO_FALLBACK", "OFF"};
+    sendDropdownRow(getText("Anchor Bron", "Anchor Source"), "anchorSourceMode", 
+                    alert2HThresholds.anchorSourceMode, anchorSourceOptions, 4);
+    
+    // Auto Anchor settings (gebruik helper methods voor compacte types)
+    snprintf(valueBuf, sizeof(valueBuf), "%u", alert2HThresholds.autoAnchorUpdateMinutes);
+    sendInputRow(getText("Update Interval (min)", "Update Interval (min)"), "autoAnchorUpdateMinutes", "number", 
+                 valueBuf, getText("Interval tussen auto anchor updates", "Interval between auto anchor updates"), 
+                 10, 1440, 1);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%u", alert2HThresholds.autoAnchorForceUpdateMinutes);
+    sendInputRow(getText("Force Update Interval (min)", "Force Update Interval (min)"), "autoAnchorForceUpdateMinutes", "number", 
+                 valueBuf, getText("Force update na X minuten (ook bij kleine wijzigingen)", "Force update after X minutes (even for small changes)"), 
+                 60, 2880, 1);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%u", alert2HThresholds.autoAnchor4hCandles);
+    sendInputRow(getText("4h Candles", "4h Candles"), "autoAnchor4hCandles", "number", 
+                 valueBuf, getText("Aantal 4h candles voor EMA berekening", "Number of 4h candles for EMA calculation"), 
+                 2, 100, 1);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%u", alert2HThresholds.autoAnchor1dCandles);
+    sendInputRow(getText("1d Candles", "1d Candles"), "autoAnchor1dCandles", "number", 
+                 valueBuf, getText("Aantal 1d candles voor EMA berekening", "Number of 1d candles for EMA calculation"), 
+                 2, 60, 1);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.getAutoAnchorMinUpdatePct());
+    sendInputRow(getText("Min Update %", "Min Update %"), "autoAnchorMinUpdatePct", "number", 
+                 valueBuf, getText("Minimaal percentage wijziging voor update", "Minimum percentage change for update"), 
+                 0.01f, 5.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.getAutoAnchorTrendPivotPct());
+    sendInputRow(getText("Trend Pivot %", "Trend Pivot %"), "autoAnchorTrendPivotPct", "number", 
+                 valueBuf, getText("Trend pivot percentage voor adaptieve weging", "Trend pivot percentage for adaptive weighting"), 
+                 0.1f, 10.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.getAutoAnchorW4hBase());
+    sendInputRow(getText("4h Base Weight", "4h Base Weight"), "autoAnchorW4hBase", "number", 
+                 valueBuf, getText("Basis gewicht voor 4h EMA", "Base weight for 4h EMA"), 
+                 0.0f, 1.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.getAutoAnchorW4hTrendBoost());
+    sendInputRow(getText("4h Trend Boost", "4h Trend Boost"), "autoAnchorW4hTrendBoost", "number", 
+                 valueBuf, getText("Extra gewicht voor 4h EMA bij sterke trend", "Extra weight for 4h EMA in strong trend"), 
+                 0.0f, 1.0f, 0.01f);
+    
+    // Read-only display voor laatste waarde
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.autoAnchorLastValue);
+    sendStatusRow(getText("Laatste Auto Anchor", "Last Auto Anchor"), valueBuf);
+    
+    // Checkbox voor notificaties
+    sendCheckboxRow(getText("Notificatie bij update", "Notify on update"), 
+                    "autoAnchorNotifyEnabled", alert2HThresholds.getAutoAnchorNotifyEnabled());
     
     sendSectionFooter();
     
@@ -844,6 +913,41 @@ void WebServerModule::handleSave() {
         alert2HThresholds.twoHSecondaryCoalesceWindowSec = intVal;  // Al in seconden
     }
     
+    // Auto Anchor settings parsing
+    if (server->hasArg("anchorSourceMode")) {
+        int mode = constrain(server->arg("anchorSourceMode").toInt(), 0, 3);
+        alert2HThresholds.anchorSourceMode = static_cast<uint8_t>(mode);
+    }
+    if (parseIntArg("autoAnchorUpdateMinutes", intVal, 10, 1440)) {
+        alert2HThresholds.autoAnchorUpdateMinutes = static_cast<uint16_t>(intVal);
+    }
+    if (parseIntArg("autoAnchorForceUpdateMinutes", intVal, 60, 2880)) {
+        alert2HThresholds.autoAnchorForceUpdateMinutes = static_cast<uint16_t>(intVal);
+    }
+    if (parseIntArg("autoAnchor4hCandles", intVal, 2, 100)) {
+        alert2HThresholds.autoAnchor4hCandles = static_cast<uint8_t>(intVal);
+    }
+    if (parseIntArg("autoAnchor1dCandles", intVal, 2, 60)) {
+        alert2HThresholds.autoAnchor1dCandles = static_cast<uint8_t>(intVal);
+    }
+    if (parseFloatArg("autoAnchorMinUpdatePct", floatVal, 0.01f, 5.0f)) {
+        alert2HThresholds.setAutoAnchorMinUpdatePct(floatVal);
+    }
+    if (parseFloatArg("autoAnchorTrendPivotPct", floatVal, 0.1f, 10.0f)) {
+        alert2HThresholds.setAutoAnchorTrendPivotPct(floatVal);
+    }
+    if (parseFloatArg("autoAnchorW4hBase", floatVal, 0.0f, 1.0f)) {
+        alert2HThresholds.setAutoAnchorW4hBase(floatVal);
+    }
+    if (parseFloatArg("autoAnchorW4hTrendBoost", floatVal, 0.0f, 1.0f)) {
+        alert2HThresholds.setAutoAnchorW4hTrendBoost(floatVal);
+    }
+    if (server->hasArg("autoAnchorNotifyEnabled")) {
+        alert2HThresholds.setAutoAnchorNotifyEnabled(true);
+    } else {
+        alert2HThresholds.setAutoAnchorNotifyEnabled(false);
+    }
+    
     // Geoptimaliseerd: gebruik helper functie i.p.v. gedupliceerde code
     if (parseIntArg("cd1min", intVal, 0, 3600)) {
         uint32_t resultMs;
@@ -885,11 +989,69 @@ void WebServerModule::handleSave() {
     
     // Anchor settings - NIET vanuit web server thread verwerken om crashes te voorkomen
     // Anchor setting wordt verwerkt via een aparte route /anchor/set die sneller is
+    if (parseIntArg("anchorStrategy", intVal, 0, 2)) {
+        anchorStrategy = static_cast<uint8_t>(intVal);
+        // Pas TP/SL automatisch aan op basis van strategie
+        if (anchorStrategy == 1) {
+            // Conservatief: TP +1.8%, SL -1.2%
+            anchorTakeProfit = 1.8f;
+            anchorMaxLoss = -1.2f;
+        } else if (anchorStrategy == 2) {
+            // Actief: TP +1.2%, SL -0.9%
+            anchorTakeProfit = 1.2f;
+            anchorMaxLoss = -0.9f;
+        }
+        // anchorStrategy == 0 (handmatig): behoud huidige waarden
+        
+        // Reset cache variabelen om BTCEUR blok en footer te forceren te updaten
+        extern float lastAnchorMaxValue;
+        extern float lastAnchorValue;
+        extern float lastAnchorMinValue;
+        lastAnchorMaxValue = -1.0f;
+        lastAnchorValue = -1.0f;
+        lastAnchorMinValue = -1.0f;
+        
+        // Reset footer cache om versie te forceren te updaten
+        extern char lastVersionText[32];
+        lastVersionText[0] = '\0';
+    }
     if (parseFloatArg("anchorTP", floatVal, 0.1f, 100.0f)) {
         anchorTakeProfit = floatVal;
+        // Als handmatig aangepast, zet strategie terug naar handmatig
+        if (anchorStrategy != 0) {
+            anchorStrategy = 0;
+        }
+        
+        // Reset cache variabelen om BTCEUR blok en footer te forceren te updaten
+        extern float lastAnchorMaxValue;
+        extern float lastAnchorValue;
+        extern float lastAnchorMinValue;
+        lastAnchorMaxValue = -1.0f;
+        lastAnchorValue = -1.0f;
+        lastAnchorMinValue = -1.0f;
+        
+        // Reset footer cache om versie te forceren te updaten
+        extern char lastVersionText[];
+        lastVersionText[0] = '\0';
     }
     if (parseFloatArg("anchorML", floatVal, -100.0f, -0.1f)) {
         anchorMaxLoss = floatVal;
+        // Als handmatig aangepast, zet strategie terug naar handmatig
+        if (anchorStrategy != 0) {
+            anchorStrategy = 0;
+        }
+        
+        // Reset cache variabelen om BTCEUR blok en footer te forceren te updaten
+        extern float lastAnchorMaxValue;
+        extern float lastAnchorValue;
+        extern float lastAnchorMinValue;
+        lastAnchorMaxValue = -1.0f;
+        lastAnchorValue = -1.0f;
+        lastAnchorMinValue = -1.0f;
+        
+        // Reset footer cache om versie te forceren te updaten
+        extern char lastVersionText[32];
+        lastVersionText[0] = '\0';
     }
     
     // Trend-adaptive anchor settings - geoptimaliseerd: gebruik helper functie
@@ -1394,6 +1556,22 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(F("var val=this.value.replace(',','.');"));
     server->sendContent(F("if(val!==this.value){this.value=val;}});"));
     server->sendContent(F("}"));
+    // TP/SL Strategie dropdown JavaScript
+    server->sendContent(F("var strategySelect=document.querySelector('select[name=\"anchorStrategy\"]');"));
+    server->sendContent(F("if(strategySelect){"));
+    server->sendContent(F("strategySelect.addEventListener('change',function(){"));
+    server->sendContent(F("var val=parseInt(this.value);"));
+    server->sendContent(F("var tpInput=document.querySelector('input[name=\"anchorTP\"]');"));
+    server->sendContent(F("var mlInput=document.querySelector('input[name=\"anchorML\"]');"));
+    server->sendContent(F("if(val==1){"));
+    server->sendContent(F("if(tpInput)tpInput.value='1.8';"));
+    server->sendContent(F("if(mlInput)mlInput.value='-1.2';"));
+    server->sendContent(F("}else if(val==2){"));
+    server->sendContent(F("if(tpInput)tpInput.value='1.2';"));
+    server->sendContent(F("if(mlInput)mlInput.value='-0.9';"));
+    server->sendContent(F("}"));
+    server->sendContent(F("});"));
+    server->sendContent(F("}"));
     server->sendContent(F("var headers=document.querySelectorAll('.section-header');"));
     server->sendContent(F("for(var i=0;i<headers.length;i++){"));
     server->sendContent(F("headers[i].addEventListener('click',function(e){"));
@@ -1517,6 +1695,22 @@ void WebServerModule::sendCheckboxRow(const char* label, const char* name, bool 
     snprintf(buf, sizeof(buf), "<label><input type='checkbox' name='%s' value='1'%s> %s</label>",
              name, checked ? " checked" : "", label);
     server->sendContent(buf);
+}
+
+void WebServerModule::sendDropdownRow(const char* label, const char* name, int value, const char* options[], int optionCount) {
+    if (server == nullptr) return;
+    server->sendContent("<tr><td>");
+    server->sendContent(label);
+    server->sendContent(":</td><td><select name=\"");
+    server->sendContent(name);
+    server->sendContent("\">");
+    for (int i = 0; i < optionCount; i++) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "<option value=\"%d\"%s>%s</option>",
+                 i, (i == value) ? " selected" : "", options[i]);
+        server->sendContent(buf);
+    }
+    server->sendContent("</select></td></tr>");
 }
 
 void WebServerModule::sendStatusRow(const char* label, const char* value) {

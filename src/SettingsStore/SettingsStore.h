@@ -3,6 +3,49 @@
 
 #include <Preferences.h>
 #include <Arduino.h>
+#include <stddef.h>  // Voor offsetof
+
+// Compacte struct voor auto anchor persistent state (één NVS key)
+// Versie 1: huidige implementatie
+struct AutoAnchorPersist {
+    uint8_t version;              // Struct versie (voor migraties)
+    uint8_t anchorSourceMode;     // 0=MANUAL, 1=AUTO, 2=AUTO_FALLBACK, 3=OFF
+    float autoAnchorLastValue;    // Laatste berekende waarde
+    uint32_t autoAnchorLastUpdateEpoch;  // Timestamp laatste update
+    uint16_t autoAnchorUpdateMinutes;    // Update interval
+    uint16_t autoAnchorForceUpdateMinutes; // Force update interval
+    uint8_t autoAnchor4hCandles;  // Aantal 4h candles
+    uint8_t autoAnchor1dCandles;  // Aantal 1d candles
+    uint16_t autoAnchorMinUpdatePct_x100;  // Min update percentage * 100
+    uint16_t autoAnchorTrendPivotPct_x100; // Trend pivot percentage * 100
+    uint8_t autoAnchorW4hBase_x100;       // 4h base weight * 100
+    uint8_t autoAnchorW4hTrendBoost_x100; // 4h trend boost * 100
+    uint8_t autoAnchorFlags;      // Bitfield: intervalMode(0-1), notifyEnabled(2)
+    uint16_t crc;                  // CRC16 voor validatie (optioneel)
+    
+    // Helper methods voor bitfield access
+    uint8_t getAutoAnchorIntervalMode() const { return (autoAnchorFlags & 0x03); }
+    void setAutoAnchorIntervalMode(uint8_t mode) { autoAnchorFlags = (autoAnchorFlags & ~0x03) | (mode & 0x03); }
+    bool getAutoAnchorNotifyEnabled() const { return (autoAnchorFlags & 0x04) != 0; }
+    void setAutoAnchorNotifyEnabled(bool enabled) { autoAnchorFlags = enabled ? (autoAnchorFlags | 0x04) : (autoAnchorFlags & ~0x04); }
+    
+    // Helper: bereken CRC (optioneel, voor extra validatie)
+    uint16_t calculateCRC() const {
+        // Eenvoudige CRC16 berekening (optioneel)
+        uint16_t crc = 0xFFFF;
+        const uint8_t* data = (const uint8_t*)this;
+        size_t len = offsetof(AutoAnchorPersist, crc);  // Tot CRC veld
+        for (size_t i = 0; i < len; i++) {
+            crc ^= data[i];
+            for (uint8_t j = 0; j < 8; j++) {
+                if (crc & 1) crc = (crc >> 1) ^ 0xA001;
+                else crc >>= 1;
+            }
+        }
+        return crc;
+    }
+};
+static_assert(sizeof(AutoAnchorPersist) <= 64, "AutoAnchorPersist te groot voor NVS");  // NVS entry max ~4000 bytes, maar blijf compact
 
 // Alert thresholds struct
 struct AlertThresholds {
@@ -47,6 +90,36 @@ struct Alert2HThresholds {
     // FASE X.5: Secondary global cooldown en coalescing
     uint32_t twoHSecondaryGlobalCooldownSec;  // Global cooldown voor SECONDARY alerts (default 7200 = 120 min)
     uint32_t twoHSecondaryCoalesceWindowSec;  // Coalescing window voor burst-demping (default 90 sec)
+    
+    // Auto Anchor settings (geoptimaliseerd: floats vervangen door compacte types)
+    uint8_t anchorSourceMode;              // 0=MANUAL, 1=AUTO, 2=AUTO_FALLBACK, 3=OFF
+    float autoAnchorLastValue;              // Laatste berekende auto anchor waarde (moet float blijven voor precisie)
+    uint32_t autoAnchorLastUpdateEpoch;     // Epoch tijd van laatste update
+    uint16_t autoAnchorUpdateMinutes;       // Update interval in minuten (default 120, max 1440)
+    uint16_t autoAnchorForceUpdateMinutes; // Force update interval (default 720 = 12h, max 2880)
+    uint8_t autoAnchor4hCandles;           // Aantal 4h candles voor EMA (default: 24 zonder PSRAM, 48 met PSRAM, max 100)
+    uint8_t autoAnchor1dCandles;           // Aantal 1d candles voor EMA (default: 14 zonder PSRAM, 30 met PSRAM, max 60)
+    uint16_t autoAnchorMinUpdatePct_x100;   // Minimale wijziging % * 100 (default 15 = 0.15%, max 500 = 5.0%)
+    uint16_t autoAnchorTrendPivotPct_x100; // Trend pivot percentage * 100 (default 100 = 1.00%, max 1000 = 10.0%)
+    uint8_t autoAnchorW4hBase_x100;        // Basis gewicht voor 4h EMA * 100 (default 35 = 0.35, max 100)
+    uint8_t autoAnchorW4hTrendBoost_x100;  // Extra gewicht bij trend * 100 (default 35 = 0.35, max 100)
+    uint8_t autoAnchorFlags;               // Bitfield: intervalMode(0-1), notifyEnabled(2), reserved(3-7)
+    
+    // Helper methods voor bitfield access
+    uint8_t getAutoAnchorIntervalMode() const { return (autoAnchorFlags & 0x03); }
+    void setAutoAnchorIntervalMode(uint8_t mode) { autoAnchorFlags = (autoAnchorFlags & ~0x03) | (mode & 0x03); }
+    bool getAutoAnchorNotifyEnabled() const { return (autoAnchorFlags & 0x04) != 0; }
+    void setAutoAnchorNotifyEnabled(bool enabled) { autoAnchorFlags = enabled ? (autoAnchorFlags | 0x04) : (autoAnchorFlags & ~0x04); }
+    
+    // Helper methods voor float conversie (voor gebruik in berekeningen)
+    float getAutoAnchorMinUpdatePct() const { return autoAnchorMinUpdatePct_x100 / 100.0f; }
+    void setAutoAnchorMinUpdatePct(float pct) { autoAnchorMinUpdatePct_x100 = (uint16_t)(pct * 100.0f + 0.5f); }
+    float getAutoAnchorTrendPivotPct() const { return autoAnchorTrendPivotPct_x100 / 100.0f; }
+    void setAutoAnchorTrendPivotPct(float pct) { autoAnchorTrendPivotPct_x100 = (uint16_t)(pct * 100.0f + 0.5f); }
+    float getAutoAnchorW4hBase() const { return autoAnchorW4hBase_x100 / 100.0f; }
+    void setAutoAnchorW4hBase(float w) { autoAnchorW4hBase_x100 = (uint8_t)(w * 100.0f + 0.5f); }
+    float getAutoAnchorW4hTrendBoost() const { return autoAnchorW4hTrendBoost_x100 / 100.0f; }
+    void setAutoAnchorW4hTrendBoost(float w) { autoAnchorW4hTrendBoost_x100 = (uint8_t)(w * 100.0f + 0.5f); }
 };
 
 // Settings struct - bevat alle instelbare waarden
@@ -75,6 +148,7 @@ struct CryptoMonitorSettings {
     // Anchor settings
     float anchorTakeProfit;
     float anchorMaxLoss;
+    uint8_t anchorStrategy;  // 0 = handmatig, 1 = conservatief (TP +1.8%, SL -1.2%), 2 = actief (TP +1.2%, SL -0.9%)
     
     // Trend-adaptive anchor settings
     bool trendAdaptiveAnchorsEnabled;
@@ -154,6 +228,7 @@ private:
     static const char* PREF_KEY_MQTT_PASS;
     static const char* PREF_KEY_ANCHOR_TP;
     static const char* PREF_KEY_ANCHOR_ML;
+    static const char* PREF_KEY_ANCHOR_STRATEGY;
     static const char* PREF_KEY_TREND_ADAPT;
     static const char* PREF_KEY_UP_ML_MULT;
     static const char* PREF_KEY_UP_TP_MULT;
@@ -195,6 +270,22 @@ private:
     // FASE X.5: Secondary global cooldown en coalescing preference keys
     static const char* PREF_KEY_2H_SEC_GLOBAL_CD;
     static const char* PREF_KEY_2H_SEC_COALESCE;
+    
+    // Auto Anchor preference keys (voor backward compatibility, maar gebruik config-blob)
+    static const char* PREF_KEY_ANCHOR_SOURCE_MODE;
+    static const char* PREF_KEY_AUTO_ANCHOR_LAST_VALUE;
+    static const char* PREF_KEY_AUTO_ANCHOR_LAST_UPDATE_EPOCH;
+    static const char* PREF_KEY_AUTO_ANCHOR_UPDATE_MINUTES;
+    static const char* PREF_KEY_AUTO_ANCHOR_FORCE_UPDATE_MINUTES;
+    static const char* PREF_KEY_AUTO_ANCHOR_4H_CANDLES;
+    static const char* PREF_KEY_AUTO_ANCHOR_1D_CANDLES;
+    static const char* PREF_KEY_AUTO_ANCHOR_MIN_UPDATE_PCT;
+    static const char* PREF_KEY_AUTO_ANCHOR_TREND_PIVOT_PCT;
+    static const char* PREF_KEY_AUTO_ANCHOR_W4H_BASE;
+    static const char* PREF_KEY_AUTO_ANCHOR_W4H_TREND_BOOST;
+    static const char* PREF_KEY_AUTO_ANCHOR_INTERVAL_MODE;
+    static const char* PREF_KEY_AUTO_ANCHOR_NOTIFY_ENABLED;
+    static const char* PREF_KEY_AUTO_ANCHOR_BLOB;  // Één key voor config-blob
 };
 
 #endif // SETTINGSSTORE_H
