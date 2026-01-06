@@ -776,7 +776,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
     
     // Static functie: gebruik lokale buffers (kan geen instance members gebruiken)
     char title[32];
-    char msg[120];  // Verhoogd van 80 naar 120 bytes voor langere notificaties
+    char msg[200];  // Verhoogd om volledige notificatieteksten te ondersteunen
     char timestamp[32];
     
     #if DEBUG_2H_ALERTS
@@ -961,7 +961,7 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
                                              const TwoHMetrics& metrics, uint32_t now) {
     // Static functie: gebruik lokale buffers
     char title[32];
-    char msg[120];  // Verhoogd van 80 naar 120 bytes voor langere notificaties
+    char msg[200];  // Verhoogd om volledige notificatieteksten te ondersteunen
     char timestamp[32];
     
     // Gebruik timestamp voor notificatie formaat
@@ -1007,8 +1007,8 @@ static uint32_t lastSecondarySentMillis = 0;
 // FASE X.5: Coalescing state voor burst-demping
 static Alert2HType pendingSecondaryType = ALERT2H_NONE;
 static uint32_t pendingSecondaryCreatedMillis = 0;
-static char pendingSecondaryTitle[48];
-static char pendingSecondaryMsg[80];
+static char pendingSecondaryTitle[64];
+static char pendingSecondaryMsg[256];
 static char pendingSecondaryColorTag[32];
 
 // FASE X.3: Check of alert PRIMARY is (override throttling)
@@ -1161,7 +1161,7 @@ static bool flushPendingSecondaryAlertInternal(uint32_t now) {
     }
     
     // Verstuur pending alert
-        char titleWithClass[48];
+        char titleWithClass[64];
         snprintf(titleWithClass, sizeof(titleWithClass), "[%s] %s", 
                  getText("Context", "Context"), pendingSecondaryTitle);
         bool result = sendNotification(titleWithClass, pendingSecondaryMsg, pendingSecondaryColorTag);
@@ -1200,7 +1200,7 @@ bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, c
         }
         
         // Verstuur PRIMARY alert
-        char titleWithClass[48];
+        char titleWithClass[64];
         snprintf(titleWithClass, sizeof(titleWithClass), "[%s] %s", 
                  getText("PRIMAIR", "PRIMARY"), title);
         bool result = sendNotification(titleWithClass, msg, colorTag);
@@ -1480,4 +1480,3 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
         return false;
     }
 }
-
