@@ -31,12 +31,18 @@ public:
     // trendThreshold: threshold voor trend bepaling (default uit settings)
     TrendState determineTrendState(float ret_2h_value, float ret_30m_value, float trendThreshold);
     
-    // Lange termijn trend detection
-    // Bepaal lange termijn trend state op basis van 4h en 1d returns
+    // Medium trend detection
+    // Bepaal medium trend state op basis van 4h en 1d returns
     // ret_4h_value: 4-hour return percentage
     // ret_1d_value: 1-day return percentage
+    // mediumThreshold: threshold voor medium trend (default 2.0%)
+    TrendState determineMediumTrendState(float ret_4h_value, float ret_1d_value, float mediumThreshold);
+
+    // Lange termijn trend detection
+    // Bepaal lange termijn trend state op basis van 7d return
+    // ret_7d_value: 7-day return percentage
     // longTermThreshold: threshold voor lange termijn trend (default 2.0%)
-    TrendState determineLongTermTrendState(float ret_4h_value, float ret_1d_value, float longTermThreshold);
+    TrendState determineLongTermTrendState(float ret_7d_value, float longTermThreshold);
     
     // Trend change detection en notificatie
     // Check of trend is veranderd en stuur notificatie indien nodig
@@ -48,17 +54,28 @@ public:
     // minuteIndex: huidige index in minute averages array
     void checkTrendChange(float ret_30m_value, float ret_2h, bool minuteArrayFilled, uint8_t minuteIndex);
     
+    // Medium trend state management
+    TrendState getMediumTrendState() const { return mediumTrendState; }
+    TrendState getPreviousMediumTrendState() const { return previousMediumTrendState; }
+    void setMediumTrendState(TrendState state) { mediumTrendState = state; }
+
     // Lange termijn trend state management
     TrendState getLongTermTrendState() const { return longTermTrendState; }
     TrendState getPreviousLongTermTrendState() const { return previousLongTermTrendState; }
     void setLongTermTrendState(TrendState state) { longTermTrendState = state; }
     
-    // Lange termijn trend change detection en notificatie
-    // Check of lange termijn trend is veranderd en stuur notificatie indien nodig
+    // Medium trend change detection en notificatie
+    // Check of medium trend is veranderd en stuur notificatie indien nodig
     // ret_4h_value: 4-hour return percentage
     // ret_1d_value: 1-day return percentage
+    // mediumThreshold: threshold voor medium trend (default 2.0%)
+    void checkMediumTrendChange(float ret_4h_value, float ret_1d_value, float mediumThreshold);
+
+    // Lange termijn trend change detection en notificatie
+    // Check of lange termijn trend is veranderd en stuur notificatie indien nodig
+    // ret_7d_value: 7-day return percentage
     // longTermThreshold: threshold voor lange termijn trend (default 2.0%)
-    void checkLongTermTrendChange(float ret_4h_value, float ret_1d_value, float longTermThreshold);
+    void checkLongTermTrendChange(float ret_7d_value, float longTermThreshold);
     
     // Sync state: Update TrendDetector state met globale variabelen (voor parallel implementatie)
     void syncStateFromGlobals();
@@ -89,9 +106,12 @@ public:
 private:
     TrendState trendState;
     TrendState previousTrendState;
+    TrendState mediumTrendState;
+    TrendState previousMediumTrendState;
     TrendState longTermTrendState;
     TrendState previousLongTermTrendState;
     unsigned long lastTrendChangeNotification;
+    unsigned long lastMediumTrendChangeNotification;
     unsigned long lastLongTermTrendChangeNotification;
     
     TrendState determineTrendStateSimple(float ret_value, float trendThreshold, TrendState currentState);

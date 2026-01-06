@@ -54,6 +54,7 @@ public:
     void updateDateTimeLabels();
     void updateTrendLabel();
     void updateVolatilityLabel();
+    void updateMediumTrendLabel();
     void updateLongTermTrendLabel();
     void updateWarmStartStatusLabel();
     
@@ -87,6 +88,7 @@ private:
     // Chart labels (trend, volatility, warm-start status)
     lv_obj_t *trendLabel;
     lv_obj_t *volatilityLabel;
+    lv_obj_t *mediumTrendLabel;
     lv_obj_t *longTermTrendLabel;
     lv_obj_t *warmStartStatusLabel;
     
@@ -150,4 +152,3 @@ private:
 extern UIController uiController;
 
 #endif // UICONTROLLER_H
-
