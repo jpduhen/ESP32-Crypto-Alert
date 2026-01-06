@@ -917,8 +917,6 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
     float closePrice = 0.0f;
     float volume = 0.0f;
     KlineMetrics lastParsedKline = {};
-    float highPrice = 0.0f;
-    float lowPrice = 0.0f;
     float volumeValue = 0.0f;
     
     // Buffer voor chunked reading (hergebruik fixed buffer)
