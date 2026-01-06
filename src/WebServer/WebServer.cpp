@@ -98,6 +98,7 @@ extern bool sendNotification(const char* title, const char* message, const char*
 extern float ret_2h;  // 2-hour return (static in .ino, maar extern hier)
 extern float ret_30m;  // 30-minute return (static in .ino, maar extern hier)
 extern float ret_1d;  // 24-hour return (hourly buffer)
+extern float ret_7d;  // 7-day return (hourly buffer of warm-start)
 extern float averagePrices[];  // Array met gemiddelde prijzen (index 3 = avg2h)
 extern bool hasRet2h;  // Flag: ret_2h beschikbaar
 extern bool hasRet30m;  // Flag: ret_30m beschikbaar
@@ -264,8 +265,14 @@ void WebServerModule::renderSettingsHTML() {
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='curPrice'>--</span></div>",
              getText("Huidige Prijs", "Current Price"));
     server->sendContent(tmpBuf);
-    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='trend'>--</span></div>",
-             getText("Trend", "Trend"));
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='trend2h'>--</span></div>",
+             getText("Trend 2h", "Trend 2h"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='trend1d'>--</span></div>",
+             getText("Trend 1d", "Trend 1d"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='trend7d'>--</span></div>",
+             getText("Trend 7d", "Trend 7d"));
     server->sendContent(tmpBuf);
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='volatility'>--</span></div>",
              getText("Volatiliteit", "Volatility"));
@@ -1181,7 +1188,9 @@ void WebServerModule::handleStatus() {
     float ret30m = 0.0f;
     float ret2h = 0.0f;
     float ret1d = 0.0f;
+    float ret7d = 0.0f;
     TrendState trend = TREND_SIDEWAYS;
+    TrendState trendMedium = TREND_SIDEWAYS;
     TrendState trendLong = TREND_SIDEWAYS;
     VolatilityState volatility = VOLATILITY_MEDIUM;
     bool anchorActive = false;
@@ -1204,7 +1213,9 @@ void WebServerModule::handleStatus() {
         ret30m = calculateReturn30Minutes();
         ret2h = ::ret_2h;  // Gebruik globale ret_2h
         ret1d = ::ret_1d;
+        ret7d = ::ret_7d;
         trend = trendDetector.getTrendState();
+        trendMedium = trendDetector.getMediumTrendState();
         trendLong = trendDetector.getLongTermTrendState();
         volatility = volatilityTracker.getVolatilityState();
         anchorActive = ::anchorActive;
@@ -1243,6 +1254,8 @@ void WebServerModule::handleStatus() {
         "\"ret30m\":%.2f,"
         "\"ret2h\":%.2f,"
         "\"ret1d\":%.2f,"
+        "\"ret7d\":%.2f,"
+        "\"trendMedium\":\"%s\","
         "\"trendLong\":\"%s\","
         "\"anchor\":%.2f,"
         "\"anchorDeltaPct\":%.2f,"
@@ -1263,6 +1276,8 @@ void WebServerModule::handleStatus() {
         ret30m,
         ret2h,
         ret1d,
+        ret7d,
+        getTrendText(trendMedium),
         getTrendText(trendLong),
         anchorPrice,
         anchorDeltaPct,
@@ -1607,7 +1622,9 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(F("function refreshStatus(){"));
     server->sendContent(F("fetch('/status').then(function(r){return r.json();}).then(function(d){"));
     server->sendContent(F("var el=document.getElementById('curPrice');if(el)el.textContent=d.price>0?d.price.toFixed(2)+' EUR':'--';"));
-    server->sendContent(F("el=document.getElementById('trend');if(el)el.textContent=d.trend||'--';"));
+    server->sendContent(F("el=document.getElementById('trend2h');if(el)el.textContent=d.trend||'--';"));
+    server->sendContent(F("el=document.getElementById('trend1d');if(el)el.textContent=d.trendMedium||'--';"));
+    server->sendContent(F("el=document.getElementById('trend7d');if(el)el.textContent=d.trendLong||'--';"));
     server->sendContent(F("el=document.getElementById('volatility');if(el)el.textContent=d.volatility||'--';"));
     server->sendContent(F("el=document.getElementById('ret1m');if(el)el.textContent=d.ret1m!=0?d.ret1m.toFixed(2)+'%':'--';"));
     server->sendContent(F("el=document.getElementById('ret30m');if(el)el.textContent=d.ret30m!=0?d.ret30m.toFixed(2)+'%':'--';"));
