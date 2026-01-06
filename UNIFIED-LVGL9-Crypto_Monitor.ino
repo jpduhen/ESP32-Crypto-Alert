@@ -697,7 +697,7 @@ bool mqttConnected = false;
 unsigned long lastMqttReconnectAttempt = 0;
 
 // MQTT Message Queue - voorkomt message loss bij disconnect
-#define MQTT_QUEUE_SIZE 10  // Max aantal berichten in queue
+#define MQTT_QUEUE_SIZE 8  // Max aantal berichten in queue
 struct MqttMessage {
     char topic[128];
     char payload[128];
