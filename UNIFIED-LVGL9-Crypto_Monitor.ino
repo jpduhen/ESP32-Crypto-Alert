@@ -5062,7 +5062,6 @@ void fetchPrice()
             float ret_5m = calculateReturn5Minutes();  // Percentage verandering laatste 5 minuten
             ret_30m = calculateReturn30Minutes(); // Percentage verandering laatste 30 minuten (update global)
             ret_2h = calculateReturn2Hours();
-            ret_1d = calculateReturn24Hours();
             
             
             // Update live availability flags: gebaseerd op data beschikbaarheid EN percentage live data
@@ -5088,7 +5087,12 @@ void fetchPrice()
             } else if (!hasRet4hWarm) {
                 ret_4h = 0.0f;
             }
-            hasRet1d = (availableHours >= 24);
+            hasRet1d = hasRet1dWarm || (availableHours >= 24);
+            if (availableHours >= 24) {
+                ret_1d = calculateReturn24Hours();
+            } else if (!hasRet1dWarm) {
+                ret_1d = 0.0f;
+            }
             bool hasRet7dLive = (availableHours >= HOURS_FOR_7D);
             hasRet7d = hasRet7dWarm || hasRet7dLive;
             if (hasRet7dLive) {
