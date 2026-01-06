@@ -826,7 +826,7 @@ static bool parseKlineEntry(const char* jsonStr, float* closePrice, unsigned lon
 // Haal Binance klines op voor een specifiek timeframe
 // Memory efficient: streaming parsing, bewaar alleen laatste maxCount candles
 // Returns: aantal candles opgehaald, of -1 bij fout
-int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit, float* prices, unsigned long* timestamps, uint16_t maxCount)
+int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit, float* prices, unsigned long* timestamps, uint16_t maxCount, float* highs = nullptr, float* lows = nullptr, float* volumes = nullptr)
 {
     if (symbol == nullptr || interval == nullptr || prices == nullptr || maxCount == 0) {
         return -1;
@@ -914,6 +914,9 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
     float closePrice = 0.0f;
     float volume = 0.0f;
     KlineMetrics lastParsedKline = {};
+    float highPrice = 0.0f;
+    float lowPrice = 0.0f;
+    float volumeValue = 0.0f;
     
     // Buffer voor chunked reading (hergebruik fixed buffer)
     size_t bufferPos = 0;
@@ -992,6 +995,9 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
                     lowPrice = 0.0f;
                     closePrice = 0.0f;
                     volume = 0.0f;
+                    highPrice = 0.0f;
+                    lowPrice = 0.0f;
+                    volumeValue = 0.0f;
                 } else if (c == ']') {
                     // End of outer array
                     goto parse_done;
@@ -1026,6 +1032,12 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
                                 volume = value;
                             }
                         }
+                    } else if (fieldIdx == 5) {
+                        // volume (6th field, index 5)
+                        float volume;
+                        if (safeAtof(fieldBuf, volume) && volume >= 0.0f) {
+                            volumeValue = volume;
+                        }
                     }
                     
                     fieldIdx++;
@@ -1049,6 +1061,11 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
                                     volume = value;
                                 }
                             }
+                        } else if (fieldIdx == 5) {
+                            float volume;
+                            if (safeAtof(fieldBuf, volume) && volume >= 0.0f) {
+                                volumeValue = volume;
+                            }
                         }
                     }
                     state = PS_ENTRY_END;
@@ -1067,6 +1084,15 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
                     prices[writeIdx] = closePrice;
                     if (timestamps != nullptr) {
                         timestamps[writeIdx] = openTime;
+                    }
+                    if (highs != nullptr) {
+                        highs[writeIdx] = highPrice;
+                    }
+                    if (lows != nullptr) {
+                        lows[writeIdx] = lowPrice;
+                    }
+                    if (volumes != nullptr) {
+                        volumes[writeIdx] = volumeValue;
                     }
                     
                     writeIdx++;
@@ -1100,6 +1126,9 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
                     lowPrice = 0.0f;
                     closePrice = 0.0f;
                     volume = 0.0f;
+                    highPrice = 0.0f;
+                    lowPrice = 0.0f;
+                    volumeValue = 0.0f;
                 } else if (c == ']') {
                     // End of outer array
                     goto parse_done;
@@ -1113,6 +1142,9 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
                     lowPrice = 0.0f;
                     closePrice = 0.0f;
                     volume = 0.0f;
+                    highPrice = 0.0f;
+                    lowPrice = 0.0f;
+                    volumeValue = 0.0f;
                 }
                 break;
         }
@@ -1139,6 +1171,9 @@ parse_done:
         // Voor kleine buffers: gebruik stack temp (max 60)
         if (writeIdx <= 60 && maxCount <= 120) {
             float tempReorder[60];  // Max 60 floats = 240 bytes (veilig voor stack)
+            float tempReorderHighs[60];
+            float tempReorderLows[60];
+            float tempReorderVolumes[60];
             unsigned long tempReorderTimes[60];
             
             // Kopieer eerste deel (0..writeIdx-1) naar temp
@@ -1147,12 +1182,30 @@ parse_done:
                 if (timestamps != nullptr) {
                     tempReorderTimes[i] = timestamps[i];
                 }
+                if (highs != nullptr) {
+                    tempReorderHighs[i] = highs[i];
+                }
+                if (lows != nullptr) {
+                    tempReorderLows[i] = lows[i];
+                }
+                if (volumes != nullptr) {
+                    tempReorderVolumes[i] = volumes[i];
+                }
             }
             // Verschuif tweede deel (writeIdx..maxCount-1) naar begin
             for (int i = 0; i < (int)maxCount - writeIdx; i++) {
                 prices[i] = prices[writeIdx + i];
                 if (timestamps != nullptr) {
                     timestamps[i] = timestamps[writeIdx + i];
+                }
+                if (highs != nullptr) {
+                    highs[i] = highs[writeIdx + i];
+                }
+                if (lows != nullptr) {
+                    lows[i] = lows[writeIdx + i];
+                }
+                if (volumes != nullptr) {
+                    volumes[i] = volumes[writeIdx + i];
                 }
             }
             // Kopieer eerste deel naar einde
@@ -1161,10 +1214,22 @@ parse_done:
                 if (timestamps != nullptr) {
                     timestamps[(int)maxCount - writeIdx + i] = tempReorderTimes[i];
                 }
+                if (highs != nullptr) {
+                    highs[(int)maxCount - writeIdx + i] = tempReorderHighs[i];
+                }
+                if (lows != nullptr) {
+                    lows[(int)maxCount - writeIdx + i] = tempReorderLows[i];
+                }
+                if (volumes != nullptr) {
+                    volumes[(int)maxCount - writeIdx + i] = tempReorderVolumes[i];
+                }
             }
         } else {
             // Voor grote buffers: gebruik heap allocatie
             float* tempFull = (float*)malloc(maxCount * sizeof(float));
+            float* tempFullHighs = (highs != nullptr) ? (float*)malloc(maxCount * sizeof(float)) : nullptr;
+            float* tempFullLows = (lows != nullptr) ? (float*)malloc(maxCount * sizeof(float)) : nullptr;
+            float* tempFullVolumes = (volumes != nullptr) ? (float*)malloc(maxCount * sizeof(float)) : nullptr;
             unsigned long* tempFullTimes = (timestamps != nullptr) ? (unsigned long*)malloc(maxCount * sizeof(unsigned long)) : nullptr;
             
             if (tempFull != nullptr) {
@@ -1174,6 +1239,15 @@ parse_done:
                     if (tempFullTimes != nullptr && timestamps != nullptr) {
                         tempFullTimes[i] = timestamps[i];
                     }
+                    if (tempFullHighs != nullptr && highs != nullptr) {
+                        tempFullHighs[i] = highs[i];
+                    }
+                    if (tempFullLows != nullptr && lows != nullptr) {
+                        tempFullLows[i] = lows[i];
+                    }
+                    if (tempFullVolumes != nullptr && volumes != nullptr) {
+                        tempFullVolumes[i] = volumes[i];
+                    }
                 }
                 // Herschik: [writeIdx..maxCount-1, 0..writeIdx-1] -> [0..maxCount-1]
                 for (uint16_t i = 0; i < maxCount - writeIdx; i++) {
@@ -1181,15 +1255,36 @@ parse_done:
                     if (tempFullTimes != nullptr && timestamps != nullptr) {
                         timestamps[i] = tempFullTimes[writeIdx + i];
                     }
+                    if (tempFullHighs != nullptr && highs != nullptr) {
+                        highs[i] = tempFullHighs[writeIdx + i];
+                    }
+                    if (tempFullLows != nullptr && lows != nullptr) {
+                        lows[i] = tempFullLows[writeIdx + i];
+                    }
+                    if (tempFullVolumes != nullptr && volumes != nullptr) {
+                        volumes[i] = tempFullVolumes[writeIdx + i];
+                    }
                 }
                 for (uint16_t i = 0; i < writeIdx; i++) {
                     prices[(int)maxCount - writeIdx + i] = tempFull[i];
                     if (tempFullTimes != nullptr && timestamps != nullptr) {
                         timestamps[(int)maxCount - writeIdx + i] = tempFullTimes[i];
                     }
+                    if (tempFullHighs != nullptr && highs != nullptr) {
+                        highs[(int)maxCount - writeIdx + i] = tempFullHighs[i];
+                    }
+                    if (tempFullLows != nullptr && lows != nullptr) {
+                        lows[(int)maxCount - writeIdx + i] = tempFullLows[i];
+                    }
+                    if (tempFullVolumes != nullptr && volumes != nullptr) {
+                        volumes[(int)maxCount - writeIdx + i] = tempFullVolumes[i];
+                    }
                 }
                 free(tempFull);
                 if (tempFullTimes != nullptr) free(tempFullTimes);
+                if (tempFullHighs != nullptr) free(tempFullHighs);
+                if (tempFullLows != nullptr) free(tempFullLows);
+                if (tempFullVolumes != nullptr) free(tempFullVolumes);
             }
             // Bij heap allocatie failure: buffer blijft in wrapped volgorde (geen probleem)
         }
