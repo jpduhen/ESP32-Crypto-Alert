@@ -320,11 +320,13 @@ float ret_2h = 0.0f;  // 2-hour return percentage
 float ret_30m = 0.0f;  // 30-minute return percentage (calculated from minuteAverages or warm-start data)
 float ret_4h = 0.0f;  // 4-hour return percentage (calculated from API during warm-start)
 float ret_1d = 0.0f;  // 1-day return percentage (calculated from API during warm-start)
+float ret_7d = 0.0f;  // 7-day return percentage (calculated from API during warm-start or hourly buffer)
 // Fase 8: UI state - gebruikt door UIController module
 bool hasRet2hWarm = false;  // Flag: ret_2h beschikbaar vanuit warm-start (minimaal 2 candles)
 bool hasRet30mWarm = false;  // Flag: ret_30m beschikbaar vanuit warm-start (minimaal 2 candles)
 bool hasRet4hWarm = false;  // Flag: ret_4h beschikbaar vanuit warm-start (minimaal 2 candles)
 bool hasRet1dWarm = false;  // Flag: ret_1d beschikbaar vanuit warm-start (minimaal 2 candles)
+bool hasRet7dWarm = false;  // Flag: ret_7d beschikbaar vanuit warm-start (minimaal 2 candles)
 bool hasRet2hLive = false;  // Flag: ret_2h kan worden berekend uit live data (minuteIndex >= 120)
 bool hasRet30mLive = false;  // Flag: ret_30m kan worden berekend uit live data (minuteIndex >= 30)
 // Combined flags: beschikbaar vanuit warm-start OF live data
@@ -332,6 +334,7 @@ bool hasRet2h = false;  // hasRet2hWarm || hasRet2hLive
 bool hasRet30m = false;  // hasRet30mWarm || hasRet30mLive
 bool hasRet4h = false;  // hasRet4hWarm (4h alleen via warm-start, geen live berekening)
 bool hasRet1d = false;  // hasRet1dWarm (1d alleen via warm-start, geen live berekening)
+bool hasRet7d = false;  // hasRet7dWarm (warm-start) of live hourly buffer
 // Fase 5.3.17: Globale variabelen voor backward compatibility - modules zijn source of truth
 // Deze variabelen worden gesynchroniseerd met TrendDetector module na elke update
 // TODO: In toekomstige fase kunnen deze verwijderd worden zodra alle code volledig gemigreerd is
@@ -405,7 +408,8 @@ static lv_obj_t *anchorDeltaLabel; // Label voor anchor delta % (TTGO, rechts)
 lv_obj_t *trendLabel; // Label voor trend weergave
 lv_obj_t *warmStartStatusLabel; // Label voor warm-start status weergave (rechts bovenin chart)
 lv_obj_t *volatilityLabel; // Label voor volatiliteit weergave
-lv_obj_t *longTermTrendLabel; // Label voor lange termijn trend weergave (4h + 1d)
+lv_obj_t *mediumTrendLabel; // Label voor medium trend weergave (4h + 1d)
+lv_obj_t *longTermTrendLabel; // Label voor lange termijn trend weergave (7d)
 
 // Fase 8: UI state - gebruikt door UIController module
 uint32_t lastApiMs = 0; // Time of last api call
@@ -423,8 +427,6 @@ static const unsigned long HEAP_TELEMETRY_INTERVAL_MS = 60000UL; // Elke 60 seco
 
 // Static buffers voor hot paths (voorkomt String allocaties)
 static char httpResponseBuffer[248];  // Buffer voor HTTP responses (NTFY, etc.) - verkleind van 264 naar 248 bytes (bespaart 16 bytes DRAM)
-static char notificationMsgBuffer[264];  // Buffer voor notification messages - verkleind van 280 naar 264 bytes (bespaart 16 bytes DRAM)
-static char notificationTitleBuffer[96];  // Buffer voor notification titles - verkleind van 128 naar 96 bytes
 
 // M2: Globale herbruikbare buffer voor HTTP responses (voorkomt String allocaties)
 // Note: Niet static zodat ApiClient.cpp er toegang toe heeft via extern declaratie in ApiClient.h
@@ -528,7 +530,7 @@ bool minuteArrayFilled = false;
 static unsigned long lastMinuteUpdate = 0;
 static float firstMinuteAverage = 0.0f; // Eerste minuut gemiddelde prijs als basis voor 30-min berekening
 // Uur-aggregatie buffer voor lange perioden (max 7 dagen)
-float hourlyAverages[HOURS_FOR_7D] = {0.0f};
+float *hourlyAverages = nullptr;
 uint16_t hourIndex = 0;
 bool hourArrayFilled = false;
 uint8_t minutesSinceHourUpdate = 0;
@@ -1462,12 +1464,45 @@ static WarmStartMode performWarmStart()
     } else {
         hasRet1dWarm = false;
     }
+
+    // 7. Haal 1w candles op voor lange termijn trend
+    float temp1wPrices[2];
+    int count1w = 0;
+    const int maxRetries1w = 3;
+    for (int retry = 0; retry < maxRetries1w; retry++) {
+        if (retry > 0) {
+            Serial_printf(F("[WarmStart] 1w retry %d/%d...\n"), retry, maxRetries1w - 1);
+            yield();
+            delay(500);
+            lv_timer_handler();
+        }
+        lv_timer_handler();
+        count1w = fetchBinanceKlines(binanceSymbol, "1w", 2, temp1wPrices, nullptr, 2);
+        lv_timer_handler();
+        if (count1w >= 2) {
+            break;
+        }
+    }
+
+    if (count1w >= 2) {
+        float firstPrice = temp1wPrices[0];
+        float lastPrice = temp1wPrices[count1w - 1];
+        if (firstPrice > 0.0f && lastPrice > 0.0f) {
+            ret_7d = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
+            hasRet7dWarm = true;
+        } else {
+            hasRet7dWarm = false;
+        }
+    } else {
+        hasRet7dWarm = false;
+    }
     
     // Update combined flags na warm-start
     hasRet2h = hasRet2hWarm || hasRet2hLive;
     hasRet30m = hasRet30mWarm || hasRet30mLive;
     hasRet4h = hasRet4hWarm;  // 4h alleen via warm-start
     hasRet1d = hasRet1dWarm;  // 1d alleen via warm-start
+    hasRet7d = hasRet7dWarm;  // 7d via warm-start of live hourly buffer
     
     // Fase 5.1: Bepaal trend state op basis van warm-start data (gebruik TrendDetector module)
     if (hasRet2h && hasRet30m) {
@@ -4604,6 +4639,9 @@ static float calculateReturn2Hours()
 // Helper: beschikbare uren in hourly buffer
 static inline uint16_t getAvailableHours()
 {
+    if (hourlyAverages == nullptr) {
+        return 0;
+    }
     return calculateAvailableElements(hourArrayFilled, hourIndex, HOURS_FOR_7D);
 }
 
@@ -4660,6 +4698,12 @@ static float calculateReturnFromHourly(uint16_t hoursBack)
 static float calculateReturn24Hours()
 {
     return calculateReturnFromHourly(24);
+}
+
+// ret_7d: prijs nu vs 7 dagen geleden (hourly buffer)
+static float calculateReturn7Days()
+{
+    return calculateReturnFromHourly(HOURS_FOR_7D);
 }
 
 // ============================================================================
@@ -4807,7 +4851,10 @@ static void updateHourlyAverage()
     if (!isValidPrice(hourAvg)) {
         return;
     }
-    
+
+    if (hourlyAverages == nullptr) {
+        return;
+    }
     hourlyAverages[hourIndex] = hourAvg;
     hourIndex = (hourIndex + 1) % HOURS_FOR_7D;
     if (hourIndex == 0) {
@@ -4960,6 +5007,13 @@ void fetchPrice()
             // Hourly buffer availability
             uint16_t availableHours = getAvailableHours();
             hasRet1d = (availableHours >= 24);
+            bool hasRet7dLive = (availableHours >= HOURS_FOR_7D);
+            hasRet7d = hasRet7dWarm || hasRet7dLive;
+            if (hasRet7dLive) {
+                ret_7d = calculateReturn7Days();
+            } else if (!hasRet7dWarm) {
+                ret_7d = 0.0f;
+            }
             
             // Fase 5.1: Bepaal trend state op basis van 2h return (gebruik TrendDetector module)
             if (hasRet2h && hasRet30m) {
@@ -4982,14 +5036,22 @@ void fetchPrice()
             trendState = trendDetector.getTrendState();
             previousTrendState = trendDetector.getPreviousTrendState();
             
-            // Check lange termijn trend change en stuur notificatie indien nodig
+            // Check medium trend change en stuur notificatie indien nodig
             extern bool hasRet4h;
             extern bool hasRet1d;
             if (hasRet4h && hasRet1d) {
                 extern float ret_4h;
                 extern float ret_1d;
+                const float mediumThreshold = 2.0f;
+                trendDetector.checkMediumTrendChange(ret_4h, ret_1d, mediumThreshold);
+            }
+
+            // Check lange termijn trend change (7d) en stuur notificatie indien nodig
+            extern bool hasRet7d;
+            if (hasRet7d) {
+                extern float ret_7d;
                 const float longTermThreshold = 2.0f;
-                trendDetector.checkLongTermTrendChange(ret_4h, ret_1d, longTermThreshold);
+                trendDetector.checkLongTermTrendChange(ret_7d, longTermThreshold);
             }
             
             // Update volatiliteit buffer elke minuut met absolute 1m return
@@ -5735,6 +5797,28 @@ static void allocateDynamicArrays()
                      MINUTES_FOR_30MIN_CALC * sizeof(float) + MINUTES_FOR_30MIN_CALC * sizeof(DataSource));
     }
     #endif
+
+    if (hourlyAverages == nullptr) {
+        if (hasPSRAM()) {
+            hourlyAverages = (float *)heap_caps_malloc(HOURS_FOR_7D * sizeof(float), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        }
+        if (!hourlyAverages) {
+            hourlyAverages = (float *)heap_caps_malloc(HOURS_FOR_7D * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        }
+        if (!hourlyAverages) {
+            Serial.println(F("[Memory] FATAL: Hourly buffer allocatie gefaald!"));
+            Serial.printf("[Memory] Free heap: %u bytes\n", ESP.getFreeHeap());
+            while (true) {
+                /* no need to continue */
+            }
+        }
+
+        for (uint16_t i = 0; i < HOURS_FOR_7D; i++) {
+            hourlyAverages[i] = 0.0f;
+        }
+        Serial.printf("[Memory] Hourly buffer gealloceerd: hourlyAverages=%u bytes\n",
+                      HOURS_FOR_7D * sizeof(float));
+    }
 }
 
 static void startFreeRTOSTasks()
