@@ -213,6 +213,7 @@ extern lv_obj_t *chart;
 extern lv_chart_series_t *dataSeries;
 extern lv_obj_t *trendLabel;
 extern lv_obj_t *volatilityLabel;
+extern lv_obj_t *longTermTrendLabel;
 extern lv_obj_t *warmStartStatusLabel;
 extern lv_obj_t *lblFooterLine1;
 extern lv_obj_t *lblFooterLine2;
@@ -270,6 +271,7 @@ UIController::UIController() {
     dataSeries = nullptr;
     trendLabel = nullptr;
     volatilityLabel = nullptr;
+    longTermTrendLabel = nullptr;
     warmStartStatusLabel = nullptr;
     lblFooterLine1 = nullptr;
     lblFooterLine2 = nullptr;
@@ -377,9 +379,18 @@ void UIController::createChart() {
     ::volatilityLabel = volatilityLabel;  // Fase 8.4.3: Synchroniseer met globale pointer
     lv_obj_set_style_text_font(volatilityLabel, FONT_SIZE_TREND_VOLATILITY, 0);
     lv_obj_set_style_text_color(volatilityLabel, lv_palette_main(LV_PALETTE_GREY), 0);
-    lv_obj_set_style_text_align(volatilityLabel, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(volatilityLabel, LV_ALIGN_BOTTOM_LEFT, -4, 6);
+    lv_obj_set_style_text_align(volatilityLabel, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(volatilityLabel, LV_ALIGN_BOTTOM_RIGHT, 4, 6);
     lv_label_set_text(volatilityLabel, "--");
+    
+    // Lange termijn trend label (links onderin)
+    longTermTrendLabel = lv_label_create(chart);
+    ::longTermTrendLabel = longTermTrendLabel;  // Fase 8.4.3: Synchroniseer met globale pointer
+    lv_obj_set_style_text_font(longTermTrendLabel, FONT_SIZE_TREND_VOLATILITY, 0);
+    lv_obj_set_style_text_color(longTermTrendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_align(longTermTrendLabel, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(longTermTrendLabel, LV_ALIGN_BOTTOM_LEFT, -4, 6);
+    lv_label_set_text(longTermTrendLabel, "--");
     
     // Platform-specifieke layout voor chart title
     #if !defined(PLATFORM_TTGO) && !defined(PLATFORM_ESP32S3_SUPERMINI) && !defined(PLATFORM_ESP32S3_GEEK)
@@ -491,9 +502,11 @@ void UIController::createPriceBoxes() {
             lv_obj_align_to(priceBox[i], priceBox[i - 1], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 3);
         }
 
-        lv_obj_set_style_radius(priceBox[i], 6, 0);
-        lv_obj_set_style_pad_all(priceBox[i], 4, 0);
-        disableScroll(priceBox[i]);
+    lv_obj_set_style_radius(priceBox[i], 6, 0);
+    lv_obj_set_style_pad_all(priceBox[i], 4, 0);
+    lv_obj_set_style_border_width(priceBox[i], 1, 0);
+    lv_obj_set_style_border_color(priceBox[i], lv_palette_main(LV_PALETTE_GREY), 0);
+    disableScroll(priceBox[i]);
 
         // Symbol caption
         priceTitle[i] = lv_label_create(priceBox[i]);
@@ -860,7 +873,7 @@ void UIController::updateTrendLabel()
         TrendState currentTrend = trendDetector.getTrendState();
         switch (currentTrend) {
             case TREND_UP:
-                trendText = getText("OMHOOG", "UP");
+                trendText = getText("KT+", "ST+");
                 if (isFromWarmStart) {
                     trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
                 } else if (isFromLive) {
@@ -870,7 +883,7 @@ void UIController::updateTrendLabel()
                 }
                 break;
             case TREND_DOWN:
-                trendText = getText("OMLAAG", "DOWN");
+                trendText = getText("KT-", "ST-");
                 if (isFromWarmStart) {
                     trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
                 } else if (isFromLive) {
@@ -881,7 +894,7 @@ void UIController::updateTrendLabel()
                 break;
             case TREND_SIDEWAYS:
             default:
-                trendText = getText("VLAK", "SIDEWAYS");
+                trendText = getText("KT=", "ST=");
                 if (isFromWarmStart) {
                     trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
                 } else if (isFromLive) {
@@ -990,6 +1003,55 @@ void UIController::updateVolatilityLabel()
     
     lv_label_set_text(::volatilityLabel, volText);
     lv_obj_set_style_text_color(::volatilityLabel, volColor, 0);
+}
+
+// Fase 8.5.4: updateLongTermTrendLabel() naar Module
+// Helper functie om lange termijn trend label bij te werken
+void UIController::updateLongTermTrendLabel()
+{
+    // Fase 8.5.4: Gebruik globale pointer (synchroniseert met module pointer)
+    if (::longTermTrendLabel == nullptr) return;
+    
+    // Toon lange termijn trend alleen als beide 4h en 1d beschikbaar zijn
+    extern bool hasRet4h;
+    extern bool hasRet1d;
+    if (hasRet4h && hasRet1d)
+    {
+        extern float ret_4h;
+        extern float ret_1d;
+        extern TrendDetector trendDetector;
+        
+        // Gebruik threshold van 2.0% voor lange termijn trend
+        const float longTermThreshold = 2.0f;
+        TrendState longTermTrend = trendDetector.determineLongTermTrendState(ret_4h, ret_1d, longTermThreshold);
+        
+        const char* trendText = "";
+        lv_color_t trendColor = lv_palette_main(LV_PALETTE_GREY);
+        
+        switch (longTermTrend) {
+            case TREND_UP:
+                trendText = getText("LT+", "LT+");
+                trendColor = lv_palette_main(LV_PALETTE_GREEN);
+                break;
+            case TREND_DOWN:
+                trendText = getText("LT-", "LT-");
+                trendColor = lv_palette_main(LV_PALETTE_RED);
+                break;
+            case TREND_SIDEWAYS:
+            default:
+                trendText = getText("LT=", "LT=");
+                trendColor = lv_palette_main(LV_PALETTE_BLUE);
+                break;
+        }
+        
+        lv_label_set_text(::longTermTrendLabel, trendText);
+        lv_obj_set_style_text_color(::longTermTrendLabel, trendColor, 0);
+    }
+    else
+    {
+        lv_label_set_text(::longTermTrendLabel, "--");
+        lv_obj_set_style_text_color(::longTermTrendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    }
 }
 
 // Fase 8.6.1: updateBTCEURCard() naar Module
@@ -1150,6 +1212,12 @@ void UIController::updateBTCEURCard(bool hasNewData)
         }
     }
     #endif
+    
+    // Zorg dat border altijd zichtbaar is voor BTCEUR blok na update
+    if (::priceBox[0] != nullptr) {
+        lv_obj_set_style_border_width(::priceBox[0], 1, 0);
+        lv_obj_set_style_border_color(::priceBox[0], lv_palette_main(LV_PALETTE_GREY), 0);
+    }
 }
 
 // Fase 8.5.4: updateWarmStartStatusLabel() naar Module
@@ -1700,6 +1768,7 @@ void UIController::updateHeaderSection()
     updateDateTimeLabels();
     updateTrendLabel();
     updateVolatilityLabel();
+    updateLongTermTrendLabel();
     updateWarmStartStatusLabel();
 }
 

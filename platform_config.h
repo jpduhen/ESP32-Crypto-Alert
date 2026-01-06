@@ -3,10 +3,16 @@
 // Selecteer je platform door een van de onderstaande defines te activeren:
 
 //#define PLATFORM_CYD24
-#define PLATFORM_CYD28
-//#define PLATFORM_TTGO
+//#define PLATFORM_CYD28_1USB  // 1USB variant: geen kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
+//#define PLATFORM_CYD28_2USB  // 2USB variant: met kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
+#define PLATFORM_TTGO
 //#define PLATFORM_ESP32S3_SUPERMINI
-//#define PLATFORM_ESP32S3_GEEK 
+//#define PLATFORM_ESP32S3_GEEK
+
+// Automatisch PLATFORM_CYD28 definiëren als een CYD28 variant is gekozen
+#if defined(PLATFORM_CYD28_1USB) || defined(PLATFORM_CYD28_2USB)
+#define PLATFORM_CYD28
+#endif 
 
 // --- Version Configuration ---
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
@@ -95,7 +101,15 @@
     #define SYMBOL_COUNT 4  // CYD: BTCEUR, 1m, 30m, 2h
 #elif defined(PLATFORM_CYD28)
     #if !defined(UICONTROLLER_INCLUDE) && !defined(MODULE_INCLUDE)
+    // Kies automatisch de juiste PINS file op basis van CYD28 variant
+    #if defined(PLATFORM_CYD28_1USB)
+    #include "PINS_CYD-ESP32-2432S028-1USB.h"
+    #elif defined(PLATFORM_CYD28_2USB)
     #include "PINS_CYD-ESP32-2432S028-2USB.h"
+    #else
+    // Default naar 2USB als geen variant is gekozen
+    #include "PINS_CYD-ESP32-2432S028-2USB.h"
+    #endif
     #endif
     #define MQTT_TOPIC_PREFIX "cyd28_crypto"
     #define DEVICE_NAME "CYD 2.8 Crypto Monitor"

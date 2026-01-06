@@ -1,5 +1,6 @@
 #include "AlertEngine.h"
 #include <WiFi.h>
+#include <time.h>  // Voor getLocalTime()
 
 // SettingsStore module (Fase 6.1.10: voor AlertThresholds en NotificationCooldowns structs)
 #include "../SettingsStore/SettingsStore.h"
@@ -11,6 +12,10 @@ extern VolatilityTracker volatilityTracker;  // Fase 6.1.10: Voor checkAndNotify
 // TrendDetector module (Fase 6.1.9: voor trendSupportsDirection)
 #include "../TrendDetector/TrendDetector.h"
 extern TrendDetector trendDetector;  // Fase 6.1.9: Voor checkAndSendConfluenceAlert
+
+// AnchorSystem module (voor auto anchor updates)
+#include "../AnchorSystem/AnchorSystem.h"
+extern AnchorSystem anchorSystem;
 
 // Alert2HThresholds module (voor 2h alert thresholds)
 #include "Alert2HThresholds.h"
@@ -746,6 +751,9 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
         return;  // Skip checks bij ongeldige waarden of geen WiFi
     }
     
+    // Auto Anchor: gebruik actieve anchor price (kan auto anchor zijn)
+    float activeAnchorPrice = getActiveAnchorPrice(anchorPrice);
+    
     // Bereken 2h metrics
     TwoHMetrics metrics = computeTwoHMetrics();
     
@@ -768,7 +776,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
     
     // Static functie: gebruik lokale buffers (kan geen instance members gebruiken)
     char title[32];
-    char msg[80];
+    char msg[120];  // Verhoogd van 80 naar 120 bytes voor langere notificaties
     char timestamp[32];
     
     #if DEBUG_2H_ALERTS
@@ -785,7 +793,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
         bool condTouch = distPct <= alert2HThresholds.meanTouchBandPct;
         
         Serial.printf("[2H-DBG] price=%.2f avg2h=%.2f high2h=%.2f low2h=%.2f rangePct=%.2f%% anchor=%.2f\n",
-                     lastPrice, metrics.avg2h, metrics.high2h, metrics.low2h, metrics.rangePct, anchorPrice);
+                     lastPrice, metrics.avg2h, metrics.high2h, metrics.low2h, metrics.rangePct, activeAnchorPrice);
         Serial.printf("[2H-DBG] cond: breakUp=%d breakDown=%d compress=%d touch=%d\n",
                      condBreakUp ? 1 : 0, condBreakDown ? 1 : 0, condCompress ? 1 : 0, condTouch ? 1 : 0);
         lastDebugLogMs = now;
@@ -907,27 +915,27 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
     }
     
     // === E) Anchor context ===
-    // Alleen checken als anchor actief is (anchorPrice > 0)
-    if (anchorPrice > 0.0f) {
+    // Alleen checken als anchor actief is (activeAnchorPrice > 0)
+    if (activeAnchorPrice > 0.0f) {
         float anchorMargin = alert2HThresholds.anchorOutsideMarginPct;
         float anchorHighThreshold = metrics.high2h * (1.0f + anchorMargin / 100.0f);
         float anchorLowThreshold = metrics.low2h * (1.0f - anchorMargin / 100.0f);
-        bool condAnchorHigh = anchorPrice > anchorHighThreshold;
-        bool condAnchorLow = anchorPrice < anchorLowThreshold;
+        bool condAnchorHigh = activeAnchorPrice > anchorHighThreshold;
+        bool condAnchorLow = activeAnchorPrice < anchorLowThreshold;
         bool cooldownOk = (now - gAlert2H.lastAnchorCtxMs) >= alert2HThresholds.anchorCooldownMs;
         
         if (gAlert2H.getAnchorCtxArmed() && cooldownOk && (condAnchorHigh || condAnchorLow)) {
             #if DEBUG_2H_ALERTS
             Serial.printf("[ALERT2H] anchor_context sent: anchor=%.2f outside 2h [%.2f..%.2f] (avg=%.2f)\n",
-                         anchorPrice, metrics.low2h, metrics.high2h, metrics.avg2h);
+                         activeAnchorPrice, metrics.low2h, metrics.high2h, metrics.avg2h);
             #endif
             getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
-            snprintf(title, sizeof(title), "%s %s %s 2h", 
+            snprintf(title, sizeof(title), "%s %s 2h", 
                      binanceSymbol, 
-                     getText("Anker buiten", "Anchor outside"), getText("2h", "2h"));
+                     getText("Anker buiten", "Anchor outside"));
             snprintf(msg, sizeof(msg), "%.2f (%s)\n%s %.2f %s 2h\n2h %s: %.2f\n2h %s: %.2f\n2h %s: %.2f",
                      lastPrice, timestamp,
-                     getText("Anker", "Anchor"), anchorPrice, getText("outside", "outside"),
+                     getText("Anker", "Anchor"), activeAnchorPrice, getText("outside", "outside"),
                      getText("Top", "High"), metrics.high2h,
                      getText("Gem", "Avg"), metrics.avg2h,
                      getText("Dal", "Low"), metrics.low2h);
@@ -953,7 +961,7 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
                                              const TwoHMetrics& metrics, uint32_t now) {
     // Static functie: gebruik lokale buffers
     char title[32];
-    char msg[80];
+    char msg[120];  // Verhoogd van 80 naar 120 bytes voor langere notificaties
     char timestamp[32];
     
     // Gebruik timestamp voor notificatie formaat
@@ -1271,5 +1279,205 @@ bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, c
 // FASE X.5: Publieke flush functie (gebruikt millis() intern)
 void AlertEngine::flushPendingSecondaryAlert() {
     flushPendingSecondaryAlertInternal(millis());
+}
+
+// Auto Anchor: Interval helpers
+const char* AlertEngine::get4hIntervalStr() {
+    return "4h";  // Bitvavo ondersteunt "4h"
+}
+
+const char* AlertEngine::get1dIntervalStr() {
+    return "1d";  // Bitvavo ondersteunt "1d"
+}
+
+// Auto Anchor: Get active anchor price based on mode
+float AlertEngine::getActiveAnchorPrice(float manualAnchorPrice) {
+    uint8_t mode = alert2HThresholds.anchorSourceMode;
+    
+    if (mode == 0) {  // MANUAL
+        return manualAnchorPrice;
+    } else if (mode == 1) {  // AUTO
+        float autoAnchor = alert2HThresholds.autoAnchorLastValue;
+        if (autoAnchor > 0.0f) {
+            return autoAnchor;
+        }
+        return manualAnchorPrice;
+    } else if (mode == 2) {  // AUTO_FALLBACK
+        float autoAnchor = alert2HThresholds.autoAnchorLastValue;
+        if (autoAnchor > 0.0f) {
+            return autoAnchor;
+        }
+        return manualAnchorPrice;
+    } else {  // OFF (mode 3)
+        return manualAnchorPrice;
+    }
+}
+
+// Auto Anchor: Update auto anchor value (called from apiTask)
+bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
+    extern SettingsStore settingsStore;
+    
+    Serial.printf("[ANCHOR][AUTO] maybeUpdateAutoAnchor called: force=%d mode=%d symbol=%s\n", 
+                  force, alert2HThresholds.anchorSourceMode, binanceSymbol);
+    
+    uint8_t mode = alert2HThresholds.anchorSourceMode;
+    if (mode == 0 || mode == 3) {  // MANUAL of OFF
+        Serial.printf("[ANCHOR][AUTO] Auto anchor disabled (mode=%d, expected 1 or 2)\n", mode);
+        return false;
+    }
+    
+    // Check tijd sinds laatste update
+    uint32_t nowEpoch = 0;
+    if (!force) {
+        struct tm timeinfo;
+        if (getLocalTime(&timeinfo)) {
+            nowEpoch = mktime(&timeinfo);
+        }
+        
+        if (nowEpoch > 0 && alert2HThresholds.autoAnchorLastUpdateEpoch > 0) {
+            uint32_t minutesSinceUpdate = (nowEpoch - alert2HThresholds.autoAnchorLastUpdateEpoch) / 60;
+            if (minutesSinceUpdate < alert2HThresholds.autoAnchorUpdateMinutes) {
+                Serial.printf("[ANCHOR][AUTO] Too soon to update (%lu minutes since last update)\n", minutesSinceUpdate);
+                return false;
+            }
+        }
+    }
+    
+    // Forward declaration voor fetchBinanceKlines (gedefinieerd in .ino)
+    extern int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit, float* prices, unsigned long* timestamps, uint16_t maxCount);
+    
+    // Fetch 4h candles
+    uint8_t count4h = alert2HThresholds.autoAnchor4hCandles;
+    const char* interval4h = get4hIntervalStr();
+    float tempPrices[12];  // Herbruikbare buffer (max 12 candles)
+    
+    int fetched4h = fetchBinanceKlines(binanceSymbol, interval4h, count4h, tempPrices, nullptr, 12);
+    Serial.printf("[ANCHOR][AUTO] 4h fetch result: %d candles\n", fetched4h);
+    
+    if (fetched4h < 2) {
+        Serial.println("[ANCHOR][AUTO] Not enough 4h candles");
+        return false;
+    }
+    
+    // Bereken 4h EMA
+    EmaAccumulator ema4h;
+    ema4h.begin(count4h);
+    for (int i = 0; i < fetched4h; i++) {
+        ema4h.push(tempPrices[i]);
+    }
+    
+    if (!ema4h.isValid()) {
+        Serial.println("[ANCHOR][AUTO] 4h EMA invalid");
+        return false;
+    }
+    
+    float ema4hValue = ema4h.get();
+    
+    // Fetch 1d candles (hergebruik tempPrices buffer)
+    uint8_t count1d = alert2HThresholds.autoAnchor1dCandles;
+    const char* interval1d = get1dIntervalStr();
+    
+    int fetched1d = fetchBinanceKlines(binanceSymbol, interval1d, count1d, tempPrices, nullptr, 12);
+    Serial.printf("[ANCHOR][AUTO] 1d fetch result: %d candles\n", fetched1d);
+    
+    if (fetched1d < 2) {
+        Serial.println("[ANCHOR][AUTO] Not enough 1d candles");
+        return false;
+    }
+    
+    // Bereken 1d EMA
+    EmaAccumulator ema1d;
+    ema1d.begin(count1d);
+    for (int i = 0; i < fetched1d; i++) {
+        ema1d.push(tempPrices[i]);
+    }
+    
+    if (!ema1d.isValid()) {
+        Serial.println("[ANCHOR][AUTO] 1d EMA invalid");
+        return false;
+    }
+    
+    float ema1dValue = ema1d.get();
+    
+    // Combineer EMA's met adaptieve weging (gebruik helper methods voor compacte types)
+    float trendDeltaPct = fabsf(ema4hValue - ema1dValue) / ema1dValue * 100.0f;
+    float trendPivotPct = alert2HThresholds.getAutoAnchorTrendPivotPct();
+    float trendFactor = fminf(trendDeltaPct / trendPivotPct, 1.0f);
+    float w4hBase = alert2HThresholds.getAutoAnchorW4hBase();
+    float w4hTrendBoost = alert2HThresholds.getAutoAnchorW4hTrendBoost();
+    float w4h = w4hBase + trendFactor * w4hTrendBoost;
+    float w1d = 1.0f - w4h;
+    float newAutoAnchor = w4h * ema4hValue + w1d * ema1dValue;
+    
+    // Hysterese check
+    float lastAutoAnchor = alert2HThresholds.autoAnchorLastValue;
+    bool shouldCommit = force;
+    
+    if (!shouldCommit && lastAutoAnchor > 0.0f) {
+        float minUpdatePct = alert2HThresholds.getAutoAnchorMinUpdatePct();
+        float changePct = fabsf(newAutoAnchor - lastAutoAnchor) / lastAutoAnchor * 100.0f;
+        if (changePct >= minUpdatePct) {
+            shouldCommit = true;
+        }
+    } else if (lastAutoAnchor <= 0.0f) {
+        shouldCommit = true;
+    }
+    
+    // Check force update interval
+    if (!shouldCommit && nowEpoch > 0 && alert2HThresholds.autoAnchorLastUpdateEpoch > 0) {
+        uint32_t minutesSinceUpdate = (nowEpoch - alert2HThresholds.autoAnchorLastUpdateEpoch) / 60;
+        if (minutesSinceUpdate >= alert2HThresholds.autoAnchorForceUpdateMinutes) {
+            shouldCommit = true;
+        }
+    }
+    
+    if (shouldCommit) {
+        // Update settings
+        CryptoMonitorSettings settings = settingsStore.load();
+        settings.alert2HThresholds.autoAnchorLastValue = newAutoAnchor;
+        if (nowEpoch > 0) {
+            settings.alert2HThresholds.autoAnchorLastUpdateEpoch = nowEpoch;
+        } else {
+            settings.alert2HThresholds.autoAnchorLastUpdateEpoch = millis() / 1000UL;
+        }
+        settingsStore.save(settings);
+        
+        // Update lokale alert2HThresholds
+        alert2HThresholds.autoAnchorLastValue = newAutoAnchor;
+        alert2HThresholds.autoAnchorLastUpdateEpoch = settings.alert2HThresholds.autoAnchorLastUpdateEpoch;
+        
+        // Stel auto anchor in als actieve anchor
+        uint8_t currentMode = alert2HThresholds.anchorSourceMode;
+        if (currentMode == 1 || currentMode == 2) {
+            // BELANGRIJK: shouldUpdateUI=false en skipNotifications=true om deadlocks te voorkomen
+            bool anchorSet = anchorSystem.setAnchorPrice(newAutoAnchor, false, true);
+            if (anchorSet) {
+                Serial.printf("[ANCHOR][AUTO] Anchor ingesteld: %.2f (take profit/max loss worden getoond)\n", newAutoAnchor);
+                
+                // Stuur optionele notificatie als enabled
+                if (alert2HThresholds.getAutoAnchorNotifyEnabled()) {
+                    char timestamp[32];
+                    char title[40];
+                    char msg[120];  // Verhoogd van 80 naar 120 bytes voor langere notificaties
+                    getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
+                    snprintf(title, sizeof(title), "%s %s", binanceSymbol, getText("Auto Anker", "Auto Anchor"));
+                    snprintf(msg, sizeof(msg), "%.2f (%s)\n%s: %.2f", 
+                             newAutoAnchor, timestamp,
+                             getText("Bijgewerkt", "Updated"), newAutoAnchor);
+                    sendNotification(title, msg, "anchor");
+                }
+            } else {
+                Serial.println("[ANCHOR][AUTO] WARN: Kon anchor niet instellen");
+            }
+        }
+        
+        Serial.printf("[ANCHOR][AUTO] ema4h=%.2f ema1d=%.2f trend=%.2f%% w4h=%.2f new=%.2f last=%.2f decision=COMMIT\n",
+                     ema4hValue, ema1dValue, trendDeltaPct, w4h, newAutoAnchor, lastAutoAnchor);
+        return true;
+    } else {
+        Serial.printf("[ANCHOR][AUTO] ema4h=%.2f ema1d=%.2f trend=%.2f%% w4h=%.2f new=%.2f last=%.2f decision=SKIP\n",
+                     ema4hValue, ema1dValue, trendDeltaPct, w4h, newAutoAnchor, lastAutoAnchor);
+        return false;
+    }
 }
 

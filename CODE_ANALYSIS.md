@@ -1,7 +1,7 @@
 # Code Analysis - UNIFIED-LVGL9-Crypto_Monitor
 
-**Versie:** 4.13  
-**Laatste update:** 2025-01-XX
+**Versie:** 4.27  
+**Laatste update:** 2026-01-06
 
 ---
 
@@ -164,11 +164,19 @@ Het systeem gebruikt een **modulaire FreeRTOS multi-task architectuur**:
 - Type: `float`
 - Usage: 30m, 2h return berekening, 2h metrics
 
+**Long-Term Trend Data:**
+- `ret_4h` - 4-hour return percentage (float)
+- `ret_1d` - 1-day return percentage (float)
+- `hasRet4h` / `hasRet1d` - Beschikbaarheid flags (bool)
+- Opgehaald tijdens warm-start via Binance API (4h en 1d klines)
+- Geen live berekening (alleen warm-start)
+
 **Memory Footprint:**
 - `secondPrices`: 60 × 4 bytes = 240 bytes
 - `fiveMinutePrices`: 12 × 4 bytes = 48 bytes
 - `minuteAverages`: 120 × 4 bytes = 480 bytes
-- **Total:** ~768 bytes
+- Long-term data: 2 × 4 bytes (float) + 2 × 1 byte (bool) = 10 bytes
+- **Total:** ~778 bytes
 
 ---
 
@@ -207,6 +215,15 @@ Het systeem gebruikt een **modulaire FreeRTOS multi-task architectuur**:
 - Reset naar `-1.0f` forceert UI update
 - Gebeurt in `AnchorSystem::setAnchorPrice()` (versie 4.13 fix)
 
+**UI Trend Labels (Versie 4.27):**
+- **Short-Term Trend Label:** Linksboven in chart block
+  - "KT+" / "KT-" / "KT=" (Nederlands) of "ST+" / "ST-" / "ST=" (Engels)
+  - Kleuren: Groen (UP), Rood (DOWN), Blauw (SIDEWAYS)
+- **Long-Term Trend Label:** Linksonder in chart block
+  - "LT+" / "LT-" / "LT=" (beide talen)
+  - Kleuren: Groen (UP), Rood (DOWN), Blauw (SIDEWAYS)
+- **Volatility Label:** Rechtsonder in chart block (verplaatst in versie 4.27)
+
 ---
 
 ## 4. Alert System Analyse
@@ -223,8 +240,13 @@ Het systeem gebruikt een **modulaire FreeRTOS multi-task architectuur**:
 - **Breakdown:** Prijs verlaat 2h range (DOWN)
 - **Compression:** Volatiliteit instorting (range verstrakt)
 - **Mean Reversion:** Prijs keert terug naar 2h gemiddelde
-- **Anchor Context:** Anchor buiten 2h range
-- **Trend Change:** 2h trend verschuiving
+- **Anchor Context:** Anchor buiten 2h range (redundante "2h" verwijderd in notificatie)
+- **Trend Change:** Short-term trend verschuiving (KT/ST)
+
+**Long-Term Trend Alerts:**
+- **LT Trend Change:** Lange termijn trend verschuiving (4h + 1d)
+- Cooldown: 10 minuten
+- Bevat 4h en 1d percentages in notificatie
 
 ### 4.2 Alert Classification (FASE X.3)
 
@@ -266,27 +288,65 @@ Het systeem gebruikt een **modulaire FreeRTOS multi-task architectuur**:
 - `TREND_DOWN` - Neerwaartse trend
 - `TREND_SIDEWAYS` - Zijwaartse trend
 
-**Bepaling:**
+**Short-Term Trend (KT/ST):**
 - Gebaseerd op `ret_2h` (2-uur return)
 - `ret_30m` (30-minuut return) voor confirmatie
 - `trendThreshold` (instelbaar via web interface)
+- UI labels: "KT+" / "KT-" / "KT=" (Nederlands) of "ST+" / "ST-" / "ST=" (Engels)
+
+**Long-Term Trend (LT):**
+- Gebaseerd op `ret_4h` (4-uur return) en `ret_1d` (1-dag return)
+- `longTermThreshold` (default 2.0%)
+- UI label: "LT+" / "LT-" / "LT=" (beide talen)
+- Alleen beschikbaar via warm-start (geen live berekening)
+- Flags: `hasRet4h` en `hasRet1d` voor beschikbaarheid
 
 ### 5.2 Hysteresis (FASE X.1)
 
 **Probleem:** Trend status flip-flop bij kleine schommelingen
 
-**Oplossing:** Hysteresis met 0.65 factor
+**Oplossing:** Hysteresis met instelbare factor (default 0.65)
 
-**Logica:**
+**Short-Term Trend Logica:**
 ```
 SIDEWAYS → UP:   ret_2h >= +trendThreshold && ret_30m >= 0
 SIDEWAYS → DOWN: ret_2h <= -trendThreshold && ret_30m <= 0
 
-UP → SIDEWAYS:   ret_2h < +(trendThreshold * 0.65) || ret_30m < 0
-DOWN → SIDEWAYS: ret_2h > -(trendThreshold * 0.65) || ret_30m > 0
+UP → SIDEWAYS:   ret_2h < +(trendThreshold * hysteresisFactor) || ret_30m < 0
+DOWN → SIDEWAYS: ret_2h > -(trendThreshold * hysteresisFactor) || ret_30m > 0
+```
+
+**Long-Term Trend Logica:**
+```
+SIDEWAYS → UP:   ret_4h >= +longTermThreshold && ret_1d >= 0
+SIDEWAYS → DOWN: ret_4h <= -longTermThreshold && ret_1d <= 0
+
+UP → SIDEWAYS:   ret_4h < +(longTermThreshold * 0.65) || ret_1d < 0
+DOWN → SIDEWAYS: ret_4h > -(longTermThreshold * 0.65) || ret_1d > 0
 ```
 
 **Resultaat:** Stabilere trend status, minder Trend Change alerts
+
+### 5.3 Trend Change Notificaties
+
+**Short-Term Trend Change (KT/ST):**
+- Detectie: `TrendDetector::checkTrendChange()`
+- Cooldown: 10 minuten (`TREND_CHANGE_COOLDOWN_MS`)
+- Notificatie bevat:
+  - Prijs en timestamp
+  - Trend change: van → naar
+  - 2h en 30m percentages
+  - Volatiliteit status
+  - Huidige LT trend voor context
+
+**Long-Term Trend Change (LT):**
+- Detectie: `TrendDetector::checkLongTermTrendChange()`
+- Cooldown: 10 minuten (`TREND_CHANGE_COOLDOWN_MS`)
+- Notificatie bevat:
+  - Prijs en timestamp
+  - LT trend change: van → naar
+  - 4h en 1d percentages
+  - Huidige KT/ST trend voor context
 
 ---
 
@@ -308,6 +368,13 @@ DOWN → SIDEWAYS: ret_2h > -(trendThreshold * 0.65) || ret_30m > 0
 3. **Streaming Parsing:**
    - `HttpFetch::streamingHttpFetch()` - Geen String allocaties
    - JSON parsing zonder volledige document in geheugen
+
+4. **DRAM Optimization (Versie 4.27):**
+   - `notificationMsgBuffer`: 280 → 264 bytes
+   - `gApiResp`: 320 → 304 bytes
+   - `binanceStreamBuffer`: 576 → 560 bytes
+   - `httpResponseBuffer`: 264 → 248 bytes
+   - Totaal: 48 bytes DRAM bespaard
 
 ### 6.2 Memory Monitoring
 
@@ -467,10 +534,15 @@ DOWN → SIDEWAYS: ret_2h > -(trendThreshold * 0.65) || ret_30m > 0
 - PSRAM beschikbaar (double buffering)
 - Betere performance dan ESP32
 
-**CYD (ESP32):**
+**CYD 2.8 (ESP32):**
 - Geen PSRAM
 - Single buffer rendering
 - Memory constraints
+- **Varianten (Versie 4.27):**
+  - `PLATFORM_CYD28_1USB`: Geen kleurinversie
+  - `PLATFORM_CYD28_2USB`: Met kleurinversie (`gfx->invertDisplay(true)`)
+  - Automatische `PLATFORM_CYD28` definitie bij variant selectie
+  - Display inversie via `PLATFORM_CYD28_INVERT_COLORS` flag in PINS files
 
 ---
 
@@ -522,4 +594,48 @@ DOWN → SIDEWAYS: ret_2h > -(trendThreshold * 0.65) || ret_30m > 0
 
 ---
 
-**Laatste update:** 2025-01-XX - Versie 4.13
+**Laatste update:** 2026-01-06 - Versie 4.27
+
+## 14. Versie 4.27 Wijzigingen
+
+### 14.1 Nieuwe Functionaliteit
+
+1. **Long-Term Trend Detection:**
+   - 4h en 1d return berekening tijdens warm-start
+   - LT trend state management (`longTermTrendState`, `previousLongTermTrendState`)
+   - LT trend change notificaties met 4h en 1d percentages
+   - UI label voor LT trend (linksonder in chart block)
+
+2. **Short-Term Trend Labels:**
+   - Gewijzigd naar "KT" (Korte Termijn) voor Nederlands
+   - "ST" (Short Term) voor Engels
+   - Zelfde notatie en kleuren als LT trend (+, =, -)
+
+3. **Platform Configuratie:**
+   - CYD 2.8 varianten: `PLATFORM_CYD28_1USB` en `PLATFORM_CYD28_2USB`
+   - Automatische `PLATFORM_CYD28` definitie
+   - Display inversie via PINS files (`PLATFORM_CYD28_INVERT_COLORS`)
+
+4. **DRAM Optimalisaties:**
+   - Meerdere buffers verkleind om DRAM overflow te voorkomen
+   - Totaal 48 bytes DRAM bespaard
+
+5. **Notificatie Verbeteringen:**
+   - Redundante "2h" verwijderd uit anchor context notificatie
+   - LT trend toegevoegd aan KT trend change notificatie
+   - Buffer sizes verhoogd (120 bytes voor messages) om truncatie te voorkomen
+
+### 14.2 Code Structuur
+
+**Nieuwe Globale Variabelen:**
+- `ret_4h`, `ret_1d` - Long-term return percentages
+- `hasRet4h`, `hasRet1d` - Beschikbaarheid flags
+- `longTermTrendLabel` - LVGL label voor LT trend weergave
+
+**Nieuwe TrendDetector Methoden:**
+- `determineLongTermTrendState()` - LT trend bepaling
+- `checkLongTermTrendChange()` - LT trend change detectie en notificatie
+- `getLongTermTrendState()` / `setLongTermTrendState()` - State management
+
+**Nieuwe UIController Methoden:**
+- `updateLongTermTrendLabel()` - Update LT trend label in UI

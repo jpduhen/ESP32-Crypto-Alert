@@ -38,6 +38,36 @@ struct TwoHMetrics {
     bool valid = false;
 };
 
+// Streaming EMA accumulator (heap-safe)
+struct EmaAccumulator {
+    float ema;
+    uint16_t count;
+    float alpha;
+    bool valid;
+    
+    void begin(uint16_t n) {
+        count = 0;
+        ema = 0.0f;
+        alpha = 2.0f / (n + 1.0f);
+        valid = false;
+    }
+    
+    void push(float value) {
+        if (count == 0) {
+            ema = value;
+        } else {
+            ema = alpha * value + (1.0f - alpha) * ema;
+        }
+        count++;
+        if (count >= 2) {
+            valid = true;
+        }
+    }
+    
+    float get() const { return ema; }
+    bool isValid() const { return valid; }
+};
+
 // FASE X.2: 2h alert types voor throttling matrix
 enum Alert2HType {
     ALERT2H_NONE = 0,
@@ -129,6 +159,12 @@ public:
     // Check 2-hour notifications (breakout, breakdown, compression, mean reversion, anchor context)
     // Wordt aangeroepen na elke price update
     static void check2HNotifications(float lastPrice, float anchorPrice);
+    
+    // Auto Anchor methods
+    static float getActiveAnchorPrice(float manualAnchorPrice);
+    static bool maybeUpdateAutoAnchor(bool force);
+    static const char* get4hIntervalStr();
+    static const char* get1dIntervalStr();
     
     // Helper: Get trend name string (inline voor performance)
     static inline const char* getTrendName(TrendState trend) {

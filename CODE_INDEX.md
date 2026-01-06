@@ -1,8 +1,8 @@
 # Code Index - UNIFIED-LVGL9-Crypto_Monitor
 
-**Versie:** 4.13  
+**Versie:** 4.27  
 **Platform:** ESP32 (TTGO T-Display, CYD 2.4/2.8, ESP32-S3 Super Mini)  
-**Laatste update:** 2025-01-XX - Versie 4.13: UI update fix na anchor setting, 2h trend hysteresis, alert throttling & classification
+**Laatste update:** 2026-01-06 - Versie 4.27: Long-term trend detection (4h/1d), KT/ST trend labels, LT trend notifications, CYD 2.8 varianten, DRAM optimalisaties
 
 ---
 
@@ -10,7 +10,8 @@
 
 Dit project is een modulaire ESP32 crypto alert systeem dat:
 - Real-time prijsdata ophaalt van Binance
-- Multi-timeframe analyse uitvoert (1m, 5m, 30m, 2h)
+- Multi-timeframe analyse uitvoert (1m, 5m, 30m, 2h, 4h, 1d)
+- Short-term (KT/ST) en long-term (LT) trend detection
 - Context-aware alerts genereert
 - Web interface biedt voor configuratie
 - LVGL UI toont op lokale display
@@ -23,7 +24,7 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 
 ### `UNIFIED-LVGL9-Crypto_Monitor.ino`
 **Verantwoordelijkheden:**
-- Platform-selectie via `platform_config.h`
+  - Platform-selectie via `platform_config.h`
 - FreeRTOS task orchestration (apiTask, uiTask, webTask)
 - Globale variabelen en state management
 - Module initialisatie en integratie
@@ -56,7 +57,7 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 **Verantwoordelijkheden:** Persistent storage (Preferences/NVS)
 
 **Bestanden:**
-- `SettingsStore.h` / `SettingsStore.cpp`
+  - `SettingsStore.h` / `SettingsStore.cpp`
 
 **Belangrijke functies:**
 - `load()` - Laad settings uit NVS
@@ -71,7 +72,7 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 **Verantwoordelijkheden:** Binance API communicatie
 
 **Bestanden:**
-- `ApiClient.h` / `ApiClient.cpp`
+  - `ApiClient.h` / `ApiClient.cpp`
 
 **Belangrijke functies:**
 - `fetchPrice()` - Haal prijs op van Binance
@@ -87,7 +88,7 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 **Verantwoordelijkheden:** Prijs data management & returns berekening
 
 **Bestanden:**
-- `PriceData.h` / `PriceData.cpp`
+  - `PriceData.h` / `PriceData.cpp`
 
 **Belangrijke functies:**
 - `addPrice()` - Voeg nieuwe prijs toe aan buffers
@@ -110,16 +111,24 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 **Verantwoordelijkheden:** Trend detection & state management
 
 **Bestanden:**
-- `TrendDetector.h` / `TrendDetector.cpp`
+  - `TrendDetector.h` / `TrendDetector.cpp`
 
 **Belangrijke functies:**
-- `determineTrendState()` - Bepaal trend (UP/DOWN/SIDEWAYS) met hysteresis
-- `checkTrendChange()` - Detecteer trend verandering
-- `getTrendState()` - Haal huidige trend state op
+- `determineTrendState()` - Bepaal short-term trend (UP/DOWN/SIDEWAYS) met hysteresis
+- `determineLongTermTrendState()` - Bepaal long-term trend (4h + 1d) met hysteresis
+- `checkTrendChange()` - Detecteer short-term trend verandering (KT/ST)
+- `checkLongTermTrendChange()` - Detecteer long-term trend verandering (LT)
+- `getTrendState()` / `getLongTermTrendState()` - Haal trend states op
 - `getTrendName()` - Haal trend naam op (voor display)
 
+**Versie 4.27 Features:**
+- Long-term trend detection op basis van 4h en 1d returns
+- LT trend change notificaties met 4h en 1d percentages
+- State management: `longTermTrendState`, `previousLongTermTrendState`
+- Cooldown: 10 minuten voor LT trend change notificaties
+
 **FASE X.1 Features:**
-- Hysteresis logica: 0.65 factor voor trend exit
+- Hysteresis logica: 0.65 factor voor trend exit (short-term en long-term)
 - Stabiliseert trend status om flip-flop te voorkomen
 
 **Dependencies:**
@@ -131,7 +140,7 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 **Verantwoordelijkheden:** Volatiliteit berekeningen en state
 
 **Bestanden:**
-- `VolatilityTracker.h` / `VolatilityTracker.cpp`
+  - `VolatilityTracker.h` / `VolatilityTracker.cpp`
 
 **Belangrijke functies:**
 - `determineVolatilityState()` - Bepaal volatiliteit (LOW/MEDIUM/HIGH)
@@ -149,7 +158,7 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 **Verantwoordelijkheden:** Alert detection & notificaties
 
 **Bestanden:**
-- `AlertEngine.h` / `AlertEngine.cpp`
+  - `AlertEngine.h` / `AlertEngine.cpp`
 - `Alert2HThresholds.h` - 2-uur alert threshold defaults
 
 **Belangrijke functies:**
@@ -190,7 +199,7 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 **Verantwoordelijkheden:** Anchor price tracking en management
 
 **Bestanden:**
-- `AnchorSystem.h` / `AnchorSystem.cpp`
+  - `AnchorSystem.h` / `AnchorSystem.cpp`
 
 **Belangrijke functies:**
 - `setAnchorPrice()` - Stel anchor prijs in (met UI cache reset)
@@ -214,7 +223,7 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 **Verantwoordelijkheden:** LVGL UI management en rendering
 
 **Bestanden:**
-- `UIController.h` / `UIController.cpp`
+  - `UIController.h` / `UIController.cpp`
 
 **Belangrijke functies:**
 - `setupLVGL()` - LVGL initialisatie
@@ -222,7 +231,9 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 - `updateUI()` - Main UI update functie
 - `updateBTCEURCard()` - Update anchor/price card
 - `updateChartSection()` - Update chart met nieuwe data
-- `updateHeaderSection()` - Update header labels
+- `updateHeaderSection()` - Update header labels (inclusief LT trend)
+- `updateTrendLabel()` - Update short-term trend label (KT/ST)
+- `updateLongTermTrendLabel()` - Update long-term trend label (LT)
 - `updatePriceCardsSection()` - Update price cards
 - `checkButton()` - Physical button handling
 
@@ -231,7 +242,16 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 - Price boxes (per symbol)
 - Anchor labels (anchor, anchorMax, anchorMin)
 - Header labels (trend, volatility, date/time)
+- Trend labels:
+  - Short-term trend (KT/ST): Linksboven in chart block
+  - Long-term trend (LT): Linksonder in chart block
+  - Volatility: Rechtsonder in chart block (verplaatst in versie 4.27)
 - Footer (IP address, version)
+
+**Versie 4.27 Features:**
+- Short-term trend labels: "KT+" / "KT-" / "KT=" (Nederlands) of "ST+" / "ST-" / "ST=" (Engels)
+- Long-term trend label: "LT+" / "LT-" / "LT=" (beide talen)
+- Volatility label verplaatst naar rechtsonder in chart block
 
 **Dependencies:**
 - `src/PriceData` - Voor prijs data
@@ -292,6 +312,11 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 - `fetchWarmStartData()` - Haal historische candles op van Binance
 - `initializeBuffers()` - Initialiseer buffers met historische data
 
+**Versie 4.27 Features:**
+- 4h en 1d klines fetching tijdens warm-start
+- Berekening van `ret_4h` en `ret_1d` percentages
+- Flags: `hasRet4h` en `hasRet1d` voor beschikbaarheid
+
 **Dependencies:**
 - `src/ApiClient` - Voor API calls
 - `src/PriceData` - Voor buffer initialisatie
@@ -334,7 +359,9 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 **Defines:**
 - `PLATFORM_TTGO` - TTGO T-Display
 - `PLATFORM_CYD24` - CYD 2.4 inch
-- `PLATFORM_CYD28` - CYD 2.8 inch
+- `PLATFORM_CYD28_1USB` - CYD 2.8 inch (1 USB, geen kleurinversie)
+- `PLATFORM_CYD28_2USB` - CYD 2.8 inch (2 USB, met kleurinversie)
+- `PLATFORM_CYD28` - Automatisch gedefinieerd bij CYD28 variant selectie
 - `PLATFORM_ESP32S3_SUPERMINI` - ESP32-S3 Super Mini
 - `VERSION_MAJOR` / `VERSION_MINOR` / `VERSION_STRING`
 - `DEBUG_BUTTON_ONLY` - Debug logging configuratie
@@ -342,8 +369,14 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 ### Pin Configuratiebestanden
 - `PINS_TTGO_T_Display.h` - TTGO pin configuratie
 - `PINS_CYD-ESP32-2432S024.h` - CYD 2.4 pin configuratie
-- `PINS_CYD-ESP32-2432S028-2USB.h` - CYD 2.8 pin configuratie
+- `PINS_CYD-ESP32-2432S028-1USB.h` - CYD 2.8 pin configuratie (1 USB, geen inversie)
+- `PINS_CYD-ESP32-2432S028-2USB.h` - CYD 2.8 pin configuratie (2 USB, met inversie via `PLATFORM_CYD28_INVERT_COLORS`)
 - `PINS_ESP32S3_SuperMini_ST7789_154.h` - ESP32-S3 Super Mini pin configuratie
+
+**Versie 4.27 Features:**
+- CYD 2.8 varianten: Selecteer `PLATFORM_CYD28_1USB` of `PLATFORM_CYD28_2USB` in `platform_config.h`
+- Automatische `PLATFORM_CYD28` definitie
+- Display inversie via `PLATFORM_CYD28_INVERT_COLORS` flag in PINS files
 
 ### `lv_conf.h`
 **Doel:** LVGL library configuratie
@@ -371,11 +404,14 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 ### Prijs Data Flow
 1. **API Task** → `ApiClient::fetchPrice()` → Binance API
 2. **API Task** → `PriceData::addPrice()` → Update buffers
-3. **API Task** → `PriceData::calculateReturns()` → Bereken returns
-4. **API Task** → `TrendDetector::determineTrendState()` → Update trend
-5. **API Task** → `VolatilityTracker::determineVolatilityState()` → Update volatiliteit
-6. **API Task** → `AlertEngine::checkAndNotify()` → Check alerts
-7. **UI Task** → `UIController::updateUI()` → Update display
+3. **API Task** → `PriceData::calculateReturns()` → Bereken returns (1m, 5m, 30m, 2h)
+4. **API Task** → `TrendDetector::determineTrendState()` → Update short-term trend (KT/ST)
+5. **API Task** → `TrendDetector::determineLongTermTrendState()` → Update long-term trend (LT)
+6. **API Task** → `TrendDetector::checkTrendChange()` → Check KT/ST trend change
+7. **API Task** → `TrendDetector::checkLongTermTrendChange()` → Check LT trend change
+8. **API Task** → `VolatilityTracker::determineVolatilityState()` → Update volatiliteit
+9. **API Task** → `AlertEngine::checkAndNotify()` → Check alerts
+10. **UI Task** → `UIController::updateUI()` → Update display (inclusief LT trend label)
 
 ### Alert Flow
 1. **API Task** → `AlertEngine::checkAndNotify()` → Detecteer condities
@@ -397,8 +433,8 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 - `dataMutex` - Beschermt alle gedeelde data:
   - `prices[]` array
   - `secondPrices[]`, `fiveMinutePrices[]`, `minuteAverages[]` arrays
-  - Return waarden (`ret_1m`, `ret_5m`, `ret_30m`, `ret_2h`)
-  - Trend state
+  - Return waarden (`ret_1m`, `ret_5m`, `ret_30m`, `ret_2h`, `ret_4h`, `ret_1d`)
+  - Trend states (short-term en long-term)
   - Volatility state
   - Anchor data
   - Settings
@@ -419,6 +455,13 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 - Stack-based buffers waar mogelijk
 - HTML caching (WEB-PERF-3) om rebuilds te voorkomen
 
+**Versie 4.27 DRAM Optimalisaties:**
+- `notificationMsgBuffer`: 280 → 264 bytes
+- `gApiResp`: 320 → 304 bytes
+- `binanceStreamBuffer`: 576 → 560 bytes
+- `httpResponseBuffer`: 264 → 248 bytes
+- Totaal: 48 bytes DRAM bespaard
+
 ### Memory Monitoring
 - `HeapMon::logHeap()` - Rate-limited heap telemetry
 - Platform-specifieke stack sizes
@@ -426,24 +469,72 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 
 ---
 
-## 9. Recente Wijzigingen (Versie 4.13)
+## 9. Recente Wijzigingen
 
-### UI Update Fix
+### Versie 4.27 (2026-01-06)
+
+#### Long-Term Trend Detection
+- **Feature:** 4h en 1d trend detection en notificaties
+- **Implementatie:** 
+  - `TrendDetector::determineLongTermTrendState()` - LT trend bepaling
+  - `TrendDetector::checkLongTermTrendChange()` - LT trend change detectie
+  - Warm-start: 4h en 1d klines fetching en return berekening
+- **Bestanden:** 
+  - `src/TrendDetector/TrendDetector.h` / `TrendDetector.cpp`
+  - `UNIFIED-LVGL9-Crypto_Monitor.ino` (warm-start)
+
+#### Short-Term Trend Labels (KT/ST)
+- **Feature:** Trend labels gewijzigd naar "KT" (Korte Termijn) / "ST" (Short Term)
+- **Implementatie:** `UIController::updateTrendLabel()` met taal-specifieke labels
+- **Bestand:** `src/UIController/UIController.cpp`
+
+#### Long-Term Trend UI Label
+- **Feature:** LT trend label linksonder in chart block
+- **Implementatie:** `UIController::updateLongTermTrendLabel()`
+- **Bestand:** `src/UIController/UIController.cpp`
+
+#### Platform Configuratie (CYD 2.8 Varianten)
+- **Feature:** CYD 2.8 varianten met display inversie optie
+- **Implementatie:** 
+  - `PLATFORM_CYD28_1USB` / `PLATFORM_CYD28_2USB` selectie
+  - Automatische `PLATFORM_CYD28` definitie
+  - Display inversie via `PLATFORM_CYD28_INVERT_COLORS` in PINS files
+- **Bestanden:** 
+  - `platform_config.h`
+  - `PINS_CYD-ESP32-2432S028-1USB.h` / `PINS_CYD-ESP32-2432S028-2USB.h`
+
+#### DRAM Optimalisaties
+- **Feature:** Buffer verkleiningen om DRAM overflow te voorkomen
+- **Implementatie:** Meerdere buffers verkleind (48 bytes totaal bespaard)
+- **Bestand:** `UNIFIED-LVGL9-Crypto_Monitor.ino`
+
+#### Notificatie Verbeteringen
+- **Feature:** 
+  - Redundante "2h" verwijderd uit anchor context notificatie
+  - LT trend toegevoegd aan KT trend change notificatie
+  - Buffer sizes verhoogd (120 bytes) om truncatie te voorkomen
+- **Bestanden:** 
+  - `src/AlertEngine/AlertEngine.cpp`
+  - `src/TrendDetector/TrendDetector.cpp`
+
+### Versie 4.13 (2025-01-XX)
+
+#### UI Update Fix
 - **Probleem:** UI update niet na anchor setting via web interface
 - **Oplossing:** Reset UI cache variabelen in `AnchorSystem::setAnchorPrice()`
 - **Bestand:** `src/AnchorSystem/AnchorSystem.cpp`
 
-### FASE X.1 - 2h Trend Hysteresis
+#### FASE X.1 - 2h Trend Hysteresis
 - **Feature:** Hysteresis voor trend status transitions
 - **Implementatie:** `TrendDetector::determineTrendState()` met 0.65 exit factor
 - **Bestand:** `src/TrendDetector/TrendDetector.cpp`
 
-### FASE X.2 - 2h Alert Throttling
+#### FASE X.2 - 2h Alert Throttling
 - **Feature:** Throttling matrix voor 2h alerts
 - **Implementatie:** `AlertEngine::shouldThrottle2HAlert()`
 - **Bestand:** `src/AlertEngine/AlertEngine.cpp`
 
-### FASE X.3 - Alert Classification
+#### FASE X.3 - Alert Classification
 - **Feature:** PRIMARY vs SECONDARY alert classificatie
 - **Implementatie:** `AlertEngine::isPrimary2HAlert()`, `send2HNotification()`
 - **Bestand:** `src/AlertEngine/AlertEngine.cpp`
@@ -492,4 +583,4 @@ WarmStart → (ApiClient, PriceData)
 
 ---
 
-**Laatste update:** 2025-01-XX - Versie 4.13
+**Laatste update:** 2026-01-06 - Versie 4.27

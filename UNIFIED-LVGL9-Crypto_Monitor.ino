@@ -282,6 +282,7 @@ bool anchorActive = false;
 static bool anchorNotificationPending = false;  // Flag voor pending anchor set notificatie (alleen UI)
 float anchorTakeProfit = ANCHOR_TAKE_PROFIT_DEFAULT;  // Take profit threshold (%)
 float anchorMaxLoss = ANCHOR_MAX_LOSS_DEFAULT;        // Max loss threshold (%)
+uint8_t anchorStrategy = 0;  // 0 = handmatig, 1 = conservatief (TP +1.8%, SL -1.2%), 2 = actief (TP +1.2%, SL -0.9%)
 bool anchorTakeProfitSent = false;  // Flag om te voorkomen dat take profit meerdere keren wordt verzonden
 bool anchorMaxLossSent = false;    // Flag om te voorkomen dat max loss meerdere keren wordt verzonden
 
@@ -315,14 +316,20 @@ float downtrendTakeProfitMultiplier = DOWNTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT;
 // WEB-PERF-3: static verwijderd zodat WebServerModule deze variabelen extern kan gebruiken
 float ret_2h = 0.0f;  // 2-hour return percentage
 float ret_30m = 0.0f;  // 30-minute return percentage (calculated from minuteAverages or warm-start data)
+float ret_4h = 0.0f;  // 4-hour return percentage (calculated from API during warm-start)
+float ret_1d = 0.0f;  // 1-day return percentage (calculated from API during warm-start)
 // Fase 8: UI state - gebruikt door UIController module
 bool hasRet2hWarm = false;  // Flag: ret_2h beschikbaar vanuit warm-start (minimaal 2 candles)
 bool hasRet30mWarm = false;  // Flag: ret_30m beschikbaar vanuit warm-start (minimaal 2 candles)
+bool hasRet4hWarm = false;  // Flag: ret_4h beschikbaar vanuit warm-start (minimaal 2 candles)
+bool hasRet1dWarm = false;  // Flag: ret_1d beschikbaar vanuit warm-start (minimaal 2 candles)
 bool hasRet2hLive = false;  // Flag: ret_2h kan worden berekend uit live data (minuteIndex >= 120)
 bool hasRet30mLive = false;  // Flag: ret_30m kan worden berekend uit live data (minuteIndex >= 30)
 // Combined flags: beschikbaar vanuit warm-start OF live data
 bool hasRet2h = false;  // hasRet2hWarm || hasRet2hLive
 bool hasRet30m = false;  // hasRet30mWarm || hasRet30mLive
+bool hasRet4h = false;  // hasRet4hWarm (4h alleen via warm-start, geen live berekening)
+bool hasRet1d = false;  // hasRet1dWarm (1d alleen via warm-start, geen live berekening)
 // Fase 5.3.17: Globale variabelen voor backward compatibility - modules zijn source of truth
 // Deze variabelen worden gesynchroniseerd met TrendDetector module na elke update
 // TODO: In toekomstige fase kunnen deze verwijderd worden zodra alle code volledig gemigreerd is
@@ -396,6 +403,7 @@ static lv_obj_t *anchorDeltaLabel; // Label voor anchor delta % (TTGO, rechts)
 lv_obj_t *trendLabel; // Label voor trend weergave
 lv_obj_t *warmStartStatusLabel; // Label voor warm-start status weergave (rechts bovenin chart)
 lv_obj_t *volatilityLabel; // Label voor volatiliteit weergave
+lv_obj_t *longTermTrendLabel; // Label voor lange termijn trend weergave (4h + 1d)
 
 // Fase 8: UI state - gebruikt door UIController module
 uint32_t lastApiMs = 0; // Time of last api call
@@ -412,18 +420,18 @@ static unsigned long lastHeapTelemetryLog = 0;   // Timestamp van laatste heap t
 static const unsigned long HEAP_TELEMETRY_INTERVAL_MS = 60000UL; // Elke 60 seconden
 
 // Static buffers voor hot paths (voorkomt String allocaties)
-static char httpResponseBuffer[320];  // Buffer voor HTTP responses (NTFY, etc.) - verkleind van 384 naar 320 bytes (bespaart 64 bytes DRAM)
-static char notificationMsgBuffer[320];  // Buffer voor notification messages - verkleind van 384 naar 320 bytes (bespaart 64 bytes DRAM)
+static char httpResponseBuffer[248];  // Buffer voor HTTP responses (NTFY, etc.) - verkleind van 264 naar 248 bytes (bespaart 16 bytes DRAM)
+static char notificationMsgBuffer[264];  // Buffer voor notification messages - verkleind van 280 naar 264 bytes (bespaart 16 bytes DRAM)
 static char notificationTitleBuffer[96];  // Buffer voor notification titles - verkleind van 128 naar 96 bytes
 
 // M2: Globale herbruikbare buffer voor HTTP responses (voorkomt String allocaties)
 // Note: Niet static zodat ApiClient.cpp er toegang toe heeft via extern declaratie in ApiClient.h
 // Verkleind van 2048 naar 512 bytes (genoeg voor price responses, ~100 bytes)
-char gApiResp[384];  // Verkleind van 512 naar 384 bytes     // Buffer voor API price responses (M2: streaming)
+char gApiResp[304];  // Verkleind van 320 naar 304 bytes (bespaart 16 bytes DRAM)     // Buffer voor API price responses (M2: streaming)
 // gKlinesResp verwijderd: fetchBinanceKlines gebruikt streaming parsing met binanceStreamBuffer
 
 // Streaming buffer voor Binance klines parsing (geen grote heap allocaties)
-static char binanceStreamBuffer[640];  // Fixed-size buffer voor chunked JSON parsing - verkleind van 768 naar 640 bytes (bespaart 128 bytes DRAM)
+static char binanceStreamBuffer[560];  // Fixed-size buffer voor chunked JSON parsing - verkleind van 576 naar 560 bytes (bespaart 16 bytes DRAM)
 
 // LVGL UI buffers en cache (voorkomt herhaalde allocaties en onnodige updates)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
@@ -466,7 +474,8 @@ static char footerRamBuffer[16];  // Buffer voor footer RAM
 // Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
 float lastPriceLblValueArray[SYMBOL_COUNT];  // Cache voor average price labels (geïnitialiseerd in setup)
 static int32_t lastRssiValue = -999;  // Cache voor RSSI
-static uint32_t lastRamValue = 0;  // Cache voor RAM
+static uint32_t lastRamValue = 0;  // Cache voor RAM (0 = niet geïnitialiseerd, force update)
+char lastVersionText[32] = "";  // Cache voor versie tekst (lege string = force update) - niet static zodat WebServer.cpp er toegang toe heeft
 // lastDateText en lastTimeText zijn verplaatst naar direct voor updateDateTimeLabels() functie
 
 // ArduinoJson: globaal hergebruikte StaticJsonDocument (geen herhaalde allocaties per tick)
@@ -803,7 +812,7 @@ static bool parseKlineEntry(const char* jsonStr, float* closePrice, unsigned lon
 // Haal Binance klines op voor een specifiek timeframe
 // Memory efficient: streaming parsing, bewaar alleen laatste maxCount candles
 // Returns: aantal candles opgehaald, of -1 bij fout
-static int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit, float* prices, unsigned long* timestamps, uint16_t maxCount)
+int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit, float* prices, unsigned long* timestamps, uint16_t maxCount)
 {
     if (symbol == nullptr || interval == nullptr || prices == nullptr || maxCount == 0) {
         return -1;
@@ -1383,9 +1392,75 @@ static WarmStartMode performWarmStart()
         }
     }
     
+    // 5. Haal 4h candles op voor lange termijn trend
+    float temp4hPrices[2];
+    int count4h = 0;
+    const int maxRetries4h = 3;
+    for (int retry = 0; retry < maxRetries4h; retry++) {
+        if (retry > 0) {
+            Serial_printf(F("[WarmStart] 4h retry %d/%d...\n"), retry, maxRetries4h - 1);
+            yield();
+            delay(500);
+            lv_timer_handler();
+        }
+        lv_timer_handler();
+        count4h = fetchBinanceKlines(binanceSymbol, "4h", 2, temp4hPrices, nullptr, 2);
+        lv_timer_handler();
+        if (count4h >= 2) {
+            break;
+        }
+    }
+    
+    if (count4h >= 2) {
+        float firstPrice = temp4hPrices[0];
+        float lastPrice = temp4hPrices[count4h - 1];
+        if (firstPrice > 0.0f && lastPrice > 0.0f) {
+            ret_4h = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
+            hasRet4hWarm = true;
+        } else {
+            hasRet4hWarm = false;
+        }
+    } else {
+        hasRet4hWarm = false;
+    }
+    
+    // 6. Haal 1d candles op voor lange termijn trend
+    float temp1dPrices[2];
+    int count1d = 0;
+    const int maxRetries1d = 3;
+    for (int retry = 0; retry < maxRetries1d; retry++) {
+        if (retry > 0) {
+            Serial_printf(F("[WarmStart] 1d retry %d/%d...\n"), retry, maxRetries1d - 1);
+            yield();
+            delay(500);
+            lv_timer_handler();
+        }
+        lv_timer_handler();
+        count1d = fetchBinanceKlines(binanceSymbol, "1d", 2, temp1dPrices, nullptr, 2);
+        lv_timer_handler();
+        if (count1d >= 2) {
+            break;
+        }
+    }
+    
+    if (count1d >= 2) {
+        float firstPrice = temp1dPrices[0];
+        float lastPrice = temp1dPrices[count1d - 1];
+        if (firstPrice > 0.0f && lastPrice > 0.0f) {
+            ret_1d = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
+            hasRet1dWarm = true;
+        } else {
+            hasRet1dWarm = false;
+        }
+    } else {
+        hasRet1dWarm = false;
+    }
+    
     // Update combined flags na warm-start
     hasRet2h = hasRet2hWarm || hasRet2hLive;
     hasRet30m = hasRet30mWarm || hasRet30mLive;
+    hasRet4h = hasRet4hWarm;  // 4h alleen via warm-start
+    hasRet1d = hasRet1dWarm;  // 1d alleen via warm-start
     
     // Fase 5.1: Bepaal trend state op basis van warm-start data (gebruik TrendDetector module)
     if (hasRet2h && hasRet30m) {
@@ -1459,6 +1534,10 @@ static WarmStartMode performWarmStart()
         hasRet30m = false;
         Serial.println(F("[WarmStart] Warm-start gefaald, ga door als cold start (LIVE_COLD)"));
     }
+    
+    // Auto Anchor update wordt UITGESTELD tot na FreeRTOS tasks zijn gestart
+    // Dit voorkomt race conditions en mutex priority inheritance problemen
+    Serial.printf("[WarmStart] Auto anchor update uitgesteld tot na tasks start (mode=%d)\n", alert2HThresholds.anchorSourceMode);
     
     // M1: Heap telemetry na warm-start (gebruik nieuwe logHeap i.p.v. oude logHeapTelemetry)
     // logHeapTelemetry("warm-start");  // Vervangen door logHeap("WARMSTART_POST") bovenaan functie
@@ -2224,6 +2303,7 @@ static void loadSettings()
     // Copy anchor settings
     anchorTakeProfit = settings.anchorTakeProfit;
     anchorMaxLoss = settings.anchorMaxLoss;
+    anchorStrategy = settings.anchorStrategy;
     
     // Copy trend-adaptive anchor settings
     trendAdaptiveAnchorsEnabled = settings.trendAdaptiveAnchorsEnabled;
@@ -2289,6 +2369,7 @@ void saveSettings()
     // Copy anchor settings
     settings.anchorTakeProfit = anchorTakeProfit;
     settings.anchorMaxLoss = anchorMaxLoss;
+    settings.anchorStrategy = anchorStrategy;
     
     // Copy trend-adaptive anchor settings
     settings.trendAdaptiveAnchorsEnabled = trendAdaptiveAnchorsEnabled;
@@ -2789,6 +2870,39 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                                 mqttClient.publish(topicBufferFull, "ERROR: Invalid value", false);
                             }
                             handled = true;
+                        } else {
+                            // anchorStrategy/set - speciale logica (pas TP/SL aan)
+                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorStrategy/set", prefixBuffer);
+                            if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                                uint8_t newStrategy = atoi(msgBuffer);
+                                if (newStrategy >= 0 && newStrategy <= 2) {
+                                    anchorStrategy = newStrategy;
+                                    // Pas TP/SL automatisch aan op basis van strategie
+                                    if (anchorStrategy == 1) {
+                                        // Conservatief: TP +1.8%, SL -1.2%
+                                        anchorTakeProfit = 1.8f;
+                                        anchorMaxLoss = -1.2f;
+                                    } else if (anchorStrategy == 2) {
+                                        // Actief: TP +1.2%, SL -0.9%
+                                        anchorTakeProfit = 1.2f;
+                                        anchorMaxLoss = -0.9f;
+                                    }
+                                    // anchorStrategy == 0 (handmatig): behoud huidige waarden
+                                    saveSettings(); // Save anchorStrategy en TP/SL to Preferences
+                                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorStrategy", prefixBuffer);
+                                    snprintf(valueBuffer, sizeof(valueBuffer), "%u", anchorStrategy);
+                                    mqttClient.publish(topicBufferFull, valueBuffer, true);
+                                    // Publiceer ook TP/SL updates
+                                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorTP", prefixBuffer);
+                                    snprintf(valueBuffer, sizeof(valueBuffer), "%.2f", anchorTakeProfit);
+                                    mqttClient.publish(topicBufferFull, valueBuffer, true);
+                                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorML", prefixBuffer);
+                                    snprintf(valueBuffer, sizeof(valueBuffer), "%.2f", anchorMaxLoss);
+                                    mqttClient.publish(topicBufferFull, valueBuffer, true);
+                                    settingChanged = true;
+                                }
+                                handled = true;
+                            }
                         }
                     }
                 }
@@ -2915,6 +3029,7 @@ void publishMqttSettings() {
     publishMqttFloat("move5mAlert", move5mAlertThreshold);
     publishMqttFloat("anchorTakeProfit", anchorTakeProfit);
     publishMqttFloat("anchorMaxLoss", anchorMaxLoss);
+    publishMqttUint("anchorStrategy", anchorStrategy);
     publishMqttFloat("trendThreshold", trendThreshold);
     publishMqttFloat("volatilityLowThreshold", volatilityLowThreshold);
     publishMqttFloat("volatilityHighThreshold", volatilityHighThreshold);
@@ -3164,6 +3279,12 @@ void publishMqttDiscovery() {
     // Anchor max loss
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_anchorMaxLoss/config", deviceId);
     snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Anchor Max Loss\",\"unique_id\":\"%s_anchorMaxLoss\",\"state_topic\":\"%s/config/anchorMaxLoss\",\"command_topic\":\"%s/config/anchorMaxLoss/set\",\"min\":-100.0,\"max\":-0.1,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:cash-minus\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    // Anchor strategy (select entity)
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/select/%s_anchorStrategy/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"TP/SL Strategie\",\"unique_id\":\"%s_anchorStrategy\",\"state_topic\":\"%s/config/anchorStrategy\",\"command_topic\":\"%s/config/anchorStrategy/set\",\"options\":[\"0\",\"1\",\"2\"],\"icon\":\"mdi:strategy\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
@@ -3448,6 +3569,8 @@ void connectMQTT() {
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/anchorMaxLoss/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/anchorValue/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/anchorStrategy/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/language/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
@@ -4741,6 +4864,16 @@ void fetchPrice()
             trendState = trendDetector.getTrendState();
             previousTrendState = trendDetector.getPreviousTrendState();
             
+            // Check lange termijn trend change en stuur notificatie indien nodig
+            extern bool hasRet4h;
+            extern bool hasRet1d;
+            if (hasRet4h && hasRet1d) {
+                extern float ret_4h;
+                extern float ret_1d;
+                const float longTermThreshold = 2.0f;
+                trendDetector.checkLongTermTrendChange(ret_4h, ret_1d, longTermThreshold);
+            }
+            
             // Update volatiliteit buffer elke minuut met absolute 1m return
             // Fase 5.3.5: Directe module call i.p.v. wrapper
             if (minuteUpdate && ret_1m != 0.0f)
@@ -4794,7 +4927,8 @@ void fetchPrice()
             // Check 2-hour notifications (breakout, breakdown, compression, mean reversion, anchor context)
             // Wordt aangeroepen na elke price update
             // Functie checkt zelf of anchorPrice > 0 voor anchor context notificaties
-            AlertEngine::check2HNotifications(prices[0], anchorActive ? anchorPrice : 0.0f);
+            float manualAnchor = anchorActive ? anchorPrice : 0.0f;
+            AlertEngine::check2HNotifications(prices[0], manualAnchor);
             
             // Touchscreen anchor set functionaliteit verwijderd - gebruik nu fysieke knop
             
@@ -4804,8 +4938,27 @@ void fetchPrice()
             // Zet flag voor nieuwe data (voor grafiek update)
             newPriceDataAvailable = true;
             
-            safeMutexGive(dataMutex, "fetchPrice");
+            safeMutexGive(dataMutex, "fetchPrice");  // MUTEX EERST VRIJGEVEN!
             ok = true;
+            
+            // Periodieke auto anchor update (elke 5 minuten checken)
+            // BELANGRIJK: Dit moet BUITEN de mutex gebeuren om deadlocks te voorkomen!
+            static unsigned long lastAutoAnchorCheckMs = 0;
+            static bool firstAutoAnchorUpdateDone = false;
+            unsigned long nowMs = millis();
+            
+            // Eerste update: wacht 5 seconden na boot om race conditions te voorkomen
+            if (!firstAutoAnchorUpdateDone && nowMs >= 5000) {
+                Serial.println("[API Task] Eerste auto anchor update (na 5s delay, buiten mutex)...");
+                bool result = AlertEngine::maybeUpdateAutoAnchor(true);  // Force update na warm-start
+                Serial.printf("[API Task] Auto anchor update result: %s\n", result ? "SUCCESS" : "FAILED");
+                firstAutoAnchorUpdateDone = true;
+                lastAutoAnchorCheckMs = nowMs;
+            } else if (firstAutoAnchorUpdateDone && (nowMs - lastAutoAnchorCheckMs) >= (5UL * 60UL * 1000UL)) {
+                // Periodieke updates: elke 5 minuten
+                AlertEngine::maybeUpdateAutoAnchor(false);  // Non-force update
+                lastAutoAnchorCheckMs = nowMs;
+            }
         } else {
             // Fase 4.1: Geconsolideerde mutex timeout handling
             handleMutexTimeout(mutexTimeoutCount, "API", binanceSymbol);
@@ -4877,7 +5030,13 @@ void updateFooter()
         uint32_t freeRAM = heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024;
         static char versionBuffer[16];
         snprintf(versionBuffer, sizeof(versionBuffer), "%ukB     %s", freeRAM, VERSION_STRING); // 5 spaties
-        lv_label_set_text(chartVersionLabel, versionBuffer);
+        // Force update als cache leeg is of waarde veranderd is
+        if (strlen(lastVersionText) == 0 || strcmp(lastVersionText, versionBuffer) != 0 || lastRamValue != freeRAM) {
+            lv_label_set_text(chartVersionLabel, versionBuffer);
+            strncpy(lastVersionText, versionBuffer, sizeof(lastVersionText) - 1);
+            lastVersionText[sizeof(lastVersionText) - 1] = '\0';
+            lastRamValue = freeRAM;
+        }
     }
     #else
     if (lblFooterLine1 != nullptr) {
@@ -4918,6 +5077,15 @@ void updateFooter()
         }
         
         lv_label_set_text(lblFooterLine2, ipStr);
+    }
+    
+    // CYD: Update versie label (rechtsonder, regel 2) - force update als cache leeg is
+    if (chartVersionLabel != nullptr) {
+        if (strlen(lastVersionText) == 0 || strcmp(lastVersionText, VERSION_STRING) != 0) {
+            lv_label_set_text(chartVersionLabel, VERSION_STRING);
+            strncpy(lastVersionText, VERSION_STRING, sizeof(lastVersionText) - 1);
+            lastVersionText[sizeof(lastVersionText) - 1] = '\0';
+        }
     }
     #endif
 }
@@ -5113,11 +5281,13 @@ static void setupDisplay()
     uint8_t rotation = (displayRotation == 2) ? 2 : 0;
     gfx->setRotation(rotation);
     // TTGO/ESP32-S3: altijd false (ST7789 heeft geen inversie nodig)
-    // CYD24/CYD28: altijd false (geen inversie instelling meer)
+    // CYD24/CYD28: standaard false, behalve voor 1USB variant (inverteert kleuren)
     #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     gfx->invertDisplay(false); // TTGO/ESP32-S3 T-Display/GEEK heeft geen inversie nodig (ST7789)
+    #elif defined(PLATFORM_CYD28_INVERT_COLORS)
+    gfx->invertDisplay(true); // CYD28 1USB variant: inverteer kleuren
     #else
-    gfx->invertDisplay(false); // CYD24/CYD28: geen inversie (instelling verwijderd)
+    gfx->invertDisplay(false); // CYD24/CYD28: geen inversie (standaard)
     #endif
     gfx->fillScreen(RGB565_BLACK);
     
@@ -5625,7 +5795,7 @@ void setup()
     startFreeRTOSTasks();
 }
 
-// Toon verbindingsinfo (SSID en IP-adres) en "Opening Binance Session" op het scherm
+// Toon verbindingsinfo (SSID en IP-adres) en "Opening Bitvavo Session" op het scherm
 // ============================================================================
 // WiFi Helper Functions - Refactored from wifiConnectionAndFetchPrice()
 // ============================================================================
@@ -5865,7 +6035,7 @@ void showConnectionInfo()
     lv_obj_set_style_bg_opa(lv_scr_act(), LV_OPA_TRANSP, LV_PART_SCROLLBAR);
     lv_obj_set_style_width(lv_scr_act(), 0, LV_PART_SCROLLBAR);
     
-    // Maak spinner voor "Opening Binance Session" (8px naar beneden vanaf midden)
+    // Maak spinner voor "Opening Bitvavo Session" (8px naar beneden vanaf midden)
     lv_obj_t *spinner = lv_spinner_create(lv_scr_act());
     lv_spinner_set_anim_params(spinner, 8000, 200);
     lv_obj_set_size(spinner, 80, 80);
@@ -5915,14 +6085,14 @@ void showConnectionInfo()
     lv_label_set_text(ipLabel, ipBuffer);
     lv_obj_align_to(ipLabel, ipTitleLabel, LV_ALIGN_OUT_BOTTOM_MID, 0, 2);
     
-    // "Opening Binance Session" label (onder de spinner)
+    // "Opening Bitvavo Session" label (onder de spinner)
     lv_obj_t *binanceLabel = lv_label_create(lv_scr_act());
     lv_obj_set_style_text_font(binanceLabel, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(binanceLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
     lv_obj_set_width(binanceLabel, 150);
     lv_label_set_long_mode(binanceLabel, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(binanceLabel, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(binanceLabel, "Opening Binance\nSession");
+    lv_label_set_text(binanceLabel, "Opening Bitvavo\nSession");
     lv_obj_align_to(binanceLabel, spinner, LV_ALIGN_OUT_BOTTOM_MID, 0, 10); // Onder spinner
     
     // Update het scherm
@@ -5936,7 +6106,7 @@ void wifiConnectionAndFetchPrice()
     bool connected = setupWiFiConnection();
     
     if (connected) {
-        // Toon verbindingsinfo (SSID en IP) en "Opening Binance Session"
+        // Toon verbindingsinfo (SSID en IP) en "Opening Bitvavo Session"
         showConnectionInfo();
         
         // Haal eerste prijs op

@@ -41,7 +41,10 @@ const char* TrendDetector::getVolatilityText(VolatilityState volState) {
 TrendDetector::TrendDetector() {
     trendState = TREND_SIDEWAYS;
     previousTrendState = TREND_SIDEWAYS;
+    longTermTrendState = TREND_SIDEWAYS;
+    previousLongTermTrendState = TREND_SIDEWAYS;
     lastTrendChangeNotification = 0;
+    lastLongTermTrendChangeNotification = 0;
 }
 
 // Begin - synchroniseer state met globale variabelen (parallel implementatie)
@@ -120,6 +123,31 @@ TrendState TrendDetector::determineTrendState(float ret_2h_value, float ret_30m_
     }
 }
 
+// Lange termijn trend detection op basis van 4h en 1d returns
+TrendState TrendDetector::determineLongTermTrendState(float ret_4h_value, float ret_1d_value, float longTermThreshold) {
+    // Gebruik een hogere threshold voor lange termijn (default 2.0%)
+    // Lange termijn trends zijn minder gevoelig voor korte termijn fluctuaties
+    
+    // UP: beide 4h en 1d moeten positief zijn, en minstens één moet boven threshold zijn
+    if (ret_4h_value >= longTermThreshold && ret_1d_value >= 0.0f) {
+        return TREND_UP;
+    }
+    if (ret_1d_value >= longTermThreshold && ret_4h_value >= 0.0f) {
+        return TREND_UP;
+    }
+    
+    // DOWN: beide 4h en 1d moeten negatief zijn, en minstens één moet onder -threshold zijn
+    if (ret_4h_value <= -longTermThreshold && ret_1d_value <= 0.0f) {
+        return TREND_DOWN;
+    }
+    if (ret_1d_value <= -longTermThreshold && ret_4h_value <= 0.0f) {
+        return TREND_DOWN;
+    }
+    
+    // SIDEWAYS: alles daartussenin
+    return TREND_SIDEWAYS;
+}
+
 // Trend change detection en notificatie
 void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool minuteArrayFilled, uint8_t minuteIndex) {
     unsigned long now = millis();
@@ -150,19 +178,19 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
             
         // Gebruik lokale buffers (stack geheugen i.p.v. DRAM)
         char title[64];
-        char msg[256];
+        char msg[240];  // Verkleind van 256 naar 240 bytes (bespaart 16 bytes DRAM)
         char timestamp[32];
         getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
         
-        // Vertaal trends naar juiste taal
+        // Vertaal trends naar juiste taal (KT voor NL, ST voor EN)
         const char* fromTrendTranslated = fromTrend;
         const char* toTrendTranslated = toTrend;
-        if (strcmp(fromTrend, "UP") == 0) fromTrendTranslated = getText("OP", "UP");
-        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = getText("NEER", "DOWN");
-        else if (strcmp(fromTrend, "SIDEWAYS") == 0) fromTrendTranslated = getText("ZIJWAARTS", "SIDEWAYS");
-        if (strcmp(toTrend, "UP") == 0) toTrendTranslated = getText("OP", "UP");
-        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = getText("NEER", "DOWN");
-        else if (strcmp(toTrend, "SIDEWAYS") == 0) toTrendTranslated = getText("ZIJWAARTS", "SIDEWAYS");
+        if (strcmp(fromTrend, "UP") == 0) fromTrendTranslated = getText("KT+", "ST+");
+        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = getText("KT-", "ST-");
+        else if (strcmp(fromTrend, "SIDEWAYS") == 0) fromTrendTranslated = getText("KT=", "ST=");
+        if (strcmp(toTrend, "UP") == 0) toTrendTranslated = getText("KT+", "ST+");
+        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = getText("KT-", "ST-");
+        else if (strcmp(toTrend, "SIDEWAYS") == 0) toTrendTranslated = getText("KT=", "ST=");
         
         // VolText is al in Nederlands (getVolatilityText geeft "Rustig", "Gemiddeld", "Volatiel")
         // Vertaal naar Engels indien nodig
@@ -173,14 +201,40 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
             else if (strcmp(volText, "Volatiel") == 0) volTextTranslated = "High";
         }
         
+        // Bepaal lange termijn trend voor notificatie
+        extern bool hasRet4h;
+        extern bool hasRet1d;
+        const char* longTermTrendText = "";
+        if (hasRet4h && hasRet1d) {
+            extern float ret_4h;
+            extern float ret_1d;
+            const float longTermThreshold = 2.0f;
+            TrendState longTermTrend = this->determineLongTermTrendState(ret_4h, ret_1d, longTermThreshold);
+            switch (longTermTrend) {
+                case TREND_UP:
+                    longTermTrendText = getText("LT+", "LT+");
+                    break;
+                case TREND_DOWN:
+                    longTermTrendText = getText("LT-", "LT-");
+                    break;
+                case TREND_SIDEWAYS:
+                default:
+                    longTermTrendText = getText("LT=", "LT=");
+                    break;
+            }
+        } else {
+            longTermTrendText = "--";
+        }
+        
         snprintf(title, sizeof(title), "%s %s", 
                  binanceSymbol, getText("Trend Wijziging", "Trend Change"));
         snprintf(msg, sizeof(msg), 
-                 "%.2f (%s)\n%s: %s → %s\n2h: %+.2f%%\n30m: %+.2f%%\n%s: %s",
+                 "%.2f (%s)\n%s: %s → %s\n2h: %+.2f%%\n30m: %+.2f%%\n%s: %s\n%s: %s",
                  prices[0], timestamp,
                  getText("Trend change", "Trend change"), fromTrendTranslated, toTrendTranslated,
                  ret_2h, ret_30m_value,
-                 getText("Volatiliteit", "Volatility"), volTextTranslated);
+                 getText("Volatiliteit", "Volatility"), volTextTranslated,
+                 getText("Lange termijn", "Long term"), longTermTrendText);
         
         // FASE X.2: Gebruik throttling wrapper voor Trend Change
         if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag)) {
@@ -201,6 +255,88 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
     extern TrendState previousTrendState;
     trendState = this->trendState;
     previousTrendState = this->previousTrendState;
+}
+
+// Lange termijn trend change detection en notificatie
+void TrendDetector::checkLongTermTrendChange(float ret_4h_value, float ret_1d_value, float longTermThreshold) {
+    unsigned long now = millis();
+    
+    // Bepaal nieuwe lange termijn trend state
+    TrendState newLongTermTrend = determineLongTermTrendState(ret_4h_value, ret_1d_value, longTermThreshold);
+    
+    // Check of trend state is veranderd
+    if (newLongTermTrend == this->longTermTrendState) {
+        return; // Geen change, skip rest
+    }
+    
+    // Geconsolideerde checks: cooldown en data validiteit
+    bool cooldownPassed = (lastLongTermTrendChangeNotification == 0 || 
+                          (now - lastLongTermTrendChangeNotification >= TREND_CHANGE_COOLDOWN_MS));
+    bool hasValidData = (ret_4h_value != 0.0f && ret_1d_value != 0.0f);
+    
+    if (cooldownPassed && hasValidData) {
+        // Geoptimaliseerd: gebruik helper functies
+        const char* fromTrend = getTrendName(this->longTermTrendState);
+        const char* toTrend = getTrendName(newLongTermTrend);
+        const char* colorTag = getTrendColorTag(newLongTermTrend);
+        
+        // Gebruik lokale buffers (stack geheugen i.p.v. DRAM)
+        char title[64];
+        char msg[240];  // Verkleind van 256 naar 240 bytes (bespaart 16 bytes DRAM)
+        char timestamp[32];
+        getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
+        
+        // Vertaal trends naar juiste taal (LT voor beide talen)
+        const char* fromTrendTranslated = fromTrend;
+        const char* toTrendTranslated = toTrend;
+        if (strcmp(fromTrend, "UP") == 0) fromTrendTranslated = "LT+";
+        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = "LT-";
+        else if (strcmp(fromTrend, "SIDEWAYS") == 0) fromTrendTranslated = "LT=";
+        if (strcmp(toTrend, "UP") == 0) toTrendTranslated = "LT+";
+        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = "LT-";
+        else if (strcmp(toTrend, "SIDEWAYS") == 0) toTrendTranslated = "LT=";
+        
+        // Bepaal korte termijn trend voor context
+        extern TrendState trendState;
+        const char* shortTermTrendText = "";
+        switch (trendState) {
+            case TREND_UP:
+                shortTermTrendText = getText("KT+", "ST+");
+                break;
+            case TREND_DOWN:
+                shortTermTrendText = getText("KT-", "ST-");
+                break;
+            case TREND_SIDEWAYS:
+            default:
+                shortTermTrendText = getText("KT=", "ST=");
+                break;
+        }
+        
+        snprintf(title, sizeof(title), "%s %s", 
+                 binanceSymbol, getText("LT Trend Wijziging", "LT Trend Change"));
+        snprintf(msg, sizeof(msg), 
+                 "%.2f (%s)\n%s: %s → %s\n4h: %+.2f%%\n1d: %+.2f%%\n%s: %s",
+                 prices[0], timestamp,
+                 getText("LT trend change", "LT trend change"), fromTrendTranslated, toTrendTranslated,
+                 ret_4h_value, ret_1d_value,
+                 getText("Korte termijn", "Short term"), shortTermTrendText);
+        
+        // FASE X.2: Gebruik throttling wrapper voor Long Term Trend Change
+        // Note: We gebruiken ALERT2H_TREND_CHANGE type omdat er geen apart type is voor LT
+        // De throttling logica zal dit behandelen als een trend change notificatie
+        if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag)) {
+            lastLongTermTrendChangeNotification = now;
+        }
+        
+        #if !DEBUG_BUTTON_ONLY
+        Serial_printf(F("[LT Trend] Lange termijn trend change notificatie verzonden: %s → %s (4h: %.2f%%, 1d: %.2f%%)\n"), 
+                     fromTrend, toTrend, ret_4h_value, ret_1d_value);
+        #endif
+    }
+    
+    // Update previous long term trend state
+    this->previousLongTermTrendState = this->longTermTrendState;
+    this->longTermTrendState = newLongTermTrend;
 }
 
 

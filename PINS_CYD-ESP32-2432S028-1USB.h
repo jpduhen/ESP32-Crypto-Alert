@@ -1,11 +1,11 @@
-// PINS_CYD-ESP32-2432S028-2USB.h
-// Pin definitions for Cheap Yellow Display (CYD) ESP32-2432S028-2USB
+// PINS_CYD-ESP32-2432S028-1USB.h
+// Pin definitions for Cheap Yellow Display (CYD) ESP32-2432S028-1USB
 // 2.8 inch 240x320 TFT display with ILI9341 controller
-// Met kleurinversie voor display (PLATFORM_CYD28_INVERT_COLORS)
+// Identiek aan 2USB versie, maar zonder kleurinversie (standaard)
 // Based on Setup902_CYD28R_2USB.h pin definitions
 
-#ifndef PINS_CYD_ESP32_2432S028_2USB_H
-#define PINS_CYD_ESP32_2432S028_2USB_H
+#ifndef PINS_CYD_ESP32_2432S028_1USB_H
+#define PINS_CYD_ESP32_2432S028_1USB_H
 
 #if defined(ESP32)
 
@@ -14,10 +14,9 @@
 // Definieer PLATFORM_CYD28 zodat alle bestaande code checks blijven werken
 #define PLATFORM_CYD28
 
-// Definieer flag voor kleurinversie (wordt gebruikt in setupDisplay())
-#define PLATFORM_CYD28_INVERT_COLORS
+// Geen kleurinversie voor 1USB variant (standaard)
 
-// Pin definitions - based on Setup902_CYD28R_2USB.h
+// Pin definitions - based on Setup902_CYD28R_2USB.h (identiek aan 2USB versie)
 #define TFT_CS 15              // Chip Select (TFT_CS)
 #define TFT_DC 2               // Data/Command (TFT_DC)
 #define TFT_RST -1             // Reset (TFT_RST = -1 means no reset pin)
@@ -55,5 +54,5 @@ Arduino_GFX *gfx = new Arduino_ILI9341(bus, TFT_RST, 0 /* rotation */, false /* 
 #error "This pin configuration is for ESP32 only"
 #endif
 
-#endif // PINS_CYD_ESP32_2432S028_2USB_H
+#endif // PINS_CYD_ESP32_2432S028_1USB_H
 
