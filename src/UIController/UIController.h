@@ -104,7 +104,6 @@ private:
     lv_obj_t *priceBox[SYMBOL_COUNT];
     lv_obj_t *priceTitle[SYMBOL_COUNT];
     lv_obj_t *priceLbl[SYMBOL_COUNT];
-    lv_obj_t *volumeConfirmLabel;
     
     // Header labels
     lv_obj_t *chartTitle;
