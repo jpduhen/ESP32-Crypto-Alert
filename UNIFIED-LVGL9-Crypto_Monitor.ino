@@ -144,6 +144,8 @@
 
 // --- Trend Detection Configuration ---
 #define TREND_THRESHOLD_DEFAULT 1.30f      // Trend threshold: ±1.30% voor 2h trend
+#define TREND_THRESHOLD_1D_DEFAULT TREND_THRESHOLD_DEFAULT  // Trend threshold: 24h trend
+#define TREND_THRESHOLD_7D_DEFAULT TREND_THRESHOLD_DEFAULT  // Trend threshold: 7d trend
 #define TREND_CHANGE_COOLDOWN_MS 600000UL  // 10 minuten cooldown voor trend change notificaties
 
 // --- Smart Confluence Mode Configuration ---
@@ -211,6 +213,8 @@
 #define SECONDS_PER_MINUTE 60
 #define SECONDS_PER_5MINUTES 300
 #define MINUTES_FOR_30MIN_CALC 120
+#define MINUTES_PER_HOUR 60
+#define HOURS_FOR_7D 168
 
 // --- Return Calculation Configuration ---
 // Aantal waarden nodig voor return berekeningen gebaseerd op UPDATE_API_INTERVAL (2000ms)
@@ -315,6 +319,8 @@ float downtrendTakeProfitMultiplier = DOWNTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT;
 // WEB-PERF-3: static verwijderd zodat WebServerModule deze variabelen extern kan gebruiken
 float ret_2h = 0.0f;  // 2-hour return percentage
 float ret_30m = 0.0f;  // 30-minute return percentage (calculated from minuteAverages or warm-start data)
+float ret_1d = 0.0f;  // 24-hour return percentage (hourly buffer)
+float ret_7d = 0.0f;  // 7-day return percentage (hourly buffer)
 // Fase 8: UI state - gebruikt door UIController module
 bool hasRet2hWarm = false;  // Flag: ret_2h beschikbaar vanuit warm-start (minimaal 2 candles)
 bool hasRet30mWarm = false;  // Flag: ret_30m beschikbaar vanuit warm-start (minimaal 2 candles)
@@ -323,6 +329,8 @@ bool hasRet30mLive = false;  // Flag: ret_30m kan worden berekend uit live data 
 // Combined flags: beschikbaar vanuit warm-start OF live data
 bool hasRet2h = false;  // hasRet2hWarm || hasRet2hLive
 bool hasRet30m = false;  // hasRet30mWarm || hasRet30mLive
+bool hasRet1d = false;  // 24h return beschikbaar
+bool hasRet7d = false;  // 7d return beschikbaar
 // Fase 5.3.17: Globale variabelen voor backward compatibility - modules zijn source of truth
 // Deze variabelen worden gesynchroniseerd met TrendDetector module na elke update
 // TODO: In toekomstige fase kunnen deze verwijderd worden zodra alle code volledig gemigreerd is
@@ -330,6 +338,8 @@ TrendState trendState = TREND_SIDEWAYS;  // Current trend state (backward compat
 TrendState previousTrendState = TREND_SIDEWAYS;  // Previous trend state (backward compatibility)
 // Fase 9.1.4: static verwijderd zodat WebServerModule deze variabele kan gebruiken
 float trendThreshold = TREND_THRESHOLD_DEFAULT;  // Trend threshold (%)
+float trendThreshold1d = TREND_THRESHOLD_1D_DEFAULT;  // Trend threshold 1d (%)
+float trendThreshold7d = TREND_THRESHOLD_7D_DEFAULT;  // Trend threshold 7d (%)
 
 // Fase 5.2: VolatilityState enum verplaatst naar VolatilityTracker.h (al geïncludeerd boven)
 // Fase 5.3.17: Globale variabelen voor backward compatibility - modules zijn source of truth
@@ -516,6 +526,11 @@ uint8_t minuteIndex = 0;
 bool minuteArrayFilled = false;
 static unsigned long lastMinuteUpdate = 0;
 static float firstMinuteAverage = 0.0f; // Eerste minuut gemiddelde prijs als basis voor 30-min berekening
+// Uur-aggregatie buffer voor lange perioden (max 7 dagen)
+float hourlyAverages[HOURS_FOR_7D] = {0.0f};
+uint16_t hourIndex = 0;
+bool hourArrayFilled = false;
+uint8_t minutesSinceHourUpdate = 0;
 
 // Warm-Start state
 // Fase 9.1.4: static verwijderd zodat WebServerModule deze variabelen kan gebruiken
@@ -2251,6 +2266,8 @@ static void loadSettings()
     
     // Copy trend and volatility settings
     trendThreshold = settings.trendThreshold;
+    trendThreshold1d = settings.trendThreshold1d;
+    trendThreshold7d = settings.trendThreshold7d;
     volatilityLowThreshold = settings.volatilityLowThreshold;
     volatilityHighThreshold = settings.volatilityHighThreshold;
     
@@ -2316,6 +2333,8 @@ void saveSettings()
     
     // Copy trend and volatility settings
     settings.trendThreshold = trendThreshold;
+    settings.trendThreshold1d = trendThreshold1d;
+    settings.trendThreshold7d = trendThreshold7d;
     settings.volatilityLowThreshold = volatilityLowThreshold;
     settings.volatilityHighThreshold = volatilityHighThreshold;
     
@@ -4471,6 +4490,74 @@ static float calculateReturn2Hours()
     return ret;
 }
 
+// Helper: beschikbare uren in hourly buffer
+static inline uint16_t getAvailableHours()
+{
+    return calculateAvailableElements(hourArrayFilled, hourIndex, HOURS_FOR_7D);
+}
+
+// Calculate return based on hourly buffer
+static float calculateReturnFromHourly(uint16_t hoursBack)
+{
+    uint16_t availableHours = getAvailableHours();
+    if (availableHours < 2 || hoursBack == 0) {
+        return 0.0f;
+    }
+    
+    uint16_t hoursAgo = (availableHours > hoursBack) ? hoursBack : (availableHours - 1);
+    if (hoursAgo == 0) {
+        return 0.0f;
+    }
+    
+    uint16_t lastHourIdx;
+    if (!hourArrayFilled)
+    {
+        if (hourIndex == 0) {
+            return 0.0f;
+        }
+        lastHourIdx = hourIndex - 1;
+        if (lastHourIdx < hoursAgo) {
+            return 0.0f;
+        }
+    }
+    else
+    {
+        lastHourIdx = getLastWrittenIndex(hourIndex, HOURS_FOR_7D);
+    }
+    
+    uint16_t idxHoursAgo;
+    if (!hourArrayFilled)
+    {
+        idxHoursAgo = lastHourIdx - hoursAgo;
+    }
+    else
+    {
+        int32_t idxHoursAgoTemp = getRingBufferIndexAgo(lastHourIdx, hoursAgo, HOURS_FOR_7D);
+        if (idxHoursAgoTemp < 0) {
+            return 0.0f;
+        }
+        idxHoursAgo = (uint16_t)idxHoursAgoTemp;
+    }
+    
+    float priceNow = hourlyAverages[lastHourIdx];
+    float priceAgo = hourlyAverages[idxHoursAgo];
+    
+    return calculatePercentageReturn(priceNow, priceAgo);
+}
+
+// ret_1d: prijs nu vs 24 uur geleden (hourly buffer)
+static float calculateReturn24Hours()
+{
+    return calculateReturnFromHourly(24);
+}
+
+// ret_7d: prijs nu vs ~7 dagen geleden (hourly buffer)
+// Met 168 punten max = 167 uur terug beschikbaar
+static float calculateReturn7Days()
+{
+    return calculateReturnFromHourly(HOURS_FOR_7D - 1);
+}
+
 // ============================================================================
 // Trend Detection Functions
 // ============================================================================
@@ -4582,6 +4669,48 @@ TwoHMetrics computeTwoHMetrics()
 
 // Update minute averages (called every minute)
 // Geoptimaliseerd: bounds checking en validatie toegevoegd
+static void updateHourlyAverage()
+{
+    minutesSinceHourUpdate++;
+    if (minutesSinceHourUpdate < MINUTES_PER_HOUR) {
+        return;
+    }
+    minutesSinceHourUpdate = 0;
+    
+    uint16_t availableMinutes = calculateAvailableElements(minuteArrayFilled, minuteIndex, MINUTES_FOR_30MIN_CALC);
+    if (availableMinutes < MINUTES_PER_HOUR) {
+        return;
+    }
+    
+    float hourSum = 0.0f;
+    uint16_t hourCount = 0;
+    accumulateValidPricesFromRingBuffer(
+        minuteAverages,
+        minuteArrayFilled,
+        minuteIndex,
+        MINUTES_FOR_30MIN_CALC,
+        1,
+        MINUTES_PER_HOUR,
+        hourSum,
+        hourCount
+    );
+    
+    if (hourCount == 0) {
+        return;
+    }
+    
+    float hourAvg = hourSum / hourCount;
+    if (!isValidPrice(hourAvg)) {
+        return;
+    }
+    
+    hourlyAverages[hourIndex] = hourAvg;
+    hourIndex = (hourIndex + 1) % HOURS_FOR_7D;
+    if (hourIndex == 0) {
+        hourArrayFilled = true;
+    }
+}
+
 static void updateMinuteAverage()
 {
     // Fase 4.2.7: Gebruik PriceData getters (parallel, arrays blijven globaal)
@@ -4614,6 +4743,9 @@ static void updateMinuteAverage()
     minuteIndex = (minuteIndex + 1) % MINUTES_FOR_30MIN_CALC;
     if (minuteIndex == 0)
         minuteArrayFilled = true;
+    
+    // Update hourly aggregate buffer
+    updateHourlyAverage();
     
     // Update warm-start status na elke minuut update
     updateWarmStartStatus();
@@ -4704,6 +4836,8 @@ void fetchPrice()
             float ret_5m = calculateReturn5Minutes();  // Percentage verandering laatste 5 minuten
             ret_30m = calculateReturn30Minutes(); // Percentage verandering laatste 30 minuten (update global)
             ret_2h = calculateReturn2Hours();
+            ret_1d = calculateReturn24Hours();
+            ret_7d = calculateReturn7Days();
             
             
             // Update live availability flags: gebaseerd op data beschikbaarheid EN percentage live data
@@ -4720,6 +4854,11 @@ void fetchPrice()
             hasRet2h = hasRet2hWarm || hasRet2hLive;
             hasRet30m = hasRet30mWarm || hasRet30mLive;
             
+            // Hourly buffer availability
+            uint16_t availableHours = getAvailableHours();
+            hasRet1d = (availableHours >= 24);
+            hasRet7d = (availableHours >= HOURS_FOR_7D);
+            
             // Fase 5.1: Bepaal trend state op basis van 2h return (gebruik TrendDetector module)
             if (hasRet2h && hasRet30m) {
                 extern float trendThreshold;
@@ -4727,6 +4866,13 @@ void fetchPrice()
                 TrendState newTrendState = trendDetector.determineTrendState(ret_2h, ret_30m, trendThreshold);
                 trendDetector.setTrendState(newTrendState);  // Update TrendDetector state
                 trendState = newTrendState;  // Synchroniseer globale variabele
+            }
+            
+            if (hasRet1d) {
+                trendDetector.updateMediumTrendState(ret_1d, trendThreshold1d);
+            }
+            if (hasRet7d) {
+                trendDetector.updateLongTrendState(ret_7d, trendThreshold7d);
             }
             
             // Check trend change en stuur notificatie indien nodig
