@@ -22,6 +22,8 @@
 #include "../TrendDetector/TrendDetector.h"  // Voor TrendState enum
 // Fase 8.5.3: updateVolatilityLabel() dependencies
 #include "../VolatilityTracker/VolatilityTracker.h"  // Voor VolatilityState enum
+// Fase 8.6.x: volume/range UI indicators dependencies
+#include "../AlertEngine/AlertEngine.h"  // Voor VolumeRangeStatus
 // Fase 8.6.1: updateBTCEURCard() dependencies
 #include "../AnchorSystem/AnchorSystem.h"  // Voor AnchorConfigEffective struct
 
@@ -73,6 +75,11 @@ extern const lv_font_t lv_font_montserrat_14;
 // FONT_SIZE_FOOTER constant
 #ifndef FONT_SIZE_FOOTER
 #define FONT_SIZE_FOOTER &lv_font_montserrat_12  // Default (gebruikt al gedefinieerde font)
+#endif
+
+// Volume/range UI thresholds
+#ifndef VOLUME_BADGE_THRESHOLD_PCT
+#define VOLUME_BADGE_THRESHOLD_PCT 50.0f
 #endif
 
 // Constants die gedefinieerd zijn in .ino (moeten beschikbaar zijn voor module)
@@ -213,6 +220,7 @@ extern lv_obj_t *chart;
 extern lv_chart_series_t *dataSeries;
 extern lv_obj_t *trendLabel;
 extern lv_obj_t *volatilityLabel;
+extern lv_obj_t *volumeConfirmLabel;
 extern lv_obj_t *mediumTrendLabel;
 extern lv_obj_t *longTermTrendLabel;
 extern lv_obj_t *warmStartStatusLabel;
@@ -262,6 +270,8 @@ extern lv_obj_t *price30MinDiffLabel;
 extern lv_obj_t *anchorLabel;
 extern lv_obj_t *anchorMaxLabel;
 extern lv_obj_t *anchorMinLabel;
+extern VolumeRangeStatus lastVolumeRange1m;
+extern VolumeRangeStatus lastVolumeRange5m;
 
 // UIController implementation
 // Fase 8: UI Module refactoring
@@ -302,6 +312,7 @@ UIController::UIController() {
     anchorLabel = nullptr;
     anchorMaxLabel = nullptr;
     anchorMinLabel = nullptr;
+    volumeConfirmLabel = nullptr;
 }
 
 void UIController::begin() {
@@ -376,6 +387,14 @@ void UIController::createChart() {
     lv_obj_set_style_text_align(warmStartStatusLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_align(warmStartStatusLabel, LV_ALIGN_TOP_RIGHT, 4, -6);
     lv_label_set_text(warmStartStatusLabel, "--");
+    
+    volumeConfirmLabel = lv_label_create(chart);
+    ::volumeConfirmLabel = volumeConfirmLabel;  // Fase 8.4.3: Synchroniseer met globale pointer
+    lv_obj_set_style_text_font(volumeConfirmLabel, FONT_SIZE_TREND_VOLATILITY, 0);
+    lv_obj_set_style_text_color(volumeConfirmLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_align(volumeConfirmLabel, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(volumeConfirmLabel, LV_ALIGN_RIGHT_MID, 4, 0);
+    lv_label_set_text(volumeConfirmLabel, "");
     
     volatilityLabel = lv_label_create(chart);
     ::volatilityLabel = volatilityLabel;  // Fase 8.4.3: Synchroniseer met globale pointer
@@ -530,7 +549,7 @@ void UIController::createPriceBoxes() {
         lv_obj_set_style_text_color(priceTitle[i], lv_color_white(), 0);
         lv_label_set_text(priceTitle[i], symbols[i]);
         lv_obj_align(priceTitle[i], LV_ALIGN_TOP_LEFT, 0, 0);
-
+        
         // Live price - platform-specifieke layout
         priceLbl[i] = lv_label_create(priceBox[i]);
         ::priceLbl[i] = priceLbl[i];  // Fase 8.4.3: Synchroniseer
@@ -884,7 +903,7 @@ void UIController::updateTrendLabel()
         TrendState currentTrend = trendDetector.getTrendState();
         switch (currentTrend) {
             case TREND_UP:
-                trendText = getText("2h+", "2h+");
+                trendText = getText("2h/", "2h/");
                 if (isFromWarmStart) {
                     trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
                 } else if (isFromLive) {
@@ -894,7 +913,7 @@ void UIController::updateTrendLabel()
                 }
                 break;
             case TREND_DOWN:
-                trendText = getText("2h-", "2h-");
+                trendText = getText("2h\\", "2h\\");
                 if (isFromWarmStart) {
                     trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
                 } else if (isFromLive) {
@@ -999,21 +1018,46 @@ void UIController::updateVolatilityLabel()
     VolatilityState currentVol = volatilityTracker.getVolatilityState();
     switch (currentVol) {
         case VOLATILITY_LOW:
-            volText = getText("RUSTIG", "CALM");
+            volText = getText("VLAK", "FLAT");
             volColor = lv_palette_main(LV_PALETTE_GREEN);
             break;
         case VOLATILITY_MEDIUM:
-            volText = getText("GEMIDDELD", "MEDIUM");
+            volText = getText("GOLVEND", "WAVES");
             volColor = lv_palette_main(LV_PALETTE_ORANGE);
             break;
         case VOLATILITY_HIGH:
-            volText = getText("VOLATIEL", "VOLATILE");
+            volText = getText("GRILLIG", "VOLATILE");
             volColor = lv_palette_main(LV_PALETTE_RED);
             break;
     }
     
     lv_label_set_text(::volatilityLabel, volText);
     lv_obj_set_style_text_color(::volatilityLabel, volColor, 0);
+}
+
+// Fase 8.5.3: updateVolumeConfirmLabel() naar Module
+// Helper functie om volume confirm label bij te werken
+void UIController::updateVolumeConfirmLabel()
+{
+    if (::volumeConfirmLabel == nullptr) return;
+
+    const char* volumeText = "";
+    lv_color_t volumeColor = lv_palette_main(LV_PALETTE_GREY);
+
+    if (lastVolumeRange1m.valid) {
+        if (fabsf(lastVolumeRange1m.volumeDeltaPct) >= VOLUME_BADGE_THRESHOLD_PCT) {
+            volumeText = (lastVolumeRange1m.volumeDeltaPct >= 0.0f) ? "volume+" : "volume-";
+            volumeColor = (lastVolumeRange1m.volumeDeltaPct >= 0.0f)
+                              ? lv_palette_main(LV_PALETTE_GREEN)
+                              : lv_palette_main(LV_PALETTE_RED);
+        } else {
+            volumeText = "volume=";
+            volumeColor = lv_palette_main(LV_PALETTE_GREY);
+        }
+    }
+
+    lv_label_set_text(::volumeConfirmLabel, volumeText);
+    lv_obj_set_style_text_color(::volumeConfirmLabel, volumeColor, 0);
 }
 
 // Fase 8.5.4: updateMediumTrendLabel() naar Module
@@ -1038,11 +1082,11 @@ void UIController::updateMediumTrendLabel()
         
         switch (mediumTrend) {
             case TREND_UP:
-                trendText = getText("1d+", "1d+");
+                trendText = getText("1d/", "1d/");
                 trendColor = lv_palette_main(LV_PALETTE_GREEN);
                 break;
             case TREND_DOWN:
-                trendText = getText("1d-", "1d-");
+                trendText = getText("1d\\", "1d\\");
                 trendColor = lv_palette_main(LV_PALETTE_RED);
                 break;
             case TREND_SIDEWAYS:
@@ -1085,11 +1129,11 @@ void UIController::updateLongTermTrendLabel()
         
         switch (longTermTrend) {
             case TREND_UP:
-                trendText = getText("7d+", "7d+");
+                trendText = getText("7d/", "7d/");
                 trendColor = lv_palette_main(LV_PALETTE_GREEN);
                 break;
             case TREND_DOWN:
-                trendText = getText("7d-", "7d-");
+                trendText = getText("7d\\", "7d\\");
                 trendColor = lv_palette_main(LV_PALETTE_RED);
                 break;
             case TREND_SIDEWAYS:
@@ -1130,7 +1174,6 @@ void UIController::updateBTCEURCard(bool hasNewData)
     if (::priceLbl[0] != nullptr) {
             lv_obj_set_style_text_color(::priceLbl[0], lv_palette_main(LV_PALETTE_BLUE), 0);
     }
-    
     // Bereken dynamische anchor-waarden op basis van trend voor UI weergave
     AnchorConfigEffective effAnchorUI;
     if (anchorActive && anchorPrice > 0.0f) {
@@ -1823,6 +1866,7 @@ void UIController::updateHeaderSection()
     updateDateTimeLabels();
     updateTrendLabel();
     updateVolatilityLabel();
+    updateVolumeConfirmLabel();
     updateMediumTrendLabel();
     updateLongTermTrendLabel();
     updateWarmStartStatusLabel();

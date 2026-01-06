@@ -250,6 +250,7 @@ lv_obj_t *ramLabel; // RAM label rechts op regel 1 (alleen voor CYD)
 lv_obj_t *priceBox[SYMBOL_COUNT];
 lv_obj_t *priceTitle[SYMBOL_COUNT];
 lv_obj_t *priceLbl[SYMBOL_COUNT];
+lv_obj_t *volumeConfirmLabel;
 
 // FreeRTOS mutex voor data synchronisatie tussen cores
 SemaphoreHandle_t dataMutex = NULL;
@@ -539,6 +540,8 @@ uint8_t minutesSinceHourUpdate = 0;
 // Laatste kline snapshots voor volume/range confirmatie
 KlineMetrics lastKline1m;
 KlineMetrics lastKline5m;
+VolumeRangeStatus lastVolumeRange1m;
+VolumeRangeStatus lastVolumeRange5m;
 
 // Warm-Start state
 // Fase 9.1.4: static verwijderd zodat WebServerModule deze variabelen kan gebruiken
@@ -914,8 +917,6 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
     float closePrice = 0.0f;
     float volume = 0.0f;
     KlineMetrics lastParsedKline = {};
-    float highPrice = 0.0f;
-    float lowPrice = 0.0f;
     float volumeValue = 0.0f;
     
     // Buffer voor chunked reading (hergebruik fixed buffer)
