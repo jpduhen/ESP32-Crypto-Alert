@@ -427,8 +427,6 @@ static const unsigned long HEAP_TELEMETRY_INTERVAL_MS = 60000UL; // Elke 60 seco
 
 // Static buffers voor hot paths (voorkomt String allocaties)
 static char httpResponseBuffer[248];  // Buffer voor HTTP responses (NTFY, etc.) - verkleind van 264 naar 248 bytes (bespaart 16 bytes DRAM)
-static char notificationMsgBuffer[264];  // Buffer voor notification messages - verkleind van 280 naar 264 bytes (bespaart 16 bytes DRAM)
-static char notificationTitleBuffer[96];  // Buffer voor notification titles - verkleind van 128 naar 96 bytes
 
 // M2: Globale herbruikbare buffer voor HTTP responses (voorkomt String allocaties)
 // Note: Niet static zodat ApiClient.cpp er toegang toe heeft via extern declaratie in ApiClient.h
