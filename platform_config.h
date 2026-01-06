@@ -18,8 +18,8 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 4
-#define VERSION_MINOR 27
-#define VERSION_STRING "4.27"
+#define VERSION_MINOR 28
+#define VERSION_STRING "4.28"
 #endif
 
 // --- Debug Configuration ---
@@ -219,4 +219,3 @@
 #else
     #define PHYSICAL_BUTTON_CODE(code)
 #endif
-

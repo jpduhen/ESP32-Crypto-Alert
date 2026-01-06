@@ -320,18 +320,22 @@ float ret_2h = 0.0f;  // 2-hour return percentage
 float ret_30m = 0.0f;  // 30-minute return percentage (calculated from minuteAverages or warm-start data)
 float ret_4h = 0.0f;  // 4-hour return percentage (calculated from API during warm-start)
 float ret_1d = 0.0f;  // 1-day return percentage (calculated from API during warm-start)
+float ret_7d = 0.0f;  // 7-day return percentage (calculated from API during warm-start or hourly buffer)
 // Fase 8: UI state - gebruikt door UIController module
 bool hasRet2hWarm = false;  // Flag: ret_2h beschikbaar vanuit warm-start (minimaal 2 candles)
 bool hasRet30mWarm = false;  // Flag: ret_30m beschikbaar vanuit warm-start (minimaal 2 candles)
 bool hasRet4hWarm = false;  // Flag: ret_4h beschikbaar vanuit warm-start (minimaal 2 candles)
 bool hasRet1dWarm = false;  // Flag: ret_1d beschikbaar vanuit warm-start (minimaal 2 candles)
+bool hasRet7dWarm = false;  // Flag: ret_7d beschikbaar vanuit warm-start (minimaal 2 candles)
 bool hasRet2hLive = false;  // Flag: ret_2h kan worden berekend uit live data (minuteIndex >= 120)
 bool hasRet30mLive = false;  // Flag: ret_30m kan worden berekend uit live data (minuteIndex >= 30)
+bool hasRet4hLive = false;  // Flag: ret_4h kan worden berekend uit live data (hourly buffer >= 4)
 // Combined flags: beschikbaar vanuit warm-start OF live data
 bool hasRet2h = false;  // hasRet2hWarm || hasRet2hLive
 bool hasRet30m = false;  // hasRet30mWarm || hasRet30mLive
-bool hasRet4h = false;  // hasRet4hWarm (4h alleen via warm-start, geen live berekening)
+bool hasRet4h = false;  // hasRet4hWarm || hasRet4hLive
 bool hasRet1d = false;  // hasRet1dWarm (1d alleen via warm-start, geen live berekening)
+bool hasRet7d = false;  // hasRet7dWarm (warm-start) of live hourly buffer
 // Fase 5.3.17: Globale variabelen voor backward compatibility - modules zijn source of truth
 // Deze variabelen worden gesynchroniseerd met TrendDetector module na elke update
 // TODO: In toekomstige fase kunnen deze verwijderd worden zodra alle code volledig gemigreerd is
@@ -405,7 +409,8 @@ static lv_obj_t *anchorDeltaLabel; // Label voor anchor delta % (TTGO, rechts)
 lv_obj_t *trendLabel; // Label voor trend weergave
 lv_obj_t *warmStartStatusLabel; // Label voor warm-start status weergave (rechts bovenin chart)
 lv_obj_t *volatilityLabel; // Label voor volatiliteit weergave
-lv_obj_t *longTermTrendLabel; // Label voor lange termijn trend weergave (4h + 1d)
+lv_obj_t *mediumTrendLabel; // Label voor medium trend weergave (4h + 1d)
+lv_obj_t *longTermTrendLabel; // Label voor lange termijn trend weergave (7d)
 
 // Fase 8: UI state - gebruikt door UIController module
 uint32_t lastApiMs = 0; // Time of last api call
@@ -423,8 +428,6 @@ static const unsigned long HEAP_TELEMETRY_INTERVAL_MS = 60000UL; // Elke 60 seco
 
 // Static buffers voor hot paths (voorkomt String allocaties)
 static char httpResponseBuffer[248];  // Buffer voor HTTP responses (NTFY, etc.) - verkleind van 264 naar 248 bytes (bespaart 16 bytes DRAM)
-static char notificationMsgBuffer[264];  // Buffer voor notification messages - verkleind van 280 naar 264 bytes (bespaart 16 bytes DRAM)
-static char notificationTitleBuffer[96];  // Buffer voor notification titles - verkleind van 128 naar 96 bytes
 
 // M2: Globale herbruikbare buffer voor HTTP responses (voorkomt String allocaties)
 // Note: Niet static zodat ApiClient.cpp er toegang toe heeft via extern declaratie in ApiClient.h
@@ -528,7 +531,7 @@ bool minuteArrayFilled = false;
 static unsigned long lastMinuteUpdate = 0;
 static float firstMinuteAverage = 0.0f; // Eerste minuut gemiddelde prijs als basis voor 30-min berekening
 // Uur-aggregatie buffer voor lange perioden (max 7 dagen)
-float hourlyAverages[HOURS_FOR_7D] = {0.0f};
+float *hourlyAverages = nullptr;
 uint16_t hourIndex = 0;
 bool hourArrayFilled = false;
 uint8_t minutesSinceHourUpdate = 0;
@@ -694,7 +697,7 @@ bool mqttConnected = false;
 unsigned long lastMqttReconnectAttempt = 0;
 
 // MQTT Message Queue - voorkomt message loss bij disconnect
-#define MQTT_QUEUE_SIZE 10  // Max aantal berichten in queue
+#define MQTT_QUEUE_SIZE 8  // Max aantal berichten in queue
 struct MqttMessage {
     char topic[128];
     char payload[128];
@@ -1462,12 +1465,45 @@ static WarmStartMode performWarmStart()
     } else {
         hasRet1dWarm = false;
     }
+
+    // 7. Haal 1w candles op voor lange termijn trend
+    float temp1wPrices[2];
+    int count1w = 0;
+    const int maxRetries1w = 3;
+    for (int retry = 0; retry < maxRetries1w; retry++) {
+        if (retry > 0) {
+            Serial_printf(F("[WarmStart] 1w retry %d/%d...\n"), retry, maxRetries1w - 1);
+            yield();
+            delay(500);
+            lv_timer_handler();
+        }
+        lv_timer_handler();
+        count1w = fetchBinanceKlines(binanceSymbol, "1w", 2, temp1wPrices, nullptr, 2);
+        lv_timer_handler();
+        if (count1w >= 2) {
+            break;
+        }
+    }
+
+    if (count1w >= 2) {
+        float firstPrice = temp1wPrices[0];
+        float lastPrice = temp1wPrices[count1w - 1];
+        if (firstPrice > 0.0f && lastPrice > 0.0f) {
+            ret_7d = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
+            hasRet7dWarm = true;
+        } else {
+            hasRet7dWarm = false;
+        }
+    } else {
+        hasRet7dWarm = false;
+    }
     
     // Update combined flags na warm-start
     hasRet2h = hasRet2hWarm || hasRet2hLive;
     hasRet30m = hasRet30mWarm || hasRet30mLive;
     hasRet4h = hasRet4hWarm;  // 4h alleen via warm-start
     hasRet1d = hasRet1dWarm;  // 1d alleen via warm-start
+    hasRet7d = hasRet7dWarm;  // 7d via warm-start of live hourly buffer
     
     // Fase 5.1: Bepaal trend state op basis van warm-start data (gebruik TrendDetector module)
     if (hasRet2h && hasRet30m) {
@@ -3147,6 +3183,23 @@ void publishMqttSettings() {
 
 // Publiceer waarden naar MQTT (prijzen, percentages, etc.)
 // Geoptimaliseerd: gebruik char arrays i.p.v. String om geheugenfragmentatie te voorkomen
+static void formatTrendLabel(char* buffer, size_t bufferSize, const char* prefix, TrendState trend) {
+    const char* suffix = "=";
+    switch (trend) {
+        case TREND_UP:
+            suffix = "+";
+            break;
+        case TREND_DOWN:
+            suffix = "-";
+            break;
+        case TREND_SIDEWAYS:
+        default:
+            suffix = "=";
+            break;
+    }
+    snprintf(buffer, bufferSize, "%s%s", prefix, suffix);
+}
+
 void publishMqttValues(float price, float ret_1m, float ret_5m, float ret_30m) {
     if (!mqttConnected) return;
     
@@ -3170,6 +3223,33 @@ void publishMqttValues(float price, float ret_1m, float ret_5m, float ret_30m) {
     dtostrf(ret_30m, 0, 2, buffer);
     snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/return_30m", mqttPrefix);
     mqttClient.publish(topicBuffer, buffer, false);
+
+    dtostrf(ret_2h, 0, 2, buffer);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/return_2h", mqttPrefix);
+    mqttClient.publish(topicBuffer, buffer, false);
+
+    dtostrf(ret_1d, 0, 2, buffer);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/return_1d", mqttPrefix);
+    mqttClient.publish(topicBuffer, buffer, false);
+
+    dtostrf(ret_7d, 0, 2, buffer);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/return_7d", mqttPrefix);
+    mqttClient.publish(topicBuffer, buffer, false);
+
+    char trend2h[8];
+    char trend1d[8];
+    char trend7d[8];
+    formatTrendLabel(trend2h, sizeof(trend2h), "2h", trendDetector.getTrendState());
+    formatTrendLabel(trend1d, sizeof(trend1d), "1d", trendDetector.getMediumTrendState());
+    formatTrendLabel(trend7d, sizeof(trend7d), "7d", trendDetector.getLongTermTrendState());
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/trend_2h", mqttPrefix);
+    mqttClient.publish(topicBuffer, trend2h, false);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/trend_1d", mqttPrefix);
+    mqttClient.publish(topicBuffer, trend1d, false);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/trend_7d", mqttPrefix);
+    mqttClient.publish(topicBuffer, trend7d, false);
     
     snprintf(buffer, sizeof(buffer), "%lu", millis());
     snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/timestamp", mqttPrefix);
@@ -3274,6 +3354,36 @@ void publishMqttDiscovery() {
     
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_return_30m/config", deviceId);
     snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"30m Return\",\"unique_id\":\"%s_return_30m\",\"state_topic\":\"%s/values/return_30m\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:trending-up\",%s}", deviceId, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_return_2h/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Return\",\"unique_id\":\"%s_return_2h\",\"state_topic\":\"%s/values/return_2h\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:trending-up\",%s}", deviceId, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_return_1d/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"1d Return\",\"unique_id\":\"%s_return_1d\",\"state_topic\":\"%s/values/return_1d\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:calendar-today\",%s}", deviceId, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_return_7d/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"7d Return\",\"unique_id\":\"%s_return_7d\",\"state_topic\":\"%s/values/return_7d\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:calendar-week\",%s}", deviceId, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_trend_2h/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Trend 2h\",\"unique_id\":\"%s_trend_2h\",\"state_topic\":\"%s/values/trend_2h\",\"icon\":\"mdi:chart-line\",%s}", deviceId, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_trend_1d/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Trend 1d\",\"unique_id\":\"%s_trend_1d\",\"state_topic\":\"%s/values/trend_1d\",\"icon\":\"mdi:chart-line\",%s}", deviceId, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_trend_7d/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Trend 7d\",\"unique_id\":\"%s_trend_7d\",\"state_topic\":\"%s/values/trend_7d\",\"icon\":\"mdi:chart-line\",%s}", deviceId, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
@@ -4604,6 +4714,9 @@ static float calculateReturn2Hours()
 // Helper: beschikbare uren in hourly buffer
 static inline uint16_t getAvailableHours()
 {
+    if (hourlyAverages == nullptr) {
+        return 0;
+    }
     return calculateAvailableElements(hourArrayFilled, hourIndex, HOURS_FOR_7D);
 }
 
@@ -4660,6 +4773,12 @@ static float calculateReturnFromHourly(uint16_t hoursBack)
 static float calculateReturn24Hours()
 {
     return calculateReturnFromHourly(24);
+}
+
+// ret_7d: prijs nu vs 7 dagen geleden (hourly buffer)
+static float calculateReturn7Days()
+{
+    return calculateReturnFromHourly(HOURS_FOR_7D);
 }
 
 // ============================================================================
@@ -4807,7 +4926,10 @@ static void updateHourlyAverage()
     if (!isValidPrice(hourAvg)) {
         return;
     }
-    
+
+    if (hourlyAverages == nullptr) {
+        return;
+    }
     hourlyAverages[hourIndex] = hourAvg;
     hourIndex = (hourIndex + 1) % HOURS_FOR_7D;
     if (hourIndex == 0) {
@@ -4940,7 +5062,6 @@ void fetchPrice()
             float ret_5m = calculateReturn5Minutes();  // Percentage verandering laatste 5 minuten
             ret_30m = calculateReturn30Minutes(); // Percentage verandering laatste 30 minuten (update global)
             ret_2h = calculateReturn2Hours();
-            ret_1d = calculateReturn24Hours();
             
             
             // Update live availability flags: gebaseerd op data beschikbaarheid EN percentage live data
@@ -4959,7 +5080,26 @@ void fetchPrice()
             
             // Hourly buffer availability
             uint16_t availableHours = getAvailableHours();
-            hasRet1d = (availableHours >= 24);
+            hasRet4hLive = (availableHours >= 4);
+            hasRet4h = hasRet4hWarm || hasRet4hLive;
+            if (hasRet4hLive) {
+                ret_4h = calculateReturnFromHourly(4);
+            } else if (!hasRet4hWarm) {
+                ret_4h = 0.0f;
+            }
+            hasRet1d = hasRet1dWarm || (availableHours >= 24);
+            if (availableHours >= 24) {
+                ret_1d = calculateReturn24Hours();
+            } else if (!hasRet1dWarm) {
+                ret_1d = 0.0f;
+            }
+            bool hasRet7dLive = (availableHours >= HOURS_FOR_7D);
+            hasRet7d = hasRet7dWarm || hasRet7dLive;
+            if (hasRet7dLive) {
+                ret_7d = calculateReturn7Days();
+            } else if (!hasRet7dWarm) {
+                ret_7d = 0.0f;
+            }
             
             // Fase 5.1: Bepaal trend state op basis van 2h return (gebruik TrendDetector module)
             if (hasRet2h && hasRet30m) {
@@ -4982,14 +5122,22 @@ void fetchPrice()
             trendState = trendDetector.getTrendState();
             previousTrendState = trendDetector.getPreviousTrendState();
             
-            // Check lange termijn trend change en stuur notificatie indien nodig
+            // Check medium trend change en stuur notificatie indien nodig
             extern bool hasRet4h;
             extern bool hasRet1d;
             if (hasRet4h && hasRet1d) {
                 extern float ret_4h;
                 extern float ret_1d;
+                const float mediumThreshold = 2.0f;
+                trendDetector.checkMediumTrendChange(ret_4h, ret_1d, mediumThreshold);
+            }
+
+            // Check lange termijn trend change (7d) en stuur notificatie indien nodig
+            extern bool hasRet7d;
+            if (hasRet7d) {
+                extern float ret_7d;
                 const float longTermThreshold = 2.0f;
-                trendDetector.checkLongTermTrendChange(ret_4h, ret_1d, longTermThreshold);
+                trendDetector.checkLongTermTrendChange(ret_7d, longTermThreshold);
             }
             
             // Update volatiliteit buffer elke minuut met absolute 1m return
@@ -5735,6 +5883,28 @@ static void allocateDynamicArrays()
                      MINUTES_FOR_30MIN_CALC * sizeof(float) + MINUTES_FOR_30MIN_CALC * sizeof(DataSource));
     }
     #endif
+
+    if (hourlyAverages == nullptr) {
+        if (hasPSRAM()) {
+            hourlyAverages = (float *)heap_caps_malloc(HOURS_FOR_7D * sizeof(float), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        }
+        if (!hourlyAverages) {
+            hourlyAverages = (float *)heap_caps_malloc(HOURS_FOR_7D * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        }
+        if (!hourlyAverages) {
+            Serial.println(F("[Memory] FATAL: Hourly buffer allocatie gefaald!"));
+            Serial.printf("[Memory] Free heap: %u bytes\n", ESP.getFreeHeap());
+            while (true) {
+                /* no need to continue */
+            }
+        }
+
+        for (uint16_t i = 0; i < HOURS_FOR_7D; i++) {
+            hourlyAverages[i] = 0.0f;
+        }
+        Serial.printf("[Memory] Hourly buffer gealloceerd: hourlyAverages=%u bytes\n",
+                      HOURS_FOR_7D * sizeof(float));
+    }
 }
 
 static void startFreeRTOSTasks()
