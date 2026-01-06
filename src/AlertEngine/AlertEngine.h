@@ -38,6 +38,16 @@ struct TwoHMetrics {
     bool valid = false;
 };
 
+// KlineMetrics struct - compacte snapshot voor volume/range confirmatie
+struct KlineMetrics {
+    float high = 0.0f;
+    float low = 0.0f;
+    float close = 0.0f;
+    float volume = 0.0f;
+    unsigned long openTime = 0;
+    bool valid = false;
+};
+
 // Streaming EMA accumulator (heap-safe)
 struct EmaAccumulator {
     float ema;
