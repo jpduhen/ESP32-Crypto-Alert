@@ -22,11 +22,7 @@ public:
     // Trend state management
     TrendState getTrendState() const { return trendState; }
     TrendState getPreviousTrendState() const { return previousTrendState; }
-    TrendState getMediumTrendState() const { return mediumTrendState; }
-    TrendState getLongTrendState() const { return longTrendState; }
     void setTrendState(TrendState state) { trendState = state; }
-    void updateMediumTrendState(float ret_1d_value, float trendThreshold);
-    void updateLongTrendState(float ret_7d_value, float trendThreshold);
     
     // Trend detection
     // Bepaal trend state op basis van 2h en 30m returns
@@ -107,4 +103,3 @@ private:
 };
 
 #endif // TRENDDETECTOR_H
-

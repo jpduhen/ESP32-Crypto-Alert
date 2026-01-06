@@ -144,8 +144,6 @@
 
 // --- Trend Detection Configuration ---
 #define TREND_THRESHOLD_DEFAULT 1.30f      // Trend threshold: ±1.30% voor 2h trend
-#define TREND_THRESHOLD_1D_DEFAULT TREND_THRESHOLD_DEFAULT  // Trend threshold: 24h trend
-#define TREND_THRESHOLD_7D_DEFAULT TREND_THRESHOLD_DEFAULT  // Trend threshold: 7d trend
 #define TREND_CHANGE_COOLDOWN_MS 600000UL  // 10 minuten cooldown voor trend change notificaties
 
 // --- Smart Confluence Mode Configuration ---
@@ -341,8 +339,6 @@ TrendState trendState = TREND_SIDEWAYS;  // Current trend state (backward compat
 TrendState previousTrendState = TREND_SIDEWAYS;  // Previous trend state (backward compatibility)
 // Fase 9.1.4: static verwijderd zodat WebServerModule deze variabele kan gebruiken
 float trendThreshold = TREND_THRESHOLD_DEFAULT;  // Trend threshold (%)
-float trendThreshold1d = TREND_THRESHOLD_1D_DEFAULT;  // Trend threshold 1d (%)
-float trendThreshold7d = TREND_THRESHOLD_7D_DEFAULT;  // Trend threshold 7d (%)
 
 // Fase 5.2: VolatilityState enum verplaatst naar VolatilityTracker.h (al geïncludeerd boven)
 // Fase 5.3.17: Globale variabelen voor backward compatibility - modules zijn source of truth
@@ -2342,8 +2338,6 @@ static void loadSettings()
     
     // Copy trend and volatility settings
     trendThreshold = settings.trendThreshold;
-    trendThreshold1d = settings.trendThreshold1d;
-    trendThreshold7d = settings.trendThreshold7d;
     volatilityLowThreshold = settings.volatilityLowThreshold;
     volatilityHighThreshold = settings.volatilityHighThreshold;
     
@@ -2410,8 +2404,6 @@ void saveSettings()
     
     // Copy trend and volatility settings
     settings.trendThreshold = trendThreshold;
-    settings.trendThreshold1d = trendThreshold1d;
-    settings.trendThreshold7d = trendThreshold7d;
     settings.volatilityLowThreshold = volatilityLowThreshold;
     settings.volatilityHighThreshold = volatilityHighThreshold;
     
@@ -2583,8 +2575,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         {"/config/anchorTakeProfit/set", true, 0.1f, 100.0f, &anchorTakeProfit, "/config/anchorTakeProfit"},
         {"/config/anchorMaxLoss/set", true, -100.0f, -0.1f, &anchorMaxLoss, "/config/anchorMaxLoss"},
         {"/config/trendThreshold/set", true, 0.1f, 10.0f, &trendThreshold, "/config/trendThreshold"},
-        {"/config/trendThreshold1d/set", true, 0.1f, 10.0f, &trendThreshold1d, "/config/trendThreshold1d"},
-        {"/config/trendThreshold7d/set", true, 0.1f, 10.0f, &trendThreshold7d, "/config/trendThreshold7d"},
         {"/config/volatilityLowThreshold/set", true, 0.01f, 1.0f, &volatilityLowThreshold, "/config/volatilityLowThreshold"},
         {"/config/volatilityHighThreshold/set", true, 0.01f, 1.0f, &volatilityHighThreshold, "/config/volatilityHighThreshold"},
         // 2-hour alert thresholds
@@ -3048,8 +3038,6 @@ void publishMqttSettings() {
     publishMqttFloat("anchorMaxLoss", anchorMaxLoss);
     publishMqttUint("anchorStrategy", anchorStrategy);
     publishMqttFloat("trendThreshold", trendThreshold);
-    publishMqttFloat("trendThreshold1d", trendThreshold1d);
-    publishMqttFloat("trendThreshold7d", trendThreshold7d);
     publishMqttFloat("volatilityLowThreshold", volatilityLowThreshold);
     publishMqttFloat("volatilityHighThreshold", volatilityHighThreshold);
     
@@ -3326,18 +3314,6 @@ void publishMqttDiscovery() {
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
 
-    // Trend threshold 1d (medium)
-    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_trendThreshold1d/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Trend Threshold 1d\",\"unique_id\":\"%s_trendThreshold1d\",\"state_topic\":\"%s/config/trendThreshold1d\",\"command_topic\":\"%s/config/trendThreshold1d/set\",\"min\":0.1,\"max\":10.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-line\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
-    mqttClient.publish(topicBuffer, payloadBuffer, true);
-    delay(50);
-
-    // Trend threshold 7d (long)
-    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_trendThreshold7d/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Trend Threshold 7d\",\"unique_id\":\"%s_trendThreshold7d\",\"state_topic\":\"%s/config/trendThreshold7d\",\"command_topic\":\"%s/config/trendThreshold7d/set\",\"min\":0.1,\"max\":10.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-line\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
-    mqttClient.publish(topicBuffer, payloadBuffer, true);
-    delay(50);
-    
     // Volatility low threshold
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_volatilityLowThreshold/config", deviceId);
     snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Volatility Low Threshold\",\"unique_id\":\"%s_volatilityLowThreshold\",\"state_topic\":\"%s/config/volatilityLowThreshold\",\"command_topic\":\"%s/config/volatilityLowThreshold/set\",\"min\":0.01,\"max\":1.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-timeline-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
@@ -4686,13 +4662,6 @@ static float calculateReturn24Hours()
     return calculateReturnFromHourly(24);
 }
 
-// ret_7d: prijs nu vs ~7 dagen geleden (hourly buffer)
-// Met 168 punten max = 167 uur terug beschikbaar
-static float calculateReturn7Days()
-{
-    return calculateReturnFromHourly(HOURS_FOR_7D - 1);
-}
-
 // ============================================================================
 // Trend Detection Functions
 // ============================================================================
@@ -4972,7 +4941,6 @@ void fetchPrice()
             ret_30m = calculateReturn30Minutes(); // Percentage verandering laatste 30 minuten (update global)
             ret_2h = calculateReturn2Hours();
             ret_1d = calculateReturn24Hours();
-            ret_7d = calculateReturn7Days();
             
             
             // Update live availability flags: gebaseerd op data beschikbaarheid EN percentage live data
@@ -4992,7 +4960,6 @@ void fetchPrice()
             // Hourly buffer availability
             uint16_t availableHours = getAvailableHours();
             hasRet1d = (availableHours >= 24);
-            hasRet7d = (availableHours >= HOURS_FOR_7D);
             
             // Fase 5.1: Bepaal trend state op basis van 2h return (gebruik TrendDetector module)
             if (hasRet2h && hasRet30m) {
@@ -5001,13 +4968,6 @@ void fetchPrice()
                 TrendState newTrendState = trendDetector.determineTrendState(ret_2h, ret_30m, trendThreshold);
                 trendDetector.setTrendState(newTrendState);  // Update TrendDetector state
                 trendState = newTrendState;  // Synchroniseer globale variabele
-            }
-            
-            if (hasRet1d) {
-                trendDetector.updateMediumTrendState(ret_1d, trendThreshold1d);
-            }
-            if (hasRet7d) {
-                trendDetector.updateLongTrendState(ret_7d, trendThreshold7d);
             }
             
             // Check trend change en stuur notificatie indien nodig

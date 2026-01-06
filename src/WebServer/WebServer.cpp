@@ -38,8 +38,6 @@ extern uint8_t mqttReconnectAttemptCount;
 // Settings variabelen
 // Note: spike1mThreshold, spike5mThreshold, etc. zijn macro's (gedefinieerd hieronder)
 extern float trendThreshold;
-extern float trendThreshold1d;
-extern float trendThreshold7d;
 extern float volatilityLowThreshold;
 extern float volatilityHighThreshold;
 extern float anchorTakeProfit;
@@ -100,7 +98,6 @@ extern bool sendNotification(const char* title, const char* message, const char*
 extern float ret_2h;  // 2-hour return (static in .ino, maar extern hier)
 extern float ret_30m;  // 30-minute return (static in .ino, maar extern hier)
 extern float ret_1d;  // 24-hour return (hourly buffer)
-extern float ret_7d;  // 7-day return (hourly buffer)
 extern float averagePrices[];  // Array met gemiddelde prijzen (index 3 = avg2h)
 extern bool hasRet2h;  // Flag: ret_2h beschikbaar
 extern bool hasRet30m;  // Flag: ret_30m beschikbaar
@@ -373,16 +370,6 @@ void WebServerModule::renderSettingsHTML() {
     snprintf(valueBuf, sizeof(valueBuf), "%.2f", trendThreshold);
     sendInputRow(getText("Trend Threshold", "Trend Threshold"), "trendTh", "number", 
                  valueBuf, getText("Minimum 2h return voor trend detectie", "Minimum 2h return for trend detection"), 
-                 0.1f, 10.0f, 0.01f);
-
-    snprintf(valueBuf, sizeof(valueBuf), "%.2f", trendThreshold1d);
-    sendInputRow(getText("Trend Threshold 1d", "Trend Threshold 1d"), "trendTh1d", "number",
-                 valueBuf, getText("Minimum 1d return voor middellange trend", "Minimum 1d return for medium trend"),
-                 0.1f, 10.0f, 0.01f);
-
-    snprintf(valueBuf, sizeof(valueBuf), "%.2f", trendThreshold7d);
-    sendInputRow(getText("Trend Threshold 7d", "Trend Threshold 7d"), "trendTh7d", "number",
-                 valueBuf, getText("Minimum 7d return voor lange trend", "Minimum 7d return for long trend"),
                  0.1f, 10.0f, 0.01f);
     
     snprintf(valueBuf, sizeof(valueBuf), "%.4f", volatilityLowThreshold);
@@ -994,12 +981,6 @@ void WebServerModule::handleSave() {
     if (parseFloatArg("trendTh", floatVal, 0.1f, 10.0f)) {
         trendThreshold = floatVal;
     }
-    if (parseFloatArg("trendTh1d", floatVal, 0.1f, 10.0f)) {
-        trendThreshold1d = floatVal;
-    }
-    if (parseFloatArg("trendTh7d", floatVal, 0.1f, 10.0f)) {
-        trendThreshold7d = floatVal;
-    }
     if (parseFloatArg("volLow", floatVal, 0.01f, 1.0f)) {
         volatilityLowThreshold = floatVal;
     }
@@ -1200,9 +1181,7 @@ void WebServerModule::handleStatus() {
     float ret30m = 0.0f;
     float ret2h = 0.0f;
     float ret1d = 0.0f;
-    float ret7d = 0.0f;
     TrendState trend = TREND_SIDEWAYS;
-    TrendState trendMedium = TREND_SIDEWAYS;
     TrendState trendLong = TREND_SIDEWAYS;
     VolatilityState volatility = VOLATILITY_MEDIUM;
     bool anchorActive = false;
@@ -1225,10 +1204,8 @@ void WebServerModule::handleStatus() {
         ret30m = calculateReturn30Minutes();
         ret2h = ::ret_2h;  // Gebruik globale ret_2h
         ret1d = ::ret_1d;
-        ret7d = ::ret_7d;
         trend = trendDetector.getTrendState();
-        trendMedium = trendDetector.getMediumTrendState();
-        trendLong = trendDetector.getLongTrendState();
+        trendLong = trendDetector.getLongTermTrendState();
         volatility = volatilityTracker.getVolatilityState();
         anchorActive = ::anchorActive;
         if (anchorActive && isValidPrice(::anchorPrice)) {
@@ -1266,8 +1243,6 @@ void WebServerModule::handleStatus() {
         "\"ret30m\":%.2f,"
         "\"ret2h\":%.2f,"
         "\"ret1d\":%.2f,"
-        "\"ret7d\":%.2f,"
-        "\"trendMedium\":\"%s\","
         "\"trendLong\":\"%s\","
         "\"anchor\":%.2f,"
         "\"anchorDeltaPct\":%.2f,"
@@ -1288,8 +1263,6 @@ void WebServerModule::handleStatus() {
         ret30m,
         ret2h,
         ret1d,
-        ret7d,
-        getTrendText(trendMedium),
         getTrendText(trendLong),
         anchorPrice,
         anchorDeltaPct,
