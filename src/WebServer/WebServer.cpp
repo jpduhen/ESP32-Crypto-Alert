@@ -265,8 +265,14 @@ void WebServerModule::renderSettingsHTML() {
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='curPrice'>--</span></div>",
              getText("Huidige Prijs", "Current Price"));
     server->sendContent(tmpBuf);
-    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='trend'>--</span></div>",
-             getText("Trend", "Trend"));
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='trend2h'>--</span></div>",
+             getText("Trend 2h", "Trend 2h"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='trend1d'>--</span></div>",
+             getText("Trend 1d", "Trend 1d"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='trend7d'>--</span></div>",
+             getText("Trend 7d", "Trend 7d"));
     server->sendContent(tmpBuf);
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='volatility'>--</span></div>",
              getText("Volatiliteit", "Volatility"));
@@ -1232,6 +1238,13 @@ void WebServerModule::handleStatus() {
         safeMutexGive(dataMutex, "handleStatus");
     }
     
+    char trend2hText[8];
+    char trend1dText[8];
+    char trend7dText[8];
+    formatTrendLabel(trend2hText, sizeof(trend2hText), "2h", trend);
+    formatTrendLabel(trend1dText, sizeof(trend1dText), "1d", trendMedium);
+    formatTrendLabel(trend7dText, sizeof(trend7dText), "7d", trendLong);
+
     // JSON buffer (900 bytes voor extra trend/return velden)
     char jsonBuf[900];
     size_t written = 0;
@@ -1263,7 +1276,7 @@ void WebServerModule::handleStatus() {
         "}",
         binanceSymbol,
         price,
-        getTrendText(trend),
+        trend2hText,
         getVolatilityText(volatility),
         ret1m,
         ret5m,
@@ -1271,8 +1284,8 @@ void WebServerModule::handleStatus() {
         ret2h,
         ret1d,
         ret7d,
-        getTrendText(trendMedium),
-        getTrendText(trendLong),
+        trend1dText,
+        trend7dText,
         anchorPrice,
         anchorDeltaPct,
         avg2h,
@@ -1616,7 +1629,9 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(F("function refreshStatus(){"));
     server->sendContent(F("fetch('/status').then(function(r){return r.json();}).then(function(d){"));
     server->sendContent(F("var el=document.getElementById('curPrice');if(el)el.textContent=d.price>0?d.price.toFixed(2)+' EUR':'--';"));
-    server->sendContent(F("el=document.getElementById('trend');if(el)el.textContent=d.trend||'--';"));
+    server->sendContent(F("el=document.getElementById('trend2h');if(el)el.textContent=d.trend||'--';"));
+    server->sendContent(F("el=document.getElementById('trend1d');if(el)el.textContent=d.trendMedium||'--';"));
+    server->sendContent(F("el=document.getElementById('trend7d');if(el)el.textContent=d.trendLong||'--';"));
     server->sendContent(F("el=document.getElementById('volatility');if(el)el.textContent=d.volatility||'--';"));
     server->sendContent(F("el=document.getElementById('ret1m');if(el)el.textContent=d.ret1m!=0?d.ret1m.toFixed(2)+'%':'--';"));
     server->sendContent(F("el=document.getElementById('ret30m');if(el)el.textContent=d.ret30m!=0?d.ret30m.toFixed(2)+'%':'--';"));
@@ -1765,11 +1780,15 @@ void WebServerModule::sendSectionDesc(const char* desc) {
 // Helper: Get trend text (geoptimaliseerd: elimineert switch duplicatie)
 const char* WebServerModule::getTrendText(TrendState trend) {
     switch (trend) {
-        case TREND_UP: return getText("OMHOOG", "UP");
-        case TREND_DOWN: return getText("OMLAAG", "DOWN");
+        case TREND_UP: return "+";
+        case TREND_DOWN: return "-";
         case TREND_SIDEWAYS:
-        default: return getText("VLAK", "SIDEWAYS");
+        default: return "=";
     }
+}
+
+void WebServerModule::formatTrendLabel(char* buffer, size_t bufferSize, const char* prefix, TrendState trend) {
+    snprintf(buffer, bufferSize, "%s%s", prefix, getTrendText(trend));
 }
 
 // Helper: Get volatility text (geoptimaliseerd: elimineert switch duplicatie)

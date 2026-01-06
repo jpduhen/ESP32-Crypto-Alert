@@ -32,10 +32,10 @@ public:
     TrendState determineTrendState(float ret_2h_value, float ret_30m_value, float trendThreshold);
     
     // Medium trend detection
-    // Bepaal medium trend state op basis van 4h en 1d returns
-    // ret_4h_value: 4-hour return percentage
+    // Bepaal medium trend state op basis van 1d return
+    // ret_4h_value: 4-hour return percentage (legacy, unused)
     // ret_1d_value: 1-day return percentage
-    // mediumThreshold: threshold voor medium trend (default 2.0%)
+    // mediumThreshold: threshold voor 1d trend (default 2.0%)
     TrendState determineMediumTrendState(float ret_4h_value, float ret_1d_value, float mediumThreshold);
 
     // Lange termijn trend detection
@@ -66,9 +66,9 @@ public:
     
     // Medium trend change detection en notificatie
     // Check of medium trend is veranderd en stuur notificatie indien nodig
-    // ret_4h_value: 4-hour return percentage
+    // ret_4h_value: 4-hour return percentage (legacy, unused)
     // ret_1d_value: 1-day return percentage
-    // mediumThreshold: threshold voor medium trend (default 2.0%)
+    // mediumThreshold: threshold voor 1d trend (default 2.0%)
     void checkMediumTrendChange(float ret_4h_value, float ret_1d_value, float mediumThreshold);
 
     // Lange termijn trend change detection en notificatie

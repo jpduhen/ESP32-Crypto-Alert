@@ -884,7 +884,7 @@ void UIController::updateTrendLabel()
         TrendState currentTrend = trendDetector.getTrendState();
         switch (currentTrend) {
             case TREND_UP:
-                trendText = getText("KT+", "ST+");
+                trendText = getText("2h+", "2h+");
                 if (isFromWarmStart) {
                     trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
                 } else if (isFromLive) {
@@ -894,7 +894,7 @@ void UIController::updateTrendLabel()
                 }
                 break;
             case TREND_DOWN:
-                trendText = getText("KT-", "ST-");
+                trendText = getText("2h-", "2h-");
                 if (isFromWarmStart) {
                     trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
                 } else if (isFromLive) {
@@ -905,7 +905,7 @@ void UIController::updateTrendLabel()
                 break;
             case TREND_SIDEWAYS:
             default:
-                trendText = getText("KT=", "ST=");
+                trendText = getText("2h=", "2h=");
                 if (isFromWarmStart) {
                     trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
                 } else if (isFromLive) {
@@ -1023,34 +1023,31 @@ void UIController::updateMediumTrendLabel()
     // Fase 8.5.4: Gebruik globale pointer (synchroniseert met module pointer)
     if (::mediumTrendLabel == nullptr) return;
     
-    // Toon medium trend alleen als beide 4h en 1d beschikbaar zijn
-    extern bool hasRet4h;
     extern bool hasRet1d;
-    if (hasRet4h && hasRet1d)
+    if (hasRet1d)
     {
-        extern float ret_4h;
         extern float ret_1d;
         extern TrendDetector trendDetector;
         
-        // Gebruik threshold van 2.0% voor medium trend
+        // Gebruik threshold van 2.0% voor 1d trend
         const float mediumThreshold = 2.0f;
-        TrendState mediumTrend = trendDetector.determineMediumTrendState(ret_4h, ret_1d, mediumThreshold);
+        TrendState mediumTrend = trendDetector.determineMediumTrendState(0.0f, ret_1d, mediumThreshold);
         
         const char* trendText = "";
         lv_color_t trendColor = lv_palette_main(LV_PALETTE_GREY);
         
         switch (mediumTrend) {
             case TREND_UP:
-                trendText = getText("MT+", "MT+");
+                trendText = getText("1d+", "1d+");
                 trendColor = lv_palette_main(LV_PALETTE_GREEN);
                 break;
             case TREND_DOWN:
-                trendText = getText("MT-", "MT-");
+                trendText = getText("1d-", "1d-");
                 trendColor = lv_palette_main(LV_PALETTE_RED);
                 break;
             case TREND_SIDEWAYS:
             default:
-                trendText = getText("MT=", "MT=");
+                trendText = getText("1d=", "1d=");
                 trendColor = lv_palette_main(LV_PALETTE_BLUE);
                 break;
         }
@@ -1088,16 +1085,16 @@ void UIController::updateLongTermTrendLabel()
         
         switch (longTermTrend) {
             case TREND_UP:
-                trendText = getText("LT+", "LT+");
+                trendText = getText("7d+", "7d+");
                 trendColor = lv_palette_main(LV_PALETTE_GREEN);
                 break;
             case TREND_DOWN:
-                trendText = getText("LT-", "LT-");
+                trendText = getText("7d-", "7d-");
                 trendColor = lv_palette_main(LV_PALETTE_RED);
                 break;
             case TREND_SIDEWAYS:
             default:
-                trendText = getText("LT=", "LT=");
+                trendText = getText("7d=", "7d=");
                 trendColor = lv_palette_main(LV_PALETTE_BLUE);
                 break;
         }

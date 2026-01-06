@@ -329,10 +329,11 @@ bool hasRet1dWarm = false;  // Flag: ret_1d beschikbaar vanuit warm-start (minim
 bool hasRet7dWarm = false;  // Flag: ret_7d beschikbaar vanuit warm-start (minimaal 2 candles)
 bool hasRet2hLive = false;  // Flag: ret_2h kan worden berekend uit live data (minuteIndex >= 120)
 bool hasRet30mLive = false;  // Flag: ret_30m kan worden berekend uit live data (minuteIndex >= 30)
+bool hasRet4hLive = false;  // Flag: ret_4h kan worden berekend uit live data (hourly buffer >= 4)
 // Combined flags: beschikbaar vanuit warm-start OF live data
 bool hasRet2h = false;  // hasRet2hWarm || hasRet2hLive
 bool hasRet30m = false;  // hasRet30mWarm || hasRet30mLive
-bool hasRet4h = false;  // hasRet4hWarm (4h alleen via warm-start, geen live berekening)
+bool hasRet4h = false;  // hasRet4hWarm || hasRet4hLive
 bool hasRet1d = false;  // hasRet1dWarm (1d alleen via warm-start, geen live berekening)
 bool hasRet7d = false;  // hasRet7dWarm (warm-start) of live hourly buffer
 // Fase 5.3.17: Globale variabelen voor backward compatibility - modules zijn source of truth
@@ -3182,6 +3183,23 @@ void publishMqttSettings() {
 
 // Publiceer waarden naar MQTT (prijzen, percentages, etc.)
 // Geoptimaliseerd: gebruik char arrays i.p.v. String om geheugenfragmentatie te voorkomen
+static void formatTrendLabel(char* buffer, size_t bufferSize, const char* prefix, TrendState trend) {
+    const char* suffix = "=";
+    switch (trend) {
+        case TREND_UP:
+            suffix = "+";
+            break;
+        case TREND_DOWN:
+            suffix = "-";
+            break;
+        case TREND_SIDEWAYS:
+        default:
+            suffix = "=";
+            break;
+    }
+    snprintf(buffer, bufferSize, "%s%s", prefix, suffix);
+}
+
 void publishMqttValues(float price, float ret_1m, float ret_5m, float ret_30m) {
     if (!mqttConnected) return;
     
@@ -3205,6 +3223,33 @@ void publishMqttValues(float price, float ret_1m, float ret_5m, float ret_30m) {
     dtostrf(ret_30m, 0, 2, buffer);
     snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/return_30m", mqttPrefix);
     mqttClient.publish(topicBuffer, buffer, false);
+
+    dtostrf(ret_2h, 0, 2, buffer);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/return_2h", mqttPrefix);
+    mqttClient.publish(topicBuffer, buffer, false);
+
+    dtostrf(ret_1d, 0, 2, buffer);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/return_1d", mqttPrefix);
+    mqttClient.publish(topicBuffer, buffer, false);
+
+    dtostrf(ret_7d, 0, 2, buffer);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/return_7d", mqttPrefix);
+    mqttClient.publish(topicBuffer, buffer, false);
+
+    char trend2h[8];
+    char trend1d[8];
+    char trend7d[8];
+    formatTrendLabel(trend2h, sizeof(trend2h), "2h", trendDetector.getTrendState());
+    formatTrendLabel(trend1d, sizeof(trend1d), "1d", trendDetector.getMediumTrendState());
+    formatTrendLabel(trend7d, sizeof(trend7d), "7d", trendDetector.getLongTermTrendState());
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/trend_2h", mqttPrefix);
+    mqttClient.publish(topicBuffer, trend2h, false);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/trend_1d", mqttPrefix);
+    mqttClient.publish(topicBuffer, trend1d, false);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/trend_7d", mqttPrefix);
+    mqttClient.publish(topicBuffer, trend7d, false);
     
     snprintf(buffer, sizeof(buffer), "%lu", millis());
     snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/timestamp", mqttPrefix);
@@ -3309,6 +3354,36 @@ void publishMqttDiscovery() {
     
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_return_30m/config", deviceId);
     snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"30m Return\",\"unique_id\":\"%s_return_30m\",\"state_topic\":\"%s/values/return_30m\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:trending-up\",%s}", deviceId, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_return_2h/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Return\",\"unique_id\":\"%s_return_2h\",\"state_topic\":\"%s/values/return_2h\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:trending-up\",%s}", deviceId, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_return_1d/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"1d Return\",\"unique_id\":\"%s_return_1d\",\"state_topic\":\"%s/values/return_1d\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:calendar-today\",%s}", deviceId, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_return_7d/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"7d Return\",\"unique_id\":\"%s_return_7d\",\"state_topic\":\"%s/values/return_7d\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:calendar-week\",%s}", deviceId, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_trend_2h/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Trend 2h\",\"unique_id\":\"%s_trend_2h\",\"state_topic\":\"%s/values/trend_2h\",\"icon\":\"mdi:chart-line\",%s}", deviceId, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_trend_1d/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Trend 1d\",\"unique_id\":\"%s_trend_1d\",\"state_topic\":\"%s/values/trend_1d\",\"icon\":\"mdi:chart-line\",%s}", deviceId, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_trend_7d/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Trend 7d\",\"unique_id\":\"%s_trend_7d\",\"state_topic\":\"%s/values/trend_7d\",\"icon\":\"mdi:chart-line\",%s}", deviceId, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
@@ -5006,6 +5081,13 @@ void fetchPrice()
             
             // Hourly buffer availability
             uint16_t availableHours = getAvailableHours();
+            hasRet4hLive = (availableHours >= 4);
+            hasRet4h = hasRet4hWarm || hasRet4hLive;
+            if (hasRet4hLive) {
+                ret_4h = calculateReturnFromHourly(4);
+            } else if (!hasRet4hWarm) {
+                ret_4h = 0.0f;
+            }
             hasRet1d = (availableHours >= 24);
             bool hasRet7dLive = (availableHours >= HOURS_FOR_7D);
             hasRet7d = hasRet7dWarm || hasRet7dLive;
