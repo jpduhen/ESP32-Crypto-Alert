@@ -213,6 +213,7 @@ extern lv_obj_t *chart;
 extern lv_chart_series_t *dataSeries;
 extern lv_obj_t *trendLabel;
 extern lv_obj_t *volatilityLabel;
+extern lv_obj_t *mediumTrendLabel;
 extern lv_obj_t *longTermTrendLabel;
 extern lv_obj_t *warmStartStatusLabel;
 extern lv_obj_t *lblFooterLine1;
@@ -271,6 +272,7 @@ UIController::UIController() {
     dataSeries = nullptr;
     trendLabel = nullptr;
     volatilityLabel = nullptr;
+    mediumTrendLabel = nullptr;
     longTermTrendLabel = nullptr;
     warmStartStatusLabel = nullptr;
     lblFooterLine1 = nullptr;
@@ -382,6 +384,15 @@ void UIController::createChart() {
     lv_obj_set_style_text_align(volatilityLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_align(volatilityLabel, LV_ALIGN_BOTTOM_RIGHT, 4, 6);
     lv_label_set_text(volatilityLabel, "--");
+    
+    // Medium trend label (links midden)
+    mediumTrendLabel = lv_label_create(chart);
+    ::mediumTrendLabel = mediumTrendLabel;  // Fase 8.4.3: Synchroniseer met globale pointer
+    lv_obj_set_style_text_font(mediumTrendLabel, FONT_SIZE_TREND_VOLATILITY, 0);
+    lv_obj_set_style_text_color(mediumTrendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_align(mediumTrendLabel, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_align(mediumTrendLabel, LV_ALIGN_LEFT_MID, -4, 0);
+    lv_label_set_text(mediumTrendLabel, "--");
     
     // Lange termijn trend label (links onderin)
     longTermTrendLabel = lv_label_create(chart);
@@ -873,7 +884,7 @@ void UIController::updateTrendLabel()
         TrendState currentTrend = trendDetector.getTrendState();
         switch (currentTrend) {
             case TREND_UP:
-                trendText = getText("KT+", "ST+");
+                trendText = getText("2h+", "2h+");
                 if (isFromWarmStart) {
                     trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
                 } else if (isFromLive) {
@@ -883,7 +894,7 @@ void UIController::updateTrendLabel()
                 }
                 break;
             case TREND_DOWN:
-                trendText = getText("KT-", "ST-");
+                trendText = getText("2h-", "2h-");
                 if (isFromWarmStart) {
                     trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
                 } else if (isFromLive) {
@@ -894,7 +905,7 @@ void UIController::updateTrendLabel()
                 break;
             case TREND_SIDEWAYS:
             default:
-                trendText = getText("KT=", "ST=");
+                trendText = getText("2h=", "2h=");
                 if (isFromWarmStart) {
                     trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
                 } else if (isFromLive) {
@@ -1005,41 +1016,85 @@ void UIController::updateVolatilityLabel()
     lv_obj_set_style_text_color(::volatilityLabel, volColor, 0);
 }
 
-// Fase 8.5.4: updateLongTermTrendLabel() naar Module
+// Fase 8.5.4: updateMediumTrendLabel() naar Module
+// Helper functie om medium trend label bij te werken
+void UIController::updateMediumTrendLabel()
+{
+    // Fase 8.5.4: Gebruik globale pointer (synchroniseert met module pointer)
+    if (::mediumTrendLabel == nullptr) return;
+    
+    extern bool hasRet1d;
+    if (hasRet1d)
+    {
+        extern float ret_1d;
+        extern TrendDetector trendDetector;
+        
+        // Gebruik threshold van 2.0% voor 1d trend
+        const float mediumThreshold = 2.0f;
+        TrendState mediumTrend = trendDetector.determineMediumTrendState(0.0f, ret_1d, mediumThreshold);
+        
+        const char* trendText = "";
+        lv_color_t trendColor = lv_palette_main(LV_PALETTE_GREY);
+        
+        switch (mediumTrend) {
+            case TREND_UP:
+                trendText = getText("1d+", "1d+");
+                trendColor = lv_palette_main(LV_PALETTE_GREEN);
+                break;
+            case TREND_DOWN:
+                trendText = getText("1d-", "1d-");
+                trendColor = lv_palette_main(LV_PALETTE_RED);
+                break;
+            case TREND_SIDEWAYS:
+            default:
+                trendText = getText("1d=", "1d=");
+                trendColor = lv_palette_main(LV_PALETTE_BLUE);
+                break;
+        }
+        
+        lv_label_set_text(::mediumTrendLabel, trendText);
+        lv_obj_set_style_text_color(::mediumTrendLabel, trendColor, 0);
+    }
+    else
+    {
+        lv_label_set_text(::mediumTrendLabel, "--");
+        lv_obj_set_style_text_color(::mediumTrendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    }
+}
+
+// Fase 8.5.5: updateLongTermTrendLabel() naar Module
 // Helper functie om lange termijn trend label bij te werken
 void UIController::updateLongTermTrendLabel()
 {
-    // Fase 8.5.4: Gebruik globale pointer (synchroniseert met module pointer)
+    // Fase 8.5.5: Gebruik globale pointer (synchroniseert met module pointer)
     if (::longTermTrendLabel == nullptr) return;
     
-    // Toon lange termijn trend alleen als beide 4h en 1d beschikbaar zijn
-    extern bool hasRet4h;
-    extern bool hasRet1d;
-    if (hasRet4h && hasRet1d)
+    // Toon lange termijn trend alleen als 7d beschikbaar is
+    extern bool hasRet7d;
+    if (hasRet7d)
     {
-        extern float ret_4h;
-        extern float ret_1d;
+        extern float ret_7d;
         extern TrendDetector trendDetector;
         
         // Gebruik threshold van 2.0% voor lange termijn trend
         const float longTermThreshold = 2.0f;
-        TrendState longTermTrend = trendDetector.determineLongTermTrendState(ret_4h, ret_1d, longTermThreshold);
+        TrendState longTermTrend = trendDetector.determineLongTermTrendState(ret_7d, longTermThreshold);
         
         const char* trendText = "";
         lv_color_t trendColor = lv_palette_main(LV_PALETTE_GREY);
         
         switch (longTermTrend) {
             case TREND_UP:
-                trendText = getText("LT+", "LT+");
+                trendText = getText("7d+", "7d+");
                 trendColor = lv_palette_main(LV_PALETTE_GREEN);
                 break;
             case TREND_DOWN:
-                trendText = getText("LT-", "LT-");
+                trendText = getText("7d-", "7d-");
                 trendColor = lv_palette_main(LV_PALETTE_RED);
                 break;
             case TREND_SIDEWAYS:
             default:
-                trendText = getText("LT=", "LT=");
+                trendText = getText("7d=", "7d=");
                 trendColor = lv_palette_main(LV_PALETTE_BLUE);
                 break;
         }
@@ -1768,6 +1823,7 @@ void UIController::updateHeaderSection()
     updateDateTimeLabels();
     updateTrendLabel();
     updateVolatilityLabel();
+    updateMediumTrendLabel();
     updateLongTermTrendLabel();
     updateWarmStartStatusLabel();
 }
@@ -1880,4 +1936,3 @@ void UIController::updateChartRange(int32_t currentPrice)
     // Gebruik member pointer i.p.v. globale pointer
     lv_chart_set_range(this->chart, LV_CHART_AXIS_PRIMARY_Y, minRange, maxRange);
 }
-
