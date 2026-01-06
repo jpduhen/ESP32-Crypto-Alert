@@ -54,6 +54,7 @@ public:
     void updateDateTimeLabels();
     void updateTrendLabel();
     void updateVolatilityLabel();
+    void updateVolumeConfirmLabel();
     void updateMediumTrendLabel();
     void updateLongTermTrendLabel();
     void updateWarmStartStatusLabel();
@@ -88,6 +89,7 @@ private:
     // Chart labels (trend, volatility, warm-start status)
     lv_obj_t *trendLabel;
     lv_obj_t *volatilityLabel;
+    lv_obj_t *volumeConfirmLabel;
     lv_obj_t *mediumTrendLabel;
     lv_obj_t *longTermTrendLabel;
     lv_obj_t *warmStartStatusLabel;
@@ -102,6 +104,7 @@ private:
     lv_obj_t *priceBox[SYMBOL_COUNT];
     lv_obj_t *priceTitle[SYMBOL_COUNT];
     lv_obj_t *priceLbl[SYMBOL_COUNT];
+    lv_obj_t *volumeConfirmLabel;
     
     // Header labels
     lv_obj_t *chartTitle;
