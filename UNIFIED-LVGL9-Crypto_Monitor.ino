@@ -3183,6 +3183,23 @@ void publishMqttSettings() {
 
 // Publiceer waarden naar MQTT (prijzen, percentages, etc.)
 // Geoptimaliseerd: gebruik char arrays i.p.v. String om geheugenfragmentatie te voorkomen
+static void formatTrendLabel(char* buffer, size_t bufferSize, const char* prefix, TrendState trend) {
+    const char* suffix = "=";
+    switch (trend) {
+        case TREND_UP:
+            suffix = "+";
+            break;
+        case TREND_DOWN:
+            suffix = "-";
+            break;
+        case TREND_SIDEWAYS:
+        default:
+            suffix = "=";
+            break;
+    }
+    snprintf(buffer, bufferSize, "%s%s", prefix, suffix);
+}
+
 void publishMqttValues(float price, float ret_1m, float ret_5m, float ret_30m) {
     if (!mqttConnected) return;
     
@@ -3219,15 +3236,18 @@ void publishMqttValues(float price, float ret_1m, float ret_5m, float ret_30m) {
     snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/return_7d", mqttPrefix);
     mqttClient.publish(topicBuffer, buffer, false);
 
-    const char* trend2h = TrendDetector::getTrendName(trendDetector.getTrendState());
+    char trend2h[8];
+    char trend1d[8];
+    char trend7d[8];
+    formatTrendLabel(trend2h, sizeof(trend2h), "2h", trendDetector.getTrendState());
+    formatTrendLabel(trend1d, sizeof(trend1d), "1d", trendDetector.getMediumTrendState());
+    formatTrendLabel(trend7d, sizeof(trend7d), "7d", trendDetector.getLongTermTrendState());
     snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/trend_2h", mqttPrefix);
     mqttClient.publish(topicBuffer, trend2h, false);
-
-    const char* trend1d = TrendDetector::getTrendName(trendDetector.getMediumTrendState());
+    
     snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/trend_1d", mqttPrefix);
     mqttClient.publish(topicBuffer, trend1d, false);
-
-    const char* trend7d = TrendDetector::getTrendName(trendDetector.getLongTermTrendState());
+    
     snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/trend_7d", mqttPrefix);
     mqttClient.publish(topicBuffer, trend7d, false);
     

@@ -49,6 +49,7 @@ private:
     
     // Helper functies voor code duplicatie eliminatie
     static const char* getTrendText(TrendState trend);
+    static void formatTrendLabel(char* buffer, size_t bufferSize, const char* prefix, TrendState trend);
     static const char* getVolatilityText(VolatilityState vol);
     bool parseFloatArg(const char* argName, float& result, float minVal, float maxVal);
     bool parseIntArg(const char* argName, int& result, int minVal, int maxVal);
@@ -69,4 +70,3 @@ private:
 extern WebServerModule webServerModule;
 
 #endif // WEBSERVERMODULE_H
-

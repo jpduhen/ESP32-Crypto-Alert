@@ -1238,6 +1238,13 @@ void WebServerModule::handleStatus() {
         safeMutexGive(dataMutex, "handleStatus");
     }
     
+    char trend2hText[8];
+    char trend1dText[8];
+    char trend7dText[8];
+    formatTrendLabel(trend2hText, sizeof(trend2hText), "2h", trend);
+    formatTrendLabel(trend1dText, sizeof(trend1dText), "1d", trendMedium);
+    formatTrendLabel(trend7dText, sizeof(trend7dText), "7d", trendLong);
+
     // JSON buffer (900 bytes voor extra trend/return velden)
     char jsonBuf[900];
     size_t written = 0;
@@ -1269,7 +1276,7 @@ void WebServerModule::handleStatus() {
         "}",
         binanceSymbol,
         price,
-        getTrendText(trend),
+        trend2hText,
         getVolatilityText(volatility),
         ret1m,
         ret5m,
@@ -1277,8 +1284,8 @@ void WebServerModule::handleStatus() {
         ret2h,
         ret1d,
         ret7d,
-        getTrendText(trendMedium),
-        getTrendText(trendLong),
+        trend1dText,
+        trend7dText,
         anchorPrice,
         anchorDeltaPct,
         avg2h,
@@ -1773,11 +1780,15 @@ void WebServerModule::sendSectionDesc(const char* desc) {
 // Helper: Get trend text (geoptimaliseerd: elimineert switch duplicatie)
 const char* WebServerModule::getTrendText(TrendState trend) {
     switch (trend) {
-        case TREND_UP: return getText("OMHOOG", "UP");
-        case TREND_DOWN: return getText("OMLAAG", "DOWN");
+        case TREND_UP: return "+";
+        case TREND_DOWN: return "-";
         case TREND_SIDEWAYS:
-        default: return getText("VLAK", "SIDEWAYS");
+        default: return "=";
     }
+}
+
+void WebServerModule::formatTrendLabel(char* buffer, size_t bufferSize, const char* prefix, TrendState trend) {
+    snprintf(buffer, bufferSize, "%s%s", prefix, getTrendText(trend));
 }
 
 // Helper: Get volatility text (geoptimaliseerd: elimineert switch duplicatie)
