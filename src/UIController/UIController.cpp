@@ -1076,8 +1076,8 @@ void UIController::updateLongTermTrendLabel()
         extern float ret_7d;
         extern TrendDetector trendDetector;
         
-        // Gebruik threshold van 2.0% voor lange termijn trend
-        const float longTermThreshold = 2.0f;
+        // Gebruik threshold van 1.0% voor lange termijn trend
+        const float longTermThreshold = 1.0f;
         TrendState longTermTrend = trendDetector.determineLongTermTrendState(ret_7d, longTermThreshold);
         
         const char* trendText = "";

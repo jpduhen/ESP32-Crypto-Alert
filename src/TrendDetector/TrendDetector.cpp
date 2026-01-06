@@ -235,7 +235,7 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
         const char* longTermTrendText = "";
         if (hasRet7d) {
             extern float ret_7d;
-            const float longTermThreshold = 2.0f;
+            const float longTermThreshold = 1.0f;
             TrendState longTermTrend = this->determineLongTermTrendState(ret_7d, longTermThreshold);
             switch (longTermTrend) {
                 case TREND_UP:

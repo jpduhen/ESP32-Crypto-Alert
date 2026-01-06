@@ -5136,7 +5136,7 @@ void fetchPrice()
             extern bool hasRet7d;
             if (hasRet7d) {
                 extern float ret_7d;
-                const float longTermThreshold = 2.0f;
+                const float longTermThreshold = 1.0f;
                 trendDetector.checkLongTermTrendChange(ret_7d, longTermThreshold);
             }
             
