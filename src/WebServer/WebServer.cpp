@@ -38,6 +38,8 @@ extern uint8_t mqttReconnectAttemptCount;
 // Settings variabelen
 // Note: spike1mThreshold, spike5mThreshold, etc. zijn macro's (gedefinieerd hieronder)
 extern float trendThreshold;
+extern float trendThreshold1d;
+extern float trendThreshold7d;
 extern float volatilityLowThreshold;
 extern float volatilityHighThreshold;
 extern float anchorTakeProfit;
@@ -362,6 +364,16 @@ void WebServerModule::renderSettingsHTML() {
     snprintf(valueBuf, sizeof(valueBuf), "%.2f", trendThreshold);
     sendInputRow(getText("Trend Threshold", "Trend Threshold"), "trendTh", "number", 
                  valueBuf, getText("Minimum 2h return voor trend detectie", "Minimum 2h return for trend detection"), 
+                 0.1f, 10.0f, 0.01f);
+
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", trendThreshold1d);
+    sendInputRow(getText("Trend Threshold 1d", "Trend Threshold 1d"), "trendTh1d", "number",
+                 valueBuf, getText("Minimum 1d return voor middellange trend", "Minimum 1d return for medium trend"),
+                 0.1f, 10.0f, 0.01f);
+
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", trendThreshold7d);
+    sendInputRow(getText("Trend Threshold 7d", "Trend Threshold 7d"), "trendTh7d", "number",
+                 valueBuf, getText("Minimum 7d return voor lange trend", "Minimum 7d return for long trend"),
                  0.1f, 10.0f, 0.01f);
     
     snprintf(valueBuf, sizeof(valueBuf), "%.4f", volatilityLowThreshold);
@@ -877,6 +889,12 @@ void WebServerModule::handleSave() {
     // Trend and volatility settings - geoptimaliseerd: gebruik helper functie
     if (parseFloatArg("trendTh", floatVal, 0.1f, 10.0f)) {
         trendThreshold = floatVal;
+    }
+    if (parseFloatArg("trendTh1d", floatVal, 0.1f, 10.0f)) {
+        trendThreshold1d = floatVal;
+    }
+    if (parseFloatArg("trendTh7d", floatVal, 0.1f, 10.0f)) {
+        trendThreshold7d = floatVal;
     }
     if (parseFloatArg("volLow", floatVal, 0.01f, 1.0f)) {
         volatilityLowThreshold = floatVal;
@@ -1656,5 +1674,3 @@ bool WebServerModule::parseStringArg(const char* argName, char* dest, size_t des
     }
     return false;
 }
-
-

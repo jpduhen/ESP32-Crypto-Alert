@@ -2506,6 +2506,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         {"/config/anchorTakeProfit/set", true, 0.1f, 100.0f, &anchorTakeProfit, "/config/anchorTakeProfit"},
         {"/config/anchorMaxLoss/set", true, -100.0f, -0.1f, &anchorMaxLoss, "/config/anchorMaxLoss"},
         {"/config/trendThreshold/set", true, 0.1f, 10.0f, &trendThreshold, "/config/trendThreshold"},
+        {"/config/trendThreshold1d/set", true, 0.1f, 10.0f, &trendThreshold1d, "/config/trendThreshold1d"},
+        {"/config/trendThreshold7d/set", true, 0.1f, 10.0f, &trendThreshold7d, "/config/trendThreshold7d"},
         {"/config/volatilityLowThreshold/set", true, 0.01f, 1.0f, &volatilityLowThreshold, "/config/volatilityLowThreshold"},
         {"/config/volatilityHighThreshold/set", true, 0.01f, 1.0f, &volatilityHighThreshold, "/config/volatilityHighThreshold"},
         // 2-hour alert thresholds
@@ -2935,6 +2937,8 @@ void publishMqttSettings() {
     publishMqttFloat("anchorTakeProfit", anchorTakeProfit);
     publishMqttFloat("anchorMaxLoss", anchorMaxLoss);
     publishMqttFloat("trendThreshold", trendThreshold);
+    publishMqttFloat("trendThreshold1d", trendThreshold1d);
+    publishMqttFloat("trendThreshold7d", trendThreshold7d);
     publishMqttFloat("volatilityLowThreshold", volatilityLowThreshold);
     publishMqttFloat("volatilityHighThreshold", volatilityHighThreshold);
     
@@ -3202,6 +3206,18 @@ void publishMqttDiscovery() {
     // Trend threshold
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_trendThreshold/config", deviceId);
     snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Trend Threshold\",\"unique_id\":\"%s_trendThreshold\",\"state_topic\":\"%s/config/trendThreshold\",\"command_topic\":\"%s/config/trendThreshold/set\",\"min\":0.1,\"max\":10.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-line\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+
+    // Trend threshold 1d (medium)
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_trendThreshold1d/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Trend Threshold 1d\",\"unique_id\":\"%s_trendThreshold1d\",\"state_topic\":\"%s/config/trendThreshold1d\",\"command_topic\":\"%s/config/trendThreshold1d/set\",\"min\":0.1,\"max\":10.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-line\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+
+    // Trend threshold 7d (long)
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_trendThreshold7d/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Trend Threshold 7d\",\"unique_id\":\"%s_trendThreshold7d\",\"state_topic\":\"%s/config/trendThreshold7d\",\"command_topic\":\"%s/config/trendThreshold7d/set\",\"min\":0.1,\"max\":10.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-line\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
