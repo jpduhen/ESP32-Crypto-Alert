@@ -3335,7 +3335,7 @@ static void formatTrendLabel(char* buffer, size_t bufferSize, const char* prefix
             suffix = "//";
             break;
         case TREND_DOWN:
-            suffix = "\\";
+            suffix = "\\\\";
             break;
         case TREND_SIDEWAYS:
         default:

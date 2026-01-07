@@ -1781,7 +1781,7 @@ void WebServerModule::sendSectionDesc(const char* desc) {
 const char* WebServerModule::getTrendText(TrendState trend) {
     switch (trend) {
         case TREND_UP: return "//";
-        case TREND_DOWN: return "\\";
+        case TREND_DOWN: return "\\\\";
         case TREND_SIDEWAYS:
         default: return "=";
     }

@@ -193,10 +193,10 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
         const char* fromTrendTranslated = fromTrend;
         const char* toTrendTranslated = toTrend;
         if (strcmp(fromTrend, "UP") == 0) fromTrendTranslated = "2h//";
-        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = "2h\\";
+        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = "2h\\\\";
         else if (strcmp(fromTrend, "SIDEWAYS") == 0) fromTrendTranslated = "2h=";
         if (strcmp(toTrend, "UP") == 0) toTrendTranslated = "2h//";
-        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = "2h\\";
+        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = "2h\\\\";
         else if (strcmp(toTrend, "SIDEWAYS") == 0) toTrendTranslated = "2h=";
         
         // VolText is al in Nederlands (getVolatilityText geeft "Rustig", "Gemiddeld", "Volatiel")
@@ -219,7 +219,7 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
                     mediumTrendText = "1d//";
                     break;
                 case TREND_DOWN:
-                    mediumTrendText = "1d\\";
+                    mediumTrendText = "1d\\\\";
                     break;
                 case TREND_SIDEWAYS:
                 default:
@@ -242,7 +242,7 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
                     longTermTrendText = "7d//";
                     break;
                 case TREND_DOWN:
-                    longTermTrendText = "7d\\";
+                    longTermTrendText = "7d\\\\";
                     break;
                 case TREND_SIDEWAYS:
                 default:
@@ -319,10 +319,10 @@ void TrendDetector::checkMediumTrendChange(float ret_4h_value, float ret_1d_valu
         const char* fromTrendTranslated = fromTrend;
         const char* toTrendTranslated = toTrend;
         if (strcmp(fromTrend, "UP") == 0) fromTrendTranslated = "1d//";
-        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = "1d\\";
+        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = "1d\\\\";
         else if (strcmp(fromTrend, "SIDEWAYS") == 0) fromTrendTranslated = "1d=";
         if (strcmp(toTrend, "UP") == 0) toTrendTranslated = "1d//";
-        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = "1d\\";
+        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = "1d\\\\";
         else if (strcmp(toTrend, "SIDEWAYS") == 0) toTrendTranslated = "1d=";
         
         // Bepaal korte termijn trend voor context
@@ -333,7 +333,7 @@ void TrendDetector::checkMediumTrendChange(float ret_4h_value, float ret_1d_valu
                 shortTermTrendText = "2h//";
                 break;
             case TREND_DOWN:
-                shortTermTrendText = "2h\\";
+                shortTermTrendText = "2h\\\\";
                 break;
             case TREND_SIDEWAYS:
             default:
@@ -401,10 +401,10 @@ void TrendDetector::checkLongTermTrendChange(float ret_7d_value, float longTermT
         const char* fromTrendTranslated = fromTrend;
         const char* toTrendTranslated = toTrend;
         if (strcmp(fromTrend, "UP") == 0) fromTrendTranslated = "7d//";
-        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = "7d\\";
+        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = "7d\\\\";
         else if (strcmp(fromTrend, "SIDEWAYS") == 0) fromTrendTranslated = "7d=";
         if (strcmp(toTrend, "UP") == 0) toTrendTranslated = "7d//";
-        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = "7d\\";
+        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = "7d\\\\";
         else if (strcmp(toTrend, "SIDEWAYS") == 0) toTrendTranslated = "7d=";
         
         // Bepaal korte termijn trend voor context
@@ -415,7 +415,7 @@ void TrendDetector::checkLongTermTrendChange(float ret_7d_value, float longTermT
                 shortTermTrendText = "2h//";
                 break;
             case TREND_DOWN:
-                shortTermTrendText = "2h\\";
+                shortTermTrendText = "2h\\\\";
                 break;
             case TREND_SIDEWAYS:
             default:
