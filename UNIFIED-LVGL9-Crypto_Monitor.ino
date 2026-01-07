@@ -4073,7 +4073,11 @@ static inline float calculatePercentageReturn(float priceNow, float priceXAgo)
     if (priceXAgo == 0.0f || !isValidPrice(priceNow) || !isValidPrice(priceXAgo)) {
         return 0.0f;
     }
-    return ((priceNow - priceXAgo) / priceXAgo) * 100.0f;
+    float ret = ((priceNow - priceXAgo) / priceXAgo) * 100.0f;
+    if (isnan(ret) || isinf(ret)) {
+        return 0.0f;
+    }
+    return ret;
 }
 
 // Helper: Calculate percentage of SOURCE_LIVE entries in the last windowMinutes of minuteAverages

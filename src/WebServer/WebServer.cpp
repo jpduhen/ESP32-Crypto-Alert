@@ -90,6 +90,11 @@ extern bool queueAnchorSetting(float value, bool useCurrentPrice);
 #ifndef Serial_println
 #define Serial_println Serial.println
 #endif
+
+// Helper: check client connection before sending large HTML responses
+static inline bool isClientConnected(WebServer* srv) {
+    return (srv != nullptr) && srv->client().connected();
+}
 extern float calculateReturn1Minute();
 extern float calculateReturn5Minutes();
 extern float calculateReturn30Minutes();
@@ -179,6 +184,10 @@ void WebServerModule::handleClient() {
 // Performance optimalisatie: debug logging voor ESP32-S3
 void WebServerModule::renderSettingsHTML() {
     if (server == nullptr) return;
+    if (!isClientConnected(server)) {
+        Serial_println(F("[WEB] WARN: client disconnected, skip render"));
+        return;
+    }
     
     #if !DEBUG_BUTTON_ONLY
     unsigned long renderStart = millis();
@@ -1469,6 +1478,7 @@ String WebServerModule::getOrBuildSettingsPage() {
 // Fase 9.1.3: HTML helper functies verplaatst vanuit .ino
 void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyTopic) {
     if (server == nullptr) return;
+    if (!isClientConnected(server)) return;
     
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
     server->send(200, "text/html; charset=utf-8", "");
@@ -1677,6 +1687,7 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
 
 void WebServerModule::sendHtmlFooter() {
     if (server == nullptr) return;
+    if (!isClientConnected(server)) return;
     server->sendContent(F("</div>"));
     server->sendContent(F("</body></html>"));
 }
