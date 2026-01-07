@@ -4,8 +4,8 @@
 
 //#define PLATFORM_CYD24
 //#define PLATFORM_CYD28_1USB  // 1USB variant: geen kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
-//#define PLATFORM_CYD28_2USB  // 2USB variant: met kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
-#define PLATFORM_TTGO
+#define PLATFORM_CYD28_2USB  // 2USB variant: met kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
+//#define PLATFORM_TTGO
 //#define PLATFORM_ESP32S3_SUPERMINI
 //#define PLATFORM_ESP32S3_GEEK
 
