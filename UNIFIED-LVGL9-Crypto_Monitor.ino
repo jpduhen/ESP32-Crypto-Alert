@@ -1859,94 +1859,130 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
     // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
     netMutexLock("sendNtfyNotification");
     
+    const uint8_t MAX_RETRIES = 1; // Max 1 retry (2 pogingen totaal)
+    const uint32_t RETRY_DELAYS[] = {250, 750}; // Backoff delays in ms
     bool ok = false;
-    HTTPClient http;
     
-    // S2: do-while(0) patroon voor consistente cleanup
-    do {
-        // S2: Expliciete timeout settings
-    http.setTimeout(5000);
-        http.setReuse(false);
-    
-        if (!http.begin(url)) {
-        Serial_println(F("[Notify] Ntfy HTTP begin gefaald"));
-            break;
-    }
-    
-    http.addHeader("Title", title);
-    http.addHeader("Priority", "high");
-    
-    // Voeg kleur tag toe als opgegeven
-        if (colorTag != nullptr && strlen(colorTag) > 0) {
-            if (strlen(colorTag) <= 64) { // Valideer lengte
-            http.addHeader(F("Tags"), colorTag);
-            Serial_printf(F("[Notify] Ntfy Tag: %s\n"), colorTag);
-        }
-    }
-    
-    Serial_println(F("[Notify] Ntfy POST versturen..."));
-    int code = http.POST(message);
-    
-    // Haal response alleen op bij succes (bespaar geheugen)
-    // Gebruik static buffer i.p.v. String om fragmentatie te voorkomen
-        if (code == 200 || code == 201) {
-        WiFiClient* stream = http.getStreamPtr();
-        if (stream != nullptr) {
-            size_t totalLen = 0;
-            while (stream->available() && totalLen < (sizeof(httpResponseBuffer) - 1)) {
-                size_t bytesRead = stream->readBytes((uint8_t*)(httpResponseBuffer + totalLen), sizeof(httpResponseBuffer) - 1 - totalLen);
-                totalLen += bytesRead;
+    for (uint8_t attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        bool attemptOk = false;
+        bool shouldRetry = false;
+        int lastCode = 0;
+        HTTPClient http;
+        
+        // S2: do-while(0) patroon voor consistente cleanup
+        do {
+            // S2: Expliciete timeout settings
+            http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+            http.setTimeout(HTTP_READ_TIMEOUT_MS);
+            http.setReuse(false);
+        
+            if (!http.begin(url)) {
+                if (attempt == MAX_RETRIES) {
+                    Serial_println(F("[Notify] Ntfy HTTP begin gefaald"));
+                }
+                shouldRetry = (attempt < MAX_RETRIES);
+                break;
             }
-            httpResponseBuffer[totalLen] = '\0';
-            if (totalLen > 0) {
-                Serial_printf(F("[Notify] Ntfy response: %s\n"), httpResponseBuffer);
+        
+            http.addHeader("Title", title);
+            http.addHeader("Priority", "high");
+        
+            // Voeg kleur tag toe als opgegeven
+            if (colorTag != nullptr && strlen(colorTag) > 0) {
+                if (strlen(colorTag) <= 64) { // Valideer lengte
+                    http.addHeader(F("Tags"), colorTag);
+                    Serial_printf(F("[Notify] Ntfy Tag: %s\n"), colorTag);
+                }
             }
-        } else {
-                // M2: Fallback: stream niet beschikbaar, lees response body direct
-                // Voor POST responses kunnen we niet httpGetToBuffer() gebruiken
-                // In plaats daarvan lezen we de response body in chunks
-                size_t totalLen = 0;
-                const size_t CHUNK_SIZE = 256;
-                while (http.connected() && totalLen < (sizeof(httpResponseBuffer) - 1)) {
-                    size_t remaining = sizeof(httpResponseBuffer) - 1 - totalLen;
-                    size_t chunkSize = (remaining < CHUNK_SIZE) ? remaining : CHUNK_SIZE;
-                    
-                    // Probeer response body te lezen (POST response)
-                    WiFiClient* client = http.getStreamPtr();
-                    if (client == nullptr) {
-                        break;
+        
+            Serial_println(F("[Notify] Ntfy POST versturen..."));
+            int code = http.POST(message);
+            lastCode = code;
+        
+            // Haal response alleen op bij succes (bespaar geheugen)
+            // Gebruik static buffer i.p.v. String om fragmentatie te voorkomen
+            if (code == 200 || code == 201) {
+                WiFiClient* stream = http.getStreamPtr();
+                if (stream != nullptr) {
+                    size_t totalLen = 0;
+                    while (stream->available() && totalLen < (sizeof(httpResponseBuffer) - 1)) {
+                        size_t bytesRead = stream->readBytes((uint8_t*)(httpResponseBuffer + totalLen), sizeof(httpResponseBuffer) - 1 - totalLen);
+                        totalLen += bytesRead;
                     }
-                    
-                    size_t bytesRead = client->readBytes((uint8_t*)(httpResponseBuffer + totalLen), chunkSize);
-                    if (bytesRead == 0) {
-                        if (!client->available()) {
+                    httpResponseBuffer[totalLen] = '\0';
+                    if (totalLen > 0) {
+                        Serial_printf(F("[Notify] Ntfy response: %s\n"), httpResponseBuffer);
+                    }
+                } else {
+                    // M2: Fallback: stream niet beschikbaar, lees response body direct
+                    // Voor POST responses kunnen we niet httpGetToBuffer() gebruiken
+                    // In plaats daarvan lezen we de response body in chunks
+                    size_t totalLen = 0;
+                    const size_t CHUNK_SIZE = 256;
+                    while (http.connected() && totalLen < (sizeof(httpResponseBuffer) - 1)) {
+                        size_t remaining = sizeof(httpResponseBuffer) - 1 - totalLen;
+                        size_t chunkSize = (remaining < CHUNK_SIZE) ? remaining : CHUNK_SIZE;
+                        
+                        // Probeer response body te lezen (POST response)
+                        WiFiClient* client = http.getStreamPtr();
+                        if (client == nullptr) {
                             break;
                         }
-                        delay(10);
-                        continue;
+                        
+                        size_t bytesRead = client->readBytes((uint8_t*)(httpResponseBuffer + totalLen), chunkSize);
+                        if (bytesRead == 0) {
+                            if (!client->available()) {
+                                break;
+                            }
+                            delay(10);
+                            continue;
+                        }
+                        totalLen += bytesRead;
                     }
-                    totalLen += bytesRead;
+                    httpResponseBuffer[totalLen] = '\0';
+                    if (totalLen > 0) {
+                        Serial_printf(F("[Notify] Ntfy response: %s\n"), httpResponseBuffer);
+                    }
                 }
-                httpResponseBuffer[totalLen] = '\0';
-                if (totalLen > 0) {
-                    Serial_printf(F("[Notify] Ntfy response: %s\n"), httpResponseBuffer);
-                }
+                
+                Serial_printf(F("[Notify] Ntfy bericht succesvol verstuurd! (code: %d)\n"), code);
+                attemptOk = true;
+                ok = true;
+            } else {
+                Serial_printf(F("[Notify] Ntfy fout bij versturen (code: %d)\n"), code);
+                shouldRetry = (code == HTTPC_ERROR_CONNECTION_REFUSED ||
+                               code == HTTPC_ERROR_CONNECTION_LOST ||
+                               code == HTTPC_ERROR_READ_TIMEOUT ||
+                               code == HTTPC_ERROR_SEND_HEADER_FAILED ||
+                               code == HTTPC_ERROR_SEND_PAYLOAD_FAILED ||
+                               code == 429 ||
+                               (code >= 500 && code < 600));
             }
-            
-        Serial_printf(F("[Notify] Ntfy bericht succesvol verstuurd! (code: %d)\n"), code);
-            ok = true;
-        } else {
-            // S2: Log zonder String concatenatie
-        Serial_printf(F("[Notify] Ntfy fout bij versturen (code: %d)\n"), code);
-    }
-    } while(0);
-    
-    // C2: ALTIJD cleanup (ook bij code<0, code!=200, parse error)
-    // Hard close: http.end() + client.stop() voor volledige cleanup
-    http.end();
-    WiFiClient* stream = http.getStreamPtr();
-    if (stream != nullptr) {
-        stream->stop();
+        } while(0);
+        
+        // C2: ALTIJD cleanup (ook bij code<0, code!=200, parse error)
+        // Hard close: http.end() + client.stop() voor volledige cleanup
+        http.end();
+        WiFiClient* stream = http.getStreamPtr();
+        if (stream != nullptr) {
+            stream->stop();
+        }
+        
+        if (attemptOk) {
+            if (attempt > 0) {
+                Serial_printf(F("[Notify] Succes na retry (poging %d/%d)\n"), attempt + 1, MAX_RETRIES + 1);
+            }
+            break;
+        }
+        
+        if (shouldRetry && attempt < MAX_RETRIES) {
+            uint32_t backoffDelay = (attempt < sizeof(RETRY_DELAYS)/sizeof(RETRY_DELAYS[0])) ? RETRY_DELAYS[attempt] : 500;
+            if (lastCode == 429 && backoffDelay < 1000) {
+                backoffDelay = 1000;
+            }
+            Serial_printf(F("[Notify] Retry %d/%d na %lu ms backoff\n"), attempt + 1, MAX_RETRIES, backoffDelay);
+            delay(backoffDelay);
+        }
     }
     
     // C2: Geef netwerk mutex vrij (met debug logging)
