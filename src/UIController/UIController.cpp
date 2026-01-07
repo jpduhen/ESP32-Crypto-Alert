@@ -1252,9 +1252,12 @@ void UIController::updateBTCEURCard(bool hasNewData)
     if (::priceLbl[0] != nullptr) {
             lv_obj_set_style_text_color(::priceLbl[0], lv_palette_main(LV_PALETTE_BLUE), 0);
     }
+    float activeAnchorPrice = AlertEngine::getActiveAnchorPrice(anchorPrice);
+    bool anchorDisplayActive = activeAnchorPrice > 0.0f;
+
     // Bereken dynamische anchor-waarden op basis van trend voor UI weergave
     AnchorConfigEffective effAnchorUI;
-    if (anchorActive && anchorPrice > 0.0f) {
+    if (anchorDisplayActive) {
         // Fase 5.3.14: Gebruik TrendDetector module getter i.p.v. globale variabele
         TrendState currentTrend = trendDetector.getTrendState();
         // Fase 6.2.7: Gebruik AnchorSystem module i.p.v. globale functie
@@ -1263,9 +1266,9 @@ void UIController::updateBTCEURCard(bool hasNewData)
     
     #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
     if (::anchorMaxLabel != nullptr) {
-        if (anchorActive && anchorPrice > 0.0f) {
+        if (anchorDisplayActive) {
             // Gebruik dynamische take profit waarde
-            float takeProfitPrice = anchorPrice * (1.0f + effAnchorUI.takeProfitPct / 100.0f);
+            float takeProfitPrice = activeAnchorPrice * (1.0f + effAnchorUI.takeProfitPct / 100.0f);
             // Update alleen als waarde veranderd is
             if (lastAnchorMaxValue != takeProfitPrice || lastAnchorMaxValue < 0.0f) {
                 snprintf(anchorMaxLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "%.2f", takeProfitPrice);
@@ -1283,12 +1286,12 @@ void UIController::updateBTCEURCard(bool hasNewData)
     }
     
     if (::anchorLabel != nullptr) {
-        if (anchorActive && anchorPrice > 0.0f) {
+        if (anchorDisplayActive) {
             // Update alleen als waarde veranderd is
-            if (lastAnchorValue != anchorPrice || lastAnchorValue < 0.0f) {
-                snprintf(anchorLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "%.2f", anchorPrice);
+            if (lastAnchorValue != activeAnchorPrice || lastAnchorValue < 0.0f) {
+                snprintf(anchorLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "%.2f", activeAnchorPrice);
                 lv_label_set_text(::anchorLabel, anchorLabelBuffer);
-                lastAnchorValue = anchorPrice;
+                lastAnchorValue = activeAnchorPrice;
             }
         } else {
             // Update alleen als label niet leeg is
@@ -1301,9 +1304,9 @@ void UIController::updateBTCEURCard(bool hasNewData)
     }
     
     if (::anchorMinLabel != nullptr) {
-        if (anchorActive && anchorPrice > 0.0f) {
+        if (anchorDisplayActive) {
             // Gebruik dynamische max loss waarde
-            float stopLossPrice = anchorPrice * (1.0f + effAnchorUI.maxLossPct / 100.0f);
+            float stopLossPrice = activeAnchorPrice * (1.0f + effAnchorUI.maxLossPct / 100.0f);
             // Update alleen als waarde veranderd is
             if (lastAnchorMinValue != stopLossPrice || lastAnchorMinValue < 0.0f) {
                 snprintf(anchorMinLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "%.2f", stopLossPrice);
@@ -1321,9 +1324,9 @@ void UIController::updateBTCEURCard(bool hasNewData)
     }
     #else
     if (::anchorMaxLabel != nullptr) {
-        if (anchorActive && anchorPrice > 0.0f) {
+        if (anchorDisplayActive) {
             // Toon dynamische take profit waarde (effectief percentage)
-            float takeProfitPrice = anchorPrice * (1.0f + effAnchorUI.takeProfitPct / 100.0f);
+            float takeProfitPrice = activeAnchorPrice * (1.0f + effAnchorUI.takeProfitPct / 100.0f);
             // Update alleen als waarde veranderd is
             if (lastAnchorMaxValue != takeProfitPrice || lastAnchorMaxValue < 0.0f) {
                 snprintf(anchorMaxLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "+%.2f%% %.2f", effAnchorUI.takeProfitPct, takeProfitPrice);
@@ -1341,22 +1344,22 @@ void UIController::updateBTCEURCard(bool hasNewData)
     }
     
     if (::anchorLabel != nullptr) {
-        if (anchorActive && anchorPrice > 0.0f && prices[0] > 0.0f) {
-            float anchorPct = ((prices[0] - anchorPrice) / anchorPrice) * 100.0f;
+        if (anchorDisplayActive && prices[0] > 0.0f) {
+            float anchorPct = ((prices[0] - activeAnchorPrice) / activeAnchorPrice) * 100.0f;
             // Update alleen als waarde veranderd is (check zowel anchorPrice als anchorPct)
-            float currentValue = anchorPrice + anchorPct;  // Combinatie voor cache check
+            float currentValue = activeAnchorPrice + anchorPct;  // Combinatie voor cache check
             if (lastAnchorValue != currentValue || lastAnchorValue < 0.0f) {
                 snprintf(anchorLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "%c%.2f%% %.2f",
-                         anchorPct >= 0 ? '+' : '-', fabsf(anchorPct), anchorPrice);
+                         anchorPct >= 0 ? '+' : '-', fabsf(anchorPct), activeAnchorPrice);
                 lv_label_set_text(::anchorLabel, anchorLabelBuffer);
                 lastAnchorValue = currentValue;
             }
-        } else if (anchorActive && anchorPrice > 0.0f) {
+        } else if (anchorDisplayActive) {
             // Update alleen als waarde veranderd is
-            if (lastAnchorValue != anchorPrice || lastAnchorValue < 0.0f) {
-                snprintf(anchorLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "%.2f", anchorPrice);
+            if (lastAnchorValue != activeAnchorPrice || lastAnchorValue < 0.0f) {
+                snprintf(anchorLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "%.2f", activeAnchorPrice);
                 lv_label_set_text(::anchorLabel, anchorLabelBuffer);
-                lastAnchorValue = anchorPrice;
+                lastAnchorValue = activeAnchorPrice;
             }
         } else {
             // Update alleen als label niet leeg is
@@ -1369,9 +1372,9 @@ void UIController::updateBTCEURCard(bool hasNewData)
     }
     
     if (::anchorMinLabel != nullptr) {
-        if (anchorActive && anchorPrice > 0.0f) {
+        if (anchorDisplayActive) {
             // Toon dynamische max loss waarde (effectief percentage)
-            float stopLossPrice = anchorPrice * (1.0f + effAnchorUI.maxLossPct / 100.0f);
+            float stopLossPrice = activeAnchorPrice * (1.0f + effAnchorUI.maxLossPct / 100.0f);
             // Update alleen als waarde veranderd is
             if (lastAnchorMinValue != stopLossPrice || lastAnchorMinValue < 0.0f) {
                 snprintf(anchorMinLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "%.2f%% %.2f", effAnchorUI.maxLossPct, stopLossPrice);
