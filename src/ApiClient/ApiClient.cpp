@@ -354,17 +354,26 @@ bool ApiClient::parseBinancePriceFromStream(WiFiClient* stream, float& out)
     size_t bytesRead = 0;
     const size_t MAX_READ = sizeof(buffer) - 1;
     
-    // Lees response body in chunks
-    while (stream->available() && bytesRead < MAX_READ) {
-        size_t n = stream->readBytes((uint8_t*)(buffer + bytesRead), MAX_READ - bytesRead);
-        if (n == 0) {
-            if (!stream->available()) {
-                break;
+    // Lees response body in chunks met timeout
+    unsigned long readStart = millis();
+    while (bytesRead < MAX_READ) {
+        if (stream->available()) {
+            size_t n = stream->readBytes((uint8_t*)(buffer + bytesRead), MAX_READ - bytesRead);
+            if (n == 0) {
+                delay(10);
+                if ((millis() - readStart) > HTTP_READ_TIMEOUT_MS_DEFAULT) {
+                    break;
+                }
+                continue;
             }
-            delay(10);
+            bytesRead += n;
+            readStart = millis();  // reset timeout bij ontvangst data
             continue;
         }
-        bytesRead += n;
+        if ((millis() - readStart) > HTTP_READ_TIMEOUT_MS_DEFAULT) {
+            break;
+        }
+        delay(10);
     }
     buffer[bytesRead] = '\0';
     
@@ -398,88 +407,128 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
     // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
     netMutexLock("ApiClient::fetchBinancePrice");
     
+    const uint8_t MAX_RETRIES = 1; // Max 1 retry (2 pogingen totaal)
+    const uint32_t RETRY_DELAYS[] = {250, 750}; // Backoff delays in ms (extra delay voor rate limiting)
     bool ok = false;
-    // Gebruik lokaal HTTPClient object (zoals fetchBinanceKlines doet) - persistent client geeft HTTP 400
-    HTTPClient http;
     
-    // S2: do-while(0) patroon voor consistente cleanup
-    do {
-        // T1: Expliciete connect/read timeout settings (verhoogd naar 4000ms)
-        http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS_DEFAULT);
-        http.setTimeout(HTTP_READ_TIMEOUT_MS_DEFAULT);
-        // Geen keep-alive voor nu (lokaal object, zoals fetchBinanceKlines)
-        http.setReuse(false);
+    for (uint8_t attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        bool attemptOk = false;
+        bool shouldRetry = false;
+        int lastCode = 0;
         
-        // N2: Voeg User-Agent header toe VOOR http.begin() om Cloudflare blocking te voorkomen
-        // Headers moeten worden toegevoegd voordat de verbinding wordt geopend
-        http.addHeader(F("User-Agent"), F("ESP32-CryptoMonitor/1.0"));
-        http.addHeader(F("Accept"), F("application/json"));
+        // Gebruik lokaal HTTPClient object (zoals fetchBinanceKlines doet) - persistent client geeft HTTP 400
+        HTTPClient http;
         
-        unsigned long requestStart = millis();
-        
-        // Normale URL flow (zoals voorheen, zonder DNS cache)
-        #if !DEBUG_BUTTON_ONLY
-        Serial.printf(F("[API] Fetching price from: %s\n"), url);
-        #endif
-        if (!http.begin(url)) {
+        // S2: do-while(0) patroon voor consistente cleanup per attempt
+        do {
+            // T1: Expliciete connect/read timeout settings (verhoogd naar 4000ms)
+            http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS_DEFAULT);
+            http.setTimeout(HTTP_READ_TIMEOUT_MS_DEFAULT);
+            // Geen keep-alive voor nu (lokaal object, zoals fetchBinanceKlines)
+            http.setReuse(false);
+            
+            // N2: Voeg User-Agent header toe VOOR http.begin() om Cloudflare blocking te voorkomen
+            // Headers moeten worden toegevoegd voordat de verbinding wordt geopend
+            http.addHeader(F("User-Agent"), F("ESP32-CryptoMonitor/1.0"));
+            http.addHeader(F("Accept"), F("application/json"));
+            
+            unsigned long requestStart = millis();
+            
+            // Normale URL flow (zoals voorheen, zonder DNS cache)
             #if !DEBUG_BUTTON_ONLY
-            Serial.printf(F("[API] http.begin() gefaald voor URL: %s\n"), url);
+            Serial.printf(F("[API] Fetching price from: %s\n"), url);
             #endif
-            break;
+            if (!http.begin(url)) {
+                #if !DEBUG_BUTTON_ONLY
+                if (attempt == MAX_RETRIES) {
+                    Serial.printf(F("[API] http.begin() gefaald voor URL: %s\n"), url);
+                }
+                #endif
+                shouldRetry = (attempt < MAX_RETRIES);
+                break;
+            }
+            
+            int code = http.GET();
+            unsigned long requestTime = millis() - requestStart;
+            lastCode = code;
+            
+            // M1: Heap telemetry na HTTP GET
+            logHeap("API_GET_POST");
+            
+            if (code != 200) {
+                // Geoptimaliseerd: gebruik helper functie voor error logging
+                const char* phase = detectHttpErrorPhase(code);
+                logHttpError(code, phase, requestTime, attempt, MAX_RETRIES + 1, "[API]");
+                
+                // Retry-waardige fouten (netwerk, rate-limit, server errors)
+                shouldRetry = (code == HTTPC_ERROR_CONNECTION_REFUSED ||
+                              code == HTTPC_ERROR_CONNECTION_LOST ||
+                              code == HTTPC_ERROR_READ_TIMEOUT ||
+                              code == HTTPC_ERROR_SEND_HEADER_FAILED ||
+                              code == HTTPC_ERROR_SEND_PAYLOAD_FAILED ||
+                              code == 429 ||
+                              (code >= 500 && code < 600));
+                
+                // N2: Log ook response body bij HTTP 400 voor debugging
+                if (code == 400) {
+                    WiFiClient* errorStream = http.getStreamPtr();
+                    if (errorStream != nullptr && errorStream->available()) {
+                        char errorBuf[256];
+                        size_t errorLen = errorStream->readBytes((uint8_t*)errorBuf, sizeof(errorBuf) - 1);
+                        errorBuf[errorLen] = '\0';
+                        Serial.printf(F("[API] HTTP 400 response body: %s\n"), errorBuf);
+                    }
+                }
+                break;
+            }
+            
+            // S1: Parse direct van stream (geen body buffer)
+            WiFiClient* stream = http.getStreamPtr();
+            if (stream == nullptr) {
+                Serial.println(F("[API] Stream pointer is null"));
+                break;
+            }
+            
+            // M1: Heap telemetry vóór JSON parse
+            logHeap("API_PARSE_PRE");
+            
+            // Parse price from stream
+            if (!parseBinancePriceFromStream(stream, out)) {
+                Serial.println(F("[API] JSON parse failed"));
+                break;
+            }
+            
+            // M1: Heap telemetry na JSON parse
+            logHeap("API_PARSE_POST");
+            
+            attemptOk = true;
+            ok = true;
+        } while(0);
+        
+        // C2: ALTIJD cleanup (ook bij succes) - HTTPClient op ESP32 vereist dit voor correcte reset
+        // Hard close: http.end() + client.stop() voor volledige cleanup
+        http.end();
+        WiFiClient* stream = http.getStreamPtr();
+        if (stream != nullptr) {
+            stream->stop();
         }
         
-        int code = http.GET();
-        unsigned long requestTime = millis() - requestStart;
-        
-        // M1: Heap telemetry na HTTP GET
-        logHeap("API_GET_POST");
-        
-        if (code != 200) {
-            // Geoptimaliseerd: gebruik helper functie voor error logging
-            const char* phase = detectHttpErrorPhase(code);
-            logHttpError(code, phase, requestTime, 0, 1, "[API]");
-            
-            // N2: Log ook response body bij HTTP 400 voor debugging
-            if (code == 400) {
-                WiFiClient* errorStream = http.getStreamPtr();
-                if (errorStream != nullptr && errorStream->available()) {
-                    char errorBuf[256];
-                    size_t errorLen = errorStream->readBytes((uint8_t*)errorBuf, sizeof(errorBuf) - 1);
-                    errorBuf[errorLen] = '\0';
-                    Serial.printf(F("[API] HTTP 400 response body: %s\n"), errorBuf);
-                }
+        if (attemptOk) {
+            if (attempt > 0) {
+                Serial.printf(F("[API] Succes na retry (poging %d/%d)\n"), attempt + 1, MAX_RETRIES + 1);
             }
             break;
         }
         
-        // S1: Parse direct van stream (geen body buffer)
-        WiFiClient* stream = http.getStreamPtr();
-        if (stream == nullptr) {
-            Serial.println(F("[API] Stream pointer is null"));
-            break;
+        if (shouldRetry && attempt < MAX_RETRIES) {
+            uint32_t backoffDelay = (attempt < sizeof(RETRY_DELAYS)/sizeof(RETRY_DELAYS[0])) ? RETRY_DELAYS[attempt] : 500;
+            if (lastCode == 429 && backoffDelay < 1000) {
+                backoffDelay = 1000;
+            }
+            Serial.printf(F("[API] Retry %d/%d na %lu ms backoff\n"), attempt + 1, MAX_RETRIES, backoffDelay);
+            delay(backoffDelay);
+            continue;
         }
-        
-        // M1: Heap telemetry vóór JSON parse
-        logHeap("API_PARSE_PRE");
-        
-        // Parse price from stream
-        if (!parseBinancePriceFromStream(stream, out)) {
-            Serial.println(F("[API] JSON parse failed"));
-            break;
-        }
-        
-        // M1: Heap telemetry na JSON parse
-        logHeap("API_PARSE_POST");
-        
-        ok = true;
-    } while(0);
-    
-    // C2: ALTIJD cleanup (ook bij succes) - HTTPClient op ESP32 vereist dit voor correcte reset
-    // Hard close: http.end() + client.stop() voor volledige cleanup
-    http.end();
-    WiFiClient* stream = http.getStreamPtr();
-    if (stream != nullptr) {
-        stream->stop();
     }
     
     // C2: Geef netwerk mutex vrij (met debug logging)
@@ -487,7 +536,6 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
     
     return ok;
 }
-
 
 
 
