@@ -192,12 +192,12 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
         // Vertaal trends naar juiste taal (2h voor NL/EN)
         const char* fromTrendTranslated = fromTrend;
         const char* toTrendTranslated = toTrend;
-        if (strcmp(fromTrend, "UP") == 0) fromTrendTranslated = getText("2h+", "2h+");
-        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = getText("2h-", "2h-");
-        else if (strcmp(fromTrend, "SIDEWAYS") == 0) fromTrendTranslated = getText("2h=", "2h=");
-        if (strcmp(toTrend, "UP") == 0) toTrendTranslated = getText("2h+", "2h+");
-        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = getText("2h-", "2h-");
-        else if (strcmp(toTrend, "SIDEWAYS") == 0) toTrendTranslated = getText("2h=", "2h=");
+        if (strcmp(fromTrend, "UP") == 0) fromTrendTranslated = "2h//";
+        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = "2h\\";
+        else if (strcmp(fromTrend, "SIDEWAYS") == 0) fromTrendTranslated = "2h=";
+        if (strcmp(toTrend, "UP") == 0) toTrendTranslated = "2h//";
+        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = "2h\\";
+        else if (strcmp(toTrend, "SIDEWAYS") == 0) toTrendTranslated = "2h=";
         
         // VolText is al in Nederlands (getVolatilityText geeft "Rustig", "Gemiddeld", "Volatiel")
         // Vertaal naar Engels indien nodig
@@ -216,14 +216,14 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
             TrendState mediumTrend = this->determineMediumTrendState(0.0f, ret_1d, mediumThreshold);
             switch (mediumTrend) {
                 case TREND_UP:
-                    mediumTrendText = getText("1d+", "1d+");
+                    mediumTrendText = "1d//";
                     break;
                 case TREND_DOWN:
-                    mediumTrendText = getText("1d-", "1d-");
+                    mediumTrendText = "1d\\";
                     break;
                 case TREND_SIDEWAYS:
                 default:
-                    mediumTrendText = getText("1d=", "1d=");
+                    mediumTrendText = "1d=";
                     break;
             }
         } else {
@@ -239,14 +239,14 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
             TrendState longTermTrend = this->determineLongTermTrendState(ret_7d, longTermThreshold);
             switch (longTermTrend) {
                 case TREND_UP:
-                    longTermTrendText = getText("7d+", "7d+");
+                    longTermTrendText = "7d//";
                     break;
                 case TREND_DOWN:
-                    longTermTrendText = getText("7d-", "7d-");
+                    longTermTrendText = "7d\\";
                     break;
                 case TREND_SIDEWAYS:
                 default:
-                    longTermTrendText = getText("7d=", "7d=");
+                    longTermTrendText = "7d=";
                     break;
             }
         } else {
@@ -315,14 +315,14 @@ void TrendDetector::checkMediumTrendChange(float ret_4h_value, float ret_1d_valu
         char timestamp[32];
         getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
         
-        // Vertaal trends naar juiste taal (1d voor beide talen)
+        // Vertaal trends naar juiste taal (1d voor beide talen, gebruik //, \\, = zoals in UI)
         const char* fromTrendTranslated = fromTrend;
         const char* toTrendTranslated = toTrend;
-        if (strcmp(fromTrend, "UP") == 0) fromTrendTranslated = "1d+";
-        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = "1d-";
+        if (strcmp(fromTrend, "UP") == 0) fromTrendTranslated = "1d//";
+        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = "1d\\";
         else if (strcmp(fromTrend, "SIDEWAYS") == 0) fromTrendTranslated = "1d=";
-        if (strcmp(toTrend, "UP") == 0) toTrendTranslated = "1d+";
-        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = "1d-";
+        if (strcmp(toTrend, "UP") == 0) toTrendTranslated = "1d//";
+        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = "1d\\";
         else if (strcmp(toTrend, "SIDEWAYS") == 0) toTrendTranslated = "1d=";
         
         // Bepaal korte termijn trend voor context
@@ -330,14 +330,14 @@ void TrendDetector::checkMediumTrendChange(float ret_4h_value, float ret_1d_valu
         const char* shortTermTrendText = "";
         switch (trendState) {
             case TREND_UP:
-                shortTermTrendText = getText("2h+", "2h+");
+                shortTermTrendText = "2h//";
                 break;
             case TREND_DOWN:
-                shortTermTrendText = getText("2h-", "2h-");
+                shortTermTrendText = "2h\\";
                 break;
             case TREND_SIDEWAYS:
             default:
-                shortTermTrendText = getText("2h=", "2h=");
+                shortTermTrendText = "2h=";
                 break;
         }
         
@@ -397,14 +397,14 @@ void TrendDetector::checkLongTermTrendChange(float ret_7d_value, float longTermT
         char timestamp[32];
         getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
         
-        // Vertaal trends naar juiste taal (7d voor beide talen)
+        // Vertaal trends naar juiste taal (7d voor beide talen, gebruik //, \\, = zoals in UI)
         const char* fromTrendTranslated = fromTrend;
         const char* toTrendTranslated = toTrend;
-        if (strcmp(fromTrend, "UP") == 0) fromTrendTranslated = "7d+";
-        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = "7d-";
+        if (strcmp(fromTrend, "UP") == 0) fromTrendTranslated = "7d//";
+        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = "7d\\";
         else if (strcmp(fromTrend, "SIDEWAYS") == 0) fromTrendTranslated = "7d=";
-        if (strcmp(toTrend, "UP") == 0) toTrendTranslated = "7d+";
-        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = "7d-";
+        if (strcmp(toTrend, "UP") == 0) toTrendTranslated = "7d//";
+        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = "7d\\";
         else if (strcmp(toTrend, "SIDEWAYS") == 0) toTrendTranslated = "7d=";
         
         // Bepaal korte termijn trend voor context
@@ -412,14 +412,14 @@ void TrendDetector::checkLongTermTrendChange(float ret_7d_value, float longTermT
         const char* shortTermTrendText = "";
         switch (trendState) {
             case TREND_UP:
-                shortTermTrendText = getText("2h+", "2h+");
+                shortTermTrendText = "2h//";
                 break;
             case TREND_DOWN:
-                shortTermTrendText = getText("2h-", "2h-");
+                shortTermTrendText = "2h\\";
                 break;
             case TREND_SIDEWAYS:
             default:
-                shortTermTrendText = getText("2h=", "2h=");
+                shortTermTrendText = "2h=";
                 break;
         }
         

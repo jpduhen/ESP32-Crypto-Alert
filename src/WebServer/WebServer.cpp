@@ -325,13 +325,13 @@ void WebServerModule::renderSettingsHTML() {
     sendSectionHeader(getText("Anchor & Risicokader", "Anchor & Risk Framework"), "anchor", true);
     sendSectionDesc(getText("Anchor prijs instellingen en risicobeheer", "Anchor price settings and risk management"));
     
-    // TP/SL Strategie dropdown
+    // 2h/2h Strategie dropdown
     const char* strategyOptions[] = {
         getText("Handmatig", "Manual"),
-        getText("Conservatief (TP +1.8%, SL -1.2%)", "Conservative (TP +1.8%, SL -1.2%)"),
-        getText("Actief (TP +1.2%, SL -0.9%)", "Active (TP +1.2%, SL -0.9%)")
+        getText("Conservatief (2h +1.8%, 2h -1.2%)", "Conservative (2h +1.8%, 2h -1.2%)"),
+        getText("Actief (2h +1.2%, 2h -0.9%)", "Active (2h +1.2%, 2h -0.9%)")
     };
-    sendDropdownRow(getText("TP/SL Strategie", "TP/SL Strategy"), "anchorStrategy", anchorStrategy, strategyOptions, 3);
+    sendDropdownRow(getText("2h/2h Strategie", "2h/2h Strategy"), "anchorStrategy", anchorStrategy, strategyOptions, 3);
     
     snprintf(valueBuf, sizeof(valueBuf), "%.2f", anchorTakeProfit);
     sendInputRow(getText("Take Profit", "Take Profit"), "anchorTP", "number", 
@@ -999,13 +999,13 @@ void WebServerModule::handleSave() {
     // Anchor setting wordt verwerkt via een aparte route /anchor/set die sneller is
     if (parseIntArg("anchorStrategy", intVal, 0, 2)) {
         anchorStrategy = static_cast<uint8_t>(intVal);
-        // Pas TP/SL automatisch aan op basis van strategie
+        // Pas 2h/2h automatisch aan op basis van strategie
         if (anchorStrategy == 1) {
-            // Conservatief: TP +1.8%, SL -1.2%
+            // Conservatief: 2h +1.8%, 2h -1.2%
             anchorTakeProfit = 1.8f;
             anchorMaxLoss = -1.2f;
         } else if (anchorStrategy == 2) {
-            // Actief: TP +1.2%, SL -0.9%
+            // Actief: 2h +1.2%, 2h -0.9%
             anchorTakeProfit = 1.2f;
             anchorMaxLoss = -0.9f;
         }
@@ -1587,7 +1587,7 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(F("var val=this.value.replace(',','.');"));
     server->sendContent(F("if(val!==this.value){this.value=val;}});"));
     server->sendContent(F("}"));
-    // TP/SL Strategie dropdown JavaScript
+    // 2h/2h Strategie dropdown JavaScript
     server->sendContent(F("var strategySelect=document.querySelector('select[name=\"anchorStrategy\"]');"));
     server->sendContent(F("if(strategySelect){"));
     server->sendContent(F("strategySelect.addEventListener('change',function(){"));
@@ -1780,8 +1780,8 @@ void WebServerModule::sendSectionDesc(const char* desc) {
 // Helper: Get trend text (geoptimaliseerd: elimineert switch duplicatie)
 const char* WebServerModule::getTrendText(TrendState trend) {
     switch (trend) {
-        case TREND_UP: return "+";
-        case TREND_DOWN: return "-";
+        case TREND_UP: return "//";
+        case TREND_DOWN: return "\\";
         case TREND_SIDEWAYS:
         default: return "=";
     }
@@ -1794,9 +1794,9 @@ void WebServerModule::formatTrendLabel(char* buffer, size_t bufferSize, const ch
 // Helper: Get volatility text (geoptimaliseerd: elimineert switch duplicatie)
 const char* WebServerModule::getVolatilityText(VolatilityState vol) {
     switch (vol) {
-        case VOLATILITY_LOW: return getText("Laag", "Low");
-        case VOLATILITY_MEDIUM: return getText("Gemiddeld", "Medium");
-        case VOLATILITY_HIGH: return getText("Hoog", "High");
+        case VOLATILITY_LOW: return getText("VLAK", "FLAT");
+        case VOLATILITY_MEDIUM: return getText("GOLVEND", "WAVES");
+        case VOLATILITY_HIGH: return getText("GRILLIG", "VOLATILE");
         default: return getText("Onbekend", "Unknown");
     }
 }

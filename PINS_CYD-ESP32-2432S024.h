@@ -1,9 +1,13 @@
 // PINS_CYD-ESP32-2432S024.h
 // Pin definitions for Cheap Yellow Display (CYD) ESP32-2432S024
 // 2.4 inch 240x320 TFT display with ILI9341 controller
+// Met kleurinversie voor display (PLATFORM_CYD24_INVERT_COLORS)
 // Based on Setup901_CYD_2432S024R.h pin definitions
 
 #if defined(ESP32)
+
+// Definieer flag voor kleurinversie (wordt gebruikt in setupDisplay())
+#define PLATFORM_CYD24_INVERT_COLORS
 
 #include <Arduino_GFX_Library.h>
 

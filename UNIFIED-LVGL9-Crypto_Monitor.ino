@@ -1111,7 +1111,7 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
                         lastParsedKline.openTime = openTime;
                         lastParsedKline.valid = true;
                     }
-
+                    
                     if (totalParsed >= (int)limit) {
                         goto parse_done;
                     }
@@ -3007,38 +3007,38 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                             settingChanged = true;
                         }
                         handled = true;
-                    } else {
-                        // anchorValue/set - speciale logica (queue voor asynchrone verwerking)
-                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorValue/set", prefixBuffer);
-                        if (strcmp(topicBuffer, topicBufferFull) == 0) {
-                            // Verwerk anchor waarde via MQTT
-                            float val = 0.0f;
-                            bool useCurrentPrice = false;
-                            bool valid = false;
-                            
-                            // Lege waarde of "current" = gebruik huidige prijs
-                            if (strlen(msgBuffer) == 0 || strcmp(msgBuffer, "current") == 0 || 
-                                strcmp(msgBuffer, "CURRENT") == 0 || strcmp(msgBuffer, "0") == 0) {
-                                useCurrentPrice = true;
-                                valid = queueAnchorSetting(0.0f, true);
-                                if (valid) {
-                                    Serial_println("[MQTT] Anchor setting queued: gebruik huidige prijs");
-                                }
-                            } else if (safeAtof(msgBuffer, val) && val > 0.0f && isValidPrice(val)) {
-                                // Valide waarde - zet in queue voor asynchrone verwerking
-                                useCurrentPrice = false;
-                                valid = queueAnchorSetting(val, false);
-                                if (valid) {
-                                    Serial_printf(F("[MQTT] Anchor setting queued: %.2f\n"), val);
-                                }
-                            } else {
-                                Serial_printf(F("[MQTT] WARN: Ongeldige anchor waarde opgegeven: %s\n"), msgBuffer);
-                            }
-                            
-                            // Publiceer bevestiging terug
-                            snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorValue", prefixBuffer);
+                } else {
+                    // anchorValue/set - speciale logica (queue voor asynchrone verwerking)
+                    snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorValue/set", prefixBuffer);
+                    if (strcmp(topicBuffer, topicBufferFull) == 0) {
+                        // Verwerk anchor waarde via MQTT
+                        float val = 0.0f;
+                        bool useCurrentPrice = false;
+                        bool valid = false;
+                        
+                        // Lege waarde of "current" = gebruik huidige prijs
+                        if (strlen(msgBuffer) == 0 || strcmp(msgBuffer, "current") == 0 || 
+                            strcmp(msgBuffer, "CURRENT") == 0 || strcmp(msgBuffer, "0") == 0) {
+                            useCurrentPrice = true;
+                            valid = queueAnchorSetting(0.0f, true);
                             if (valid) {
-                                if (useCurrentPrice) {
+                                Serial_println("[MQTT] Anchor setting queued: gebruik huidige prijs");
+                            }
+                        } else if (safeAtof(msgBuffer, val) && val > 0.0f && isValidPrice(val)) {
+                            // Valide waarde - zet in queue voor asynchrone verwerking
+                            useCurrentPrice = false;
+                            valid = queueAnchorSetting(val, false);
+                            if (valid) {
+                                Serial_printf(F("[MQTT] Anchor setting queued: %.2f\n"), val);
+                            }
+                        } else {
+                            Serial_printf(F("[MQTT] WARN: Ongeldige anchor waarde opgegeven: %s\n"), msgBuffer);
+                        }
+                        
+                        // Publiceer bevestiging terug
+                        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorValue", prefixBuffer);
+                        if (valid) {
+                            if (useCurrentPrice) {
                                     // Publiceer huidige prijs als state (default waarde)
                                     extern float prices[];
                                     if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "mqttCallback anchorValue")) {
@@ -3050,15 +3050,15 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                                         // Fallback: gebruik 0 als placeholder (wordt later geupdate)
                                         mqttClient.publish(topicBufferFull, "0.00", true);
                                     }
-                                } else {
-                                    snprintf(valueBuffer, sizeof(valueBuffer), "%.2f", val);
-                                    mqttClient.publish(topicBufferFull, valueBuffer, true);
-                                }
                             } else {
-                                mqttClient.publish(topicBufferFull, "ERROR: Invalid value", false);
+                                snprintf(valueBuffer, sizeof(valueBuffer), "%.2f", val);
+                                    mqttClient.publish(topicBufferFull, valueBuffer, true);
                             }
-                            handled = true;
                         } else {
+                            mqttClient.publish(topicBufferFull, "ERROR: Invalid value", false);
+                        }
+                        handled = true;
+                                } else {
                             // anchorStrategy/set - speciale logica (pas TP/SL aan)
                             snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/anchorStrategy/set", prefixBuffer);
                             if (strcmp(topicBuffer, topicBufferFull) == 0) {
@@ -3332,10 +3332,10 @@ static void formatTrendLabel(char* buffer, size_t bufferSize, const char* prefix
     const char* suffix = "=";
     switch (trend) {
         case TREND_UP:
-            suffix = "+";
+            suffix = "//";
             break;
         case TREND_DOWN:
-            suffix = "-";
+            suffix = "\\";
             break;
         case TREND_SIDEWAYS:
         default:
@@ -3501,7 +3501,7 @@ void publishMqttDiscovery() {
     snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"30m Return\",\"unique_id\":\"%s_return_30m\",\"state_topic\":\"%s/values/return_30m\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:trending-up\",%s}", deviceId, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
-
+    
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/sensor/%s_return_2h/config", deviceId);
     snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Return\",\"unique_id\":\"%s_return_2h\",\"state_topic\":\"%s/values/return_2h\",\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:trending-up\",%s}", deviceId, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
@@ -3568,7 +3568,7 @@ void publishMqttDiscovery() {
     snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Trend Threshold\",\"unique_id\":\"%s_trendThreshold\",\"state_topic\":\"%s/config/trendThreshold\",\"command_topic\":\"%s/config/trendThreshold/set\",\"min\":0.1,\"max\":10.0,\"step\":0.1,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-line\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
-
+    
     // Volatility low threshold
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_volatilityLowThreshold/config", deviceId);
     snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Volatility Low Threshold\",\"unique_id\":\"%s_volatilityLowThreshold\",\"state_topic\":\"%s/config/volatilityLowThreshold\",\"command_topic\":\"%s/config/volatilityLowThreshold/set\",\"min\":0.01,\"max\":1.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:chart-timeline-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
@@ -4898,9 +4898,9 @@ static float calculateReturnFromHourly(uint16_t hoursBack)
     if (!hourArrayFilled)
     {
         idxHoursAgo = lastHourIdx - hoursAgo;
-    }
-    else
-    {
+            }
+            else
+            {
         int32_t idxHoursAgoTemp = getRingBufferIndexAgo(lastHourIdx, hoursAgo, HOURS_FOR_7D);
         if (idxHoursAgoTemp < 0) {
             return 0.0f;
@@ -5448,6 +5448,15 @@ void updateFooter()
             lv_label_set_text(ipLabel, "--");
         }
     }
+    
+    // TTGO/GEEK: Update versie label (rechtsonder) - force update als cache leeg is
+    if (chartVersionLabel != nullptr) {
+        if (strlen(lastVersionText) == 0 || strcmp(lastVersionText, VERSION_STRING) != 0) {
+            lv_label_set_text(chartVersionLabel, VERSION_STRING);
+            strncpy(lastVersionText, VERSION_STRING, sizeof(lastVersionText) - 1);
+            lastVersionText[sizeof(lastVersionText) - 1] = '\0';
+        }
+    }
     #elif defined(PLATFORM_ESP32S3_SUPERMINI)
     if (ipLabel != nullptr) {
         if (WiFi.status() == WL_CONNECTED) {
@@ -5470,7 +5479,7 @@ void updateFooter()
         snprintf(versionBuffer, sizeof(versionBuffer), "%ukB     %s", freeRAM, VERSION_STRING); // 5 spaties
         // Force update als cache leeg is of waarde veranderd is
         if (strlen(lastVersionText) == 0 || strcmp(lastVersionText, versionBuffer) != 0 || lastRamValue != freeRAM) {
-            lv_label_set_text(chartVersionLabel, versionBuffer);
+        lv_label_set_text(chartVersionLabel, versionBuffer);
             strncpy(lastVersionText, versionBuffer, sizeof(lastVersionText) - 1);
             lastVersionText[sizeof(lastVersionText) - 1] = '\0';
             lastRamValue = freeRAM;
@@ -5719,11 +5728,13 @@ static void setupDisplay()
     uint8_t rotation = (displayRotation == 2) ? 2 : 0;
     gfx->setRotation(rotation);
     // TTGO/ESP32-S3: altijd false (ST7789 heeft geen inversie nodig)
-    // CYD24/CYD28: standaard false, behalve voor 1USB variant (inverteert kleuren)
+    // CYD24/CYD28: standaard false, behalve wanneer INVERT_COLORS flag is gezet
     #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     gfx->invertDisplay(false); // TTGO/ESP32-S3 T-Display/GEEK heeft geen inversie nodig (ST7789)
+    #elif defined(PLATFORM_CYD24_INVERT_COLORS)
+    gfx->invertDisplay(true); // CYD24: inverteer kleuren
     #elif defined(PLATFORM_CYD28_INVERT_COLORS)
-    gfx->invertDisplay(true); // CYD28 1USB variant: inverteer kleuren
+    gfx->invertDisplay(true); // CYD28 2USB variant: inverteer kleuren
     #else
     gfx->invertDisplay(false); // CYD24/CYD28: geen inversie (standaard)
     #endif

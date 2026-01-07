@@ -903,7 +903,7 @@ void UIController::updateTrendLabel()
         TrendState currentTrend = trendDetector.getTrendState();
         switch (currentTrend) {
             case TREND_UP:
-                trendText = getText("2h/", "2h/");
+                trendText = getText("2h//", "2h//");
                 if (isFromWarmStart) {
                     trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
                 } else if (isFromLive) {
@@ -1046,7 +1046,7 @@ void UIController::updateVolumeConfirmLabel()
 
     if (lastVolumeRange1m.valid) {
         if (fabsf(lastVolumeRange1m.volumeDeltaPct) >= VOLUME_BADGE_THRESHOLD_PCT) {
-            volumeText = (lastVolumeRange1m.volumeDeltaPct >= 0.0f) ? "VOLUME+" : "VOLUME-";
+            volumeText = (lastVolumeRange1m.volumeDeltaPct >= 0.0f) ? "VOLUME//" : "VOLUME\\";
             volumeColor = (lastVolumeRange1m.volumeDeltaPct >= 0.0f)
                               ? lv_palette_main(LV_PALETTE_GREEN)
                               : lv_palette_main(LV_PALETTE_RED);
@@ -1082,7 +1082,7 @@ void UIController::updateMediumTrendLabel()
         
         switch (mediumTrend) {
             case TREND_UP:
-                trendText = getText("1d/", "1d/");
+                trendText = getText("1d//", "1d//");
                 trendColor = lv_palette_main(LV_PALETTE_GREEN);
                 break;
             case TREND_DOWN:
@@ -1129,7 +1129,7 @@ void UIController::updateLongTermTrendLabel()
         
         switch (longTermTrend) {
             case TREND_UP:
-                trendText = getText("7d/", "7d/");
+                trendText = getText("7d//", "7d//");
                 trendColor = lv_palette_main(LV_PALETTE_GREEN);
                 break;
             case TREND_DOWN:
