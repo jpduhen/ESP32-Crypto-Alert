@@ -868,12 +868,90 @@ void UIController::createFooter() {
     lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(chartVersionLabel, VERSION_STRING);
     lv_obj_align(chartVersionLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
-    #endif
+#endif
+}
+
+// Helper: reset UI pointers before rebuild (voorkomt stale pointers na lv_obj_clean)
+static void resetUiPointers() {
+    chart = nullptr;
+    dataSeries = nullptr;
+    trendLabel = nullptr;
+    warmStartStatusLabel = nullptr;
+    volumeConfirmLabel = nullptr;
+    volatilityLabel = nullptr;
+    mediumTrendLabel = nullptr;
+    longTermTrendLabel = nullptr;
+    chartTitle = nullptr;
+    chartDateLabel = nullptr;
+    chartBeginLettersLabel = nullptr;
+    chartTimeLabel = nullptr;
+    anchorLabel = nullptr;
+    anchorMaxLabel = nullptr;
+    anchorMinLabel = nullptr;
+    price1MinMaxLabel = nullptr;
+    price1MinDiffLabel = nullptr;
+    price1MinMinLabel = nullptr;
+    price30MinMaxLabel = nullptr;
+    price30MinDiffLabel = nullptr;
+    price30MinMinLabel = nullptr;
+    price2HMaxLabel = nullptr;
+    price2HDiffLabel = nullptr;
+    price2HMinLabel = nullptr;
+    ipLabel = nullptr;
+    chartVersionLabel = nullptr;
+    lblFooterLine1 = nullptr;
+    ramLabel = nullptr;
+    lblFooterLine2 = nullptr;
+
+    ::chart = nullptr;
+    ::dataSeries = nullptr;
+    ::trendLabel = nullptr;
+    ::warmStartStatusLabel = nullptr;
+    ::volumeConfirmLabel = nullptr;
+    ::volatilityLabel = nullptr;
+    ::mediumTrendLabel = nullptr;
+    ::longTermTrendLabel = nullptr;
+    ::chartTitle = nullptr;
+    ::chartDateLabel = nullptr;
+    ::chartBeginLettersLabel = nullptr;
+    ::chartTimeLabel = nullptr;
+    ::anchorLabel = nullptr;
+    ::anchorMaxLabel = nullptr;
+    ::anchorMinLabel = nullptr;
+    ::price1MinMaxLabel = nullptr;
+    ::price1MinDiffLabel = nullptr;
+    ::price1MinMinLabel = nullptr;
+    ::price30MinMaxLabel = nullptr;
+    ::price30MinDiffLabel = nullptr;
+    ::price30MinMinLabel = nullptr;
+    ::price2HMaxLabel = nullptr;
+    ::price2HDiffLabel = nullptr;
+    ::price2HMinLabel = nullptr;
+    ::ipLabel = nullptr;
+    ::chartVersionLabel = nullptr;
+    ::lblFooterLine1 = nullptr;
+    ::ramLabel = nullptr;
+    ::lblFooterLine2 = nullptr;
+
+    for (uint8_t i = 0; i < SYMBOL_COUNT; ++i) {
+        priceBox[i] = nullptr;
+        priceTitle[i] = nullptr;
+        priceLbl[i] = nullptr;
+        ::priceBox[i] = nullptr;
+        ::priceTitle[i] = nullptr;
+        ::priceLbl[i] = nullptr;
+    }
 }
 
 // Fase 8.4.1: buildUI() verplaatst naar UIController module (parallel implementatie)
 void UIController::buildUI() {
-    lv_obj_clean(lv_scr_act());
+    lv_obj_t* screen = lv_scr_act();
+    if (screen == nullptr) {
+        Serial.println(F("[UI] WARN: lv_scr_act is null, skip buildUI"));
+        return;
+    }
+    resetUiPointers();
+    lv_obj_clean(screen);
     disableScroll(lv_scr_act());
     
     createChart();

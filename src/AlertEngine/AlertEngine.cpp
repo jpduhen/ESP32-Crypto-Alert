@@ -274,14 +274,16 @@ bool AlertEngine::sendAlertNotification(float ret, float threshold, float strong
     char title[48];
     snprintf(title, sizeof(title), "%s %s Alert", binanceSymbol, alertType);
     
-    sendNotification(title, msg, colorTag);
-    lastNotification = now;
-    alertsThisHour++;
-    #if !DEBUG_BUTTON_ONLY
-    Serial_printf(F("[Notify] %s notificatie verstuurd (%d/%d dit uur)\n"), alertType, alertsThisHour, maxAlertsPerHour);
-    #endif
+    bool sent = sendNotification(title, msg, colorTag);
+    if (sent) {
+        lastNotification = now;
+        alertsThisHour++;
+        #if !DEBUG_BUTTON_ONLY
+        Serial_printf(F("[Notify] %s notificatie verstuurd (%d/%d dit uur)\n"), alertType, alertsThisHour, maxAlertsPerHour);
+        #endif
+    }
     
-    return true;
+    return sent;
 }
 
 // Sync state: Update AlertEngine state met globale variabelen
@@ -466,13 +468,15 @@ bool AlertEngine::checkAndSendConfluenceAlert(unsigned long now, float ret_30m)
     appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange);
     
     const char* colorTag = (direction == EVENT_UP) ? "green_square,📈" : "red_square,📉";
-    sendNotification(titleBuffer, msgBuffer, colorTag);
-    lastVolumeEventMs = now;
-    
-    // Mark events as used
-    last1mEvent.usedInConfluence = true;
-    last5mEvent.usedInConfluence = true;
-    lastConfluenceAlert = now;
+    bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
+    if (sent) {
+        lastVolumeEventMs = now;
+        
+        // Mark events as used
+        last1mEvent.usedInConfluence = true;
+        last5mEvent.usedInConfluence = true;
+        lastConfluenceAlert = now;
+    }
     
     #if !DEBUG_BUTTON_ONLY
     Serial_printf(F("[Confluence] Alert verzonden: 1m=%.2f%%, 5m=%.2f%%, trend=%s, ret_30m=%.2f%%\n"),
@@ -481,7 +485,7 @@ bool AlertEngine::checkAndSendConfluenceAlert(unsigned long now, float ret_30m)
                   trendText, ret_30m);
     #endif
     
-    return true;
+    return sent;
 }
 
 // Helper: Cache absolute waarden (voorkomt herhaalde fabsf calls)
@@ -684,13 +688,15 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
                             if (checkAlertConditions(now, lastNotification1Min, notificationCooldowns.cooldown1MinMs, 
                                                      alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR, "1m spike")) {
-                                sendNotification(titleBuffer, msgBuffer, colorTag);
-                                lastNotification1Min = now;
-                                alerts1MinThisHour++;
-                                lastVolumeEventMs = now;
-                                #if !DEBUG_BUTTON_ONLY
-                                Serial_printf(F("[Notify] 1m spike notificatie verstuurd (%d/%d dit uur)\n"), alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR);
-                                #endif
+                                bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
+                                if (sent) {
+                                    lastNotification1Min = now;
+                                    alerts1MinThisHour++;
+                                    lastVolumeEventMs = now;
+                                    #if !DEBUG_BUTTON_ONLY
+                                    Serial_printf(F("[Notify] 1m spike notificatie verstuurd (%d/%d dit uur)\n"), alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR);
+                                    #endif
+                                }
                             }
                         }
                     }
@@ -764,13 +770,15 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                         #endif
                     } else if (checkAlertConditions(now, lastNotification30Min, notificationCooldowns.cooldown30MinMs, 
                                                     alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR, "30m move")) {
-                        sendNotification(titleBuffer, msgBuffer, colorTag);
-                        lastNotification30Min = now;
-                        alerts30MinThisHour++;
-                        lastVolumeEventMs = now;
-                        #if !DEBUG_BUTTON_ONLY
-                        Serial_printf(F("[Notify] 30m move notificatie verstuurd (%d/%d dit uur)\n"), alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR);
-                        #endif
+                        bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
+                        if (sent) {
+                            lastNotification30Min = now;
+                            alerts30MinThisHour++;
+                            lastVolumeEventMs = now;
+                            #if !DEBUG_BUTTON_ONLY
+                            Serial_printf(F("[Notify] 30m move notificatie verstuurd (%d/%d dit uur)\n"), alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR);
+                            #endif
+                        }
                     }
                 }
             }
@@ -860,13 +868,15 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
                             if (checkAlertConditions(now, lastNotification5Min, notificationCooldowns.cooldown5MinMs, 
                                                      alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR, "5m move")) {
-                                sendNotification(titleBuffer, msgBuffer, colorTag);
-                                lastNotification5Min = now;
-                                alerts5MinThisHour++;
-                                lastVolumeEventMs = now;
-                                #if !DEBUG_BUTTON_ONLY
-                                Serial_printf(F("[Notify] 5m move notificatie verstuurd (%d/%d dit uur)\n"), alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR);
-                                #endif
+                                bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
+                                if (sent) {
+                                    lastNotification5Min = now;
+                                    alerts5MinThisHour++;
+                                    lastVolumeEventMs = now;
+                                    #if !DEBUG_BUTTON_ONLY
+                                    Serial_printf(F("[Notify] 5m move notificatie verstuurd (%d/%d dit uur)\n"), alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR);
+                                    #endif
+                                }
                             }
                         }
                     }
@@ -1602,7 +1612,10 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
                     snprintf(msg, sizeof(msg), "%.2f (%s)\n%s: %.2f", 
                              newAutoAnchor, timestamp,
                              getText("Bijgewerkt", "Updated"), newAutoAnchor);
-                    sendNotification(title, msg, "anchor");
+                    bool sent = sendNotification(title, msg, "anchor");
+                    if (!sent) {
+                        Serial.println("[ANCHOR][AUTO] WARN: Auto anchor notificatie niet verstuurd");
+                    }
                 }
             } else {
                 Serial.println("[ANCHOR][AUTO] WARN: Kon anchor niet instellen");

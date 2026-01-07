@@ -50,6 +50,11 @@ TrendDetector::TrendDetector() {
     lastLongTermTrendChangeNotification = 0;
 }
 
+// Helper: Validate return/threshold values
+static inline bool isValidReturnValue(float value) {
+    return !isnan(value) && !isinf(value);
+}
+
 // Begin - synchroniseer state met globale variabelen (parallel implementatie)
 void TrendDetector::begin() {
     // Fase 5.1: Synchroniseer TrendDetector state met globale variabelen
@@ -76,6 +81,11 @@ void TrendDetector::syncStateFromGlobals() {
 TrendState TrendDetector::determineTrendState(float ret_2h_value, float ret_30m_value, float trendThreshold) {
     // Forward declaration voor alert2HThresholds (uit SettingsStore)
     extern Alert2HThresholds alert2HThresholds;
+    
+    if (!isValidReturnValue(ret_2h_value) || !isValidReturnValue(ret_30m_value) ||
+        !isValidReturnValue(trendThreshold) || trendThreshold <= 0.0f) {
+        return TREND_SIDEWAYS;
+    }
     
     // Hysterese factor uit settings (default 0.65)
     const float hysteresisFactor = alert2HThresholds.trendHysteresisFactor;
@@ -131,6 +141,10 @@ TrendState TrendDetector::determineMediumTrendState(float ret_4h_value, float re
     // Gebruik een hogere threshold voor 1d trend (default 2.0%)
     // 1d trends zijn minder gevoelig voor korte termijn fluctuaties
     (void)ret_4h_value;
+    
+    if (!isValidReturnValue(ret_1d_value) || !isValidReturnValue(mediumThreshold) || mediumThreshold <= 0.0f) {
+        return TREND_SIDEWAYS;
+    }
 
     if (ret_1d_value >= mediumThreshold) {
         return TREND_UP;
@@ -146,6 +160,9 @@ TrendState TrendDetector::determineMediumTrendState(float ret_4h_value, float re
 
 // Lange termijn trend detection op basis van 7d return
 TrendState TrendDetector::determineLongTermTrendState(float ret_7d_value, float longTermThreshold) {
+    if (!isValidReturnValue(ret_7d_value) || !isValidReturnValue(longTermThreshold) || longTermThreshold <= 0.0f) {
+        return TREND_SIDEWAYS;
+    }
     if (ret_7d_value >= longTermThreshold) {
         return TREND_UP;
     }
@@ -159,6 +176,9 @@ TrendState TrendDetector::determineLongTermTrendState(float ret_7d_value, float 
 void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool minuteArrayFilled, uint8_t minuteIndex) {
     unsigned long now = millis();
     
+    if (!isValidReturnValue(ret_2h) || !isValidReturnValue(ret_30m_value)) {
+        return;
+    }
     // Fase 5.1: Synchroniseer TrendDetector state met globale waarden (parallel implementatie)
     // Dit zorgt ervoor dat we de laatste trendState hebben voordat we checken op changes
     extern TrendState trendState;
@@ -290,6 +310,10 @@ void TrendDetector::checkMediumTrendChange(float ret_4h_value, float ret_1d_valu
     unsigned long now = millis();
     (void)ret_4h_value;
     
+    if (!isValidReturnValue(ret_1d_value) || !isValidReturnValue(mediumThreshold) || mediumThreshold <= 0.0f) {
+        return;
+    }
+    
     // Bepaal nieuwe medium trend state
     TrendState newMediumTrend = determineMediumTrendState(ret_4h_value, ret_1d_value, mediumThreshold);
     
@@ -371,6 +395,10 @@ void TrendDetector::checkMediumTrendChange(float ret_4h_value, float ret_1d_valu
 // Lange termijn trend change detection en notificatie
 void TrendDetector::checkLongTermTrendChange(float ret_7d_value, float longTermThreshold) {
     unsigned long now = millis();
+    
+    if (!isValidReturnValue(ret_7d_value) || !isValidReturnValue(longTermThreshold) || longTermThreshold <= 0.0f) {
+        return;
+    }
     
     // Bepaal nieuwe lange termijn trend state
     TrendState newLongTermTrend = determineLongTermTrendState(ret_7d_value, longTermThreshold);

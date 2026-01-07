@@ -34,6 +34,7 @@ extern bool mqttConnected;
 extern PubSubClient mqttClient;
 extern unsigned long lastMqttReconnectAttempt;
 extern uint8_t mqttReconnectAttemptCount;
+extern uint32_t lastApiMs;
 
 // Settings variabelen
 // Note: spike1mThreshold, spike5mThreshold, etc. zijn macro's (gedefinieerd hieronder)
@@ -89,6 +90,11 @@ extern bool queueAnchorSetting(float value, bool useCurrentPrice);
 #ifndef Serial_println
 #define Serial_println Serial.println
 #endif
+
+// Helper: check client connection before sending large HTML responses
+static inline bool isClientConnected(WebServer* srv) {
+    return (srv != nullptr) && srv->client().connected();
+}
 extern float calculateReturn1Minute();
 extern float calculateReturn5Minutes();
 extern float calculateReturn30Minutes();
@@ -178,6 +184,10 @@ void WebServerModule::handleClient() {
 // Performance optimalisatie: debug logging voor ESP32-S3
 void WebServerModule::renderSettingsHTML() {
     if (server == nullptr) return;
+    if (!isClientConnected(server)) {
+        Serial_println(F("[WEB] WARN: client disconnected, skip render"));
+        return;
+    }
     
     #if !DEBUG_BUTTON_ONLY
     unsigned long renderStart = millis();
@@ -1202,6 +1212,9 @@ void WebServerModule::handleStatus() {
     float range2hPct = 0.0f;
     bool hasRet2hFlag = false;
     bool hasRet30mFlag = false;
+    bool apiFresh = false;
+    uint32_t apiAgeMs = 0;
+    unsigned long currentTime = millis();
     
     // Neem kort de dataMutex om globale waarden te kopiëren
     if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "handleStatus")) {
@@ -1235,6 +1248,11 @@ void WebServerModule::handleStatus() {
         low2h = metrics.low2h;
         range2hPct = metrics.rangePct;
         
+        if (lastApiMs > 0) {
+            apiAgeMs = (currentTime >= lastApiMs) ? (currentTime - lastApiMs) : (ULONG_MAX - lastApiMs + currentTime);
+            apiFresh = (apiAgeMs < 3000);
+        }
+        
         safeMutexGive(dataMutex, "handleStatus");
     }
     
@@ -1245,8 +1263,8 @@ void WebServerModule::handleStatus() {
     formatTrendLabel(trend1dText, sizeof(trend1dText), "1d", trendMedium);
     formatTrendLabel(trend7dText, sizeof(trend7dText), "7d", trendLong);
 
-    // JSON buffer (900 bytes voor extra trend/return velden)
-    char jsonBuf[900];
+    // JSON buffer (960 bytes voor extra trend/return velden)
+    char jsonBuf[960];
     size_t written = 0;
     
     // Bouw JSON zonder String-concatenaties (gebruik snprintf met offset)
@@ -1270,6 +1288,8 @@ void WebServerModule::handleStatus() {
         "\"high2h\":%.2f,"
         "\"low2h\":%.2f,"
         "\"range2hPct\":%.2f,"
+        "\"apiFresh\":%s,"
+        "\"apiAgeMs\":%lu,"
         "\"uptimeSec\":%lu,"
         "\"heapFree\":%u,"
         "\"heapLargest\":%u"
@@ -1292,6 +1312,8 @@ void WebServerModule::handleStatus() {
         high2h,
         low2h,
         range2hPct,
+        apiFresh ? "true" : "false",
+        static_cast<unsigned long>(apiAgeMs),
         millis() / 1000,
         ESP.getFreeHeap(),
         heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)
@@ -1456,6 +1478,7 @@ String WebServerModule::getOrBuildSettingsPage() {
 // Fase 9.1.3: HTML helper functies verplaatst vanuit .ino
 void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyTopic) {
     if (server == nullptr) return;
+    if (!isClientConnected(server)) return;
     
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
     server->send(200, "text/html; charset=utf-8", "");
@@ -1637,7 +1660,11 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(F("el=document.getElementById('ret30m');if(el)el.textContent=d.ret30m!=0?d.ret30m.toFixed(2)+'%':'--';"));
     server->sendContent(F("el=document.getElementById('anchor');if(el)el.textContent=d.anchor>0?d.anchor.toFixed(2)+' EUR':'--';"));
     server->sendContent(F("el=document.getElementById('anchorDelta');if(el)el.textContent=d.anchorDeltaPct!=0?d.anchorDeltaPct.toFixed(2)+'%':'--';"));
-    server->sendContent(F("el=document.getElementById('apiState');if(el)el.textContent='';"));
+    server->sendContent(F("el=document.getElementById('apiState');if(el){"));
+    server->sendContent(F("if(d.apiFresh){el.textContent='';}else{"));
+    server->sendContent(F("var age=(d.apiAgeMs?Math.round(d.apiAgeMs/1000):0);"));
+    server->sendContent(F("el.textContent='STALE '+age+'s';"));
+    server->sendContent(F("}}"));
     server->sendContent(F("}).catch(function(e){"));
     server->sendContent(F("var el=document.getElementById('apiState');if(el)el.textContent='NET?';"));
     server->sendContent(F("});"));
@@ -1660,6 +1687,7 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
 
 void WebServerModule::sendHtmlFooter() {
     if (server == nullptr) return;
+    if (!isClientConnected(server)) return;
     server->sendContent(F("</div>"));
     server->sendContent(F("</body></html>"));
 }
