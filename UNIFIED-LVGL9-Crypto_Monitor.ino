@@ -2514,6 +2514,7 @@ static void loadSettings()
     
     // Copy 2-hour alert thresholds
     alert2HThresholds = settings.alert2HThresholds;
+    AlertEngine::onSettingsLoaded(alert2HThresholds);
     
     // Copy notification cooldowns
     notificationCooldowns = settings.notificationCooldowns;
@@ -2626,6 +2627,7 @@ void saveSettings()
     
     // Save using SettingsStore
     settingsStore.save(settings);
+    AlertEngine::onSettingsLoaded(alert2HThresholds);
     Serial_println("[Settings] Saved");
 }
 

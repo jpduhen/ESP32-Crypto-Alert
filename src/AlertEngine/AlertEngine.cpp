@@ -22,6 +22,7 @@ extern AnchorSystem anchorSystem;
 
 // Extern declaration voor 2h alert thresholds (wordt geladen vanuit settings)
 extern Alert2HThresholds alert2HThresholds;
+extern SettingsStore settingsStore;
 
 // PriceData module (voor fiveMinutePrices getter)
 #include "../PriceData/PriceData.h"
@@ -46,6 +47,8 @@ TwoHMetrics computeTwoHMetrics();
 
 // Persistent runtime state voor 2h notificaties
 static Alert2HState gAlert2H;
+static const Alert2HThresholds* gAlert2HThresholdsPtr = nullptr;
+static bool gAlert2HThresholdsReady = false;
 
 // Fase 6.1.10: Forward declarations voor checkAndNotify dependencies
 void findMinMaxInSecondPrices(float &minVal, float &maxVal);
@@ -112,6 +115,19 @@ AlertEngine::AlertEngine() {
 void AlertEngine::begin() {
     // Fase 6.1.1: Basis structuur - sync wordt incrementeel geïmplementeerd
     syncStateFromGlobals();
+}
+
+void AlertEngine::onSettingsLoaded(const Alert2HThresholds& thresholds) {
+    gAlert2HThresholdsPtr = &thresholds;
+    gAlert2HThresholdsReady = true;
+}
+
+bool AlertEngine::are2HThresholdsReady() {
+    return gAlert2HThresholdsReady || settingsStore.isLoaded();
+}
+
+const Alert2HThresholds& AlertEngine::getAlert2HThresholds() {
+    return gAlert2HThresholdsPtr ? *gAlert2HThresholdsPtr : alert2HThresholds;
 }
 
 // Helper: Check if cooldown has passed and hourly limit is OK
@@ -932,6 +948,17 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
         flushPendingSecondaryAlert();
         return;  // Skip checks bij ongeldige waarden of geen WiFi
     }
+
+    if (!are2HThresholdsReady()) {
+        static bool loggedNotReady = false;
+        if (!loggedNotReady) {
+            Serial_println(F("[AlertEngine] WARN: 2h thresholds nog niet geladen, skip 2h checks"));
+            loggedNotReady = true;
+        }
+        return;
+    }
+
+    const Alert2HThresholds& thresholds = getAlert2HThresholds();
     
     // Auto Anchor: gebruik actieve anchor price (kan auto anchor zijn)
     float activeAnchorPrice = getActiveAnchorPrice(anchorPrice);
@@ -952,7 +979,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
     flushPendingSecondaryAlert();
     
     // Geconsolideerde berekeningen: bereken breakMargin en thresholds één keer
-    float breakMargin = alert2HThresholds.breakMarginPct;
+    float breakMargin = thresholds.breakMarginPct;
     float breakThresholdUp = metrics.high2h * (1.0f + breakMargin / 100.0f);
     float breakThresholdDown = metrics.low2h * (1.0f - breakMargin / 100.0f);
     
@@ -970,9 +997,9 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
         // Gebruik reeds berekende thresholds
         bool condBreakUp = lastPrice > breakThresholdUp;
         bool condBreakDown = lastPrice < breakThresholdDown;
-        bool condCompress = metrics.rangePct < alert2HThresholds.compressThresholdPct;
+        bool condCompress = metrics.rangePct < thresholds.compressThresholdPct;
         float distPct = absf((lastPrice - metrics.avg2h) / metrics.avg2h * 100.0f);
-        bool condTouch = distPct <= alert2HThresholds.meanTouchBandPct;
+        bool condTouch = distPct <= thresholds.meanTouchBandPct;
         
         Serial.printf("[2H-DBG] price=%.2f avg2h=%.2f high2h=%.2f low2h=%.2f rangePct=%.2f%% anchor=%.2f\n",
                      lastPrice, metrics.avg2h, metrics.high2h, metrics.low2h, metrics.rangePct, activeAnchorPrice);
@@ -985,7 +1012,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
     // === A) 2h Breakout Up ===
     {
         bool condUp = lastPrice > breakThresholdUp;
-        bool cooldownOk = (now - gAlert2H.lastBreakoutUpMs) >= alert2HThresholds.breakCooldownMs;
+        bool cooldownOk = (now - gAlert2H.lastBreakoutUpMs) >= thresholds.breakCooldownMs;
         
         if (gAlert2H.getBreakoutUpArmed() && condUp && cooldownOk) {
             send2HBreakoutNotification(true, lastPrice, breakThresholdUp, metrics, now);
@@ -994,7 +1021,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
         }
         
         // Reset arm zodra prijs weer onder reset threshold komt
-        float resetThreshold = metrics.high2h * (1.0f - alert2HThresholds.breakResetMarginPct / 100.0f);
+        float resetThreshold = metrics.high2h * (1.0f - thresholds.breakResetMarginPct / 100.0f);
         if (!gAlert2H.getBreakoutUpArmed() && lastPrice < resetThreshold) {
             gAlert2H.setBreakoutUpArmed(true);
         }
@@ -1003,7 +1030,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
     // === B) 2h Breakdown Down ===
     {
         bool condDown = lastPrice < breakThresholdDown;
-        bool cooldownOk = (now - gAlert2H.lastBreakoutDownMs) >= alert2HThresholds.breakCooldownMs;
+        bool cooldownOk = (now - gAlert2H.lastBreakoutDownMs) >= thresholds.breakCooldownMs;
         
         if (gAlert2H.getBreakoutDownArmed() && condDown && cooldownOk) {
             send2HBreakoutNotification(false, lastPrice, breakThresholdDown, metrics, now);
@@ -1012,7 +1039,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
         }
         
         // Reset arm zodra prijs weer boven reset threshold komt
-        float resetThreshold = metrics.low2h * (1.0f + alert2HThresholds.breakResetMarginPct / 100.0f);
+        float resetThreshold = metrics.low2h * (1.0f + thresholds.breakResetMarginPct / 100.0f);
         if (!gAlert2H.getBreakoutDownArmed() && lastPrice > resetThreshold) {
             gAlert2H.setBreakoutDownArmed(true);
         }
@@ -1020,13 +1047,13 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
     
     // === C) Range compression ===
     {
-        bool condComp = metrics.rangePct < alert2HThresholds.compressThresholdPct;
-        bool cooldownOk = (now - gAlert2H.lastCompressMs) >= alert2HThresholds.compressCooldownMs;
+        bool condComp = metrics.rangePct < thresholds.compressThresholdPct;
+        bool cooldownOk = (now - gAlert2H.lastCompressMs) >= thresholds.compressCooldownMs;
         
         if (gAlert2H.getCompressArmed() && condComp && cooldownOk) {
             #if DEBUG_2H_ALERTS
             Serial.printf("[ALERT2H] range_compress sent: range=%.2f%% < %.2f%% (avg=%.2f high=%.2f low=%.2f)\n",
-                         metrics.rangePct, alert2HThresholds.compressThresholdPct,
+                         metrics.rangePct, thresholds.compressThresholdPct,
                          metrics.avg2h, metrics.high2h, metrics.low2h);
             #endif
             getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
@@ -1034,7 +1061,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                      binanceSymbol, getText("Compressie", "Compression"));
             snprintf(msg, sizeof(msg), "%.2f (%s)\n%s: %.2f%% (<%.2f%%)\n2h %s: %.2f\n2h %s: %.2f\n2h %s: %.2f",
                      lastPrice, timestamp,
-                     getText("Band", "Range"), metrics.rangePct, alert2HThresholds.compressThresholdPct,
+                     getText("Band", "Range"), metrics.rangePct, thresholds.compressThresholdPct,
                      getText("Top", "High"), metrics.high2h,
                      getText("Gem", "Avg"), metrics.avg2h,
                      getText("Dal", "Low"), metrics.low2h);
@@ -1046,7 +1073,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
         }
         
         // Reset arm zodra range weer boven reset threshold komt
-        if (!gAlert2H.getCompressArmed() && metrics.rangePct > alert2HThresholds.compressResetPct) {
+        if (!gAlert2H.getCompressArmed() && metrics.rangePct > thresholds.compressResetPct) {
             gAlert2H.setCompressArmed(true);
         }
     }
@@ -1056,14 +1083,14 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
         float distPct = absf((lastPrice - metrics.avg2h) / metrics.avg2h * 100.0f);
         
         // Update state: zijn we ver genoeg weg?
-        if (distPct >= alert2HThresholds.meanMinDistancePct) {
+        if (distPct >= thresholds.meanMinDistancePct) {
             gAlert2H.setMeanWasFar(true);
             gAlert2H.setMeanFarSide((lastPrice >= metrics.avg2h) ? +1 : -1);
         }
         
         // Check touch
-        bool touch = distPct <= alert2HThresholds.meanTouchBandPct;
-        bool cooldownOk = (now - gAlert2H.lastMeanMs) >= alert2HThresholds.meanCooldownMs;
+        bool touch = distPct <= thresholds.meanTouchBandPct;
+        bool cooldownOk = (now - gAlert2H.lastMeanMs) >= thresholds.meanCooldownMs;
         
         if (gAlert2H.getMeanArmed() && gAlert2H.getMeanWasFar() && touch && cooldownOk) {
             const char* direction = (gAlert2H.getMeanFarSide() > 0) ? "from above" : "from below";
@@ -1091,7 +1118,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
         }
         
         // Reset arm zodra prijs weer ver genoeg weg is
-        if (!gAlert2H.getMeanArmed() && distPct > (alert2HThresholds.meanTouchBandPct * 2.0f)) {
+        if (!gAlert2H.getMeanArmed() && distPct > (thresholds.meanTouchBandPct * 2.0f)) {
             gAlert2H.setMeanArmed(true);
         }
     }
@@ -1099,12 +1126,12 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
     // === E) Anchor context ===
     // Alleen checken als anchor actief is (activeAnchorPrice > 0)
     if (activeAnchorPrice > 0.0f) {
-        float anchorMargin = alert2HThresholds.anchorOutsideMarginPct;
+        float anchorMargin = thresholds.anchorOutsideMarginPct;
         float anchorHighThreshold = metrics.high2h * (1.0f + anchorMargin / 100.0f);
         float anchorLowThreshold = metrics.low2h * (1.0f - anchorMargin / 100.0f);
         bool condAnchorHigh = activeAnchorPrice > anchorHighThreshold;
         bool condAnchorLow = activeAnchorPrice < anchorLowThreshold;
-        bool cooldownOk = (now - gAlert2H.lastAnchorCtxMs) >= alert2HThresholds.anchorCooldownMs;
+        bool cooldownOk = (now - gAlert2H.lastAnchorCtxMs) >= thresholds.anchorCooldownMs;
         
         if (gAlert2H.getAnchorCtxArmed() && cooldownOk && (condAnchorHigh || condAnchorLow)) {
             #if DEBUG_2H_ALERTS
@@ -1251,6 +1278,7 @@ static uint32_t getSecondaryCooldownSec(Alert2HType lastType, Alert2HType nextTy
 // FASE X.3: PRIMARY alerts override throttling (altijd door)
 // FASE X.5: Uitgebreid met global cooldown en uitgebreide matrix
 bool AlertEngine::shouldThrottle2HAlert(Alert2HType alertType, uint32_t now) {
+    const Alert2HThresholds& thresholds = getAlert2HThresholds();
     // PRIMARY alerts mogen altijd door (override throttling)
     if (isPrimary2HAlert(alertType)) {
         return false;  // Geen throttling
@@ -1259,7 +1287,7 @@ bool AlertEngine::shouldThrottle2HAlert(Alert2HType alertType, uint32_t now) {
     // FASE X.5: Check global cooldown voor SECONDARY alerts (hard cap)
     if (lastSecondarySentMillis > 0) {
         uint32_t timeSinceLastSecondary = (now - lastSecondarySentMillis) / 1000UL;  // in seconden
-        uint32_t globalCooldownSec = alert2HThresholds.twoHSecondaryGlobalCooldownSec;
+        uint32_t globalCooldownSec = thresholds.twoHSecondaryGlobalCooldownSec;
         if (timeSinceLastSecondary < globalCooldownSec) {
             #ifdef DEBUG_ALERT_THROTTLE
             Serial_printf(F("[2h throttled] SECONDARY dropped by global cooldown (%lu < %lu sec)\n"),
@@ -1295,25 +1323,25 @@ bool AlertEngine::shouldThrottle2HAlert(Alert2HType alertType, uint32_t now) {
     switch (last2HAlertType) {
         case ALERT2H_TREND_CHANGE:
             // Trend Change → Trend Change: suppress volgens instelling
-            if (alertType == ALERT2H_TREND_CHANGE && timeSinceLastAlert < alert2HThresholds.throttlingTrendChangeMs) {
+            if (alertType == ALERT2H_TREND_CHANGE && timeSinceLastAlert < thresholds.throttlingTrendChangeMs) {
                 return true;  // Suppress
             }
             // Trend Change → Mean Touch: suppress volgens instelling
-            if (alertType == ALERT2H_MEAN_TOUCH && timeSinceLastAlert < alert2HThresholds.throttlingTrendToMeanMs) {
+            if (alertType == ALERT2H_MEAN_TOUCH && timeSinceLastAlert < thresholds.throttlingTrendToMeanMs) {
                 return true;  // Suppress
             }
             break;
             
         case ALERT2H_MEAN_TOUCH:
             // Mean Touch → Mean Touch: suppress volgens instelling
-            if (alertType == ALERT2H_MEAN_TOUCH && timeSinceLastAlert < alert2HThresholds.throttlingMeanTouchMs) {
+            if (alertType == ALERT2H_MEAN_TOUCH && timeSinceLastAlert < thresholds.throttlingMeanTouchMs) {
                 return true;  // Suppress
             }
             break;
             
         case ALERT2H_COMPRESS:
             // Compress → Compress: suppress volgens instelling
-            if (alertType == ALERT2H_COMPRESS && timeSinceLastAlert < alert2HThresholds.throttlingCompressMs) {
+            if (alertType == ALERT2H_COMPRESS && timeSinceLastAlert < thresholds.throttlingCompressMs) {
                 return true;  // Suppress
             }
             break;
@@ -1368,6 +1396,7 @@ static bool flushPendingSecondaryAlertInternal(uint32_t now) {
 // FASE X.5: Uitgebreid met coalescing voor SECONDARY alerts
 bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, const char* msg, const char* colorTag) {
     uint32_t now = millis();
+    const Alert2HThresholds& thresholds = getAlert2HThresholds();
     
     // FASE X.3: PRIMARY alerts override throttling (altijd door, geen coalescing)
     bool isPrimary = isPrimary2HAlert(alertType);
@@ -1415,7 +1444,7 @@ bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, c
     }
     
     // Coalescing: check of er al een pending SECONDARY alert is
-    uint32_t coalesceWindowMs = alert2HThresholds.twoHSecondaryCoalesceWindowSec * 1000UL;
+    uint32_t coalesceWindowMs = thresholds.twoHSecondaryCoalesceWindowSec * 1000UL;
     
     if (pendingSecondaryType != ALERT2H_NONE && pendingSecondaryCreatedMillis > 0) {
         uint32_t timeSincePending = now - pendingSecondaryCreatedMillis;
@@ -1474,18 +1503,19 @@ const char* AlertEngine::get1dIntervalStr() {
 
 // Auto Anchor: Get active anchor price based on mode
 float AlertEngine::getActiveAnchorPrice(float manualAnchorPrice) {
-    uint8_t mode = alert2HThresholds.anchorSourceMode;
+    const Alert2HThresholds& thresholds = getAlert2HThresholds();
+    uint8_t mode = thresholds.anchorSourceMode;
     
     if (mode == 0) {  // MANUAL
         return manualAnchorPrice;
     } else if (mode == 1) {  // AUTO
-        float autoAnchor = alert2HThresholds.autoAnchorLastValue;
+        float autoAnchor = thresholds.autoAnchorLastValue;
         if (autoAnchor > 0.0f) {
             return autoAnchor;
         }
         return manualAnchorPrice;
     } else if (mode == 2) {  // AUTO_FALLBACK
-        float autoAnchor = alert2HThresholds.autoAnchorLastValue;
+        float autoAnchor = thresholds.autoAnchorLastValue;
         if (autoAnchor > 0.0f) {
             return autoAnchor;
         }
@@ -1497,12 +1527,11 @@ float AlertEngine::getActiveAnchorPrice(float manualAnchorPrice) {
 
 // Auto Anchor: Update auto anchor value (called from apiTask)
 bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
-    extern SettingsStore settingsStore;
-    
+    const Alert2HThresholds& thresholds = getAlert2HThresholds();
     Serial.printf("[ANCHOR][AUTO] maybeUpdateAutoAnchor called: force=%d mode=%d symbol=%s\n", 
-                  force, alert2HThresholds.anchorSourceMode, binanceSymbol);
+                  force, thresholds.anchorSourceMode, binanceSymbol);
     
-    uint8_t mode = alert2HThresholds.anchorSourceMode;
+    uint8_t mode = thresholds.anchorSourceMode;
     if (mode == 0 || mode == 3) {  // MANUAL of OFF
         Serial.printf("[ANCHOR][AUTO] Auto anchor disabled (mode=%d, expected 1 or 2)\n", mode);
         return false;
@@ -1516,9 +1545,9 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
             nowEpoch = mktime(&timeinfo);
         }
         
-        if (nowEpoch > 0 && alert2HThresholds.autoAnchorLastUpdateEpoch > 0) {
-            uint32_t minutesSinceUpdate = (nowEpoch - alert2HThresholds.autoAnchorLastUpdateEpoch) / 60;
-            if (minutesSinceUpdate < alert2HThresholds.autoAnchorUpdateMinutes) {
+        if (nowEpoch > 0 && thresholds.autoAnchorLastUpdateEpoch > 0) {
+            uint32_t minutesSinceUpdate = (nowEpoch - thresholds.autoAnchorLastUpdateEpoch) / 60;
+            if (minutesSinceUpdate < thresholds.autoAnchorUpdateMinutes) {
                 Serial.printf("[ANCHOR][AUTO] Too soon to update (%lu minutes since last update)\n", minutesSinceUpdate);
                 return false;
             }
@@ -1529,7 +1558,7 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
     extern int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit, float* prices, unsigned long* timestamps, uint16_t maxCount, float* highs = nullptr, float* lows = nullptr, float* volumes = nullptr);
     
     // Fetch 4h candles
-    uint8_t count4h = alert2HThresholds.autoAnchor4hCandles;
+    uint8_t count4h = thresholds.autoAnchor4hCandles;
     const char* interval4h = get4hIntervalStr();
     float tempPrices[12];  // Herbruikbare buffer (max 12 candles)
     
@@ -1556,7 +1585,7 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
     float ema4hValue = ema4h.get();
     
     // Fetch 1d candles (hergebruik tempPrices buffer)
-    uint8_t count1d = alert2HThresholds.autoAnchor1dCandles;
+    uint8_t count1d = thresholds.autoAnchor1dCandles;
     const char* interval1d = get1dIntervalStr();
     
     int fetched1d = fetchBinanceKlines(binanceSymbol, interval1d, count1d, tempPrices, nullptr, 12);
@@ -1583,20 +1612,20 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
     
     // Combineer EMA's met adaptieve weging (gebruik helper methods voor compacte types)
     float trendDeltaPct = fabsf(ema4hValue - ema1dValue) / ema1dValue * 100.0f;
-    float trendPivotPct = alert2HThresholds.getAutoAnchorTrendPivotPct();
+    float trendPivotPct = thresholds.getAutoAnchorTrendPivotPct();
     float trendFactor = fminf(trendDeltaPct / trendPivotPct, 1.0f);
-    float w4hBase = alert2HThresholds.getAutoAnchorW4hBase();
-    float w4hTrendBoost = alert2HThresholds.getAutoAnchorW4hTrendBoost();
+    float w4hBase = thresholds.getAutoAnchorW4hBase();
+    float w4hTrendBoost = thresholds.getAutoAnchorW4hTrendBoost();
     float w4h = w4hBase + trendFactor * w4hTrendBoost;
     float w1d = 1.0f - w4h;
     float newAutoAnchor = w4h * ema4hValue + w1d * ema1dValue;
     
     // Hysterese check
-    float lastAutoAnchor = alert2HThresholds.autoAnchorLastValue;
+    float lastAutoAnchor = thresholds.autoAnchorLastValue;
     bool shouldCommit = force;
     
     if (!shouldCommit && lastAutoAnchor > 0.0f) {
-        float minUpdatePct = alert2HThresholds.getAutoAnchorMinUpdatePct();
+        float minUpdatePct = thresholds.getAutoAnchorMinUpdatePct();
         float changePct = fabsf(newAutoAnchor - lastAutoAnchor) / lastAutoAnchor * 100.0f;
         if (changePct >= minUpdatePct) {
             shouldCommit = true;
@@ -1606,9 +1635,9 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
     }
     
     // Check force update interval
-    if (!shouldCommit && nowEpoch > 0 && alert2HThresholds.autoAnchorLastUpdateEpoch > 0) {
-        uint32_t minutesSinceUpdate = (nowEpoch - alert2HThresholds.autoAnchorLastUpdateEpoch) / 60;
-        if (minutesSinceUpdate >= alert2HThresholds.autoAnchorForceUpdateMinutes) {
+    if (!shouldCommit && nowEpoch > 0 && thresholds.autoAnchorLastUpdateEpoch > 0) {
+        uint32_t minutesSinceUpdate = (nowEpoch - thresholds.autoAnchorLastUpdateEpoch) / 60;
+        if (minutesSinceUpdate >= thresholds.autoAnchorForceUpdateMinutes) {
             shouldCommit = true;
         }
     }

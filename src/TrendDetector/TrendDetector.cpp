@@ -79,16 +79,16 @@ void TrendDetector::syncStateFromGlobals() {
 // FASE X.4: Hysterese factor is nu instelbaar via settings
 // Geoptimaliseerd: geconsolideerde checks, early returns
 TrendState TrendDetector::determineTrendState(float ret_2h_value, float ret_30m_value, float trendThreshold) {
-    // Forward declaration voor alert2HThresholds (uit SettingsStore)
-    extern Alert2HThresholds alert2HThresholds;
-    
     if (!isValidReturnValue(ret_2h_value) || !isValidReturnValue(ret_30m_value) ||
         !isValidReturnValue(trendThreshold) || trendThreshold <= 0.0f) {
         return TREND_SIDEWAYS;
     }
     
     // Hysterese factor uit settings (default 0.65)
-    const float hysteresisFactor = alert2HThresholds.trendHysteresisFactor;
+    float hysteresisFactor = 0.65f;
+    if (AlertEngine::are2HThresholdsReady()) {
+        hysteresisFactor = AlertEngine::getAlert2HThresholds().trendHysteresisFactor;
+    }
     const float exitThreshold = trendThreshold * hysteresisFactor;
     
     // Gebruik huidige trend state voor hysterese logica
