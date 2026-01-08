@@ -32,11 +32,6 @@
 #define APICLIENT_HEAP_LOG 1
 #endif
 
-// N2: Keep-alive toggle voor prijs fetches (kan uitgezet worden bij HTTP 400 issues)
-#ifndef APICLIENT_PRICE_KEEPALIVE
-#define APICLIENT_PRICE_KEEPALIVE 1
-#endif
-
 // M2: Extern declaratie voor globale response buffer (gedefinieerd in .ino)
 extern char gApiResp[304];  // Verkleind van 320 naar 304 bytes (bespaart 16 bytes DRAM)
 
@@ -100,4 +95,5 @@ private:
 };
 
 #endif // APICLIENT_H
+
 
