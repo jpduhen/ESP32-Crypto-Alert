@@ -958,8 +958,8 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
         return;
     }
 
-    const Alert2HThresholds& thresholds = getAlert2HThresholds();
-    
+    const Alert2HThresholds& thresholds = alert2HThresholds;
+
     // Auto Anchor: gebruik actieve anchor price (kan auto anchor zijn)
     float activeAnchorPrice = getActiveAnchorPrice(anchorPrice);
     
@@ -1278,7 +1278,8 @@ static uint32_t getSecondaryCooldownSec(Alert2HType lastType, Alert2HType nextTy
 // FASE X.3: PRIMARY alerts override throttling (altijd door)
 // FASE X.5: Uitgebreid met global cooldown en uitgebreide matrix
 bool AlertEngine::shouldThrottle2HAlert(Alert2HType alertType, uint32_t now) {
-    const Alert2HThresholds& thresholds = getAlert2HThresholds();
+    const Alert2HThresholds& thresholds = alert2HThresholds;
+
     // PRIMARY alerts mogen altijd door (override throttling)
     if (isPrimary2HAlert(alertType)) {
         return false;  // Geen throttling
@@ -1396,15 +1397,7 @@ static bool flushPendingSecondaryAlertInternal(uint32_t now) {
 // FASE X.5: Uitgebreid met coalescing voor SECONDARY alerts
 bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, const char* msg, const char* colorTag) {
     uint32_t now = millis();
-    if (!are2HThresholdsReady()) {
-        static bool loggedNotReady = false;
-        if (!loggedNotReady) {
-            Serial_println(F("[AlertEngine] WARN: 2h thresholds nog niet geladen, skip 2h notificatie"));
-            loggedNotReady = true;
-        }
-        return false;
-    }
-    const Alert2HThresholds& thresholds = getAlert2HThresholds();
+    const Alert2HThresholds& thresholds = alert2HThresholds;
     
     // FASE X.3: PRIMARY alerts override throttling (altijd door, geen coalescing)
     bool isPrimary = isPrimary2HAlert(alertType);
@@ -1511,7 +1504,7 @@ const char* AlertEngine::get1dIntervalStr() {
 
 // Auto Anchor: Get active anchor price based on mode
 float AlertEngine::getActiveAnchorPrice(float manualAnchorPrice) {
-    const Alert2HThresholds& thresholds = getAlert2HThresholds();
+    const Alert2HThresholds& thresholds = alert2HThresholds;
     uint8_t mode = thresholds.anchorSourceMode;
     
     if (mode == 0) {  // MANUAL
@@ -1535,7 +1528,7 @@ float AlertEngine::getActiveAnchorPrice(float manualAnchorPrice) {
 
 // Auto Anchor: Update auto anchor value (called from apiTask)
 bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
-    const Alert2HThresholds& thresholds = getAlert2HThresholds();
+    const Alert2HThresholds& thresholds = alert2HThresholds;
     Serial.printf("[ANCHOR][AUTO] maybeUpdateAutoAnchor called: force=%d mode=%d symbol=%s\n", 
                   force, thresholds.anchorSourceMode, binanceSymbol);
     
@@ -1666,7 +1659,7 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
         alert2HThresholds.autoAnchorLastUpdateEpoch = settings.alert2HThresholds.autoAnchorLastUpdateEpoch;
         
         // Stel auto anchor in als actieve anchor
-        uint8_t currentMode = alert2HThresholds.anchorSourceMode;
+        uint8_t currentMode = thresholds.anchorSourceMode;
         if (currentMode == 1 || currentMode == 2) {
             // BELANGRIJK: shouldUpdateUI=false en skipNotifications=true om deadlocks te voorkomen
             bool anchorSet = anchorSystem.setAnchorPrice(newAutoAnchor, false, true);
@@ -1674,7 +1667,7 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
                 Serial.printf("[ANCHOR][AUTO] Anchor ingesteld: %.2f (take profit/max loss worden getoond)\n", newAutoAnchor);
                 
                 // Stuur optionele notificatie als enabled
-                if (alert2HThresholds.getAutoAnchorNotifyEnabled()) {
+                if (thresholds.getAutoAnchorNotifyEnabled()) {
                     char timestamp[32];
                     char title[40];
                     char msg[120];  // Verhoogd van 80 naar 120 bytes voor langere notificaties
