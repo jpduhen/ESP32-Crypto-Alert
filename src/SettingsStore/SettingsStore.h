@@ -187,6 +187,7 @@ class SettingsStore {
 public:
     SettingsStore();
     bool begin();
+    bool isLoaded() const;
     
     // Load en save alle settings
     CryptoMonitorSettings load();
@@ -198,6 +199,7 @@ public:
 private:
     Preferences prefs;
     static const char* PREF_NAMESPACE;
+    bool settingsLoaded;
     
     // Helper: Load string preference (geoptimaliseerd: elimineert duplicatie)
     void loadStringPreference(const char* key, char* buffer, size_t bufferSize, const char* defaultValue);
@@ -289,4 +291,3 @@ private:
 };
 
 #endif // SETTINGSSTORE_H
-
