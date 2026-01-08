@@ -5000,23 +5000,18 @@ TwoHMetrics computeTwoHMetrics()
 {
     TwoHMetrics metrics;
     
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
     // Gebruik bestaande 2h average (wordt berekend in calculateReturn2Hours())
     metrics.avg2h = averagePrices[3];
-    
     // Gebruik bestaande findMinMaxInLast2Hours() functie voor CYD platforms
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
     findMinMaxInLast2Hours(metrics.low2h, metrics.high2h);
     #else
-    // Voor niet-CYD platforms: bereken 2h min/max uit minuteAverages (zoals findMinMaxInLast2Hours doet)
+    // Voor niet-CYD platforms: bereken 2h avg/min/max uit minuteAverages (zoals findMinMaxInLast2Hours doet)
+    metrics.avg2h = 0.0f;
     metrics.low2h = 0.0f;
     metrics.high2h = 0.0f;
     
-    uint8_t availableMinutes = 0;
-    if (!minuteArrayFilled) {
-        availableMinutes = minuteIndex;
-    } else {
-        availableMinutes = MINUTES_FOR_30MIN_CALC;  // 120 minuten
-    }
+    uint8_t availableMinutes = minuteArrayFilled ? MINUTES_FOR_30MIN_CALC : minuteIndex;
     
     if (availableMinutes > 0) {
         // Gebruik laatste 120 minuten (of minder als niet beschikbaar)
@@ -5035,6 +5030,22 @@ TwoHMetrics computeTwoHMetrics()
                     if (minuteAverages[idx] > metrics.high2h) metrics.high2h = minuteAverages[idx];
                 }
             }
+        }
+        
+        float last120Sum = 0.0f;
+        uint16_t last120Count = 0;
+        accumulateValidPricesFromRingBuffer(
+            minuteAverages,
+            minuteArrayFilled,
+            minuteIndex,
+            MINUTES_FOR_30MIN_CALC,
+            1,  // Start vanaf 1 positie terug (nieuwste)
+            count,
+            last120Sum,
+            last120Count
+        );
+        if (last120Count > 0) {
+            metrics.avg2h = last120Sum / last120Count;
         }
     }
     #endif
