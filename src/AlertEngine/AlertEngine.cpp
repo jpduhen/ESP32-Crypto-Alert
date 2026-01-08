@@ -1396,6 +1396,14 @@ static bool flushPendingSecondaryAlertInternal(uint32_t now) {
 // FASE X.5: Uitgebreid met coalescing voor SECONDARY alerts
 bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, const char* msg, const char* colorTag) {
     uint32_t now = millis();
+    if (!are2HThresholdsReady()) {
+        static bool loggedNotReady = false;
+        if (!loggedNotReady) {
+            Serial_println(F("[AlertEngine] WARN: 2h thresholds nog niet geladen, skip 2h notificatie"));
+            loggedNotReady = true;
+        }
+        return false;
+    }
     const Alert2HThresholds& thresholds = getAlert2HThresholds();
     
     // FASE X.3: PRIMARY alerts override throttling (altijd door, geen coalescing)
