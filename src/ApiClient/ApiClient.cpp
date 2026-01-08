@@ -430,21 +430,23 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
     const uint32_t RETRY_DELAYS[] = {250, 750}; // Backoff delays in ms (extra delay voor rate limiting)
     bool ok = false;
     
+    bool usePersistent = (APICLIENT_PRICE_KEEPALIVE != 0);
     for (uint8_t attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         bool attemptOk = false;
         bool shouldRetry = false;
         int lastCode = 0;
         
-        // Gebruik lokaal HTTPClient object (zoals fetchBinanceKlines doet) - persistent client geeft HTTP 400
-        HTTPClient http;
+        // Gebruik persistent client als keep-alive aan staat, anders lokaal object
+        HTTPClient localHttp;
+        HTTPClient& http = usePersistent ? httpClient : localHttp;
         
         // S2: do-while(0) patroon voor consistente cleanup per attempt
         do {
             // T1: Expliciete connect/read timeout settings (verhoogd naar 4000ms)
             http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS_DEFAULT);
             http.setTimeout(HTTP_READ_TIMEOUT_MS_DEFAULT);
-            // Geen keep-alive voor nu (lokaal object, zoals fetchBinanceKlines)
-            http.setReuse(false);
+            // Keep-alive alleen bij persistent client
+            http.setReuse(usePersistent);
             
             // N2: Voeg User-Agent header toe VOOR http.begin() om Cloudflare blocking te voorkomen
             // Headers moeten worden toegevoegd voordat de verbinding wordt geopend
@@ -457,7 +459,20 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
             #if !DEBUG_BUTTON_ONLY
             Serial.printf(F("[API] Fetching price from: %s\n"), url);
             #endif
-            if (!http.begin(url)) {
+            if (usePersistent) {
+                if (http.connected()) {
+                    http.end();
+                }
+                if (!http.begin(wifiClient, url)) {
+                    #if !DEBUG_BUTTON_ONLY
+                    if (attempt == MAX_RETRIES) {
+                        Serial.printf(F("[API] http.begin() gefaald voor URL: %s\n"), url);
+                    }
+                    #endif
+                    shouldRetry = (attempt < MAX_RETRIES);
+                    break;
+                }
+            } else if (!http.begin(url)) {
                 #if !DEBUG_BUTTON_ONLY
                 if (attempt == MAX_RETRIES) {
                     Serial.printf(F("[API] http.begin() gefaald voor URL: %s\n"), url);
@@ -499,6 +514,10 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
                         errorBuf[errorLen] = '\0';
                         Serial.printf(F("[API] HTTP 400 response body: %s\n"), errorBuf);
                     }
+                    if (usePersistent) {
+                        usePersistent = false;
+                        shouldRetry = (attempt < MAX_RETRIES);
+                    }
                 }
                 break;
             }
@@ -533,7 +552,7 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
         // C2: ALTIJD cleanup (ook bij succes) - HTTPClient op ESP32 vereist dit voor correcte reset
         // Hard close: http.end() + client.stop() voor volledige cleanup
         WiFiClient* stream = http.getStreamPtr();
-        if (stream != nullptr) {
+        if (!usePersistent && stream != nullptr) {
             stream->stop();
         }
         http.end();
