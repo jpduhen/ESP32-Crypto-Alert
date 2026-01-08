@@ -80,14 +80,18 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
             http.addHeader(F("Accept"), F("application/json"));
             
             // M1: Heap telemetry vóór HTTP GET (intern)
+            #if APICLIENT_HEAP_LOG
             logHeap("HTTP_GET_PRE");
+            #endif
         
         int code = http.GET();
         unsigned long requestTime = millis() - requestStart;
             lastCode = code;  // S2: Bewaar voor retry logica
             
             // M1: Heap telemetry na HTTP GET (intern)
+            #if APICLIENT_HEAP_LOG
             logHeap("HTTP_GET_POST");
+            #endif
             
             if (code != 200) {
                 // Geconsolideerde retry check: check alle retry-waardige fouten in één keer
@@ -114,7 +118,9 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
             
             // M2: Read response body via streaming (vervangt getString() fallback)
             // M1: Heap telemetry vóór body read
+            #if APICLIENT_HEAP_LOG
             logHeap("HTTP_BODY_READ_PRE");
+            #endif
             
             // Read response into buffer via streaming
             WiFiClient *stream = http.getStreamPtr();
@@ -123,8 +129,10 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
                 break;
             }
             
-                size_t bytesRead = 0;
+            size_t bytesRead = 0;
             const size_t CHUNK_SIZE = 256;  // Lees in chunks
+            const uint32_t readTimeoutMs = (timeoutMs > 0) ? timeoutMs : HTTP_READ_TIMEOUT_MS_DEFAULT;
+            unsigned long readStart = millis();
             
             // Read in chunks: continue zolang stream connected/available
             while (http.connected() && bytesRead < (bufferSize - 1)) {
@@ -136,10 +144,14 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
                     if (!stream->available()) {
                         break;
                     }
+                    if ((millis() - readStart) > readTimeoutMs) {
+                        break;
+                    }
                     delay(10);  // Wacht kort op meer data
                     continue;
                 }
                 bytesRead += n;
+                readStart = millis();  // reset timeout bij ontvangst data
                 }
                 buffer[bytesRead] = '\0';
                 
@@ -149,7 +161,9 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
             }
             
             // M1: Heap telemetry na body read
+            #if APICLIENT_HEAP_LOG
             logHeap("HTTP_BODY_READ_POST");
+            #endif
             
             attemptOk = true;
             result = true;
@@ -157,11 +171,11 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
         
         // C2: ALTIJD cleanup (ook bij succes) - HTTPClient op ESP32 vereist dit voor correcte reset
         // Hard close: http.end() + client.stop() voor volledige cleanup
-        http.end();
         WiFiClient* stream = http.getStreamPtr();
         if (stream != nullptr) {
             stream->stop();
         }
+        http.end();
         
         // S2: Succes - stop retries
         if (attemptOk) {
@@ -255,7 +269,8 @@ void ApiClient::logHttpError(int code, const char* phase, unsigned long requestT
 {
     if (code < 0) {
         // T2: Gebruik errorToString voor leesbare error messages (deterministisch, geen mojibake)
-        String localErr = HTTPClient().errorToString(code);  // Temporary object voor errorToString
+        static HTTPClient errorHttp;
+        String localErr = errorHttp.errorToString(code);
         if (maxAttempts > 1) {
             Serial.printf(F("%s HTTP error (code=%d, fase=%s, tijd=%lu ms, poging %d/%d, error=%s)\n"), 
                          prefix, code, phase, requestTime, attempt + 1, maxAttempts, localErr.c_str());
@@ -395,14 +410,18 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
     }
     
     // M1: Heap telemetry vóór URL build
+    #if APICLIENT_HEAP_LOG
     logHeap("API_URL_BUILD");
+    #endif
     
     // Build Binance API URL
     char url[128];
     snprintf(url, sizeof(url), "https://api.binance.com/api/v3/ticker/price?symbol=%s", symbol);
     
     // M1: Heap telemetry vóór HTTP GET
+    #if APICLIENT_HEAP_LOG
     logHeap("API_GET_PRE");
+    #endif
     
     // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
     netMutexLock("ApiClient::fetchBinancePrice");
@@ -453,7 +472,9 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
             lastCode = code;
             
             // M1: Heap telemetry na HTTP GET
+            #if APICLIENT_HEAP_LOG
             logHeap("API_GET_POST");
+            #endif
             
             if (code != 200) {
                 // Geoptimaliseerd: gebruik helper functie voor error logging
@@ -490,7 +511,9 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
             }
             
             // M1: Heap telemetry vóór JSON parse
+            #if APICLIENT_HEAP_LOG
             logHeap("API_PARSE_PRE");
+            #endif
             
             // Parse price from stream
             if (!parseBinancePriceFromStream(stream, out)) {
@@ -499,7 +522,9 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
             }
             
             // M1: Heap telemetry na JSON parse
+            #if APICLIENT_HEAP_LOG
             logHeap("API_PARSE_POST");
+            #endif
             
             attemptOk = true;
             ok = true;
@@ -507,11 +532,11 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
         
         // C2: ALTIJD cleanup (ook bij succes) - HTTPClient op ESP32 vereist dit voor correcte reset
         // Hard close: http.end() + client.stop() voor volledige cleanup
-        http.end();
         WiFiClient* stream = http.getStreamPtr();
         if (stream != nullptr) {
             stream->stop();
         }
+        http.end();
         
         if (attemptOk) {
             if (attempt > 0) {
@@ -536,6 +561,4 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
     
     return ok;
 }
-
-
 
