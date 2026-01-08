@@ -952,7 +952,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
     if (!are2HThresholdsReady()) {
         static bool loggedNotReady = false;
         if (!loggedNotReady) {
-            Serial_println(F("[AlertEngine] WARN: 2h thresholds nog niet geladen, skip 2h checks"));
+            Serial_printf(F("[AlertEngine] WARN: 2h thresholds nog niet geladen, skip 2h checks\n"));
             loggedNotReady = true;
         }
         return;
