@@ -4386,7 +4386,30 @@ float calculateReturn30Minutes()
         averagePrices[2] = 0.0f;
     }
     
-    // Calculate return: use current price vs average of 30 minutes ago
+    // Calculate return: use average of last 30 minutes vs average of previous 30 minutes (if available)
+    if (availableMinutes >= 60) {
+        float prev30Sum = 0.0f;
+        uint16_t prev30Count = 0;
+        accumulateValidPricesFromRingBuffer(
+            averages,
+            minuteArrayFilled,
+            minuteIndex,
+            MINUTES_FOR_30MIN_CALC,
+            31, // Start vanaf 31 posities terug (30 minuten vóór de laatste 30)
+            30,
+            prev30Sum,
+            prev30Count
+        );
+
+        if (prev30Count > 0) {
+            float prev30Avg = prev30Sum / prev30Count;
+            if (areValidPrices(averagePrices[2], prev30Avg) && prev30Avg > 0.0f) {
+                return calculatePercentageReturn(averagePrices[2], prev30Avg);
+            }
+        }
+    }
+
+    // Fallback: gebruik huidige prijs vs gemiddelde van laatste 30 minuten
     // Fase 6.1: Geconsolideerde validatie
     float priceNow = prices[0];
     float price30mAgo = averagePrices[2];
