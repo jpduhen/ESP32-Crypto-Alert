@@ -33,6 +33,7 @@ extern char binanceSymbol[];
 extern float prices[];  // Fase 6.1.4: Voor formatNotificationMessage
 extern uint8_t language;  // Taalinstelling (0 = Nederlands, 1 = English)
 extern const char* getText(const char* nlText, const char* enText);  // Taalvertaling functie
+extern bool isValidPrice(float price);  // Voor price validatie
 void getFormattedTimestamp(char* buffer, size_t bufferSize);  // Fase 6.1.4: Voor formatNotificationMessage
 void getFormattedTimestampForNotification(char* buffer, size_t bufferSize);  // Nieuwe functie voor notificaties met slash formaat
 extern bool smartConfluenceEnabled;  // Fase 6.1.9: Voor checkAndSendConfluenceAlert
@@ -50,17 +51,6 @@ static Alert2HState gAlert2H;
 void findMinMaxInSecondPrices(float &minVal, float &maxVal);
 void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
 void logVolatilityStatus(const EffectiveThresholds& eff);
-// Forward declaration voor generieke findMinMaxInArray() functie (gebruikt voor 5m min/max)
-extern bool findMinMaxInArray(
-    const float* array,
-    uint16_t arraySize,
-    uint16_t currentIndex,
-    bool arrayFilled,
-    uint16_t elementsToCheck,
-    bool useRingBuffer,
-    float &minVal,
-    float &maxVal
-);
 // Fase 6.1.10: fiveMinutePrices kan pointer zijn (CYD/TTGO) of array (andere platforms)
 #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
 extern float *fiveMinutePrices;
@@ -497,7 +487,7 @@ void AlertEngine::cacheAbsoluteValues(float ret_1m, float ret_5m, float ret_30m)
 }
 
 // Helper: Bereken min/max uit fiveMinutePrices (gebruikt zelfde logica als 1m en 30m)
-// Fase: Gebruik generieke findMinMaxInArray() functie voor consistentie
+// Fase: Extra sanity-range om corrupte waarden te filteren
 bool AlertEngine::findMinMaxInFiveMinutePrices(float& minVal, float& maxVal) {
     // Gebruik PriceData getters (consistent met 1m implementatie)
     const float* fiveMinPrices = priceData.getFiveMinutePrices();
@@ -515,12 +505,56 @@ bool AlertEngine::findMinMaxInFiveMinutePrices(float& minVal, float& maxVal) {
     
     uint16_t fiveMinIndex = priceData.getFiveMinuteIndex();
     bool fiveMinArrayFilled = priceData.getFiveMinuteArrayFilled();
-    
-    // Gebruik generieke functie (ring buffer, net zoals minuteAverages)
-    // elementsToCheck = 0 betekent "check alle beschikbare elementen"
-    // useRingBuffer = true omdat fiveMinutePrices een ring buffer is (index gebruikt modulo)
-    return findMinMaxInArray(fiveMinPrices, SECONDS_PER_5MINUTES, fiveMinIndex, 
-                            fiveMinArrayFilled, 0, true, minVal, maxVal);
+
+    uint16_t available = fiveMinArrayFilled ? SECONDS_PER_5MINUTES : fiveMinIndex;
+    if (available == 0) {
+        // Geen data beschikbaar, fallback naar huidige prijs
+        if (isValidPrice(prices[0])) {
+            minVal = prices[0];
+            maxVal = prices[0];
+        } else {
+            minVal = 0.0f;
+            maxVal = 0.0f;
+        }
+        return false;
+    }
+
+    float currentPrice = prices[0];
+    bool useSanityRange = isValidPrice(currentPrice);
+    float minAllowed = useSanityRange ? currentPrice * 0.1f : 0.0f;
+    float maxAllowed = useSanityRange ? currentPrice * 10.0f : 0.0f;
+
+    bool firstValid = false;
+    for (uint16_t i = 1; i <= available; i++) {
+        uint16_t idx = (fiveMinIndex - i + SECONDS_PER_5MINUTES) % SECONDS_PER_5MINUTES;
+        float value = fiveMinPrices[idx];
+        if (!isValidPrice(value)) {
+            continue;
+        }
+        if (useSanityRange && (value < minAllowed || value > maxAllowed)) {
+            continue;
+        }
+        if (!firstValid) {
+            minVal = value;
+            maxVal = value;
+            firstValid = true;
+        } else {
+            if (value < minVal) minVal = value;
+            if (value > maxVal) maxVal = value;
+        }
+    }
+
+    if (!firstValid) {
+        if (isValidPrice(currentPrice)) {
+            minVal = currentPrice;
+            maxVal = currentPrice;
+        } else {
+            minVal = 0.0f;
+            maxVal = 0.0f;
+        }
+    }
+
+    return firstValid;
 }
 
 // Helper: Format notification message (gebruikt class buffers)
