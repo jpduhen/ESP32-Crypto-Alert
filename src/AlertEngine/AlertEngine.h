@@ -131,6 +131,9 @@ struct Alert2HState {
     Alert2HState() : flags(0x1F) {} // Alle armed flags op true (0x1F = 0b00011111)
 };
 
+// Forward declaration voor instelbare 2h thresholds (SettingsStore)
+struct Alert2HThresholds;
+
 // AlertEngine class - beheert alert detection en notificaties
 class AlertEngine {
 public:
@@ -215,6 +218,11 @@ public:
     // FASE X.3: PRIMARY alerts override throttling, SECONDARY alerts onderhevig aan throttling
     // Gebruik deze functie in plaats van direct sendNotification() voor 2h alerts
     static bool send2HNotification(Alert2HType alertType, const char* title, const char* msg, const char* colorTag);
+
+    // FASE X.6: Centraliseer toegang tot 2h thresholds (instelbaar via SettingsStore)
+    static void onSettingsLoaded(const Alert2HThresholds& thresholds);
+    static bool are2HThresholdsReady();
+    static const Alert2HThresholds& getAlert2HThresholds();
     
     // Sync state: Update AlertEngine state met globale variabelen (voor parallel implementatie)
     void syncStateFromGlobals();

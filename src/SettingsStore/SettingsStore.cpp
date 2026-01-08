@@ -273,11 +273,15 @@ bool SettingsStore::needsTopicMigration(const char* topic) {
     return true;
 }
 
-SettingsStore::SettingsStore() {
+SettingsStore::SettingsStore() : settingsLoaded(false) {
 }
 
 bool SettingsStore::begin() {
     return true; // Preferences heeft geen expliciete begin() nodig
+}
+
+bool SettingsStore::isLoaded() const {
+    return settingsLoaded;
 }
 
 void SettingsStore::generateDefaultNtfyTopic(char* buffer, size_t bufferSize) {
@@ -592,6 +596,7 @@ CryptoMonitorSettings SettingsStore::load() {
     if (settings.alert2HThresholds.autoAnchorW4hTrendBoost_x100 > 100) settings.alert2HThresholds.autoAnchorW4hTrendBoost_x100 = 100;  // 1.0
     
     prefs.end();
+    settingsLoaded = true;
     return settings;
 }
 
