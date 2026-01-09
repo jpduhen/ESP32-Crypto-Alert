@@ -100,75 +100,7 @@ public:
     
     // Fase 4.2.3: addPriceToSecondArray() toegevoegd
     // Fase 4.2.5: Gebruikt nu PriceData state variabelen (parallel, globale arrays blijven bestaan)
-    void addPriceToSecondArray(float price) {
-        // Validate input
-        if (!ApiClient::isValidPrice(price))
-        {
-            Serial.printf("[Array] WARN: Ongeldige prijs in addPriceToSecondArray: %.2f\n", price);
-            return;
-        }
-        
-        // Bounds check voor secondPrices array
-        // Fase 4.2.5: Gebruikt PriceData state (this->secondIndex)
-        // Note: Als secondIndex == SECONDS_PER_MINUTE, betekent dit dat buffer vol is, reset naar 0
-        if (this->secondIndex >= SECONDS_PER_MINUTE)
-        {
-            // Dit kan gebeuren na warm-start als copyCount == SECONDS_PER_MINUTE
-            // In dat geval is de buffer vol, dus volgende write moet naar index 0
-            this->secondIndex = 0;
-            this->secondArrayFilled = true;
-        }
-        
-        // Gebruik nog globale arrays (worden later verplaatst in stap 4.2.6+)
-        extern float secondPrices[];
-        extern DataSource secondPricesSource[];
-        secondPrices[this->secondIndex] = price;
-        secondPricesSource[this->secondIndex] = SOURCE_LIVE;  // Mark as live data
-        // Geconsolideerde index update: check en update in één keer
-        this->secondIndex = (this->secondIndex + 1) % SECONDS_PER_MINUTE;
-        if (this->secondIndex == 0) {
-            this->secondArrayFilled = true;
-        }
-        
-        // Ook toevoegen aan 5-minuten buffer met bounds checking
-        // Note: Als fiveMinuteIndex == SECONDS_PER_5MINUTES, betekent dit dat buffer vol is, reset naar 0
-        if (this->fiveMinuteIndex >= SECONDS_PER_5MINUTES)
-        {
-            // Dit kan gebeuren na warm-start als fiveMinuteIndex == SECONDS_PER_5MINUTES
-            // In dat geval is de buffer vol, dus volgende write moet naar index 0
-            this->fiveMinuteIndex = 0;
-            this->fiveMinuteArrayFilled = true;
-        }
-        
-        // Null pointer check voor dynamische arrays (CYD/TTGO platforms)
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
-        extern float *fiveMinutePrices;
-        extern DataSource *fiveMinutePricesSource;
-        if (fiveMinutePrices == nullptr || fiveMinutePricesSource == nullptr) {
-            Serial.printf("[Array] ERROR: fiveMinutePrices arrays niet gealloceerd!\n");
-            return; // Skip als arrays niet gealloceerd zijn
-        }
-        #else
-        extern float fiveMinutePrices[];  // Statische arrays voor platforms met PSRAM (ESP32-S3 SuperMini, GEEK)
-        extern DataSource fiveMinutePricesSource[];
-        #endif
-        
-        fiveMinutePrices[this->fiveMinuteIndex] = price;
-        fiveMinutePricesSource[this->fiveMinuteIndex] = SOURCE_LIVE;  // Mark as live data
-        // Geconsolideerde index update: check en update in één keer
-        this->fiveMinuteIndex = (this->fiveMinuteIndex + 1) % SECONDS_PER_5MINUTES;
-        if (this->fiveMinuteIndex == 0) {
-            this->fiveMinuteArrayFilled = true;
-        }
-        
-        // Update warm-start status periodiek (elke 10 seconden)
-        static unsigned long lastStatusUpdate = 0;
-        unsigned long now = millis();
-        if (now - lastStatusUpdate > 10000) {  // Elke 10 seconden
-            updateWarmStartStatus();
-            lastStatusUpdate = now;
-        }
-    }
+    void addPriceToSecondArray(float price);
     
     // Fase 4.2.8: calculateReturn1Minute() verplaatst naar PriceData
     // Bereken 1-minuut return: prijs nu vs 60 seconden geleden
@@ -181,6 +113,7 @@ private:
     bool secondArrayFilled;
     uint16_t fiveMinuteIndex;
     bool fiveMinuteArrayFilled;
+    bool hasFiveMinuteBuffers;
     
     // Fase 4.2.2: Arrays toegevoegd (parallel, nog niet gebruikt)
     // Note: Tijdelijk uitgecommentarieerd om naamconflicten te voorkomen met globale variabelen
@@ -215,6 +148,5 @@ private:
 };
 
 #endif // PRICEDATA_H
-
 
 
