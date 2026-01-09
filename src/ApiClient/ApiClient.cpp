@@ -4,6 +4,11 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+// Fallback: als macro niet beschikbaar is in de header (bijv. in oudere branches)
+#ifndef APICLIENT_PRICE_KEEPALIVE
+#define APICLIENT_PRICE_KEEPALIVE 0
+#endif
+
 // Constructor - initialiseer persistent clients
 ApiClient::ApiClient() {
     // N2: Persistent clients worden automatisch geïnitialiseerd
