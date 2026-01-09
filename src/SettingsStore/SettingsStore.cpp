@@ -234,9 +234,13 @@ static void getESP32DeviceId(char* buffer, size_t bufferSize) {
 // Consolideert getString + toCharArray logica
 void SettingsStore::loadStringPreference(const char* key, char* buffer, size_t bufferSize, const char* defaultValue) {
     if (buffer == nullptr || bufferSize == 0) return;
-    
-    String value = prefs.getString(key, defaultValue);
-    value.toCharArray(buffer, bufferSize);
+
+    size_t len = prefs.getString(key, buffer, bufferSize);
+    if (len == 0 && defaultValue != nullptr && !prefs.isKey(key)) {
+        strncpy(buffer, defaultValue, bufferSize - 1);
+        buffer[bufferSize - 1] = '\0';
+        return;
+    }
     buffer[bufferSize - 1] = '\0'; // Ensure null termination
 }
 
@@ -271,6 +275,91 @@ bool SettingsStore::needsTopicMigration(const char* topic) {
     }
     
     return true;
+}
+
+bool SettingsStore::putStringIfChanged(const char* key, const char* value) {
+    if (value == nullptr) return false;
+
+    char existing[128];
+    existing[0] = '\0';
+    prefs.getString(key, existing, sizeof(existing));
+    if (strcmp(existing, value) == 0) {
+        return false;
+    }
+    return prefs.putString(key, value) > 0;
+}
+
+bool SettingsStore::putFloatIfChanged(const char* key, float value) {
+    float existing = prefs.getFloat(key, value);
+    if (existing == value) {
+        return false;
+    }
+    return prefs.putFloat(key, value) > 0;
+}
+
+bool SettingsStore::putBoolIfChanged(const char* key, bool value) {
+    bool existing = prefs.getBool(key, value);
+    if (existing == value) {
+        return false;
+    }
+    return prefs.putBool(key, value) > 0;
+}
+
+bool SettingsStore::putUCharIfChanged(const char* key, uint8_t value) {
+    uint8_t existing = prefs.getUChar(key, value);
+    if (existing == value) {
+        return false;
+    }
+    return prefs.putUChar(key, value) > 0;
+}
+
+bool SettingsStore::putUIntIfChanged(const char* key, uint32_t value) {
+    uint32_t existing = prefs.getUInt(key, value);
+    if (existing == value) {
+        return false;
+    }
+    return prefs.putUInt(key, value) > 0;
+}
+
+bool SettingsStore::putULongIfChanged(const char* key, unsigned long value) {
+    unsigned long existing = prefs.getULong(key, value);
+    if (existing == value) {
+        return false;
+    }
+    return prefs.putULong(key, value) > 0;
+}
+
+bool SettingsStore::putUShortIfChanged(const char* key, uint16_t value) {
+    uint16_t existing = prefs.getUShort(key, value);
+    if (existing == value) {
+        return false;
+    }
+    return prefs.putUShort(key, value) > 0;
+}
+
+bool SettingsStore::putBytesIfChanged(const char* key, const void* value, size_t size, bool* didWrite) {
+    if (value == nullptr || size == 0) return false;
+    if (didWrite != nullptr) {
+        *didWrite = false;
+    }
+
+    uint8_t existing[128];
+    if (size > sizeof(existing)) {
+        size_t written = prefs.putBytes(key, value, size);
+        if (didWrite != nullptr) {
+            *didWrite = written == size;
+        }
+        return written == size;
+    }
+    size_t existingSize = prefs.getBytes(key, existing, size);
+    if (existingSize == size && memcmp(existing, value, size) == 0) {
+        return true;
+    }
+    size_t written = prefs.putBytes(key, value, size);
+    if (didWrite != nullptr) {
+        *didWrite = written == size;
+    }
+    return written == size;
 }
 
 SettingsStore::SettingsStore() : settingsLoaded(false) {
@@ -407,8 +496,11 @@ CryptoMonitorSettings SettingsStore::load() {
     
     // Load NTFY topic with migration logic (geoptimaliseerd: gebruik helper)
     char topicBuffer[64];
-    String topic = prefs.getString(PREF_KEY_NTFY_TOPIC, defaultTopic);
-    topic.toCharArray(topicBuffer, sizeof(topicBuffer));
+    size_t topicLen = prefs.getString(PREF_KEY_NTFY_TOPIC, topicBuffer, sizeof(topicBuffer));
+    if (topicLen == 0 && !prefs.isKey(PREF_KEY_NTFY_TOPIC)) {
+        strncpy(topicBuffer, defaultTopic, sizeof(topicBuffer) - 1);
+        topicBuffer[sizeof(topicBuffer) - 1] = '\0';
+    }
     
     // Geoptimaliseerd: gebruik helper functie voor migration check
     if (needsTopicMigration(topicBuffer)) {
@@ -520,7 +612,7 @@ CryptoMonitorSettings SettingsStore::load() {
     AutoAnchorPersist blob;
     size_t blobSize = prefs.getBytes(PREF_KEY_AUTO_ANCHOR_BLOB, &blob, sizeof(blob));
     
-    if (blobSize == sizeof(AutoAnchorPersist) && blob.version == 1) {
+    if (blobSize == sizeof(AutoAnchorPersist) && blob.version == 1 && blob.crc == blob.calculateCRC()) {
         // Config-blob gevonden en valide
         settings.alert2HThresholds.anchorSourceMode = blob.anchorSourceMode;
         settings.alert2HThresholds.autoAnchorLastValue = blob.autoAnchorLastValue;
@@ -604,66 +696,66 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     prefs.begin(PREF_NAMESPACE, false); // read-write mode
     
     // Save basic settings
-    prefs.putString(PREF_KEY_NTFY_TOPIC, settings.ntfyTopic);
-    prefs.putString(PREF_KEY_BINANCE_SYMBOL, settings.binanceSymbol);
-    prefs.putUChar(PREF_KEY_LANGUAGE, settings.language);
-    prefs.putUChar(PREF_KEY_DISPLAY_ROTATION, settings.displayRotation);
+    putStringIfChanged(PREF_KEY_NTFY_TOPIC, settings.ntfyTopic);
+    putStringIfChanged(PREF_KEY_BINANCE_SYMBOL, settings.binanceSymbol);
+    putUCharIfChanged(PREF_KEY_LANGUAGE, settings.language);
+    putUCharIfChanged(PREF_KEY_DISPLAY_ROTATION, settings.displayRotation);
     
     // Save alert thresholds
-    prefs.putFloat(PREF_KEY_TH1_UP, settings.alertThresholds.threshold1MinUp);
-    prefs.putFloat(PREF_KEY_TH1_DOWN, settings.alertThresholds.threshold1MinDown);
-    prefs.putFloat(PREF_KEY_TH30_UP, settings.alertThresholds.threshold30MinUp);
-    prefs.putFloat(PREF_KEY_TH30_DOWN, settings.alertThresholds.threshold30MinDown);
-    prefs.putFloat(PREF_KEY_SPIKE1M, settings.alertThresholds.spike1m);
-    prefs.putFloat(PREF_KEY_SPIKE5M, settings.alertThresholds.spike5m);
-    prefs.putFloat(PREF_KEY_MOVE30M, settings.alertThresholds.move30m);
-    prefs.putFloat(PREF_KEY_MOVE5M, settings.alertThresholds.move5m);
-    prefs.putFloat(PREF_KEY_MOVE5M_ALERT, settings.alertThresholds.move5mAlert);
+    putFloatIfChanged(PREF_KEY_TH1_UP, settings.alertThresholds.threshold1MinUp);
+    putFloatIfChanged(PREF_KEY_TH1_DOWN, settings.alertThresholds.threshold1MinDown);
+    putFloatIfChanged(PREF_KEY_TH30_UP, settings.alertThresholds.threshold30MinUp);
+    putFloatIfChanged(PREF_KEY_TH30_DOWN, settings.alertThresholds.threshold30MinDown);
+    putFloatIfChanged(PREF_KEY_SPIKE1M, settings.alertThresholds.spike1m);
+    putFloatIfChanged(PREF_KEY_SPIKE5M, settings.alertThresholds.spike5m);
+    putFloatIfChanged(PREF_KEY_MOVE30M, settings.alertThresholds.move30m);
+    putFloatIfChanged(PREF_KEY_MOVE5M, settings.alertThresholds.move5m);
+    putFloatIfChanged(PREF_KEY_MOVE5M_ALERT, settings.alertThresholds.move5mAlert);
     
     // Save notification cooldowns
-    prefs.putULong(PREF_KEY_CD1MIN, settings.notificationCooldowns.cooldown1MinMs);
-    prefs.putULong(PREF_KEY_CD30MIN, settings.notificationCooldowns.cooldown30MinMs);
-    prefs.putULong(PREF_KEY_CD5MIN, settings.notificationCooldowns.cooldown5MinMs);
+    putULongIfChanged(PREF_KEY_CD1MIN, settings.notificationCooldowns.cooldown1MinMs);
+    putULongIfChanged(PREF_KEY_CD30MIN, settings.notificationCooldowns.cooldown30MinMs);
+    putULongIfChanged(PREF_KEY_CD5MIN, settings.notificationCooldowns.cooldown5MinMs);
     
     // Save MQTT settings
-    prefs.putString(PREF_KEY_MQTT_HOST, settings.mqttHost);
-    prefs.putUInt(PREF_KEY_MQTT_PORT, settings.mqttPort);
-    prefs.putString(PREF_KEY_MQTT_USER, settings.mqttUser);
-    prefs.putString(PREF_KEY_MQTT_PASS, settings.mqttPass);
+    putStringIfChanged(PREF_KEY_MQTT_HOST, settings.mqttHost);
+    putUIntIfChanged(PREF_KEY_MQTT_PORT, settings.mqttPort);
+    putStringIfChanged(PREF_KEY_MQTT_USER, settings.mqttUser);
+    putStringIfChanged(PREF_KEY_MQTT_PASS, settings.mqttPass);
     
     // Save anchor settings
-    prefs.putFloat(PREF_KEY_ANCHOR_TP, settings.anchorTakeProfit);
-    prefs.putFloat(PREF_KEY_ANCHOR_ML, settings.anchorMaxLoss);
-    prefs.putUChar(PREF_KEY_ANCHOR_STRATEGY, settings.anchorStrategy);
+    putFloatIfChanged(PREF_KEY_ANCHOR_TP, settings.anchorTakeProfit);
+    putFloatIfChanged(PREF_KEY_ANCHOR_ML, settings.anchorMaxLoss);
+    putUCharIfChanged(PREF_KEY_ANCHOR_STRATEGY, settings.anchorStrategy);
     
     // Save trend-adaptive anchor settings
-    prefs.putBool(PREF_KEY_TREND_ADAPT, settings.trendAdaptiveAnchorsEnabled);
-    prefs.putFloat(PREF_KEY_UP_ML_MULT, settings.uptrendMaxLossMultiplier);
-    prefs.putFloat(PREF_KEY_UP_TP_MULT, settings.uptrendTakeProfitMultiplier);
-    prefs.putFloat(PREF_KEY_DOWN_ML_MULT, settings.downtrendMaxLossMultiplier);
-    prefs.putFloat(PREF_KEY_DOWN_TP_MULT, settings.downtrendTakeProfitMultiplier);
+    putBoolIfChanged(PREF_KEY_TREND_ADAPT, settings.trendAdaptiveAnchorsEnabled);
+    putFloatIfChanged(PREF_KEY_UP_ML_MULT, settings.uptrendMaxLossMultiplier);
+    putFloatIfChanged(PREF_KEY_UP_TP_MULT, settings.uptrendTakeProfitMultiplier);
+    putFloatIfChanged(PREF_KEY_DOWN_ML_MULT, settings.downtrendMaxLossMultiplier);
+    putFloatIfChanged(PREF_KEY_DOWN_TP_MULT, settings.downtrendTakeProfitMultiplier);
     
     // Save Smart Confluence Mode
-    prefs.putBool(PREF_KEY_SMART_CONF, settings.smartConfluenceEnabled);
+    putBoolIfChanged(PREF_KEY_SMART_CONF, settings.smartConfluenceEnabled);
     
     // Save Warm-Start settings
-    prefs.putBool(PREF_KEY_WARM_START, settings.warmStartEnabled);
-    prefs.putUChar(PREF_KEY_WS1M_EXTRA, settings.warmStart1mExtraCandles);
-    prefs.putUChar(PREF_KEY_WS5M, settings.warmStart5mCandles);
-    prefs.putUChar(PREF_KEY_WS30M, settings.warmStart30mCandles);
-    prefs.putUChar(PREF_KEY_WS2H, settings.warmStart2hCandles);
+    putBoolIfChanged(PREF_KEY_WARM_START, settings.warmStartEnabled);
+    putUCharIfChanged(PREF_KEY_WS1M_EXTRA, settings.warmStart1mExtraCandles);
+    putUCharIfChanged(PREF_KEY_WS5M, settings.warmStart5mCandles);
+    putUCharIfChanged(PREF_KEY_WS30M, settings.warmStart30mCandles);
+    putUCharIfChanged(PREF_KEY_WS2H, settings.warmStart2hCandles);
     
     // Save Auto-Volatility Mode settings
-    prefs.putBool(PREF_KEY_AUTO_VOL, settings.autoVolatilityEnabled);
-    prefs.putUChar(PREF_KEY_AUTO_VOL_WIN, settings.autoVolatilityWindowMinutes);
-    prefs.putFloat(PREF_KEY_AUTO_VOL_BASE, settings.autoVolatilityBaseline1mStdPct);
-    prefs.putFloat(PREF_KEY_AUTO_VOL_MIN, settings.autoVolatilityMinMultiplier);
-    prefs.putFloat(PREF_KEY_AUTO_VOL_MAX, settings.autoVolatilityMaxMultiplier);
+    putBoolIfChanged(PREF_KEY_AUTO_VOL, settings.autoVolatilityEnabled);
+    putUCharIfChanged(PREF_KEY_AUTO_VOL_WIN, settings.autoVolatilityWindowMinutes);
+    putFloatIfChanged(PREF_KEY_AUTO_VOL_BASE, settings.autoVolatilityBaseline1mStdPct);
+    putFloatIfChanged(PREF_KEY_AUTO_VOL_MIN, settings.autoVolatilityMinMultiplier);
+    putFloatIfChanged(PREF_KEY_AUTO_VOL_MAX, settings.autoVolatilityMaxMultiplier);
     
     // Save trend and volatility settings
-    prefs.putFloat(PREF_KEY_TREND_TH, settings.trendThreshold);
-    prefs.putFloat(PREF_KEY_VOL_LOW, settings.volatilityLowThreshold);
-    prefs.putFloat(PREF_KEY_VOL_HIGH, settings.volatilityHighThreshold);
+    putFloatIfChanged(PREF_KEY_TREND_TH, settings.trendThreshold);
+    putFloatIfChanged(PREF_KEY_VOL_LOW, settings.volatilityLowThreshold);
+    putFloatIfChanged(PREF_KEY_VOL_HIGH, settings.volatilityHighThreshold);
     
     // Save Auto Anchor settings (gebruik config-blob)
     AutoAnchorPersist blob;
@@ -683,9 +775,12 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     blob.setAutoAnchorNotifyEnabled(settings.alert2HThresholds.getAutoAnchorNotifyEnabled());
     blob.crc = blob.calculateCRC();
     
-    size_t blobResult = prefs.putBytes(PREF_KEY_AUTO_ANCHOR_BLOB, &blob, sizeof(blob));
-    if (blobResult == sizeof(blob)) {
-        Serial.printf("[SettingsStore] Saved auto anchor config-blob (version 1, %d bytes)\n", sizeof(blob));
+    bool blobWritten = false;
+    bool blobResult = putBytesIfChanged(PREF_KEY_AUTO_ANCHOR_BLOB, &blob, sizeof(blob), &blobWritten);
+    if (blobResult) {
+        if (blobWritten) {
+            Serial.printf("[SettingsStore] Saved auto anchor config-blob (version 1, %d bytes)\n", sizeof(blob));
+        }
     } else {
         Serial.printf("[SettingsStore] WARNING: Failed to save auto anchor config-blob, falling back to individual keys\n");
         // Fallback: save individuele keys (backward compatibility)
@@ -715,26 +810,26 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     }
     
     // Save 2-hour alert thresholds
-    prefs.putFloat(PREF_KEY_2H_BREAK_MARGIN, settings.alert2HThresholds.breakMarginPct);
-    prefs.putFloat(PREF_KEY_2H_BREAK_RESET, settings.alert2HThresholds.breakResetMarginPct);
-    prefs.putULong(PREF_KEY_2H_BREAK_CD, settings.alert2HThresholds.breakCooldownMs);
-    prefs.putFloat(PREF_KEY_2H_MEAN_MIN_DIST, settings.alert2HThresholds.meanMinDistancePct);
-    prefs.putFloat(PREF_KEY_2H_MEAN_TOUCH, settings.alert2HThresholds.meanTouchBandPct);
-    prefs.putULong(PREF_KEY_2H_MEAN_CD, settings.alert2HThresholds.meanCooldownMs);
-    prefs.putFloat(PREF_KEY_2H_COMPRESS_TH, settings.alert2HThresholds.compressThresholdPct);
-    prefs.putFloat(PREF_KEY_2H_COMPRESS_RESET, settings.alert2HThresholds.compressResetPct);
-    prefs.putULong(PREF_KEY_2H_COMPRESS_CD, settings.alert2HThresholds.compressCooldownMs);
-    prefs.putFloat(PREF_KEY_2H_ANCHOR_MARGIN, settings.alert2HThresholds.anchorOutsideMarginPct);
-    prefs.putULong(PREF_KEY_2H_ANCHOR_CD, settings.alert2HThresholds.anchorCooldownMs);
+    putFloatIfChanged(PREF_KEY_2H_BREAK_MARGIN, settings.alert2HThresholds.breakMarginPct);
+    putFloatIfChanged(PREF_KEY_2H_BREAK_RESET, settings.alert2HThresholds.breakResetMarginPct);
+    putULongIfChanged(PREF_KEY_2H_BREAK_CD, settings.alert2HThresholds.breakCooldownMs);
+    putFloatIfChanged(PREF_KEY_2H_MEAN_MIN_DIST, settings.alert2HThresholds.meanMinDistancePct);
+    putFloatIfChanged(PREF_KEY_2H_MEAN_TOUCH, settings.alert2HThresholds.meanTouchBandPct);
+    putULongIfChanged(PREF_KEY_2H_MEAN_CD, settings.alert2HThresholds.meanCooldownMs);
+    putFloatIfChanged(PREF_KEY_2H_COMPRESS_TH, settings.alert2HThresholds.compressThresholdPct);
+    putFloatIfChanged(PREF_KEY_2H_COMPRESS_RESET, settings.alert2HThresholds.compressResetPct);
+    putULongIfChanged(PREF_KEY_2H_COMPRESS_CD, settings.alert2HThresholds.compressCooldownMs);
+    putFloatIfChanged(PREF_KEY_2H_ANCHOR_MARGIN, settings.alert2HThresholds.anchorOutsideMarginPct);
+    putULongIfChanged(PREF_KEY_2H_ANCHOR_CD, settings.alert2HThresholds.anchorCooldownMs);
     // FASE X.4: Trend hysteresis en throttling settings
-    prefs.putFloat(PREF_KEY_2H_TREND_HYSTERESIS, settings.alert2HThresholds.trendHysteresisFactor);
-    prefs.putULong(PREF_KEY_2H_THROTTLE_TREND_CHANGE, settings.alert2HThresholds.throttlingTrendChangeMs);
-    prefs.putULong(PREF_KEY_2H_THROTTLE_TREND_MEAN, settings.alert2HThresholds.throttlingTrendToMeanMs);
-    prefs.putULong(PREF_KEY_2H_THROTTLE_MEAN_TOUCH, settings.alert2HThresholds.throttlingMeanTouchMs);
-    prefs.putULong(PREF_KEY_2H_THROTTLE_COMPRESS, settings.alert2HThresholds.throttlingCompressMs);
+    putFloatIfChanged(PREF_KEY_2H_TREND_HYSTERESIS, settings.alert2HThresholds.trendHysteresisFactor);
+    putULongIfChanged(PREF_KEY_2H_THROTTLE_TREND_CHANGE, settings.alert2HThresholds.throttlingTrendChangeMs);
+    putULongIfChanged(PREF_KEY_2H_THROTTLE_TREND_MEAN, settings.alert2HThresholds.throttlingTrendToMeanMs);
+    putULongIfChanged(PREF_KEY_2H_THROTTLE_MEAN_TOUCH, settings.alert2HThresholds.throttlingMeanTouchMs);
+    putULongIfChanged(PREF_KEY_2H_THROTTLE_COMPRESS, settings.alert2HThresholds.throttlingCompressMs);
     // FASE X.5: Secondary global cooldown en coalescing settings
-    prefs.putULong(PREF_KEY_2H_SEC_GLOBAL_CD, settings.alert2HThresholds.twoHSecondaryGlobalCooldownSec);
-    prefs.putULong(PREF_KEY_2H_SEC_COALESCE, settings.alert2HThresholds.twoHSecondaryCoalesceWindowSec);
+    putULongIfChanged(PREF_KEY_2H_SEC_GLOBAL_CD, settings.alert2HThresholds.twoHSecondaryGlobalCooldownSec);
+    putULongIfChanged(PREF_KEY_2H_SEC_COALESCE, settings.alert2HThresholds.twoHSecondaryCoalesceWindowSec);
     
     prefs.end();
 }
