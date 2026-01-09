@@ -2575,6 +2575,7 @@ void saveSettings()
     safeStrncpy(settings.ntfyTopic, ntfyTopic, sizeof(settings.ntfyTopic));
     safeStrncpy(settings.binanceSymbol, binanceSymbol, sizeof(settings.binanceSymbol));
     settings.language = language;
+    settings.displayRotation = displayRotation;
     
     // Copy alert thresholds
     settings.alertThresholds = alertThresholds;
