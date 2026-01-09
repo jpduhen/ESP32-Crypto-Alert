@@ -206,7 +206,13 @@ void WebServerModule::renderSettingsHTML() {
     float currentAnchorPct = 0.0f;
     
     // Haal alle status data op binnen één mutex lock
-    if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "getSettingsHTML status")) {
+    const TickType_t statusTimeout = pdMS_TO_TICKS(100);
+    bool statusLocked = safeMutexTake(dataMutex, statusTimeout, "getSettingsHTML status");
+    if (!statusLocked) {
+        vTaskDelay(pdMS_TO_TICKS(2));
+        statusLocked = safeMutexTake(dataMutex, statusTimeout, "getSettingsHTML status retry");
+    }
+    if (statusLocked) {
         if (isValidPrice(prices[0])) {
             currentPrice = prices[0];
         }
@@ -1217,7 +1223,13 @@ void WebServerModule::handleStatus() {
     unsigned long currentTime = millis();
     
     // Neem kort de dataMutex om globale waarden te kopiëren
-    if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "handleStatus")) {
+    const TickType_t statusTimeout = pdMS_TO_TICKS(100);
+    bool statusLocked = safeMutexTake(dataMutex, statusTimeout, "handleStatus");
+    if (!statusLocked) {
+        vTaskDelay(pdMS_TO_TICKS(2));
+        statusLocked = safeMutexTake(dataMutex, statusTimeout, "handleStatus retry");
+    }
+    if (statusLocked) {
         if (isValidPrice(prices[0])) {
             price = prices[0];
         }

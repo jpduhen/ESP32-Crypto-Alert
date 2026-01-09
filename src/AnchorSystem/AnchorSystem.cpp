@@ -45,11 +45,20 @@ void AnchorSystem::begin() {
 
 // Sync state: Update AnchorSystem state met globale variabelen
 void AnchorSystem::syncStateFromGlobals() {
-    if (!safeMutexTake(dataMutex, pdMS_TO_TICKS(500), "syncStateFromGlobals")) {
-        #if !DEBUG_BUTTON_ONLY
-        Serial_println("[Anchor] WARN: Mutex timeout bij syncStateFromGlobals");
-        #endif
-        return;
+    const TickType_t timeout = pdMS_TO_TICKS(200);
+    if (!safeMutexTake(dataMutex, timeout, "syncStateFromGlobals")) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+        if (!safeMutexTake(dataMutex, timeout, "syncStateFromGlobals retry")) {
+            #if !DEBUG_BUTTON_ONLY
+            static uint32_t lastSyncWarnMs = 0;
+            uint32_t now = millis();
+            if (now - lastSyncWarnMs > 2000) {
+                Serial_println("[Anchor] WARN: Mutex timeout bij syncStateFromGlobals");
+                lastSyncWarnMs = now;
+            }
+            #endif
+            return;
+        }
     }
     // Fase 6.2.6: Synchroniseer anchor state variabelen met globale variabelen (parallel implementatie)
     extern float anchorPrice;
@@ -59,18 +68,6 @@ void AnchorSystem::syncStateFromGlobals() {
     extern bool anchorActive;
     extern bool anchorTakeProfitSent;
     extern bool anchorMaxLossSent;
-    
-    // Kopieer waarden van globale variabelen naar AnchorSystem state
-    this->anchorPrice = anchorPrice;
-    this->anchorPriceInv = isValidPrice(anchorPrice) ? (1.0f / anchorPrice) : 0.0f;
-    this->anchorMax = anchorMax;
-    this->anchorMin = anchorMin;
-    this->anchorTime = anchorTime;
-    this->anchorActive = anchorActive;
-    this->anchorTakeProfitSent = anchorTakeProfitSent;
-    this->anchorMaxLossSent = anchorMaxLossSent;
-    
-    // Fase 6.2.6: Synchroniseer anchor settings
     extern float anchorTakeProfit;
     extern float anchorMaxLoss;
     extern bool trendAdaptiveAnchorsEnabled;
@@ -78,16 +75,40 @@ void AnchorSystem::syncStateFromGlobals() {
     extern float uptrendTakeProfitMultiplier;
     extern float downtrendMaxLossMultiplier;
     extern float downtrendTakeProfitMultiplier;
-    
-    this->anchorTakeProfit = anchorTakeProfit;
-    this->anchorMaxLoss = anchorMaxLoss;
-    this->trendAdaptiveAnchorsEnabled = trendAdaptiveAnchorsEnabled;
-    this->uptrendMaxLossMultiplier = uptrendMaxLossMultiplier;
-    this->uptrendTakeProfitMultiplier = uptrendTakeProfitMultiplier;
-    this->downtrendMaxLossMultiplier = downtrendMaxLossMultiplier;
-    this->downtrendTakeProfitMultiplier = downtrendTakeProfitMultiplier;
+
+    float localAnchorPrice = anchorPrice;
+    float localAnchorMax = anchorMax;
+    float localAnchorMin = anchorMin;
+    unsigned long localAnchorTime = anchorTime;
+    bool localAnchorActive = anchorActive;
+    bool localAnchorTakeProfitSent = anchorTakeProfitSent;
+    bool localAnchorMaxLossSent = anchorMaxLossSent;
+    float localAnchorTakeProfit = anchorTakeProfit;
+    float localAnchorMaxLoss = anchorMaxLoss;
+    bool localTrendAdaptiveEnabled = trendAdaptiveAnchorsEnabled;
+    float localUptrendMaxLossMultiplier = uptrendMaxLossMultiplier;
+    float localUptrendTakeProfitMultiplier = uptrendTakeProfitMultiplier;
+    float localDowntrendMaxLossMultiplier = downtrendMaxLossMultiplier;
+    float localDowntrendTakeProfitMultiplier = downtrendTakeProfitMultiplier;
 
     safeMutexGive(dataMutex, "syncStateFromGlobals");
+
+    // Kopieer waarden van globale variabelen naar AnchorSystem state (buiten mutex)
+    this->anchorPrice = localAnchorPrice;
+    this->anchorPriceInv = isValidPrice(localAnchorPrice) ? (1.0f / localAnchorPrice) : 0.0f;
+    this->anchorMax = localAnchorMax;
+    this->anchorMin = localAnchorMin;
+    this->anchorTime = localAnchorTime;
+    this->anchorActive = localAnchorActive;
+    this->anchorTakeProfitSent = localAnchorTakeProfitSent;
+    this->anchorMaxLossSent = localAnchorMaxLossSent;
+    this->anchorTakeProfit = localAnchorTakeProfit;
+    this->anchorMaxLoss = localAnchorMaxLoss;
+    this->trendAdaptiveAnchorsEnabled = localTrendAdaptiveEnabled;
+    this->uptrendMaxLossMultiplier = localUptrendMaxLossMultiplier;
+    this->uptrendTakeProfitMultiplier = localUptrendTakeProfitMultiplier;
+    this->downtrendMaxLossMultiplier = localDowntrendMaxLossMultiplier;
+    this->downtrendTakeProfitMultiplier = localDowntrendTakeProfitMultiplier;
 }
 
 // Calculate effective anchor thresholds based on trend
@@ -302,18 +323,27 @@ void AnchorSystem::updateAnchorMinMax(float currentPrice)
     
     // Alleen globale variabelen updaten als er iets veranderd is
     if (updated) {
-        if (safeMutexTake(dataMutex, pdMS_TO_TICKS(50), "updateAnchorMinMax")) {
-            // Fase 6.2: Update ook globale variabelen voor backward compatibility
-            extern float anchorMax;
-            extern float anchorMin;
-            anchorMax = this->anchorMax;
-            anchorMin = this->anchorMin;
-            safeMutexGive(dataMutex, "updateAnchorMinMax");
-        } else {
-            #if !DEBUG_BUTTON_ONLY
-            Serial_println("[Anchor] WARN: Mutex timeout bij updateAnchorMinMax");
-            #endif
+        const TickType_t timeout = pdMS_TO_TICKS(200);
+        if (!safeMutexTake(dataMutex, timeout, "updateAnchorMinMax")) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+            if (!safeMutexTake(dataMutex, timeout, "updateAnchorMinMax retry")) {
+                #if !DEBUG_BUTTON_ONLY
+                static uint32_t lastMinMaxWarnMs = 0;
+                uint32_t now = millis();
+                if (now - lastMinMaxWarnMs > 2000) {
+                    Serial_println("[Anchor] WARN: Mutex timeout bij updateAnchorMinMax");
+                    lastMinMaxWarnMs = now;
+                }
+                #endif
+                return;
+            }
         }
+        // Fase 6.2: Update ook globale variabelen voor backward compatibility
+        extern float anchorMax;
+        extern float anchorMin;
+        anchorMax = this->anchorMax;
+        anchorMin = this->anchorMin;
+        safeMutexGive(dataMutex, "updateAnchorMinMax");
     }
 }
 
