@@ -342,6 +342,10 @@ bool hasRet7d = false;  // hasRet7dWarm (warm-start) of live hourly buffer
 // TODO: In toekomstige fase kunnen deze verwijderd worden zodra alle code volledig gemigreerd is
 TrendState trendState = TREND_SIDEWAYS;  // Current trend state (backward compatibility)
 TrendState previousTrendState = TREND_SIDEWAYS;  // Previous trend state (backward compatibility)
+TrendState mediumTrendState = TREND_SIDEWAYS;  // Medium trend state (backward compatibility)
+TrendState previousMediumTrendState = TREND_SIDEWAYS;  // Previous medium trend state (backward compatibility)
+TrendState longTermTrendState = TREND_SIDEWAYS;  // Long-term trend state (backward compatibility)
+TrendState previousLongTermTrendState = TREND_SIDEWAYS;  // Previous long-term trend state (backward compatibility)
 // Fase 9.1.4: static verwijderd zodat WebServerModule deze variabele kan gebruiken
 float trendThreshold = TREND_THRESHOLD_DEFAULT;  // Trend threshold (%)
 
@@ -356,6 +360,8 @@ VolatilityState volatilityState = VOLATILITY_MEDIUM;  // Current volatility stat
 float volatilityLowThreshold = VOLATILITY_LOW_THRESHOLD_DEFAULT;  // Low threshold (%)
 float volatilityHighThreshold = VOLATILITY_HIGH_THRESHOLD_DEFAULT;  // High threshold (%)
 unsigned long lastTrendChangeNotification = 0;  // Timestamp van laatste trend change notificatie (backward compatibility)
+unsigned long lastMediumTrendChangeNotification = 0;  // Timestamp van laatste 1d trend change notificatie (backward compatibility)
+unsigned long lastLongTermTrendChangeNotification = 0;  // Timestamp van laatste 7d trend change notificatie (backward compatibility)
 
 // Smart Confluence Mode state
 // Fase 6.1: AlertEngine module gebruikt deze variabele (extern declaration in AlertEngine.cpp)

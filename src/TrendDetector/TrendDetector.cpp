@@ -48,11 +48,23 @@ TrendDetector::TrendDetector() {
     lastTrendChangeNotification = 0;
     lastMediumTrendChangeNotification = 0;
     lastLongTermTrendChangeNotification = 0;
+    cachedTrendHysteresisFactor = 0.65f;
+    lastHysteresisUpdateMs = 0;
 }
 
 // Helper: Validate return/threshold values
 static inline bool isValidReturnValue(float value) {
     return !isnan(value) && !isinf(value);
+}
+
+// Helper: Trend token per horizon (gebruikt voor notificaties)
+static inline const char* getTrendToken(TrendState trend, const char* upToken, const char* downToken, const char* sidewaysToken) {
+    switch (trend) {
+        case TREND_UP: return upToken;
+        case TREND_DOWN: return downToken;
+        case TREND_SIDEWAYS:
+        default: return sidewaysToken;
+    }
 }
 
 // Begin - synchroniseer state met globale variabelen (parallel implementatie)
@@ -66,12 +78,24 @@ void TrendDetector::syncStateFromGlobals() {
     // Forward declarations voor globale variabelen
     extern TrendState trendState;
     extern TrendState previousTrendState;
+    extern TrendState mediumTrendState;
+    extern TrendState previousMediumTrendState;
+    extern TrendState longTermTrendState;
+    extern TrendState previousLongTermTrendState;
     extern unsigned long lastTrendChangeNotification;
+    extern unsigned long lastMediumTrendChangeNotification;
+    extern unsigned long lastLongTermTrendChangeNotification;
     
     // Kopieer waarden van globale variabelen naar TrendDetector state
     this->trendState = trendState;
     this->previousTrendState = previousTrendState;
+    this->mediumTrendState = mediumTrendState;
+    this->previousMediumTrendState = previousMediumTrendState;
+    this->longTermTrendState = longTermTrendState;
+    this->previousLongTermTrendState = previousLongTermTrendState;
     this->lastTrendChangeNotification = lastTrendChangeNotification;
+    this->lastMediumTrendChangeNotification = lastMediumTrendChangeNotification;
+    this->lastLongTermTrendChangeNotification = lastLongTermTrendChangeNotification;
 }
 
 // Bepaal trend state op basis van 2h en 30m returns
@@ -84,11 +108,15 @@ TrendState TrendDetector::determineTrendState(float ret_2h_value, float ret_30m_
         return TREND_SIDEWAYS;
     }
     
-    // Hysterese factor uit settings (default 0.65)
-    float hysteresisFactor = 0.65f;
-    if (AlertEngine::are2HThresholdsReady()) {
-        hysteresisFactor = AlertEngine::getAlert2HThresholds().trendHysteresisFactor;
+    // Hysterese factor uit settings (default 0.65) met eenvoudige cache
+    const unsigned long now = millis();
+    const unsigned long hysteresisUpdateIntervalMs = 60000UL;
+    if (AlertEngine::are2HThresholdsReady() &&
+        (lastHysteresisUpdateMs == 0 || (now - lastHysteresisUpdateMs) >= hysteresisUpdateIntervalMs)) {
+        cachedTrendHysteresisFactor = AlertEngine::getAlert2HThresholds().trendHysteresisFactor;
+        lastHysteresisUpdateMs = now;
     }
+    float hysteresisFactor = cachedTrendHysteresisFactor;
     const float exitThreshold = trendThreshold * hysteresisFactor;
     
     // Gebruik huidige trend state voor hysterese logica
@@ -194,7 +222,7 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
     // Geconsolideerde checks: cooldown en data validiteit in één keer
     bool cooldownPassed = (lastTrendChangeNotification == 0 || 
                           (now - lastTrendChangeNotification >= TREND_CHANGE_COOLDOWN_MS));
-    bool hasValidData = (ret_2h != 0.0f && (minuteArrayFilled || minuteIndex >= 120));
+    bool hasValidData = (minuteArrayFilled || minuteIndex >= 120);
     
     if (cooldownPassed && hasValidData) {
         // Geoptimaliseerd: gebruik helper functies i.p.v. switch statements
@@ -210,14 +238,8 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
         getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
         
         // Vertaal trends naar juiste taal (2h voor NL/EN)
-        const char* fromTrendTranslated = fromTrend;
-        const char* toTrendTranslated = toTrend;
-        if (strcmp(fromTrend, "UP") == 0) fromTrendTranslated = "2h//";
-        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = "2h\\\\";
-        else if (strcmp(fromTrend, "SIDEWAYS") == 0) fromTrendTranslated = "2h=";
-        if (strcmp(toTrend, "UP") == 0) toTrendTranslated = "2h//";
-        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = "2h\\\\";
-        else if (strcmp(toTrend, "SIDEWAYS") == 0) toTrendTranslated = "2h=";
+        const char* fromTrendTranslated = getTrendToken(this->previousTrendState, "2h//", "2h\\\\", "2h=");
+        const char* toTrendTranslated = getTrendToken(this->trendState, "2h//", "2h\\\\", "2h=");
         
         // VolText is al in Nederlands (getVolatilityText geeft "Rustig", "Gemiddeld", "Volatiel")
         // Vertaal naar Engels indien nodig
@@ -234,18 +256,7 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
             extern float ret_1d;
             const float mediumThreshold = 2.0f;
             TrendState mediumTrend = this->determineMediumTrendState(0.0f, ret_1d, mediumThreshold);
-            switch (mediumTrend) {
-                case TREND_UP:
-                    mediumTrendText = "1d//";
-                    break;
-                case TREND_DOWN:
-                    mediumTrendText = "1d\\\\";
-                    break;
-                case TREND_SIDEWAYS:
-                default:
-                    mediumTrendText = "1d=";
-                    break;
-            }
+            mediumTrendText = getTrendToken(mediumTrend, "1d//", "1d\\\\", "1d=");
         } else {
             mediumTrendText = "--";
         }
@@ -257,18 +268,7 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
             extern float ret_7d;
             const float longTermThreshold = 1.0f;
             TrendState longTermTrend = this->determineLongTermTrendState(ret_7d, longTermThreshold);
-            switch (longTermTrend) {
-                case TREND_UP:
-                    longTermTrendText = "7d//";
-                    break;
-                case TREND_DOWN:
-                    longTermTrendText = "7d\\\\";
-                    break;
-                case TREND_SIDEWAYS:
-                default:
-                    longTermTrendText = "7d=";
-                    break;
-            }
+            longTermTrendText = getTrendToken(longTermTrend, "7d//", "7d\\\\", "7d=");
         } else {
             longTermTrendText = "--";
         }
@@ -301,8 +301,10 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
     // Update globale variabelen voor backward compatibility
     extern TrendState trendState;
     extern TrendState previousTrendState;
+    extern unsigned long lastTrendChangeNotification;
     trendState = this->trendState;
     previousTrendState = this->previousTrendState;
+    lastTrendChangeNotification = this->lastTrendChangeNotification;
 }
 
 // Medium trend change detection en notificatie
@@ -325,7 +327,8 @@ void TrendDetector::checkMediumTrendChange(float ret_4h_value, float ret_1d_valu
     // Geconsolideerde checks: cooldown en data validiteit
     bool cooldownPassed = (lastMediumTrendChangeNotification == 0 || 
                           (now - lastMediumTrendChangeNotification >= TREND_CHANGE_COOLDOWN_MS));
-    bool hasValidData = (ret_4h_value != 0.0f && ret_1d_value != 0.0f);
+    extern bool hasRet1d;
+    bool hasValidData = hasRet1d;
     
     if (cooldownPassed && hasValidData) {
         // Geoptimaliseerd: gebruik helper functies
@@ -340,30 +343,12 @@ void TrendDetector::checkMediumTrendChange(float ret_4h_value, float ret_1d_valu
         getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
         
         // Vertaal trends naar juiste taal (1d voor beide talen, gebruik //, \\, = zoals in UI)
-        const char* fromTrendTranslated = fromTrend;
-        const char* toTrendTranslated = toTrend;
-        if (strcmp(fromTrend, "UP") == 0) fromTrendTranslated = "1d//";
-        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = "1d\\\\";
-        else if (strcmp(fromTrend, "SIDEWAYS") == 0) fromTrendTranslated = "1d=";
-        if (strcmp(toTrend, "UP") == 0) toTrendTranslated = "1d//";
-        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = "1d\\\\";
-        else if (strcmp(toTrend, "SIDEWAYS") == 0) toTrendTranslated = "1d=";
+        const char* fromTrendTranslated = getTrendToken(this->mediumTrendState, "1d//", "1d\\\\", "1d=");
+        const char* toTrendTranslated = getTrendToken(newMediumTrend, "1d//", "1d\\\\", "1d=");
         
         // Bepaal korte termijn trend voor context
         extern TrendState trendState;
-        const char* shortTermTrendText = "";
-        switch (trendState) {
-            case TREND_UP:
-                shortTermTrendText = "2h//";
-                break;
-            case TREND_DOWN:
-                shortTermTrendText = "2h\\\\";
-                break;
-            case TREND_SIDEWAYS:
-            default:
-                shortTermTrendText = "2h=";
-                break;
-        }
+        const char* shortTermTrendText = getTrendToken(trendState, "2h//", "2h\\\\", "2h=");
         
         snprintf(title, sizeof(title), "%s %s", 
                  binanceSymbol, getText("1d Trend Wijziging", "1d Trend Change"));
@@ -390,6 +375,14 @@ void TrendDetector::checkMediumTrendChange(float ret_4h_value, float ret_1d_valu
     // Update previous medium trend state
     this->previousMediumTrendState = this->mediumTrendState;
     this->mediumTrendState = newMediumTrend;
+    
+    // Update globale variabelen voor backward compatibility
+    extern TrendState mediumTrendState;
+    extern TrendState previousMediumTrendState;
+    extern unsigned long lastMediumTrendChangeNotification;
+    mediumTrendState = this->mediumTrendState;
+    previousMediumTrendState = this->previousMediumTrendState;
+    lastMediumTrendChangeNotification = this->lastMediumTrendChangeNotification;
 }
 
 // Lange termijn trend change detection en notificatie
@@ -411,7 +404,8 @@ void TrendDetector::checkLongTermTrendChange(float ret_7d_value, float longTermT
     // Geconsolideerde checks: cooldown en data validiteit
     bool cooldownPassed = (lastLongTermTrendChangeNotification == 0 || 
                           (now - lastLongTermTrendChangeNotification >= TREND_CHANGE_COOLDOWN_MS));
-    bool hasValidData = (ret_7d_value != 0.0f);
+    extern bool hasRet7d;
+    bool hasValidData = hasRet7d;
     
     if (cooldownPassed && hasValidData) {
         // Geoptimaliseerd: gebruik helper functies
@@ -426,30 +420,12 @@ void TrendDetector::checkLongTermTrendChange(float ret_7d_value, float longTermT
         getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
         
         // Vertaal trends naar juiste taal (7d voor beide talen, gebruik //, \\, = zoals in UI)
-        const char* fromTrendTranslated = fromTrend;
-        const char* toTrendTranslated = toTrend;
-        if (strcmp(fromTrend, "UP") == 0) fromTrendTranslated = "7d//";
-        else if (strcmp(fromTrend, "DOWN") == 0) fromTrendTranslated = "7d\\\\";
-        else if (strcmp(fromTrend, "SIDEWAYS") == 0) fromTrendTranslated = "7d=";
-        if (strcmp(toTrend, "UP") == 0) toTrendTranslated = "7d//";
-        else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = "7d\\\\";
-        else if (strcmp(toTrend, "SIDEWAYS") == 0) toTrendTranslated = "7d=";
+        const char* fromTrendTranslated = getTrendToken(this->longTermTrendState, "7d//", "7d\\\\", "7d=");
+        const char* toTrendTranslated = getTrendToken(newLongTermTrend, "7d//", "7d\\\\", "7d=");
         
         // Bepaal korte termijn trend voor context
         extern TrendState trendState;
-        const char* shortTermTrendText = "";
-        switch (trendState) {
-            case TREND_UP:
-                shortTermTrendText = "2h//";
-                break;
-            case TREND_DOWN:
-                shortTermTrendText = "2h\\\\";
-                break;
-            case TREND_SIDEWAYS:
-            default:
-                shortTermTrendText = "2h=";
-                break;
-        }
+        const char* shortTermTrendText = getTrendToken(trendState, "2h//", "2h\\\\", "2h=");
         
         snprintf(title, sizeof(title), "%s %s", 
                  binanceSymbol, getText("7d Trend Wijziging", "7d Trend Change"));
@@ -476,4 +452,12 @@ void TrendDetector::checkLongTermTrendChange(float ret_7d_value, float longTermT
     // Update previous long term trend state
     this->previousLongTermTrendState = this->longTermTrendState;
     this->longTermTrendState = newLongTermTrend;
+    
+    // Update globale variabelen voor backward compatibility
+    extern TrendState longTermTrendState;
+    extern TrendState previousLongTermTrendState;
+    extern unsigned long lastLongTermTrendChangeNotification;
+    longTermTrendState = this->longTermTrendState;
+    previousLongTermTrendState = this->previousLongTermTrendState;
+    lastLongTermTrendChangeNotification = this->lastLongTermTrendChangeNotification;
 }
