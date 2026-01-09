@@ -510,19 +510,9 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
                               code == 429 ||
                               (code >= 500 && code < 600));
                 
-                // N2: Log ook response body bij HTTP 400 voor debugging
-                if (code == 400) {
-                    WiFiClient* errorStream = http.getStreamPtr();
-                    if (errorStream != nullptr && errorStream->available()) {
-                        char errorBuf[256];
-                        size_t errorLen = errorStream->readBytes((uint8_t*)errorBuf, sizeof(errorBuf) - 1);
-                        errorBuf[errorLen] = '\0';
-                        Serial.printf(F("[API] HTTP 400 response body: %s\n"), errorBuf);
-                    }
-                    if (usePersistent) {
-                        usePersistent = false;
-                        shouldRetry = (attempt < MAX_RETRIES);
-                    }
+                if (code == 400 && usePersistent) {
+                    usePersistent = false;
+                    shouldRetry = (attempt < MAX_RETRIES);
                 }
                 break;
             }
@@ -585,4 +575,3 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
     
     return ok;
 }
-
