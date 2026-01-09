@@ -273,6 +273,10 @@ extern lv_obj_t *anchorMinLabel;
 extern VolumeRangeStatus lastVolumeRange1m;
 extern VolumeRangeStatus lastVolumeRange5m;
 
+static bool pendingAnchorRequest = false;
+static unsigned long pendingAnchorRequestMs = 0;
+static constexpr unsigned long pendingAnchorTimeoutMs = 5000;
+
 // UIController implementation
 // Fase 8: UI Module refactoring
 
@@ -733,45 +737,41 @@ void UIController::updateDateTimeLabels()
     // Cache variabelen voor datum/tijd labels (lokaal voor deze functie)
     static char lastDateText[11] = {0};  // Cache voor date label
     static char lastTimeText[9] = {0};   // Cache voor time label
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) {
+        return;
+    }
     
     // Fase 8.5.1: Gebruik globale pointer (synchroniseert met module pointer)
     if (::chartDateLabel != nullptr)
     {
-        struct tm timeinfo;
-        if (getLocalTime(&timeinfo))
-        {
-            #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
-            // TTGO/GEEK: compact formaat dd-mm-yy voor lagere resolutie
-            char dateStr[9]; // dd-mm-yy + null terminator = 9 karakters
-            strftime(dateStr, sizeof(dateStr), "%d-%m-%y", &timeinfo);
-            #else
-            // CYD/ESP32-S3: volledig formaat dd-mm-yyyy voor hogere resolutie
-            char dateStr[11]; // dd-mm-yyyy + null terminator = 11 karakters
-            strftime(dateStr, sizeof(dateStr), "%d-%m-%Y", &timeinfo);
-            #endif
-            // Update alleen als datum veranderd is
-            if (strcmp(lastDateText, dateStr) != 0) {
-                strncpy(lastDateText, dateStr, sizeof(lastDateText) - 1);
-                lastDateText[sizeof(lastDateText) - 1] = '\0';
-                lv_label_set_text(::chartDateLabel, dateStr);
-            }
+        #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
+        // TTGO/GEEK: compact formaat dd-mm-yy voor lagere resolutie
+        char dateStr[9]; // dd-mm-yy + null terminator = 9 karakters
+        strftime(dateStr, sizeof(dateStr), "%d-%m-%y", &timeinfo);
+        #else
+        // CYD/ESP32-S3: volledig formaat dd-mm-yyyy voor hogere resolutie
+        char dateStr[11]; // dd-mm-yyyy + null terminator = 11 karakters
+        strftime(dateStr, sizeof(dateStr), "%d-%m-%Y", &timeinfo);
+        #endif
+        // Update alleen als datum veranderd is
+        if (strcmp(lastDateText, dateStr) != 0) {
+            strncpy(lastDateText, dateStr, sizeof(lastDateText) - 1);
+            lastDateText[sizeof(lastDateText) - 1] = '\0';
+            lv_label_set_text(::chartDateLabel, dateStr);
         }
     }
     
     // Fase 8.5.1: Gebruik globale pointer (synchroniseert met module pointer)
     if (::chartTimeLabel != nullptr)
     {
-        struct tm timeinfo;
-        if (getLocalTime(&timeinfo))
-        {
-            char timeStr[9];
-            strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
-            // Update alleen als tijd veranderd is
-            if (strcmp(lastTimeText, timeStr) != 0) {
-                strncpy(lastTimeText, timeStr, sizeof(lastTimeText) - 1);
-                lastTimeText[sizeof(lastTimeText) - 1] = '\0';
-                lv_label_set_text(::chartTimeLabel, timeStr);
-            }
+        char timeStr[9];
+        strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
+        // Update alleen als tijd veranderd is
+        if (strcmp(lastTimeText, timeStr) != 0) {
+            strncpy(lastTimeText, timeStr, sizeof(lastTimeText) - 1);
+            lastTimeText[sizeof(lastTimeText) - 1] = '\0';
+            lv_label_set_text(::chartTimeLabel, timeStr);
         }
     }
 }
@@ -966,6 +966,8 @@ void UIController::updateTrendLabel()
 {
     // Fase 8.5.2: Gebruik globale pointer (synchroniseert met module pointer)
     if (::trendLabel == nullptr) return;
+    static char lastTrendText[24] = {0};
+    static uint32_t lastTrendColor = 0;
     
     // Toon trend alleen als beide availability flags true zijn
     if (hasRet2h && hasRet30m)
@@ -1014,8 +1016,16 @@ void UIController::updateTrendLabel()
         }
         
         // Geen "-warm" tekst meer - kleur geeft status aan
-        lv_label_set_text(::trendLabel, trendText);
-        lv_obj_set_style_text_color(::trendLabel, trendColor, 0);
+        uint32_t trendColor32 = lv_color_to32(trendColor);
+        if (strcmp(lastTrendText, trendText) != 0) {
+            strncpy(lastTrendText, trendText, sizeof(lastTrendText) - 1);
+            lastTrendText[sizeof(lastTrendText) - 1] = '\0';
+            lv_label_set_text(::trendLabel, trendText);
+        }
+        if (lastTrendColor != trendColor32) {
+            lv_obj_set_style_text_color(::trendLabel, trendColor, 0);
+            lastTrendColor = trendColor32;
+        }
     }
     else
     {
@@ -1028,8 +1038,15 @@ void UIController::updateTrendLabel()
             // Als warm-start succesvol was maar hasRet30m nog false, toon dan warm-start status
             if (hasRet30mWarm) {
                 // Warm-start heeft 30m data, maar hasRet30m is nog false (mogelijk bug, toon "--")
-                lv_label_set_text(::trendLabel, "--");
-                lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+                if (strcmp(lastTrendText, "--") != 0) {
+                    strcpy(lastTrendText, "--");
+                    lv_label_set_text(::trendLabel, "--");
+                }
+                uint32_t trendColor32 = lv_color_to32(lv_palette_main(LV_PALETTE_GREY));
+                if (lastTrendColor != trendColor32) {
+                    lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+                    lastTrendColor = trendColor32;
+                }
                 return;
             }
             
@@ -1047,8 +1064,15 @@ void UIController::updateTrendLabel()
                     snprintf(waitText, sizeof(waitText), "Warm-up 30m %u%%", livePct30);
             } else {
                 // Zou niet moeten voorkomen (livePct30 >= 80 maar hasRet30m is false)
-                lv_label_set_text(::trendLabel, "--");
-                lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+                if (strcmp(lastTrendText, "--") != 0) {
+                    strcpy(lastTrendText, "--");
+                    lv_label_set_text(::trendLabel, "--");
+                }
+                uint32_t trendColor32 = lv_color_to32(lv_palette_main(LV_PALETTE_GREY));
+                if (lastTrendColor != trendColor32) {
+                    lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+                    lastTrendColor = trendColor32;
+                }
                 return;
             }
         } else if (!hasRet2h) {
@@ -1066,19 +1090,41 @@ void UIController::updateTrendLabel()
                     snprintf(waitText, sizeof(waitText), "Warm-up 2h %u%%", livePct120);
             } else {
                 // Zou niet moeten voorkomen (livePct120 >= 80 maar hasRet2h is false)
-                lv_label_set_text(::trendLabel, "--");
-                lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+                if (strcmp(lastTrendText, "--") != 0) {
+                    strcpy(lastTrendText, "--");
+                    lv_label_set_text(::trendLabel, "--");
+                }
+                uint32_t trendColor32 = lv_color_to32(lv_palette_main(LV_PALETTE_GREY));
+                if (lastTrendColor != trendColor32) {
+                    lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+                    lastTrendColor = trendColor32;
+                }
                 return;
             }
         } else {
             // Beide ontbreken (zou niet moeten voorkomen, maar fallback)
-            lv_label_set_text(::trendLabel, "--");
-            lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            if (strcmp(lastTrendText, "--") != 0) {
+                strcpy(lastTrendText, "--");
+                lv_label_set_text(::trendLabel, "--");
+            }
+            uint32_t trendColor32 = lv_color_to32(lv_palette_main(LV_PALETTE_GREY));
+            if (lastTrendColor != trendColor32) {
+                lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+                lastTrendColor = trendColor32;
+            }
             return;
         }
         
-        lv_label_set_text(::trendLabel, waitText);
-        lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+        if (strcmp(lastTrendText, waitText) != 0) {
+            strncpy(lastTrendText, waitText, sizeof(lastTrendText) - 1);
+            lastTrendText[sizeof(lastTrendText) - 1] = '\0';
+            lv_label_set_text(::trendLabel, waitText);
+        }
+        uint32_t trendColor32 = lv_color_to32(lv_palette_main(LV_PALETTE_GREY));
+        if (lastTrendColor != trendColor32) {
+            lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lastTrendColor = trendColor32;
+        }
     }
 }
 
@@ -1091,6 +1137,8 @@ void UIController::updateVolatilityLabel()
     
     const char* volText = "";
     lv_color_t volColor = lv_palette_main(LV_PALETTE_GREY);
+    static char lastVolText[12] = {0};
+    static uint32_t lastVolColor = 0;
     
     // Fase 5.3.14: Gebruik VolatilityTracker module getter i.p.v. globale variabele
     VolatilityState currentVol = volatilityTracker.getVolatilityState();
@@ -1109,8 +1157,16 @@ void UIController::updateVolatilityLabel()
             break;
     }
     
-    lv_label_set_text(::volatilityLabel, volText);
-    lv_obj_set_style_text_color(::volatilityLabel, volColor, 0);
+    uint32_t volColor32 = lv_color_to32(volColor);
+    if (strcmp(lastVolText, volText) != 0) {
+        strncpy(lastVolText, volText, sizeof(lastVolText) - 1);
+        lastVolText[sizeof(lastVolText) - 1] = '\0';
+        lv_label_set_text(::volatilityLabel, volText);
+    }
+    if (lastVolColor != volColor32) {
+        lv_obj_set_style_text_color(::volatilityLabel, volColor, 0);
+        lastVolColor = volColor32;
+    }
 }
 
 // Fase 8.5.3: updateVolumeConfirmLabel() naar Module
@@ -1121,6 +1177,8 @@ void UIController::updateVolumeConfirmLabel()
 
     const char* volumeText = "";
     lv_color_t volumeColor = lv_palette_main(LV_PALETTE_GREY);
+    static char lastVolumeText[10] = {0};
+    static uint32_t lastVolumeColor = 0;
 
     if (lastVolumeRange1m.valid) {
         if (fabsf(lastVolumeRange1m.volumeDeltaPct) >= VOLUME_BADGE_THRESHOLD_PCT) {
@@ -1134,8 +1192,16 @@ void UIController::updateVolumeConfirmLabel()
         }
     }
 
-    lv_label_set_text(::volumeConfirmLabel, volumeText);
-    lv_obj_set_style_text_color(::volumeConfirmLabel, volumeColor, 0);
+    uint32_t volumeColor32 = lv_color_to32(volumeColor);
+    if (strcmp(lastVolumeText, volumeText) != 0) {
+        strncpy(lastVolumeText, volumeText, sizeof(lastVolumeText) - 1);
+        lastVolumeText[sizeof(lastVolumeText) - 1] = '\0';
+        lv_label_set_text(::volumeConfirmLabel, volumeText);
+    }
+    if (lastVolumeColor != volumeColor32) {
+        lv_obj_set_style_text_color(::volumeConfirmLabel, volumeColor, 0);
+        lastVolumeColor = volumeColor32;
+    }
 }
 
 // Fase 8.5.4: updateMediumTrendLabel() naar Module
@@ -1144,6 +1210,8 @@ void UIController::updateMediumTrendLabel()
 {
     // Fase 8.5.4: Gebruik globale pointer (synchroniseert met module pointer)
     if (::mediumTrendLabel == nullptr) return;
+    static char lastMediumText[8] = {0};
+    static uint32_t lastMediumColor = 0;
     
     extern bool hasRet1d;
     if (hasRet1d)
@@ -1174,13 +1242,28 @@ void UIController::updateMediumTrendLabel()
                 break;
         }
         
-        lv_label_set_text(::mediumTrendLabel, trendText);
-        lv_obj_set_style_text_color(::mediumTrendLabel, trendColor, 0);
+        uint32_t trendColor32 = lv_color_to32(trendColor);
+        if (strcmp(lastMediumText, trendText) != 0) {
+            strncpy(lastMediumText, trendText, sizeof(lastMediumText) - 1);
+            lastMediumText[sizeof(lastMediumText) - 1] = '\0';
+            lv_label_set_text(::mediumTrendLabel, trendText);
+        }
+        if (lastMediumColor != trendColor32) {
+            lv_obj_set_style_text_color(::mediumTrendLabel, trendColor, 0);
+            lastMediumColor = trendColor32;
+        }
     }
     else
     {
-        lv_label_set_text(::mediumTrendLabel, "--");
-        lv_obj_set_style_text_color(::mediumTrendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+        if (strcmp(lastMediumText, "--") != 0) {
+            strcpy(lastMediumText, "--");
+            lv_label_set_text(::mediumTrendLabel, "--");
+        }
+        uint32_t trendColor32 = lv_color_to32(lv_palette_main(LV_PALETTE_GREY));
+        if (lastMediumColor != trendColor32) {
+            lv_obj_set_style_text_color(::mediumTrendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lastMediumColor = trendColor32;
+        }
     }
 }
 
@@ -1190,6 +1273,8 @@ void UIController::updateLongTermTrendLabel()
 {
     // Fase 8.5.5: Gebruik globale pointer (synchroniseert met module pointer)
     if (::longTermTrendLabel == nullptr) return;
+    static char lastLongText[8] = {0};
+    static uint32_t lastLongColor = 0;
     
     // Toon lange termijn trend alleen als 7d beschikbaar is
     extern bool hasRet7d;
@@ -1221,13 +1306,28 @@ void UIController::updateLongTermTrendLabel()
                 break;
         }
         
-        lv_label_set_text(::longTermTrendLabel, trendText);
-        lv_obj_set_style_text_color(::longTermTrendLabel, trendColor, 0);
+        uint32_t trendColor32 = lv_color_to32(trendColor);
+        if (strcmp(lastLongText, trendText) != 0) {
+            strncpy(lastLongText, trendText, sizeof(lastLongText) - 1);
+            lastLongText[sizeof(lastLongText) - 1] = '\0';
+            lv_label_set_text(::longTermTrendLabel, trendText);
+        }
+        if (lastLongColor != trendColor32) {
+            lv_obj_set_style_text_color(::longTermTrendLabel, trendColor, 0);
+            lastLongColor = trendColor32;
+        }
     }
     else
     {
-        lv_label_set_text(::longTermTrendLabel, "--");
-        lv_obj_set_style_text_color(::longTermTrendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+        if (strcmp(lastLongText, "--") != 0) {
+            strcpy(lastLongText, "--");
+            lv_label_set_text(::longTermTrendLabel, "--");
+        }
+        uint32_t trendColor32 = lv_color_to32(lv_palette_main(LV_PALETTE_GREY));
+        if (lastLongColor != trendColor32) {
+            lv_obj_set_style_text_color(::longTermTrendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lastLongColor = trendColor32;
+        }
     }
 }
 
@@ -1407,6 +1507,8 @@ void UIController::updateWarmStartStatusLabel()
     if (::warmStartStatusLabel == nullptr) return;
     
     char warmStartText[16];
+    static char lastWarmStartText[16] = {0};
+    static uint32_t lastWarmStartColor = 0;
     if (warmStartStatus == WARMING_UP) {
         snprintf(warmStartText, sizeof(warmStartText), "DATA%u%%", warmStartStats.warmUpProgress);
     } else if (warmStartStatus == LIVE_COLD) {
@@ -1414,16 +1516,24 @@ void UIController::updateWarmStartStatusLabel()
     } else {
         snprintf(warmStartText, sizeof(warmStartText), "LIVE");
     }
-    lv_label_set_text(::warmStartStatusLabel, warmStartText);
     lv_color_t statusColor = (warmStartStatus == WARMING_UP) ? lv_palette_main(LV_PALETTE_ORANGE) :
                               (warmStartStatus == LIVE_COLD) ? lv_palette_main(LV_PALETTE_BLUE) :
                               lv_palette_main(LV_PALETTE_BLUE);
-    lv_obj_set_style_text_color(::warmStartStatusLabel, statusColor, 0);
+    if (strcmp(lastWarmStartText, warmStartText) != 0) {
+        strncpy(lastWarmStartText, warmStartText, sizeof(lastWarmStartText) - 1);
+        lastWarmStartText[sizeof(lastWarmStartText) - 1] = '\0';
+        lv_label_set_text(::warmStartStatusLabel, warmStartText);
+    }
+    uint32_t statusColor32 = lv_color_to32(statusColor);
+    if (lastWarmStartColor != statusColor32) {
+        lv_obj_set_style_text_color(::warmStartStatusLabel, statusColor, 0);
+        lastWarmStartColor = statusColor32;
+    }
 }
 
 // Fase 8.6.2: updateAveragePriceCard() naar Module
 // Helper functie om average price cards (1min/30min) bij te werken
-void UIController::updateAveragePriceCard(uint8_t index)
+void UIController::updateAveragePriceCard(uint8_t index, bool hasNewData)
 {
     // Fase 8.6.2: Gebruik globale pointers (synchroniseert met module pointers)
     float pct = prices[index];
@@ -1489,7 +1599,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
         }
     }
     
-    if (index == 1 && ::price1MinMaxLabel != nullptr && ::price1MinMinLabel != nullptr && ::price1MinDiffLabel != nullptr)
+    if (hasNewData && index == 1 && ::price1MinMaxLabel != nullptr && ::price1MinMinLabel != nullptr && ::price1MinDiffLabel != nullptr)
     {
         float minVal, maxVal;
         findMinMaxInSecondPrices(minVal, maxVal);
@@ -1502,7 +1612,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
                               lastPrice1MinMaxValue, lastPrice1MinMinValue, lastPrice1MinDiffValue);
     }
     
-    if (index == 2 && ::price30MinMaxLabel != nullptr && ::price30MinMinLabel != nullptr && ::price30MinDiffLabel != nullptr)
+    if (hasNewData && index == 2 && ::price30MinMaxLabel != nullptr && ::price30MinMinLabel != nullptr && ::price30MinDiffLabel != nullptr)
     {
         float minVal, maxVal;
         findMinMaxInLast30Minutes(minVal, maxVal);
@@ -1516,7 +1626,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
     }
     
     #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-    if (index == 3 && ::price2HMaxLabel != nullptr && ::price2HMinLabel != nullptr && ::price2HDiffLabel != nullptr)
+    if (hasNewData && index == 3 && ::price2HMaxLabel != nullptr && ::price2HMinLabel != nullptr && ::price2HDiffLabel != nullptr)
     {
         float minVal, maxVal;
         findMinMaxInLast2Hours(minVal, maxVal);
@@ -1558,6 +1668,14 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
     if (index == 0) {
         return;
     }
+    static int8_t lastColorState[SYMBOL_COUNT];
+    static bool colorStateInitialized = false;
+    if (!colorStateInitialized) {
+        for (uint8_t i = 0; i < SYMBOL_COUNT; ++i) {
+            lastColorState[i] = -1;
+        }
+        colorStateInitialized = true;
+    }
     
     // Fase 8.6.3: Gebruik globale pointers (synchroniseert met module pointers)
     #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
@@ -1574,25 +1692,31 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
     bool shouldShowColor = hasDataForColor && pct != 0.0f;
     #endif
     
+    int8_t nextColorState = 0;
     if (shouldShowColor)
     {
-        lv_obj_set_style_text_color(::priceLbl[index],
-                                    pct >= 0 ? lv_palette_lighten(LV_PALETTE_GREEN, 4)
-                                             : lv_palette_lighten(LV_PALETTE_RED, 3),
-                                    0);
-        
-        lv_color_t bg = pct >= 0
-                            ? lv_color_mix(lv_palette_main(LV_PALETTE_GREEN), lv_color_black(), 127)
-                            : lv_color_mix(lv_palette_main(LV_PALETTE_RED), lv_color_black(), 127);
-        lv_obj_set_style_bg_color(::priceBox[index], bg, 0);
+        nextColorState = pct >= 0 ? 1 : 2;
     }
-    else
-    {
-        lv_obj_set_style_text_color(::priceLbl[index], lv_palette_main(LV_PALETTE_GREY), 0);
-        lv_obj_set_style_bg_color(::priceBox[index], lv_color_black(), 0);
+    if (nextColorState != lastColorState[index]) {
+        if (nextColorState == 1) {
+            lv_obj_set_style_text_color(::priceLbl[index],
+                                        lv_palette_lighten(LV_PALETTE_GREEN, 4),
+                                        0);
+            lv_color_t bg = lv_color_mix(lv_palette_main(LV_PALETTE_GREEN), lv_color_black(), 127);
+            lv_obj_set_style_bg_color(::priceBox[index], bg, 0);
+        } else if (nextColorState == 2) {
+            lv_obj_set_style_text_color(::priceLbl[index],
+                                        lv_palette_lighten(LV_PALETTE_RED, 3),
+                                        0);
+            lv_color_t bg = lv_color_mix(lv_palette_main(LV_PALETTE_RED), lv_color_black(), 127);
+            lv_obj_set_style_bg_color(::priceBox[index], bg, 0);
+        } else {
+            lv_obj_set_style_text_color(::priceLbl[index], lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_bg_color(::priceBox[index], lv_color_black(), 0);
+        }
+        lv_obj_set_height(::priceBox[index], LV_SIZE_CONTENT);
+        lastColorState[index] = nextColorState;
     }
-    
-    lv_obj_set_height(::priceBox[index], LV_SIZE_CONTENT);
 }
 
 // Fase 8.7.1: updateChartSection() naar Module
@@ -1616,14 +1740,15 @@ void UIController::updateChartSection(int32_t currentPrice, bool hasNewPriceData
         
         // Reset flag na gebruik
         newPriceDataAvailable = false;
+        if (valueChanged || hasNewPriceData || newPriceDataAvailable) {
+            this->updateChartRange(currentPrice);
+        }
     }
-    
-    // Update chart range
-    this->updateChartRange(currentPrice);
     
     // Update chart title (CYD displays)
     if (::chartTitle != nullptr) {
         char deviceIdBuffer[16] = {0};
+        static char lastDeviceIdBuffer[16] = {0};
         const char* alertPos = strstr(ntfyTopic, "-alert");
         if (alertPos != nullptr) {
             size_t len = alertPos - ntfyTopic;
@@ -1635,15 +1760,22 @@ void UIController::updateChartSection(int32_t currentPrice, bool hasNewPriceData
         } else {
             safeStrncpy(deviceIdBuffer, ntfyTopic, sizeof(deviceIdBuffer));
         }
-        lv_label_set_text(::chartTitle, deviceIdBuffer);
+        if (strcmp(lastDeviceIdBuffer, deviceIdBuffer) != 0) {
+            safeStrncpy(lastDeviceIdBuffer, deviceIdBuffer, sizeof(lastDeviceIdBuffer));
+            lv_label_set_text(::chartTitle, deviceIdBuffer);
+        }
     }
     
     // Update chart begin letters label (TTGO displays)
     #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     if (::chartBeginLettersLabel != nullptr) {
         char deviceIdBuffer[16];
+        static char lastBeginLettersBuffer[16] = {0};
         getDeviceIdFromTopic(ntfyTopic, deviceIdBuffer, sizeof(deviceIdBuffer));
-        lv_label_set_text(::chartBeginLettersLabel, deviceIdBuffer);
+        if (strcmp(lastBeginLettersBuffer, deviceIdBuffer) != 0) {
+            safeStrncpy(lastBeginLettersBuffer, deviceIdBuffer, sizeof(lastBeginLettersBuffer));
+            lv_label_set_text(::chartBeginLettersLabel, deviceIdBuffer);
+        }
     }
     #endif
 }
@@ -1660,6 +1792,17 @@ void UIController::updateUI()
         Serial.println(F("[UI] WARN: Chart of dataSeries is null, skip update"));
         #endif
         return;
+    }
+
+    if (pendingAnchorRequest) {
+        unsigned long now = millis();
+        if ((now - pendingAnchorRequestMs) > pendingAnchorTimeoutMs) {
+            pendingAnchorRequest = false;
+        } else if (prices[0] > 0.0f) {
+            if (anchorSystem.setAnchorPrice(0.0f, false)) {
+                pendingAnchorRequest = false;
+            }
+        }
     }
     
     // Data wordt al beschermd door mutex in uiTask
@@ -1709,8 +1852,9 @@ void UIController::checkButton()
                     safeMutexGive(dataMutex, "checkButton price check");
                     // Haal prijs op (buiten mutex om deadlock te voorkomen)
                     fetchPrice();
-                    // Wacht even zodat de prijs kan worden opgeslagen
-                    vTaskDelay(pdMS_TO_TICKS(200));
+                    pendingAnchorRequest = true;
+                    pendingAnchorRequestMs = now;
+                    return;
                 } else {
                     safeMutexGive(dataMutex, "checkButton price available");
                 }
@@ -1968,7 +2112,7 @@ void UIController::updatePriceCardsSection(bool hasNewPriceData)
         } else {
             // 1min/30min cards
             pct = prices[i];
-            updateAveragePriceCard(i);
+            updateAveragePriceCard(i, hasNewPriceData);
         }
         
         // Update kleuren
