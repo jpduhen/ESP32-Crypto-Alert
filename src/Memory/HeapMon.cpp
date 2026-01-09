@@ -2,8 +2,8 @@
 #include <esp_heap_caps.h>
 
 // Rate limiting: max 1 log per tag per 5 seconden
-static const unsigned long RATE_LIMIT_MS = 5000;
-static const int MAX_TAGS = 32;  // Maximum aantal unieke tags
+constexpr unsigned long RATE_LIMIT_MS = 5000;
+constexpr uint8_t MAX_TAGS = 32;  // Maximum aantal unieke tags
 
 struct TagLogEntry {
     const char* tag;
@@ -11,7 +11,7 @@ struct TagLogEntry {
 };
 
 static TagLogEntry tagLogs[MAX_TAGS];
-static int tagCount = 0;
+static uint8_t tagCount = 0;
 
 // Helper: Find tag index in tagLogs array (geoptimaliseerd: elimineert code duplicatie)
 // Geoptimaliseerd: pointer vergelijking eerst (sneller), dan string vergelijking alleen als nodig
@@ -22,12 +22,29 @@ static int findTagIndex(const char* tag) {
     
     for (int i = 0; i < tagCount; i++) {
         // Geoptimaliseerd: pointer vergelijking eerst (sneller), dan string vergelijking
-        if (tagLogs[i].tag == tag || 
-            (tagLogs[i].tag != nullptr && strcmp(tagLogs[i].tag, tag) == 0)) {
+        if (tagLogs[i].tag == tag ||
+            (!HEAPMON_POINTER_ONLY_MATCH &&
+             tagLogs[i].tag != nullptr && strcmp(tagLogs[i].tag, tag) == 0)) {
             return i;
         }
     }
     return -1;
+}
+
+static int findOldestTagIndex() {
+    if (tagCount == 0) {
+        return -1;
+    }
+
+    int oldestIndex = 0;
+    unsigned long oldestTime = tagLogs[0].lastLogTime;
+    for (int i = 1; i < tagCount; i++) {
+        if (tagLogs[i].lastLogTime < oldestTime) {
+            oldestTime = tagLogs[i].lastLogTime;
+            oldestIndex = i;
+        }
+    }
+    return oldestIndex;
 }
 
 HeapSnap snapHeap() {
@@ -63,6 +80,14 @@ void logHeap(const char* tag) {
             tagLogs[tagIndex].lastLogTime = now;
             tagCount++;
             shouldLog = true;
+        } else {
+            // Evict oudste tag om logging niet stilletjes te verliezen
+            tagIndex = findOldestTagIndex();
+            if (tagIndex >= 0) {
+                tagLogs[tagIndex].tag = tag;
+                tagLogs[tagIndex].lastLogTime = now;
+                shouldLog = true;
+            }
         }
     }
     
@@ -70,8 +95,10 @@ void logHeap(const char* tag) {
     #if !DEBUG_BUTTON_ONLY
     if (shouldLog) {
         HeapSnap snap = snapHeap();
-        Serial.printf("[Heap] %s: free=%u largest=%u minFree=%u\n", 
-                     tag, snap.freeHeap, snap.largestBlock, snap.minFreeHeap);
+        if (Serial) {
+            Serial.printf("[Heap] %s: free=%u largest=%u minFree=%u\n",
+                         tag, snap.freeHeap, snap.largestBlock, snap.minFreeHeap);
+        }
     }
     #endif
 }
@@ -88,7 +115,6 @@ void resetRateLimit(const char* tag) {
         tagLogs[tagIndex].lastLogTime = 0;
     }
 }
-
 
 
 
