@@ -1016,7 +1016,7 @@ void UIController::updateTrendLabel()
         }
         
         // Geen "-warm" tekst meer - kleur geeft status aan
-        uint32_t trendColor32 = lv_color_to32(trendColor);
+        uint32_t trendColor32 = lv_color_to_32(trendColor);
         if (strcmp(lastTrendText, trendText) != 0) {
             strncpy(lastTrendText, trendText, sizeof(lastTrendText) - 1);
             lastTrendText[sizeof(lastTrendText) - 1] = '\0';
@@ -1042,7 +1042,7 @@ void UIController::updateTrendLabel()
                     strcpy(lastTrendText, "--");
                     lv_label_set_text(::trendLabel, "--");
                 }
-                uint32_t trendColor32 = lv_color_to32(lv_palette_main(LV_PALETTE_GREY));
+                uint32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY));
                 if (lastTrendColor != trendColor32) {
                     lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
                     lastTrendColor = trendColor32;
@@ -1068,7 +1068,7 @@ void UIController::updateTrendLabel()
                     strcpy(lastTrendText, "--");
                     lv_label_set_text(::trendLabel, "--");
                 }
-                uint32_t trendColor32 = lv_color_to32(lv_palette_main(LV_PALETTE_GREY));
+                uint32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY));
                 if (lastTrendColor != trendColor32) {
                     lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
                     lastTrendColor = trendColor32;
@@ -1094,7 +1094,7 @@ void UIController::updateTrendLabel()
                     strcpy(lastTrendText, "--");
                     lv_label_set_text(::trendLabel, "--");
                 }
-                uint32_t trendColor32 = lv_color_to32(lv_palette_main(LV_PALETTE_GREY));
+                uint32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY));
                 if (lastTrendColor != trendColor32) {
                     lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
                     lastTrendColor = trendColor32;
@@ -1107,7 +1107,7 @@ void UIController::updateTrendLabel()
                 strcpy(lastTrendText, "--");
                 lv_label_set_text(::trendLabel, "--");
             }
-            uint32_t trendColor32 = lv_color_to32(lv_palette_main(LV_PALETTE_GREY));
+            uint32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY));
             if (lastTrendColor != trendColor32) {
                 lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
                 lastTrendColor = trendColor32;
@@ -1120,7 +1120,7 @@ void UIController::updateTrendLabel()
             lastTrendText[sizeof(lastTrendText) - 1] = '\0';
             lv_label_set_text(::trendLabel, waitText);
         }
-        uint32_t trendColor32 = lv_color_to32(lv_palette_main(LV_PALETTE_GREY));
+        uint32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY));
         if (lastTrendColor != trendColor32) {
             lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
             lastTrendColor = trendColor32;
@@ -1157,7 +1157,7 @@ void UIController::updateVolatilityLabel()
             break;
     }
     
-    uint32_t volColor32 = lv_color_to32(volColor);
+    uint32_t volColor32 = lv_color_to_32(volColor);
     if (strcmp(lastVolText, volText) != 0) {
         strncpy(lastVolText, volText, sizeof(lastVolText) - 1);
         lastVolText[sizeof(lastVolText) - 1] = '\0';
@@ -1192,7 +1192,7 @@ void UIController::updateVolumeConfirmLabel()
         }
     }
 
-    uint32_t volumeColor32 = lv_color_to32(volumeColor);
+    uint32_t volumeColor32 = lv_color_to_32(volumeColor);
     if (strcmp(lastVolumeText, volumeText) != 0) {
         strncpy(lastVolumeText, volumeText, sizeof(lastVolumeText) - 1);
         lastVolumeText[sizeof(lastVolumeText) - 1] = '\0';
@@ -1242,7 +1242,7 @@ void UIController::updateMediumTrendLabel()
                 break;
         }
         
-        uint32_t trendColor32 = lv_color_to32(trendColor);
+        uint32_t trendColor32 = lv_color_to_32(trendColor);
         if (strcmp(lastMediumText, trendText) != 0) {
             strncpy(lastMediumText, trendText, sizeof(lastMediumText) - 1);
             lastMediumText[sizeof(lastMediumText) - 1] = '\0';
@@ -1259,7 +1259,7 @@ void UIController::updateMediumTrendLabel()
             strcpy(lastMediumText, "--");
             lv_label_set_text(::mediumTrendLabel, "--");
         }
-        uint32_t trendColor32 = lv_color_to32(lv_palette_main(LV_PALETTE_GREY));
+        uint32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY));
         if (lastMediumColor != trendColor32) {
             lv_obj_set_style_text_color(::mediumTrendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
             lastMediumColor = trendColor32;
@@ -1306,7 +1306,7 @@ void UIController::updateLongTermTrendLabel()
                 break;
         }
         
-        uint32_t trendColor32 = lv_color_to32(trendColor);
+        uint32_t trendColor32 = lv_color_to_32(trendColor);
         if (strcmp(lastLongText, trendText) != 0) {
             strncpy(lastLongText, trendText, sizeof(lastLongText) - 1);
             lastLongText[sizeof(lastLongText) - 1] = '\0';
@@ -1323,7 +1323,7 @@ void UIController::updateLongTermTrendLabel()
             strcpy(lastLongText, "--");
             lv_label_set_text(::longTermTrendLabel, "--");
         }
-        uint32_t trendColor32 = lv_color_to32(lv_palette_main(LV_PALETTE_GREY));
+        uint32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY));
         if (lastLongColor != trendColor32) {
             lv_obj_set_style_text_color(::longTermTrendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
             lastLongColor = trendColor32;
@@ -1524,7 +1524,7 @@ void UIController::updateWarmStartStatusLabel()
         lastWarmStartText[sizeof(lastWarmStartText) - 1] = '\0';
         lv_label_set_text(::warmStartStatusLabel, warmStartText);
     }
-    uint32_t statusColor32 = lv_color_to32(statusColor);
+    uint32_t statusColor32 = lv_color_to_32(statusColor);
     if (lastWarmStartColor != statusColor32) {
         lv_obj_set_style_text_color(::warmStartStatusLabel, statusColor, 0);
         lastWarmStartColor = statusColor32;
