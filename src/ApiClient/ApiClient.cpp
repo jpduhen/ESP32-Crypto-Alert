@@ -555,7 +555,7 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
         } while(0);
         
         // C2: ALTIJD cleanup (ook bij succes) - HTTPClient op ESP32 vereist dit voor correcte reset
-        // Hard close alleen als keep-alive niet actief
+        // Hard close: http.end() + client.stop() voor volledige cleanup
         WiFiClient* stream = http.getStreamPtr();
         if (!usePersistent && stream != nullptr) {
             stream->stop();
@@ -585,3 +585,4 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
     
     return ok;
 }
+
