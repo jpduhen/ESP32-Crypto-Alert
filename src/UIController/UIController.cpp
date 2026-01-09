@@ -17,6 +17,7 @@
 #include <lvgl.h>
 #include <Arduino_GFX_Library.h>
 #include <WiFi.h>
+#include <cstring>
 #include <esp_heap_caps.h>
 // Fase 8.5.2: updateTrendLabel() dependencies
 #include "../TrendDetector/TrendDetector.h"  // Voor TrendState enum
@@ -967,7 +968,8 @@ void UIController::updateTrendLabel()
     // Fase 8.5.2: Gebruik globale pointer (synchroniseert met module pointer)
     if (::trendLabel == nullptr) return;
     static char lastTrendText[24] = {0};
-    static uint32_t lastTrendColor = 0;
+    static lv_color32_t lastTrendColor = {};
+    static bool lastTrendColorValid = false;
     
     // Toon trend alleen als beide availability flags true zijn
     if (hasRet2h && hasRet30m)
@@ -1016,15 +1018,16 @@ void UIController::updateTrendLabel()
         }
         
         // Geen "-warm" tekst meer - kleur geeft status aan
-        uint32_t trendColor32 = lv_color_to_32(trendColor, LV_OPA_COVER).full;
+        lv_color32_t trendColor32 = lv_color_to_32(trendColor, LV_OPA_COVER);
         if (strcmp(lastTrendText, trendText) != 0) {
             strncpy(lastTrendText, trendText, sizeof(lastTrendText) - 1);
             lastTrendText[sizeof(lastTrendText) - 1] = '\0';
             lv_label_set_text(::trendLabel, trendText);
         }
-        if (lastTrendColor != trendColor32) {
+        if (!lastTrendColorValid || memcmp(&lastTrendColor, &trendColor32, sizeof(trendColor32)) != 0) {
             lv_obj_set_style_text_color(::trendLabel, trendColor, 0);
             lastTrendColor = trendColor32;
+            lastTrendColorValid = true;
         }
     }
     else
@@ -1042,10 +1045,11 @@ void UIController::updateTrendLabel()
                     strcpy(lastTrendText, "--");
                     lv_label_set_text(::trendLabel, "--");
                 }
-                uint32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY), LV_OPA_COVER).full;
-                if (lastTrendColor != trendColor32) {
+                lv_color32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY), LV_OPA_COVER);
+                if (!lastTrendColorValid || memcmp(&lastTrendColor, &trendColor32, sizeof(trendColor32)) != 0) {
                     lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
                     lastTrendColor = trendColor32;
+                    lastTrendColorValid = true;
                 }
                 return;
             }
@@ -1068,10 +1072,11 @@ void UIController::updateTrendLabel()
                     strcpy(lastTrendText, "--");
                     lv_label_set_text(::trendLabel, "--");
                 }
-                uint32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY), LV_OPA_COVER).full;
-                if (lastTrendColor != trendColor32) {
+                lv_color32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY), LV_OPA_COVER);
+                if (!lastTrendColorValid || memcmp(&lastTrendColor, &trendColor32, sizeof(trendColor32)) != 0) {
                     lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
                     lastTrendColor = trendColor32;
+                    lastTrendColorValid = true;
                 }
                 return;
             }
@@ -1094,10 +1099,11 @@ void UIController::updateTrendLabel()
                     strcpy(lastTrendText, "--");
                     lv_label_set_text(::trendLabel, "--");
                 }
-                uint32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY), LV_OPA_COVER).full;
-                if (lastTrendColor != trendColor32) {
+                lv_color32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY), LV_OPA_COVER);
+                if (!lastTrendColorValid || memcmp(&lastTrendColor, &trendColor32, sizeof(trendColor32)) != 0) {
                     lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
                     lastTrendColor = trendColor32;
+                    lastTrendColorValid = true;
                 }
                 return;
             }
@@ -1107,10 +1113,11 @@ void UIController::updateTrendLabel()
                 strcpy(lastTrendText, "--");
                 lv_label_set_text(::trendLabel, "--");
             }
-            uint32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY), LV_OPA_COVER).full;
-            if (lastTrendColor != trendColor32) {
+            lv_color32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY), LV_OPA_COVER);
+            if (!lastTrendColorValid || memcmp(&lastTrendColor, &trendColor32, sizeof(trendColor32)) != 0) {
                 lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
                 lastTrendColor = trendColor32;
+                lastTrendColorValid = true;
             }
             return;
         }
@@ -1120,10 +1127,11 @@ void UIController::updateTrendLabel()
             lastTrendText[sizeof(lastTrendText) - 1] = '\0';
             lv_label_set_text(::trendLabel, waitText);
         }
-        uint32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY), LV_OPA_COVER).full;
-        if (lastTrendColor != trendColor32) {
+        lv_color32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY), LV_OPA_COVER);
+        if (!lastTrendColorValid || memcmp(&lastTrendColor, &trendColor32, sizeof(trendColor32)) != 0) {
             lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
             lastTrendColor = trendColor32;
+            lastTrendColorValid = true;
         }
     }
 }
@@ -1138,7 +1146,8 @@ void UIController::updateVolatilityLabel()
     const char* volText = "";
     lv_color_t volColor = lv_palette_main(LV_PALETTE_GREY);
     static char lastVolText[12] = {0};
-    static uint32_t lastVolColor = 0;
+    static lv_color32_t lastVolColor = {};
+    static bool lastVolColorValid = false;
     
     // Fase 5.3.14: Gebruik VolatilityTracker module getter i.p.v. globale variabele
     VolatilityState currentVol = volatilityTracker.getVolatilityState();
@@ -1157,15 +1166,16 @@ void UIController::updateVolatilityLabel()
             break;
     }
     
-    uint32_t volColor32 = lv_color_to_32(volColor, LV_OPA_COVER).full;
+    lv_color32_t volColor32 = lv_color_to_32(volColor, LV_OPA_COVER);
     if (strcmp(lastVolText, volText) != 0) {
         strncpy(lastVolText, volText, sizeof(lastVolText) - 1);
         lastVolText[sizeof(lastVolText) - 1] = '\0';
         lv_label_set_text(::volatilityLabel, volText);
     }
-    if (lastVolColor != volColor32) {
+    if (!lastVolColorValid || memcmp(&lastVolColor, &volColor32, sizeof(volColor32)) != 0) {
         lv_obj_set_style_text_color(::volatilityLabel, volColor, 0);
         lastVolColor = volColor32;
+        lastVolColorValid = true;
     }
 }
 
@@ -1178,7 +1188,8 @@ void UIController::updateVolumeConfirmLabel()
     const char* volumeText = "";
     lv_color_t volumeColor = lv_palette_main(LV_PALETTE_GREY);
     static char lastVolumeText[10] = {0};
-    static uint32_t lastVolumeColor = 0;
+    static lv_color32_t lastVolumeColor = {};
+    static bool lastVolumeColorValid = false;
 
     if (lastVolumeRange1m.valid) {
         if (fabsf(lastVolumeRange1m.volumeDeltaPct) >= VOLUME_BADGE_THRESHOLD_PCT) {
@@ -1192,15 +1203,16 @@ void UIController::updateVolumeConfirmLabel()
         }
     }
 
-    uint32_t volumeColor32 = lv_color_to_32(volumeColor, LV_OPA_COVER).full;
+    lv_color32_t volumeColor32 = lv_color_to_32(volumeColor, LV_OPA_COVER);
     if (strcmp(lastVolumeText, volumeText) != 0) {
         strncpy(lastVolumeText, volumeText, sizeof(lastVolumeText) - 1);
         lastVolumeText[sizeof(lastVolumeText) - 1] = '\0';
         lv_label_set_text(::volumeConfirmLabel, volumeText);
     }
-    if (lastVolumeColor != volumeColor32) {
+    if (!lastVolumeColorValid || memcmp(&lastVolumeColor, &volumeColor32, sizeof(volumeColor32)) != 0) {
         lv_obj_set_style_text_color(::volumeConfirmLabel, volumeColor, 0);
         lastVolumeColor = volumeColor32;
+        lastVolumeColorValid = true;
     }
 }
 
@@ -1211,7 +1223,8 @@ void UIController::updateMediumTrendLabel()
     // Fase 8.5.4: Gebruik globale pointer (synchroniseert met module pointer)
     if (::mediumTrendLabel == nullptr) return;
     static char lastMediumText[8] = {0};
-    static uint32_t lastMediumColor = 0;
+    static lv_color32_t lastMediumColor = {};
+    static bool lastMediumColorValid = false;
     
     extern bool hasRet1d;
     if (hasRet1d)
@@ -1242,15 +1255,16 @@ void UIController::updateMediumTrendLabel()
                 break;
         }
         
-        uint32_t trendColor32 = lv_color_to_32(trendColor, LV_OPA_COVER).full;
+        lv_color32_t trendColor32 = lv_color_to_32(trendColor, LV_OPA_COVER);
         if (strcmp(lastMediumText, trendText) != 0) {
             strncpy(lastMediumText, trendText, sizeof(lastMediumText) - 1);
             lastMediumText[sizeof(lastMediumText) - 1] = '\0';
             lv_label_set_text(::mediumTrendLabel, trendText);
         }
-        if (lastMediumColor != trendColor32) {
+        if (!lastMediumColorValid || memcmp(&lastMediumColor, &trendColor32, sizeof(trendColor32)) != 0) {
             lv_obj_set_style_text_color(::mediumTrendLabel, trendColor, 0);
             lastMediumColor = trendColor32;
+            lastMediumColorValid = true;
         }
     }
     else
@@ -1259,10 +1273,11 @@ void UIController::updateMediumTrendLabel()
             strcpy(lastMediumText, "--");
             lv_label_set_text(::mediumTrendLabel, "--");
         }
-        uint32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY), LV_OPA_COVER).full;
-        if (lastMediumColor != trendColor32) {
+        lv_color32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY), LV_OPA_COVER);
+        if (!lastMediumColorValid || memcmp(&lastMediumColor, &trendColor32, sizeof(trendColor32)) != 0) {
             lv_obj_set_style_text_color(::mediumTrendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
             lastMediumColor = trendColor32;
+            lastMediumColorValid = true;
         }
     }
 }
@@ -1274,7 +1289,8 @@ void UIController::updateLongTermTrendLabel()
     // Fase 8.5.5: Gebruik globale pointer (synchroniseert met module pointer)
     if (::longTermTrendLabel == nullptr) return;
     static char lastLongText[8] = {0};
-    static uint32_t lastLongColor = 0;
+    static lv_color32_t lastLongColor = {};
+    static bool lastLongColorValid = false;
     
     // Toon lange termijn trend alleen als 7d beschikbaar is
     extern bool hasRet7d;
@@ -1306,15 +1322,16 @@ void UIController::updateLongTermTrendLabel()
                 break;
         }
         
-        uint32_t trendColor32 = lv_color_to_32(trendColor, LV_OPA_COVER).full;
+        lv_color32_t trendColor32 = lv_color_to_32(trendColor, LV_OPA_COVER);
         if (strcmp(lastLongText, trendText) != 0) {
             strncpy(lastLongText, trendText, sizeof(lastLongText) - 1);
             lastLongText[sizeof(lastLongText) - 1] = '\0';
             lv_label_set_text(::longTermTrendLabel, trendText);
         }
-        if (lastLongColor != trendColor32) {
+        if (!lastLongColorValid || memcmp(&lastLongColor, &trendColor32, sizeof(trendColor32)) != 0) {
             lv_obj_set_style_text_color(::longTermTrendLabel, trendColor, 0);
             lastLongColor = trendColor32;
+            lastLongColorValid = true;
         }
     }
     else
@@ -1323,10 +1340,11 @@ void UIController::updateLongTermTrendLabel()
             strcpy(lastLongText, "--");
             lv_label_set_text(::longTermTrendLabel, "--");
         }
-        uint32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY), LV_OPA_COVER).full;
-        if (lastLongColor != trendColor32) {
+        lv_color32_t trendColor32 = lv_color_to_32(lv_palette_main(LV_PALETTE_GREY), LV_OPA_COVER);
+        if (!lastLongColorValid || memcmp(&lastLongColor, &trendColor32, sizeof(trendColor32)) != 0) {
             lv_obj_set_style_text_color(::longTermTrendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
             lastLongColor = trendColor32;
+            lastLongColorValid = true;
         }
     }
 }
@@ -1508,7 +1526,8 @@ void UIController::updateWarmStartStatusLabel()
     
     char warmStartText[16];
     static char lastWarmStartText[16] = {0};
-    static uint32_t lastWarmStartColor = 0;
+    static lv_color32_t lastWarmStartColor = {};
+    static bool lastWarmStartColorValid = false;
     if (warmStartStatus == WARMING_UP) {
         snprintf(warmStartText, sizeof(warmStartText), "DATA%u%%", warmStartStats.warmUpProgress);
     } else if (warmStartStatus == LIVE_COLD) {
@@ -1524,10 +1543,11 @@ void UIController::updateWarmStartStatusLabel()
         lastWarmStartText[sizeof(lastWarmStartText) - 1] = '\0';
         lv_label_set_text(::warmStartStatusLabel, warmStartText);
     }
-    uint32_t statusColor32 = lv_color_to_32(statusColor, LV_OPA_COVER).full;
-    if (lastWarmStartColor != statusColor32) {
+    lv_color32_t statusColor32 = lv_color_to_32(statusColor, LV_OPA_COVER);
+    if (!lastWarmStartColorValid || memcmp(&lastWarmStartColor, &statusColor32, sizeof(statusColor32)) != 0) {
         lv_obj_set_style_text_color(::warmStartStatusLabel, statusColor, 0);
         lastWarmStartColor = statusColor32;
+        lastWarmStartColorValid = true;
     }
 }
 
