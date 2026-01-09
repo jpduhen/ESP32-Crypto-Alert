@@ -6825,7 +6825,12 @@ void uiTask(void *parameter)
         #endif
         
         static uint32_t uiMutexTimeoutCount = 0;
-        if (safeMutexTake(dataMutex, mutexTimeout, "uiTask updateUI"))
+        bool uiLocked = safeMutexTake(dataMutex, mutexTimeout, "uiTask updateUI");
+        if (!uiLocked) {
+            vTaskDelay(pdMS_TO_TICKS(2));
+            uiLocked = safeMutexTake(dataMutex, mutexTimeout, "uiTask updateUI retry");
+        }
+        if (uiLocked)
         {
             // Fase 4.2: Geconsolideerde mutex timeout counter reset
             resetMutexTimeoutCounter(uiMutexTimeoutCount);
