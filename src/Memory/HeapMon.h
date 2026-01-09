@@ -8,6 +8,11 @@
 #define DEBUG_BUTTON_ONLY 1
 #endif
 
+// Optionele optimalisatie: match tags alleen op pointer (sneller, maar vereist stabiele pointers)
+#ifndef HEAPMON_POINTER_ONLY_MATCH
+#define HEAPMON_POINTER_ONLY_MATCH 0
+#endif
+
 /**
  * HeapMon: Heap telemetry voor geheugenfragmentatie audit
  * 
@@ -36,7 +41,6 @@ void logHeap(const char* tag);
 void resetRateLimit(const char* tag);
 
 #endif // HEAPMON_H
-
 
 
 
