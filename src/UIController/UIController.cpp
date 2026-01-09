@@ -249,6 +249,7 @@ extern void updateFooter();
 #include <freertos/semphr.h>
 extern SemaphoreHandle_t dataMutex;
 extern void fetchPrice();
+extern bool queueAnchorSetting(float value, bool useCurrentPrice);
 extern bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const char* context);
 extern void safeMutexGive(SemaphoreHandle_t mutex, const char* context);
 extern unsigned long lastButtonPress;
@@ -1819,7 +1820,7 @@ void UIController::updateUI()
         if ((now - pendingAnchorRequestMs) > pendingAnchorTimeoutMs) {
             pendingAnchorRequest = false;
         } else if (prices[0] > 0.0f) {
-            if (anchorSystem.setAnchorPrice(0.0f, false)) {
+            if (queueAnchorSetting(0.0f, true)) {
                 pendingAnchorRequest = false;
             }
         }
