@@ -5888,7 +5888,7 @@ static void setupLVGL()
         // CYD zonder PSRAM: compile-time instelbaar (default 4, kan 1/2/4 zijn voor testen)
         // Na geheugenoptimalisaties kunnen we meer buffer gebruiken voor betere performance
         #ifndef CYD_BUF_LINES_NO_PSRAM
-        #define CYD_BUF_LINES_NO_PSRAM 4  // Default: 4 regels (was 1->2->4, verhoogd na geheugenoptimalisaties)
+        #define CYD_BUF_LINES_NO_PSRAM 2  // Default: 4 regels (was 1->2->4, verhoogd na geheugenoptimalisaties)
         #endif
         if (psramAvailable) {
             bufLines = 40;  // CYD met PSRAM: 40 regels
