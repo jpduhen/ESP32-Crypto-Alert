@@ -327,7 +327,7 @@ void WebServerModule::renderSettingsHTML() {
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='info'>%s</div>", 
              getText("NTFY.sh topic voor notificaties", "NTFY.sh topic for notifications"));
     server->sendContent(tmpBuf);
-    sendInputRow(getText("Binance Symbol", "Binance Symbol"), "binancesymbol", "text", binanceSymbol, 
+    sendInputRow(getText("Bitvavo Symbol", "Bitvavo Symbol"), "binancesymbol", "text", binanceSymbol, 
                  getText("Bijv. BTCEUR, ETHBTC", "E.g. BTCEUR, ETHBTC"));
     sendInputRow(getText("Taal", "Language"), "language", "number", (language == 0) ? "0" : "1", 
                  getText("0 = Nederlands, 1 = English", "0 = Dutch, 1 = English"), 0, 1, 1);
@@ -834,7 +834,7 @@ void WebServerModule::handleSave() {
             
             if (symbolChanged) {
                 // Symbol changed - reboot for clean state
-                Serial_printf(F("[Settings] Binance symbol changed from %s to %s - rebooting\n"), 
+                Serial_printf(F("[Settings] Bitvavo symbol changed from %s to %s - rebooting\n"), 
                              binanceSymbol, symbolBuffer);
                 
                 // Update symbol before reboot
