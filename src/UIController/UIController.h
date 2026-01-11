@@ -61,7 +61,7 @@ public:
     
     // Fase 8.6: update*Card() functies naar Module
     void updateBTCEURCard(bool hasNewData);
-    void updateAveragePriceCard(uint8_t index, bool hasNewData);
+    void updateAveragePriceCard(uint8_t index);
     void updatePriceCardColor(uint8_t index, float pct);
     
     // Fase 8.7: update*Section() functies naar Module

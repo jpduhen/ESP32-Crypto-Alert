@@ -79,7 +79,6 @@ public:
 private:
     // Anchor state variabelen
     float anchorPrice;
-    float anchorPriceInv;  // Cached reciprocal for faster percentage calc
     float anchorMax;  // Hoogste prijs sinds anchor
     float anchorMin;  // Laagste prijs sinds anchor
     unsigned long anchorTime;
@@ -113,15 +112,16 @@ private:
     // Helper: Send anchor alert notification (consolideert take profit en max loss logica)
     void sendAnchorAlert(AnchorEventType eventType, float anchorPct, 
                         const AnchorConfigEffective& effAnchor, 
-                        TrendState trend);
+                        const char* trendName);
     
     // Helper: Format notification message (gebruikt lokale buffers)
     void formatAnchorNotification(AnchorEventType eventType, float anchorPct, 
                                   const AnchorConfigEffective& effAnchor, 
-                                  TrendState trend,
+                                  const char* trendName,
                                   char* msgBuffer, size_t msgSize,
                                   char* titleBuffer, size_t titleSize,
                                   char* timestampBuffer, size_t timestampSize);
 };
 
 #endif // ANCHORSYSTEM_H
+

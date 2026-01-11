@@ -12,24 +12,12 @@ PriceData::PriceData() {
     secondArrayFilled = false;
     fiveMinuteIndex = 0;
     fiveMinuteArrayFilled = false;
-    hasFiveMinuteBuffers = true;
 }
 
 // Begin - synchroniseer state met globale variabelen (Fase 4.2.5)
 void PriceData::begin() {
     // Fase 4.2.5: Synchroniseer PriceData state met globale variabelen
     syncStateFromGlobals();
-
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
-    extern float *fiveMinutePrices;
-    extern DataSource *fiveMinutePricesSource;
-    hasFiveMinuteBuffers = (fiveMinutePrices != nullptr && fiveMinutePricesSource != nullptr);
-    if (!hasFiveMinuteBuffers) {
-        Serial.printf("[Array] ERROR: fiveMinutePrices arrays niet gealloceerd!\n");
-    }
-    #else
-    hasFiveMinuteBuffers = true;
-    #endif
 }
 
 // Fase 4.2.5: Synchroniseer PriceData state met globale variabelen
@@ -58,81 +46,8 @@ bool PriceData::getMinuteArrayFilled() const {
     return minuteArrayFilled;
 }
 
-// Fase 4.2.3: addPriceToSecondArray() verplaatst naar .cpp voor code-size reductie
-// Fase 4.2.5: Gebruikt nu PriceData state variabelen (parallel, globale arrays blijven bestaan)
-void PriceData::addPriceToSecondArray(float price) {
-    uint32_t now = millis();
-
-    // Validate input
-    if (!ApiClient::isValidPrice(price))
-    {
-        static uint32_t lastInvalidLogTime = 0;
-        if (now - lastInvalidLogTime > 5000) {
-            Serial.printf("[Array] WARN: Ongeldige prijs in addPriceToSecondArray: %.2f\n", price);
-            lastInvalidLogTime = now;
-        }
-        return;
-    }
-
-    // Bounds check voor secondPrices array
-    // Fase 4.2.5: Gebruikt PriceData state (this->secondIndex)
-    // Note: Als secondIndex == SECONDS_PER_MINUTE, betekent dit dat buffer vol is, reset naar 0
-    if (this->secondIndex >= SECONDS_PER_MINUTE)
-    {
-        // Dit kan gebeuren na warm-start als copyCount == SECONDS_PER_MINUTE
-        // In dat geval is de buffer vol, dus volgende write moet naar index 0
-        this->secondIndex = 0;
-        this->secondArrayFilled = true;
-    }
-
-    // Gebruik nog globale arrays (worden later verplaatst in stap 4.2.6+)
-    extern float secondPrices[];
-    extern DataSource secondPricesSource[];
-    secondPrices[this->secondIndex] = price;
-    secondPricesSource[this->secondIndex] = SOURCE_LIVE;  // Mark as live data
-    // Geconsolideerde index update: check en update in één keer
-    this->secondIndex = (this->secondIndex + 1) % SECONDS_PER_MINUTE;
-    if (this->secondIndex == 0) {
-        this->secondArrayFilled = true;
-    }
-
-    // Ook toevoegen aan 5-minuten buffer met bounds checking
-    // Note: Als fiveMinuteIndex == SECONDS_PER_5MINUTES, betekent dit dat buffer vol is, reset naar 0
-    if (this->fiveMinuteIndex >= SECONDS_PER_5MINUTES)
-    {
-        // Dit kan gebeuren na warm-start als fiveMinuteIndex == SECONDS_PER_5MINUTES
-        // In dat geval is de buffer vol, dus volgende write moet naar index 0
-        this->fiveMinuteIndex = 0;
-        this->fiveMinuteArrayFilled = true;
-    }
-
-    if (!hasFiveMinuteBuffers) {
-        return;
-    }
-
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
-    extern float *fiveMinutePrices;
-    extern DataSource *fiveMinutePricesSource;
-    #else
-    extern float fiveMinutePrices[];  // Statische arrays voor platforms met PSRAM (ESP32-S3 SuperMini, GEEK)
-    extern DataSource fiveMinutePricesSource[];
-    #endif
-
-    fiveMinutePrices[this->fiveMinuteIndex] = price;
-    fiveMinutePricesSource[this->fiveMinuteIndex] = SOURCE_LIVE;  // Mark as live data
-    // Geconsolideerde index update: check en update in één keer
-    this->fiveMinuteIndex = (this->fiveMinuteIndex + 1) % SECONDS_PER_5MINUTES;
-    if (this->fiveMinuteIndex == 0) {
-        this->fiveMinuteArrayFilled = true;
-    }
-
-    // Update warm-start status periodiek (elke 10 seconden)
-    static unsigned long lastStatusUpdate = 0;
-    if (now - lastStatusUpdate > 10000) {  // Elke 10 seconden
-        updateWarmStartStatus();
-        lastStatusUpdate = now;
-    }
-}
+// Fase 4.2.3: addPriceToSecondArray() is inline geïmplementeerd in header
+// omdat globale variabelen direct beschikbaar moeten zijn
 
 // Fase 4.2.8: calculateReturn1Minute() verplaatst naar PriceData
 // Forward declarations voor helper functies uit .ino
@@ -232,3 +147,6 @@ float PriceData::calculateReturn1Minute(float* averagePrices) {
     // Return percentage: (now - X ago) / X ago * 100
     return ((priceNow - priceXAgo) / priceXAgo) * 100.0f;
 }
+
+
+
