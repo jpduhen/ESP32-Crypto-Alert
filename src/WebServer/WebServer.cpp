@@ -206,7 +206,13 @@ void WebServerModule::renderSettingsHTML() {
     float currentAnchorPct = 0.0f;
     
     // Haal alle status data op binnen één mutex lock
-    if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "getSettingsHTML status")) {
+    const TickType_t statusTimeout = pdMS_TO_TICKS(100);
+    bool statusLocked = safeMutexTake(dataMutex, statusTimeout, "getSettingsHTML status");
+    if (!statusLocked) {
+        vTaskDelay(pdMS_TO_TICKS(2));
+        statusLocked = safeMutexTake(dataMutex, statusTimeout, "getSettingsHTML status retry");
+    }
+    if (statusLocked) {
         if (isValidPrice(prices[0])) {
             currentPrice = prices[0];
         }
@@ -321,7 +327,7 @@ void WebServerModule::renderSettingsHTML() {
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='info'>%s</div>", 
              getText("NTFY.sh topic voor notificaties", "NTFY.sh topic for notifications"));
     server->sendContent(tmpBuf);
-    sendInputRow(getText("Binance Symbol", "Binance Symbol"), "binancesymbol", "text", binanceSymbol, 
+    sendInputRow(getText("Bitvavo Symbol", "Bitvavo Symbol"), "binancesymbol", "text", binanceSymbol, 
                  getText("Bijv. BTCEUR, ETHBTC", "E.g. BTCEUR, ETHBTC"));
     sendInputRow(getText("Taal", "Language"), "language", "number", (language == 0) ? "0" : "1", 
                  getText("0 = Nederlands, 1 = English", "0 = Dutch, 1 = English"), 0, 1, 1);
@@ -828,7 +834,7 @@ void WebServerModule::handleSave() {
             
             if (symbolChanged) {
                 // Symbol changed - reboot for clean state
-                Serial_printf(F("[Settings] Binance symbol changed from %s to %s - rebooting\n"), 
+                Serial_printf(F("[Settings] Bitvavo symbol changed from %s to %s - rebooting\n"), 
                              binanceSymbol, symbolBuffer);
                 
                 // Update symbol before reboot
@@ -1217,7 +1223,13 @@ void WebServerModule::handleStatus() {
     unsigned long currentTime = millis();
     
     // Neem kort de dataMutex om globale waarden te kopiëren
-    if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "handleStatus")) {
+    const TickType_t statusTimeout = pdMS_TO_TICKS(100);
+    bool statusLocked = safeMutexTake(dataMutex, statusTimeout, "handleStatus");
+    if (!statusLocked) {
+        vTaskDelay(pdMS_TO_TICKS(2));
+        statusLocked = safeMutexTake(dataMutex, statusTimeout, "handleStatus retry");
+    }
+    if (statusLocked) {
         if (isValidPrice(prices[0])) {
             price = prices[0];
         }

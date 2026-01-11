@@ -187,6 +187,7 @@ class SettingsStore {
 public:
     SettingsStore();
     bool begin();
+    bool isLoaded() const;
     
     // Load en save alle settings
     CryptoMonitorSettings load();
@@ -198,12 +199,23 @@ public:
 private:
     Preferences prefs;
     static const char* PREF_NAMESPACE;
+    bool settingsLoaded;
     
     // Helper: Load string preference (geoptimaliseerd: elimineert duplicatie)
     void loadStringPreference(const char* key, char* buffer, size_t bufferSize, const char* defaultValue);
     
     // Helper: Check if topic needs migration (geoptimaliseerd: geconsolideerde logica)
     static bool needsTopicMigration(const char* topic);
+
+    // Helpers: schrijf alleen bij wijziging (vermindert NVS writes)
+    bool putStringIfChanged(const char* key, const char* value);
+    bool putFloatIfChanged(const char* key, float value);
+    bool putBoolIfChanged(const char* key, bool value);
+    bool putUCharIfChanged(const char* key, uint8_t value);
+    bool putUIntIfChanged(const char* key, uint32_t value);
+    bool putULongIfChanged(const char* key, unsigned long value);
+    bool putUShortIfChanged(const char* key, uint16_t value);
+    bool putBytesIfChanged(const char* key, const void* value, size_t size, bool* didWrite = nullptr);
     
     // Preference keys
     static const char* PREF_KEY_NTFY_TOPIC;
@@ -289,4 +301,3 @@ private:
 };
 
 #endif // SETTINGSSTORE_H
-

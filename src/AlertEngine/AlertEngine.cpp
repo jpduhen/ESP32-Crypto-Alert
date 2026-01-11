@@ -22,6 +22,7 @@ extern AnchorSystem anchorSystem;
 
 // Extern declaration voor 2h alert thresholds (wordt geladen vanuit settings)
 extern Alert2HThresholds alert2HThresholds;
+extern SettingsStore settingsStore;
 
 // PriceData module (voor fiveMinutePrices getter)
 #include "../PriceData/PriceData.h"
@@ -46,6 +47,8 @@ TwoHMetrics computeTwoHMetrics();
 
 // Persistent runtime state voor 2h notificaties
 static Alert2HState gAlert2H;
+static const Alert2HThresholds* gAlert2HThresholdsPtr = nullptr;
+static bool gAlert2HThresholdsReady = false;
 
 // Fase 6.1.10: Forward declarations voor checkAndNotify dependencies
 void findMinMaxInSecondPrices(float &minVal, float &maxVal);
@@ -112,6 +115,19 @@ AlertEngine::AlertEngine() {
 void AlertEngine::begin() {
     // Fase 6.1.1: Basis structuur - sync wordt incrementeel geïmplementeerd
     syncStateFromGlobals();
+}
+
+void AlertEngine::onSettingsLoaded(const Alert2HThresholds& thresholds) {
+    gAlert2HThresholdsPtr = &thresholds;
+    gAlert2HThresholdsReady = true;
+}
+
+bool AlertEngine::are2HThresholdsReady() {
+    return gAlert2HThresholdsReady || settingsStore.isLoaded();
+}
+
+const Alert2HThresholds& AlertEngine::getAlert2HThresholds() {
+    return gAlert2HThresholdsPtr ? *gAlert2HThresholdsPtr : alert2HThresholds;
 }
 
 // Helper: Check if cooldown has passed and hourly limit is OK
@@ -932,6 +948,15 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
         flushPendingSecondaryAlert();
         return;  // Skip checks bij ongeldige waarden of geen WiFi
     }
+
+    if (!are2HThresholdsReady()) {
+        static bool loggedNotReady = false;
+        if (!loggedNotReady) {
+            Serial_printf(F("[AlertEngine] WARN: 2h thresholds nog niet geladen, skip 2h checks\n"));
+            loggedNotReady = true;
+        }
+        return;
+    }
     
     // Auto Anchor: gebruik actieve anchor price (kan auto anchor zijn)
     float activeAnchorPrice = getActiveAnchorPrice(anchorPrice);
@@ -1497,8 +1522,6 @@ float AlertEngine::getActiveAnchorPrice(float manualAnchorPrice) {
 
 // Auto Anchor: Update auto anchor value (called from apiTask)
 bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
-    extern SettingsStore settingsStore;
-    
     Serial.printf("[ANCHOR][AUTO] maybeUpdateAutoAnchor called: force=%d mode=%d symbol=%s\n", 
                   force, alert2HThresholds.anchorSourceMode, binanceSymbol);
     

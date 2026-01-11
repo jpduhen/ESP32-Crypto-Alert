@@ -3,6 +3,10 @@
 #include <WiFiClient.h>
 #include "../Memory/HeapMon.h"
 
+#ifndef HTTPFETCH_HEAP_LOG
+#define HTTPFETCH_HEAP_LOG 1
+#endif
+
 bool httpGetToBuffer(const char* url, char* buf, size_t bufCap, size_t* outLen, int timeoutMs)
 {
     // Geconsolideerde validatie: check alle parameters in één keer
@@ -18,7 +22,17 @@ bool httpGetToBuffer(const char* url, char* buf, size_t bufCap, size_t* outLen, 
     
     HTTPClient http;
     http.setTimeout(timeoutMs);
-    http.setConnectTimeout(1000);  // 1 seconde connect timeout
+    int connectTimeoutMs = 1000;
+    if (timeoutMs > 0) {
+        connectTimeoutMs = timeoutMs / 3;
+        if (connectTimeoutMs < 1000) {
+            connectTimeoutMs = 1000;
+        }
+        if (connectTimeoutMs > 5000) {
+            connectTimeoutMs = 5000;
+        }
+    }
+    http.setConnectTimeout(connectTimeoutMs);
     http.setReuse(false);
     
     bool result = false;
@@ -30,7 +44,9 @@ bool httpGetToBuffer(const char* url, char* buf, size_t bufCap, size_t* outLen, 
         }
         
         // M1: Heap telemetry vóór HTTP GET
+        #if HTTPFETCH_HEAP_LOG
         logHeap("HTTP_BODY_GET_PRE");
+        #endif
         
         int code = http.GET();
         
@@ -51,16 +67,22 @@ bool httpGetToBuffer(const char* url, char* buf, size_t bufCap, size_t* outLen, 
         }
         
         // M1: Heap telemetry vóór body read
+        #if HTTPFETCH_HEAP_LOG
         logHeap("HTTP_BODY_READ_PRE");
+        #endif
         
         // Read body via streaming
         WiFiClient* stream = http.getStreamPtr();
         if (stream == nullptr) {
             break;
         }
+        stream->setTimeout((timeoutMs > 0) ? (uint32_t)timeoutMs : 5000U);
         
         size_t totalRead = 0;
         const size_t CHUNK_SIZE = 256;  // Lees in chunks van 256 bytes
+        uint32_t lastDataMs = millis();
+        const uint32_t idleTimeoutMs = (timeoutMs > 0) ? (uint32_t)timeoutMs : 5000U;
+        uint32_t waitMs = 10;
         
         // Geconsolideerde loop conditie: check alles in één keer
         // Read in chunks: continue zolang stream connected/available
@@ -78,15 +100,22 @@ bool httpGetToBuffer(const char* url, char* buf, size_t bufCap, size_t* outLen, 
             size_t bytesRead = stream->readBytes((uint8_t*)(buf + totalRead), chunkSize);
             if (bytesRead == 0) {
                 // Geconsolideerde check: geen data meer beschikbaar
-                if (!stream->available()) {
+                if (millis() - lastDataMs >= idleTimeoutMs) {
+                    Serial.printf(F("[HttpFetch] WARN: read timeout na %lu ms\n"),
+                                  static_cast<unsigned long>(idleTimeoutMs));
                     break;
                 }
                 // Wacht kort op meer data
-                delay(10);
+                delay(waitMs);
+                if (waitMs < 50) {
+                    waitMs += 10;
+                }
                 continue;
             }
             
             totalRead += bytesRead;
+            lastDataMs = millis();
+            waitMs = 10;
         }
         
         // NUL terminator
@@ -94,7 +123,9 @@ bool httpGetToBuffer(const char* url, char* buf, size_t bufCap, size_t* outLen, 
         *outLen = totalRead;
         
         // M1: Heap telemetry na body read
+        #if HTTPFETCH_HEAP_LOG
         logHeap("HTTP_BODY_READ_POST");
+        #endif
         
         result = true;
     } while(0);
@@ -112,5 +143,3 @@ bool httpGetToBuffer(const char* url, char* buf, size_t bufCap, size_t* outLen, 
     
     return result;
 }
-
-

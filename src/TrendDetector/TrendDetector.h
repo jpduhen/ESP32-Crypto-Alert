@@ -113,6 +113,8 @@ private:
     unsigned long lastTrendChangeNotification;
     unsigned long lastMediumTrendChangeNotification;
     unsigned long lastLongTermTrendChangeNotification;
+    float cachedTrendHysteresisFactor;
+    unsigned long lastHysteresisUpdateMs;
     
     TrendState determineTrendStateSimple(float ret_value, float trendThreshold, TrendState currentState);
     

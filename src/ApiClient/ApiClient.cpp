@@ -4,6 +4,11 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+// Fallback: als macro niet beschikbaar is in de header (bijv. in oudere branches)
+#ifndef APICLIENT_PRICE_KEEPALIVE
+#define APICLIENT_PRICE_KEEPALIVE 0
+#endif
+
 // Constructor - initialiseer persistent clients
 ApiClient::ApiClient() {
     // N2: Persistent clients worden automatisch geïnitialiseerd
@@ -80,14 +85,18 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
             http.addHeader(F("Accept"), F("application/json"));
             
             // M1: Heap telemetry vóór HTTP GET (intern)
+            #if APICLIENT_HEAP_LOG
             logHeap("HTTP_GET_PRE");
+            #endif
         
         int code = http.GET();
         unsigned long requestTime = millis() - requestStart;
             lastCode = code;  // S2: Bewaar voor retry logica
             
             // M1: Heap telemetry na HTTP GET (intern)
+            #if APICLIENT_HEAP_LOG
             logHeap("HTTP_GET_POST");
+            #endif
             
             if (code != 200) {
                 // Geconsolideerde retry check: check alle retry-waardige fouten in één keer
@@ -114,7 +123,9 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
             
             // M2: Read response body via streaming (vervangt getString() fallback)
             // M1: Heap telemetry vóór body read
+            #if APICLIENT_HEAP_LOG
             logHeap("HTTP_BODY_READ_PRE");
+            #endif
             
             // Read response into buffer via streaming
             WiFiClient *stream = http.getStreamPtr();
@@ -123,8 +134,10 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
                 break;
             }
             
-                size_t bytesRead = 0;
+            size_t bytesRead = 0;
             const size_t CHUNK_SIZE = 256;  // Lees in chunks
+            const uint32_t readTimeoutMs = (timeoutMs > 0) ? timeoutMs : HTTP_READ_TIMEOUT_MS_DEFAULT;
+            unsigned long readStart = millis();
             
             // Read in chunks: continue zolang stream connected/available
             while (http.connected() && bytesRead < (bufferSize - 1)) {
@@ -136,10 +149,14 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
                     if (!stream->available()) {
                         break;
                     }
+                    if ((millis() - readStart) > readTimeoutMs) {
+                        break;
+                    }
                     delay(10);  // Wacht kort op meer data
                     continue;
                 }
                 bytesRead += n;
+                readStart = millis();  // reset timeout bij ontvangst data
                 }
                 buffer[bytesRead] = '\0';
                 
@@ -149,7 +166,9 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
             }
             
             // M1: Heap telemetry na body read
+            #if APICLIENT_HEAP_LOG
             logHeap("HTTP_BODY_READ_POST");
+            #endif
             
             attemptOk = true;
             result = true;
@@ -157,11 +176,11 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
         
         // C2: ALTIJD cleanup (ook bij succes) - HTTPClient op ESP32 vereist dit voor correcte reset
         // Hard close: http.end() + client.stop() voor volledige cleanup
-        http.end();
         WiFiClient* stream = http.getStreamPtr();
         if (stream != nullptr) {
             stream->stop();
         }
+        http.end();
         
         // S2: Succes - stop retries
         if (attemptOk) {
@@ -255,7 +274,8 @@ void ApiClient::logHttpError(int code, const char* phase, unsigned long requestT
 {
     if (code < 0) {
         // T2: Gebruik errorToString voor leesbare error messages (deterministisch, geen mojibake)
-        String localErr = HTTPClient().errorToString(code);  // Temporary object voor errorToString
+        static HTTPClient errorHttp;
+        String localErr = errorHttp.errorToString(code);
         if (maxAttempts > 1) {
             Serial.printf(F("%s HTTP error (code=%d, fase=%s, tijd=%lu ms, poging %d/%d, error=%s)\n"), 
                          prefix, code, phase, requestTime, attempt + 1, maxAttempts, localErr.c_str());
@@ -395,14 +415,18 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
     }
     
     // M1: Heap telemetry vóór URL build
+    #if APICLIENT_HEAP_LOG
     logHeap("API_URL_BUILD");
+    #endif
     
     // Build Binance API URL
     char url[128];
     snprintf(url, sizeof(url), "https://api.binance.com/api/v3/ticker/price?symbol=%s", symbol);
     
     // M1: Heap telemetry vóór HTTP GET
+    #if APICLIENT_HEAP_LOG
     logHeap("API_GET_PRE");
+    #endif
     
     // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
     netMutexLock("ApiClient::fetchBinancePrice");
@@ -411,21 +435,23 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
     const uint32_t RETRY_DELAYS[] = {250, 750}; // Backoff delays in ms (extra delay voor rate limiting)
     bool ok = false;
     
+    bool usePersistent = (APICLIENT_PRICE_KEEPALIVE != 0);
     for (uint8_t attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         bool attemptOk = false;
         bool shouldRetry = false;
         int lastCode = 0;
         
-        // Gebruik lokaal HTTPClient object (zoals fetchBinanceKlines doet) - persistent client geeft HTTP 400
-        HTTPClient http;
+        // Gebruik persistent client als keep-alive aan staat, anders lokaal object
+        HTTPClient localHttp;
+        HTTPClient& http = usePersistent ? httpClient : localHttp;
         
         // S2: do-while(0) patroon voor consistente cleanup per attempt
         do {
             // T1: Expliciete connect/read timeout settings (verhoogd naar 4000ms)
             http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS_DEFAULT);
             http.setTimeout(HTTP_READ_TIMEOUT_MS_DEFAULT);
-            // Geen keep-alive voor nu (lokaal object, zoals fetchBinanceKlines)
-            http.setReuse(false);
+            // Keep-alive alleen bij persistent client
+            http.setReuse(usePersistent);
             
             // N2: Voeg User-Agent header toe VOOR http.begin() om Cloudflare blocking te voorkomen
             // Headers moeten worden toegevoegd voordat de verbinding wordt geopend
@@ -438,7 +464,20 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
             #if !DEBUG_BUTTON_ONLY
             Serial.printf(F("[API] Fetching price from: %s\n"), url);
             #endif
-            if (!http.begin(url)) {
+            if (usePersistent) {
+                if (http.connected()) {
+                    http.end();
+                }
+                if (!http.begin(wifiClient, url)) {
+                    #if !DEBUG_BUTTON_ONLY
+                    if (attempt == MAX_RETRIES) {
+                        Serial.printf(F("[API] http.begin() gefaald voor URL: %s\n"), url);
+                    }
+                    #endif
+                    shouldRetry = (attempt < MAX_RETRIES);
+                    break;
+                }
+            } else if (!http.begin(url)) {
                 #if !DEBUG_BUTTON_ONLY
                 if (attempt == MAX_RETRIES) {
                     Serial.printf(F("[API] http.begin() gefaald voor URL: %s\n"), url);
@@ -453,7 +492,9 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
             lastCode = code;
             
             // M1: Heap telemetry na HTTP GET
+            #if APICLIENT_HEAP_LOG
             logHeap("API_GET_POST");
+            #endif
             
             if (code != 200) {
                 // Geoptimaliseerd: gebruik helper functie voor error logging
@@ -469,15 +510,9 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
                               code == 429 ||
                               (code >= 500 && code < 600));
                 
-                // N2: Log ook response body bij HTTP 400 voor debugging
-                if (code == 400) {
-                    WiFiClient* errorStream = http.getStreamPtr();
-                    if (errorStream != nullptr && errorStream->available()) {
-                        char errorBuf[256];
-                        size_t errorLen = errorStream->readBytes((uint8_t*)errorBuf, sizeof(errorBuf) - 1);
-                        errorBuf[errorLen] = '\0';
-                        Serial.printf(F("[API] HTTP 400 response body: %s\n"), errorBuf);
-                    }
+                if (code == 400 && usePersistent) {
+                    usePersistent = false;
+                    shouldRetry = (attempt < MAX_RETRIES);
                 }
                 break;
             }
@@ -490,7 +525,9 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
             }
             
             // M1: Heap telemetry vóór JSON parse
+            #if APICLIENT_HEAP_LOG
             logHeap("API_PARSE_PRE");
+            #endif
             
             // Parse price from stream
             if (!parseBinancePriceFromStream(stream, out)) {
@@ -499,7 +536,9 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
             }
             
             // M1: Heap telemetry na JSON parse
+            #if APICLIENT_HEAP_LOG
             logHeap("API_PARSE_POST");
+            #endif
             
             attemptOk = true;
             ok = true;
@@ -507,11 +546,11 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
         
         // C2: ALTIJD cleanup (ook bij succes) - HTTPClient op ESP32 vereist dit voor correcte reset
         // Hard close: http.end() + client.stop() voor volledige cleanup
-        http.end();
         WiFiClient* stream = http.getStreamPtr();
-        if (stream != nullptr) {
+        if (!usePersistent && stream != nullptr) {
             stream->stop();
         }
+        http.end();
         
         if (attemptOk) {
             if (attempt > 0) {
@@ -536,6 +575,3 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
     
     return ok;
 }
-
-
-
