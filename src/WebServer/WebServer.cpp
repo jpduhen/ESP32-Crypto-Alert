@@ -16,6 +16,7 @@ extern TrendDetector trendDetector;
 extern VolatilityTracker volatilityTracker;
 extern AnchorSystem anchorSystem;
 extern Arduino_GFX* gfx;  // Display object voor rotatie aanpassing
+extern VolumeRangeStatus lastVolumeRange1m;  // Voor volume trend in WebUI
 
 // Externe variabelen en functies die nodig zijn voor web server
 extern SemaphoreHandle_t dataMutex;
@@ -286,6 +287,9 @@ void WebServerModule::renderSettingsHTML() {
     server->sendContent(tmpBuf);
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='volatility'>--</span></div>",
              getText("Volatiliteit", "Volatility"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='volume'>--</span></div>",
+             getText("Volume", "Volume"));
     server->sendContent(tmpBuf);
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='ret1m'>--</span></div>",
              getText("1m Return", "1m Return"));
@@ -1203,6 +1207,7 @@ void WebServerModule::handleStatus() {
     TrendState trendMedium = TREND_SIDEWAYS;
     TrendState trendLong = TREND_SIDEWAYS;
     VolatilityState volatility = VOLATILITY_MEDIUM;
+    VolumeRangeStatus volumeStatus;
     bool anchorActive = false;
     float anchorPrice = 0.0f;
     float anchorDeltaPct = 0.0f;
@@ -1231,6 +1236,7 @@ void WebServerModule::handleStatus() {
         trendMedium = trendDetector.getMediumTrendState();
         trendLong = trendDetector.getLongTermTrendState();
         volatility = volatilityTracker.getVolatilityState();
+        volumeStatus = ::lastVolumeRange1m;  // Kopieer volume status
         anchorActive = ::anchorActive;
         if (anchorActive && isValidPrice(::anchorPrice)) {
             anchorPrice = ::anchorPrice;
@@ -1274,6 +1280,7 @@ void WebServerModule::handleStatus() {
         "\"price\":%.2f,"
         "\"trend\":\"%s\","
         "\"volatility\":\"%s\","
+        "\"volume\":\"%s\","
         "\"ret1m\":%.2f,"
         "\"ret5m\":%.2f,"
         "\"ret30m\":%.2f,"
@@ -1298,6 +1305,7 @@ void WebServerModule::handleStatus() {
         price,
         trend2hText,
         getVolatilityText(volatility),
+        getVolumeText(volumeStatus),
         ret1m,
         ret5m,
         ret30m,
@@ -1656,6 +1664,7 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(F("el=document.getElementById('trend1d');if(el)el.textContent=d.trendMedium||'--';"));
     server->sendContent(F("el=document.getElementById('trend7d');if(el)el.textContent=d.trendLong||'--';"));
     server->sendContent(F("el=document.getElementById('volatility');if(el)el.textContent=d.volatility||'--';"));
+    server->sendContent(F("el=document.getElementById('volume');if(el)el.textContent=d.volume||'--';"));
     server->sendContent(F("el=document.getElementById('ret1m');if(el)el.textContent=d.ret1m!=0?d.ret1m.toFixed(2)+'%':'--';"));
     server->sendContent(F("el=document.getElementById('ret30m');if(el)el.textContent=d.ret30m!=0?d.ret30m.toFixed(2)+'%':'--';"));
     server->sendContent(F("el=document.getElementById('anchor');if(el)el.textContent=d.anchor>0?d.anchor.toFixed(2)+' EUR':'--';"));
@@ -1809,7 +1818,7 @@ void WebServerModule::sendSectionDesc(const char* desc) {
 const char* WebServerModule::getTrendText(TrendState trend) {
     switch (trend) {
         case TREND_UP: return "//";
-        case TREND_DOWN: return "\\\\";
+        case TREND_DOWN: return "\\\\\\\\";  // 4 backslashes in C++ = 2 backslashes in JSON = 2 backslashes in HTML
         case TREND_SIDEWAYS:
         default: return "=";
     }
@@ -1826,6 +1835,25 @@ const char* WebServerModule::getVolatilityText(VolatilityState vol) {
         case VOLATILITY_MEDIUM: return getText("GOLVEND", "WAVES");
         case VOLATILITY_HIGH: return getText("GRILLIG", "VOLATILE");
         default: return getText("Onbekend", "Unknown");
+    }
+}
+
+// Helper: Format volume status text (vergelijkbaar met UI volume label)
+const char* WebServerModule::getVolumeText(const VolumeRangeStatus& volumeStatus) {
+    if (!volumeStatus.valid) {
+        return "--";
+    }
+    
+    // Gebruik VOLUME_BADGE_THRESHOLD_PCT (50.0%) om te bepalen of volume significant is
+    // Dit komt overeen met de logica in updateVolumeConfirmLabel()
+    #ifndef VOLUME_BADGE_THRESHOLD_PCT
+    #define VOLUME_BADGE_THRESHOLD_PCT 50.0f
+    #endif
+    
+    if (fabsf(volumeStatus.volumeDeltaPct) >= VOLUME_BADGE_THRESHOLD_PCT) {
+        return (volumeStatus.volumeDeltaPct >= 0.0f) ? getText("VOLUME//", "VOLUME//") : getText("VOLUME\\\\\\\\", "VOLUME\\\\\\\\");  // 8 backslashes in C++ = 2 backslashes in JSON = 2 backslashes in HTML
+    } else {
+        return getText("VOLUME=", "VOLUME=");
     }
 }
 

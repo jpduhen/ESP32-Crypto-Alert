@@ -1176,11 +1176,32 @@ void UIController::updateMediumTrendLabel()
         
         lv_label_set_text(::mediumTrendLabel, trendText);
         lv_obj_set_style_text_color(::mediumTrendLabel, trendColor, 0);
+        
+        #if DEBUG_CALCULATIONS
+        static float lastLoggedRet1d = -999.0f;
+        static const char* lastLoggedText = nullptr;
+        if (fabsf(ret_1d - lastLoggedRet1d) > 0.01f || lastLoggedText != trendText) {
+            Serial.printf(F("[UI][1d] hasRet1d=%d, ret_1d=%.4f%%, trend=%s, text=%s\n"),
+                         hasRet1d ? 1 : 0, ret_1d,
+                         (mediumTrend == TREND_UP) ? "UP" : (mediumTrend == TREND_DOWN) ? "DOWN" : "SIDEWAYS",
+                         trendText);
+            lastLoggedRet1d = ret_1d;
+            lastLoggedText = trendText;
+        }
+        #endif
     }
     else
     {
         lv_label_set_text(::mediumTrendLabel, "--");
         lv_obj_set_style_text_color(::mediumTrendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+        
+        #if DEBUG_CALCULATIONS
+        static bool lastLoggedHasRet1d = true;
+        if (lastLoggedHasRet1d != hasRet1d) {
+            Serial.printf(F("[UI][1d] hasRet1d=%d, label set to '--'\n"), hasRet1d ? 1 : 0);
+            lastLoggedHasRet1d = hasRet1d;
+        }
+        #endif
     }
 }
 
@@ -1223,11 +1244,32 @@ void UIController::updateLongTermTrendLabel()
         
         lv_label_set_text(::longTermTrendLabel, trendText);
         lv_obj_set_style_text_color(::longTermTrendLabel, trendColor, 0);
+        
+        #if DEBUG_CALCULATIONS
+        static float lastLoggedRet7d = -999.0f;
+        static const char* lastLoggedText7d = nullptr;
+        if (fabsf(ret_7d - lastLoggedRet7d) > 0.01f || lastLoggedText7d != trendText) {
+            Serial.printf(F("[UI][7d] hasRet7d=%d, ret_7d=%.4f%%, trend=%s, text=%s\n"),
+                         hasRet7d ? 1 : 0, ret_7d,
+                         (longTermTrend == TREND_UP) ? "UP" : (longTermTrend == TREND_DOWN) ? "DOWN" : "SIDEWAYS",
+                         trendText);
+            lastLoggedRet7d = ret_7d;
+            lastLoggedText7d = trendText;
+        }
+        #endif
     }
     else
     {
         lv_label_set_text(::longTermTrendLabel, "--");
         lv_obj_set_style_text_color(::longTermTrendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+        
+        #if DEBUG_CALCULATIONS
+        static bool lastLoggedHasRet7d = true;
+        if (lastLoggedHasRet7d != hasRet7d) {
+            Serial.printf(F("[UI][7d] hasRet7d=%d, label set to '--'\n"), hasRet7d ? 1 : 0);
+            lastLoggedHasRet7d = hasRet7d;
+        }
+        #endif
     }
 }
 
@@ -1428,19 +1470,28 @@ void UIController::updateAveragePriceCard(uint8_t index)
     // Fase 8.6.2: Gebruik globale pointers (synchroniseert met module pointers)
     float pct = prices[index];
     bool hasData1m = (index == 1) ? secondArrayFilled : true;
-    bool hasData30m = (index == 2) ? (minuteArrayFilled || minuteIndex >= 30) : true;
+    // Voor 30m box: gebruik hasRet30m (inclusief warm-start) OF 30+ minuten live data
+    bool hasData30m = (index == 2) ? (hasRet30m || (minuteArrayFilled || minuteIndex >= 30)) : true;
     #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-    bool hasData2h = (index == 3) ? (minuteArrayFilled || minuteIndex >= 120) : true;
-    bool hasData2hMinimal = (index == 3) ? (minuteArrayFilled || minuteIndex >= 2) : true;  // Minimaal 2 minuten data nodig voor return berekening (of buffer vol)
+    // Voor 2h box: gebruik warm-start data OF live data (minuteIndex >= 2 voor minimal, >= 120 voor volledig)
+    bool hasData2h = (index == 3) ? (hasRet2h || (minuteArrayFilled || minuteIndex >= 120)) : true;
+    bool hasData2hMinimal = (index == 3) ? (hasRet2h || (minuteArrayFilled || minuteIndex >= 2)) : true;  // Warm-start OF minimaal 2 minuten live data
     bool hasData = (index == 1) ? hasData1m : ((index == 2) ? hasData30m : ((index == 3) ? hasData2hMinimal : true));
     
-    // Debug voor 2h box
+    // Debug voor 2h box: alleen loggen wanneer waarde verandert
     if (index == 3) {
         #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
         #if !DEBUG_BUTTON_ONLY
+        static float lastLoggedPct2h = -999.0f;
+        static bool lastLoggedHasData2h = false;
         bool shouldShowPct = (index == 3) ? (hasData2hMinimal) : (hasData && pct != 0.0f);
-        Serial.printf("[UI] 2h box: hasData=%d, hasData2hMinimal=%d, pct=%.4f, prices[3]=%.4f, shouldShowPct=%d\n", 
-                      hasData, hasData2hMinimal, pct, prices[3], shouldShowPct);
+        // Log alleen als waarde of hasData status verandert
+        if (fabsf(pct - lastLoggedPct2h) > 0.001f || hasData2hMinimal != lastLoggedHasData2h) {
+            Serial.printf("[UI] 2h box: hasData=%d, hasData2hMinimal=%d, pct=%.4f, prices[3]=%.4f, shouldShowPct=%d\n", 
+                          hasData, hasData2hMinimal, pct, prices[3], shouldShowPct);
+            lastLoggedPct2h = pct;
+            lastLoggedHasData2h = hasData2hMinimal;
+        }
         #endif
         #endif
     }
@@ -1455,16 +1506,21 @@ void UIController::updateAveragePriceCard(uint8_t index)
     if (::priceTitle[index] != nullptr) {
         #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
         // Voor 2h box: toon percentage als er minimaal 2 minuten data zijn (hasData2hMinimal)
-        // Voor andere boxes: toon alleen als pct != 0.0f
-        bool shouldShowPct = (index == 3) ? (hasData2hMinimal) : (hasData && pct != 0.0f);
-        if (shouldShowPct) {  // Voor 2h box: toon percentage altijd als er data is (ook als 0.00%)
+        // Voor 30m box: toon percentage als er data is (hasRet30m of 30+ minuten)
+        // Voor 1m box: toon alleen als pct != 0.0f
+        bool shouldShowPct = (index == 3) ? (hasData2hMinimal) : 
+                             (index == 2) ? (hasData30m) : 
+                             (hasData && pct != 0.0f);
+        if (shouldShowPct) {  // Voor 2h en 30m box: toon percentage altijd als er data is (ook als 0.00%)
         #else
-        if (hasData && pct != 0.0f) {
+        // Voor 30m box: toon percentage als er data is (hasRet30m of 30+ minuten)
+        bool shouldShowPct = (index == 2) ? (hasData30m) : (hasData && pct != 0.0f);
+        if (shouldShowPct) {
         #endif
             // Format nieuwe tekst
             char newText[32];  // Verkleind van 48 naar 32 bytes (max: "30 min  +12.34%" = ~20 chars)
-            if (pct == 0.0f && index == 3) {
-                // Voor 2h box: toon 0.00% als de return 0 is
+            if (pct == 0.0f && (index == 3 || index == 2)) {
+                // Voor 2h en 30m box: toon 0.00% als de return 0 is
                 snprintf(newText, sizeof(newText), "%s  0.00%%", symbols[index]);
             } else {
                 snprintf(newText, sizeof(newText), "%s  %c%.2f%%", symbols[index], pct >= 0 ? '+' : '-', fabsf(pct));
@@ -1532,7 +1588,18 @@ void UIController::updateAveragePriceCard(uint8_t index)
     
     if (!hasData)
     {
-        lv_label_set_text(::priceLbl[index], "--");
+        // Update alleen als label niet al "--" is
+        if (lastPriceLblValueArray[index] >= 0.0f || strcmp(priceLblBufferArray[index], "--") != 0) {
+            lv_label_set_text(::priceLbl[index], "--");
+            strcpy(priceLblBufferArray[index], "--");
+            lastPriceLblValueArray[index] = -1.0f;
+            
+            // FASE 7.2: UI Average label update verificatie logging
+            #if DEBUG_CALCULATIONS
+            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : "2h");
+            Serial.printf(F("[UI][Average] %s label set to '--' (no data)\n"), timeframe);
+            #endif
+        }
     }
     else if (averagePrices[index] > 0.0f)
     {
@@ -1541,12 +1608,29 @@ void UIController::updateAveragePriceCard(uint8_t index)
             snprintf(priceLblBufferArray[index], sizeof(priceLblBufferArray[index]), "%.2f", averagePrices[index]);
             lv_label_set_text(::priceLbl[index], priceLblBufferArray[index]);
             lastPriceLblValueArray[index] = averagePrices[index];
+            
+            // FASE 7.2: UI Average label update verificatie logging
+            #if DEBUG_CALCULATIONS
+            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : "2h");
+            Serial.printf(F("[UI][Average] %s label updated: %.2f\n"), timeframe, averagePrices[index]);
+            #endif
         }
     }
     else
     {
         // averagePrices[index] is 0.0f of niet gezet
-        lv_label_set_text(::priceLbl[index], "--");
+        // Update alleen als label niet al "--" is
+        if (lastPriceLblValueArray[index] >= 0.0f || strcmp(priceLblBufferArray[index], "--") != 0) {
+            lv_label_set_text(::priceLbl[index], "--");
+            strcpy(priceLblBufferArray[index], "--");
+            lastPriceLblValueArray[index] = -1.0f;
+            
+            // FASE 7.2: UI Average label update verificatie logging
+            #if DEBUG_CALCULATIONS
+            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : "2h");
+            Serial.printf(F("[UI][Average] %s label set to '--' (no data)\n"), timeframe);
+            #endif
+        }
     }
 }
 
@@ -1561,8 +1645,8 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
     
     // Fase 8.6.3: Gebruik globale pointers (synchroniseert met module pointers)
     #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-    // Voor 2h box: gebruik minimaal 2 minuten data (net als voor return berekening) of buffer vol
-    bool hasDataForColor = (index == 1) ? secondArrayFilled : ((index == 2) ? (minuteArrayFilled || minuteIndex >= 30) : (minuteArrayFilled || minuteIndex >= 2));
+    // Voor 2h box: gebruik warm-start data OF minimaal 2 minuten live data (net als voor return berekening) of buffer vol
+    bool hasDataForColor = (index == 1) ? secondArrayFilled : ((index == 2) ? (minuteArrayFilled || minuteIndex >= 30) : (hasRet2h || (minuteArrayFilled || minuteIndex >= 2)));
     #else
     bool hasDataForColor = (index == 1) ? secondArrayFilled : (minuteArrayFilled || minuteIndex >= 30);
     #endif
@@ -1908,6 +1992,11 @@ void UIController::updateMinMaxDiffLabels(lv_obj_t* maxLabel, lv_obj_t* minLabel
             snprintf(maxBuffer, 20, "%.2f", maxVal);
             lv_label_set_text(maxLabel, maxBuffer);
             lastMaxValue = maxVal;
+            
+            // FASE 7.1: UI Min/Max label update verificatie logging
+            #if DEBUG_CALCULATIONS
+            Serial.printf(F("[UI][MinMax] max label updated: %.2f\n"), maxVal);
+            #endif
         }
         if (lastDiffValue != diff || lastDiffValue < 0.0f) {
             snprintf(diffBuffer, 20, "%.2f", diff);
@@ -1918,6 +2007,11 @@ void UIController::updateMinMaxDiffLabels(lv_obj_t* maxLabel, lv_obj_t* minLabel
             snprintf(minBuffer, 20, "%.2f", minVal);
             lv_label_set_text(minLabel, minBuffer);
             lastMinValue = minVal;
+            
+            // FASE 7.1: UI Min/Max label update verificatie logging
+            #if DEBUG_CALCULATIONS
+            Serial.printf(F("[UI][MinMax] min label updated: %.2f\n"), minVal);
+            #endif
         }
     } else {
         // Update alleen als labels niet "--" zijn
@@ -1925,6 +2019,11 @@ void UIController::updateMinMaxDiffLabels(lv_obj_t* maxLabel, lv_obj_t* minLabel
             strcpy(maxBuffer, "--");
             lv_label_set_text(maxLabel, "--");
             lastMaxValue = -1.0f;
+            
+            // FASE 7.1: UI Min/Max label update verificatie logging
+            #if DEBUG_CALCULATIONS
+            Serial.printf(F("[UI][MinMax] max label set to '--' (no data)\n"));
+            #endif
         }
         if (strcmp(diffBuffer, "--") != 0) {
             strcpy(diffBuffer, "--");
@@ -1935,6 +2034,11 @@ void UIController::updateMinMaxDiffLabels(lv_obj_t* maxLabel, lv_obj_t* minLabel
             strcpy(minBuffer, "--");
             lv_label_set_text(minLabel, "--");
             lastMinValue = -1.0f;
+            
+            // FASE 7.1: UI Min/Max label update verificatie logging
+            #if DEBUG_CALCULATIONS
+            Serial.printf(F("[UI][MinMax] min label set to '--' (no data)\n"));
+            #endif
         }
     }
 }

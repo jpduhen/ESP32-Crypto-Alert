@@ -228,6 +228,12 @@ static void appendVolumeRangeInfo(char* msg, size_t msgSize, const VolumeRangeSt
 void AlertEngine::formatNotificationMessage(char* msg, size_t msgSize, float ret, const char* direction, 
                                             float minVal, float maxVal)
 {
+    // FASE 8.1: Notificatie waarden verificatie logging
+    #if DEBUG_CALCULATIONS
+    Serial.printf(F("[Notify][Format] ret=%.2f%%, direction=%s, minVal=%.2f, maxVal=%.2f, price=%.2f\n"),
+                 ret, direction, minVal, maxVal, prices[0]);
+    #endif
+    
     // Static functie: gebruik lokale buffer (kan geen instance members gebruiken)
     char timestamp[32];
     getFormattedTimestamp(timestamp, sizeof(timestamp));
@@ -254,6 +260,12 @@ bool AlertEngine::sendAlertNotification(float ret, float threshold, float strong
     if (!checkAlertConditions(now, lastNotification, cooldownMs, alertsThisHour, maxAlertsPerHour, alertType)) {
         return false;
     }
+    
+    // FASE 8.1: Notificatie waarden verificatie logging
+    #if DEBUG_CALCULATIONS
+    Serial.printf(F("[Notify][Send] %s alert: ret=%.2f%%, threshold=%.2f%%, minVal=%.2f, maxVal=%.2f, direction=%s\n"),
+                 alertType, ret, threshold, minVal, maxVal, direction);
+    #endif
     
     // Static functie: gebruik lokale buffers (kan geen instance members gebruiken)
     char msg[256];
@@ -560,6 +572,12 @@ bool AlertEngine::findMinMaxInFiveMinutePrices(float& minVal, float& maxVal) {
 // Helper: Format notification message (gebruikt class buffers)
 void AlertEngine::formatNotificationMessageInternal(float ret, const char* direction, 
                                                     float minVal, float maxVal, const char* timeframe) {
+    // FASE 8.1: Notificatie waarden verificatie logging (internal)
+    #if DEBUG_CALCULATIONS
+    Serial.printf(F("[Notify][FormatInternal] timeframe=%s, ret=%.2f%%, direction=%s, minVal=%.2f, maxVal=%.2f, price=%.2f\n"),
+                 timeframe, ret, direction, minVal, maxVal, prices[0]);
+    #endif
+    
     getFormattedTimestamp(timestampBuffer, sizeof(timestampBuffer));
     
     if (ret >= 0) {
@@ -696,6 +714,12 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             // Bereken min en max uit secondPrices buffer
                             float minVal, maxVal;
                             findMinMaxInSecondPrices(minVal, maxVal);
+                            
+                            // FASE 8.1: Notificatie waarden verificatie logging (1m spike)
+                            #if DEBUG_CALCULATIONS
+                            Serial.printf(F("[Notify][1mSpike] ret_1m=%.2f%%, ret_5m=%.2f%%, minVal=%.2f, maxVal=%.2f, price=%.2f\n"),
+                                         ret_1m, ret_5m, minVal, maxVal, prices[0]);
+                            #endif
                             
                             // Format message met hergebruik van class buffer
                             getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));

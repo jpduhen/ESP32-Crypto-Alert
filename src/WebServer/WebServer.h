@@ -5,6 +5,7 @@
 #include <WebServer.h>
 #include "../TrendDetector/TrendDetector.h"
 #include "../VolatilityTracker/VolatilityTracker.h"
+#include "../AlertEngine/AlertEngine.h"  // Voor VolumeRangeStatus
 
 // Forward declarations voor dependencies
 class AnchorSystem;
@@ -49,6 +50,7 @@ private:
     
     // Helper functies voor code duplicatie eliminatie
     static const char* getTrendText(TrendState trend);
+    static const char* getVolumeText(const VolumeRangeStatus& volumeStatus);
     static void formatTrendLabel(char* buffer, size_t bufferSize, const char* prefix, TrendState trend);
     static const char* getVolatilityText(VolatilityState vol);
     bool parseFloatArg(const char* argName, float& result, float minVal, float maxVal);

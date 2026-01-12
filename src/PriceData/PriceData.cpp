@@ -1,5 +1,9 @@
 #include "PriceData.h"
 #include "../ApiClient/ApiClient.h"  // Voor ApiClient::isValidPrice()
+// DEBUG_CALCULATIONS wordt gedefinieerd in PriceData.h (forward declaration)
+// Als platform_config.h al geïncludeerd is in .ino, zou DEBUG_CALCULATIONS al gedefinieerd moeten zijn
+// Als het niet gedefinieerd is, betekent dit dat PriceData.h het op 0 heeft gezet
+// We kunnen het hier niet opnieuw definiëren omdat PriceData.h al geïncludeerd is
 
 // Note: In stap 4.2.3 gebruiken we nog de globale variabelen uit .ino bestand
 // Deze zijn static, maar omdat .ino en .cpp in dezelfde compilation unit zitten,
@@ -145,7 +149,8 @@ float PriceData::calculateReturn1Minute(float* averagePrices) {
     }
     
     // Return percentage: (now - X ago) / X ago * 100
-    return ((priceNow - priceXAgo) / priceXAgo) * 100.0f;
+    float ret1m = ((priceNow - priceXAgo) / priceXAgo) * 100.0f;
+    return ret1m;
 }
 
 

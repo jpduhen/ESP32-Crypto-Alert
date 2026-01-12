@@ -81,13 +81,29 @@
 // Geen fallback nodig omdat platform_config.h altijd wordt geïncludeerd
 
 // --- Debug Configuration ---
-#define DEBUG_BUTTON_ONLY 1  // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
+// DEBUG_BUTTON_ONLY en DEBUG_CALCULATIONS worden gedefinieerd in platform_config.h
+// Hier alleen de macro's voor Serial output
 
 #if DEBUG_BUTTON_ONLY
     // Disable all Serial output except button actions
     #define Serial_printf(...) ((void)0)
     #define Serial_println(...) ((void)0)
     #define Serial_print(...) ((void)0)
+    
+    // DEBUG_CALCULATIONS logging werkt altijd, ongeacht DEBUG_BUTTON_ONLY
+    // WAARSCHUWING: DEBUG_CALCULATIONS gebruikt DRAM voor debug strings
+    // Voor CYD/TTGO (geen PSRAM) wordt dit standaard UIT gezet in platform_config.h
+    #if DEBUG_CALCULATIONS
+        #undef Serial_printf
+        #undef Serial_println
+        #undef Serial_print
+        // Gebruik Serial.printf_P() voor Flash strings (PROGMEM) - bespaart DRAM
+        // Maar Serial.printf_P() heeft beperkte ondersteuning, dus gebruik Serial.printf() met F()
+        // Let op: F() strings worden nog steeds in DRAM opgeslagen bij Serial.printf()
+        #define Serial_printf(fmt, ...) Serial.printf(fmt, ##__VA_ARGS__)
+        #define Serial_println(...) Serial.println(__VA_ARGS__)
+        #define Serial_print(...) Serial.print(__VA_ARGS__)
+    #endif
 #else
     // Normal Serial output
     #define Serial_printf Serial.printf
@@ -109,8 +125,8 @@
 #define BINANCE_API "https://api.binance.com/api/v3/ticker/price?symbol="  // Binance API endpoint
 #define BINANCE_SYMBOL_DEFAULT "BTCEUR"  // Default Binance symbol
 // T1: Verhoogde connect/read timeouts voor betere stabiliteit
-#define HTTP_CONNECT_TIMEOUT_MS 4000  // Connect timeout (4000ms)
-#define HTTP_READ_TIMEOUT_MS 4000     // Read timeout (4000ms)
+#define HTTP_CONNECT_TIMEOUT_MS 2000  // Connect timeout (2000ms - geoptimaliseerd)
+#define HTTP_READ_TIMEOUT_MS 2500     // Read timeout (2500ms - geoptimaliseerd voor kleine responses)
 #define HTTP_TIMEOUT_MS HTTP_READ_TIMEOUT_MS  // Backward compatibility: totale timeout = read timeout
 
 // --- Chart Configuration ---
@@ -416,6 +432,11 @@ lv_obj_t *longTermTrendLabel; // Label voor lange termijn trend weergave (7d)
 // Fase 8: UI state - gebruikt door UIController module
 uint32_t lastApiMs = 0; // Time of last api call
 
+// Variabelen voor periodieke prijs herhaling (elke 2 seconden in ring buffer)
+// Dit zorgt voor exacte 1m en 5m berekeningen, ook als API calls langzaam zijn
+float lastFetchedPrice = 0.0f; // Laatste succesvol opgehaalde prijs
+unsigned long lastPriceRepeatMs = 0; // Timestamp van laatste prijs herhaling
+
 // CPU usage measurement (alleen voor web interface)
 static float cpuUsagePercent = 0.0f;
 static unsigned long loopTimeSum = 0;
@@ -574,6 +595,7 @@ void publishMqttAnchorEvent(float anchor_price, const char* event_type);
 void apiTask(void *parameter);
 void uiTask(void *parameter);
 void webTask(void *parameter);
+void priceRepeatTask(void *parameter); // Aparte task voor periodieke prijs herhaling
 void wifiConnectionAndFetchPrice();
 void setDisplayBrigthness();
 
@@ -775,6 +797,7 @@ static const uint8_t MAX_MQTT_RECONNECT_ATTEMPTS = 3; // Max aantal reconnect po
 // Parse een enkele kline entry uit JSON array
 // Format: [openTime, open, high, low, close, volume, ...]
 // Returns: true als succesvol, false bij fout
+// FASE 1.2: Debug logging toegevoegd voor verificatie
 static bool parseKlineEntry(const char* jsonStr, float* closePrice, unsigned long* openTime)
 {
     if (jsonStr == nullptr || closePrice == nullptr || openTime == nullptr) {
@@ -784,7 +807,9 @@ static bool parseKlineEntry(const char* jsonStr, float* closePrice, unsigned lon
     // Skip opening bracket
     const char* ptr = jsonStr;
     while (*ptr && (*ptr == '[' || *ptr == ' ')) ptr++;
-    if (*ptr == '\0') return false;
+    if (*ptr == '\0') {
+        return false;
+    }
     
     // Parse openTime (eerste veld)
     unsigned long time = 0;
@@ -794,14 +819,19 @@ static bool parseKlineEntry(const char* jsonStr, float* closePrice, unsigned lon
         }
         ptr++;
     }
-    if (*ptr != ',') return false;
+    if (*ptr != ',') {
+        return false;
+    }
     *openTime = time;
     ptr++; // Skip comma
+    
     
     // Skip open, high, low (velden 2-4)
     for (int i = 0; i < 3; i++) {
         while (*ptr && *ptr != ',') ptr++;
-        if (*ptr != ',') return false;
+        if (*ptr != ',') {
+            return false;
+        }
         ptr++; // Skip comma
     }
     
@@ -819,9 +849,14 @@ static bool parseKlineEntry(const char* jsonStr, float* closePrice, unsigned lon
     priceStr[priceIdx] = '\0';
     
     float price;
-    if (!safeAtof(priceStr, price) || !isValidPrice(price)) {
+    if (!safeAtof(priceStr, price)) {
         return false;
     }
+    
+    if (!isValidPrice(price)) {
+        return false;
+    }
+    
     *closePrice = price;
     return true;
 }
@@ -857,7 +892,7 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
     
     // S2: do-while(0) patroon voor consistente cleanup
     do {
-        // N1: Expliciete connect/read timeout settings
+        // N1: Expliciete connect/read timeout settings (geoptimaliseerd: 2000ms connect, 2500ms read)
     http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
         http.setTimeout(WARM_START_TIMEOUT_MS > HTTP_READ_TIMEOUT_MS ? WARM_START_TIMEOUT_MS : HTTP_READ_TIMEOUT_MS);
     http.setReuse(false);
@@ -1095,6 +1130,7 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
                     if (volumes != nullptr) {
                         volumes[writeIdx] = volumeValue;
                     }
+                    
                     
                     writeIdx++;
                     if (writeIdx >= (int)maxCount) {
@@ -1414,8 +1450,12 @@ static WarmStartMode performWarmStart()
         secondArrayFilled = (copyCount == SECONDS_PER_MINUTE);
         warmStartStats.loaded1m = count1m;
         warmStartStats.warmStartOk1m = true;
+        
     } else {
         warmStartStats.warmStartOk1m = false;
+        #if DEBUG_CALCULATIONS
+        Serial.printf(F("[WarmStart][1m] FAILED: count1m=%d\n"), count1m);
+        #endif
     }
     
     // 2. Vul 5m buffer (returns-only: alleen laatste 2 closes nodig)
@@ -1480,7 +1520,8 @@ static WarmStartMode performWarmStart()
             minuteAverages[m] = lastPrice;
             minuteAveragesSource[m] = SOURCE_BINANCE;
         }
-        minuteIndex = MINUTES_FOR_30MIN_CALC;
+        // Array is nu vol (alle 120 posities gevuld), volgende write moet naar index 0
+        minuteIndex = 0;  // Reset naar 0 voor wraparound (niet MINUTES_FOR_30MIN_CALC wat 120 is!)
         minuteArrayFilled = true;
         firstMinuteAverage = minuteAverages[0];
         warmStartStats.loaded30m = count30m;
@@ -1604,11 +1645,22 @@ static WarmStartMode performWarmStart()
         if (firstPrice > 0.0f && lastPrice > 0.0f) {
             ret_1d = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
             hasRet1dWarm = true;
+            #if DEBUG_CALCULATIONS
+            Serial_printf(F("[WarmStart][1d] ret_1d=%.4f%%, firstPrice=%.2f, lastPrice=%.2f, hasRet1dWarm=%d\n"),
+                         ret_1d, firstPrice, lastPrice, hasRet1dWarm ? 1 : 0);
+            #endif
         } else {
             hasRet1dWarm = false;
+            #if DEBUG_CALCULATIONS
+            Serial_printf(F("[WarmStart][1d] ERROR: Invalid prices: firstPrice=%.2f, lastPrice=%.2f\n"),
+                         firstPrice, lastPrice);
+            #endif
         }
     } else {
         hasRet1dWarm = false;
+        #if DEBUG_CALCULATIONS
+        Serial_printf(F("[WarmStart][1d] ERROR: count1d=%d < 2\n"), count1d);
+        #endif
     }
 
     // 7. Haal 1w candles op voor lange termijn trend
@@ -1636,11 +1688,22 @@ static WarmStartMode performWarmStart()
         if (firstPrice > 0.0f && lastPrice > 0.0f) {
             ret_7d = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
             hasRet7dWarm = true;
+            #if DEBUG_CALCULATIONS
+            Serial_printf(F("[WarmStart][7d] ret_7d=%.4f%%, firstPrice=%.2f, lastPrice=%.2f, hasRet7dWarm=%d\n"),
+                         ret_7d, firstPrice, lastPrice, hasRet7dWarm ? 1 : 0);
+            #endif
         } else {
             hasRet7dWarm = false;
+            #if DEBUG_CALCULATIONS
+            Serial_printf(F("[WarmStart][7d] ERROR: Invalid prices: firstPrice=%.2f, lastPrice=%.2f\n"),
+                         firstPrice, lastPrice);
+            #endif
         }
     } else {
         hasRet7dWarm = false;
+        #if DEBUG_CALCULATIONS
+        Serial_printf(F("[WarmStart][7d] ERROR: count1w=%d < 2\n"), count1w);
+        #endif
     }
     
     // Update combined flags na warm-start
@@ -1649,6 +1712,52 @@ static WarmStartMode performWarmStart()
     hasRet4h = hasRet4hWarm;  // 4h alleen via warm-start
     hasRet1d = hasRet1dWarm;  // 1d alleen via warm-start
     hasRet7d = hasRet7dWarm;  // 7d via warm-start of live hourly buffer
+    
+    #if DEBUG_CALCULATIONS
+    Serial_printf(F("[WarmStart] Combined flags: hasRet1d=%d (warm=%d), hasRet7d=%d (warm=%d), ret_1d=%.4f%%, ret_7d=%.4f%%\n"),
+                  hasRet1d ? 1 : 0, hasRet1dWarm ? 1 : 0,
+                  hasRet7d ? 1 : 0, hasRet7dWarm ? 1 : 0,
+                  ret_1d, ret_7d);
+    #endif
+    
+    // Initialiseer prices array met warm-start waarden (voor directe UI weergave)
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+    if (hasRet2h) {
+        prices[3] = ret_2h;  // Zet 2h return direct na warm-start
+    }
+    
+    // Bereken 2h gemiddelde na warm-start (voor UI weergave)
+    if (hasRet2h && (minuteArrayFilled || minuteIndex > 0)) {
+        uint8_t availableMinutes = minuteArrayFilled ? MINUTES_FOR_30MIN_CALC : minuteIndex;
+        if (availableMinutes > 0) {
+            float last120Sum = 0.0f;
+            uint16_t last120Count = 0;
+            uint16_t minutesToUse = (availableMinutes < 120) ? availableMinutes : 120;
+            accumulateValidPricesFromRingBuffer(
+                minuteAverages,
+                minuteArrayFilled,
+                minuteIndex,
+                MINUTES_FOR_30MIN_CALC,
+                1,  // Start vanaf 1 positie terug (nieuwste)
+                minutesToUse,
+                last120Sum,
+                last120Count
+            );
+            if (last120Count > 0) {
+                averagePrices[3] = last120Sum / last120Count;
+                #if DEBUG_CALCULATIONS
+                Serial_printf(F("[WarmStart][2h] averagePrices[3]=%.2f, availableMinutes=%u, minutesToUse=%u, last120Count=%u\n"),
+                             averagePrices[3], availableMinutes, minutesToUse, last120Count);
+                #endif
+            } else {
+                averagePrices[3] = 0.0f;
+            }
+        }
+    }
+    #endif
+    if (hasRet30m) {
+        prices[2] = ret_30m;  // Zet 30m return direct na warm-start
+    }
     
     // Fase 5.1: Bepaal trend state op basis van warm-start data (gebruik TrendDetector module)
     if (hasRet2h && hasRet30m) {
@@ -2179,11 +2288,11 @@ void netMutexLock(const char* taskName)
         return;
     }
     
-    // C2: Debug logging met task name en core id
-    #if !DEBUG_BUTTON_ONLY
-    BaseType_t coreId = xPortGetCoreID();
-    Serial.printf(F("[NetMutex] lock by %s (core %d)\n"), taskName, coreId);
-    #endif
+    // C2: Debug logging met task name en core id (uitgeschakeld voor minder logging)
+    // #if !DEBUG_BUTTON_ONLY
+    // BaseType_t coreId = xPortGetCoreID();
+    // Serial.printf(F("[NetMutex] lock by %s (core %d)\n"), taskName, coreId);
+    // #endif
     
     xSemaphoreTake(gNetMutex, portMAX_DELAY);
 }
@@ -2194,11 +2303,11 @@ void netMutexUnlock(const char* taskName)
         return;
     }
     
-    // C2: Debug logging met task name en core id
-    #if !DEBUG_BUTTON_ONLY
-    BaseType_t coreId = xPortGetCoreID();
-    Serial.printf(F("[NetMutex] unlock by %s (core %d)\n"), taskName, coreId);
-    #endif
+    // C2: Debug logging met task name en core id (uitgeschakeld voor minder logging)
+    // #if !DEBUG_BUTTON_ONLY
+    // BaseType_t coreId = xPortGetCoreID();
+    // Serial.printf(F("[NetMutex] unlock by %s (core %d)\n"), taskName, coreId);
+    // #endif
     
     xSemaphoreGive(gNetMutex);
 }
@@ -3145,8 +3254,24 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 // MQTT Message Queue functions
 static bool enqueueMqttMessage(const char* topic, const char* payload, bool retained) {
     if (mqttQueueCount >= MQTT_QUEUE_SIZE) {
-        Serial_printf("[MQTT Queue] Queue vol, bericht verloren: %s\n", topic);
-        return false; // Queue vol
+        // Queue is vol: probeer eerst queue te legen voordat we bericht verliezen
+        // Dit voorkomt message loss bij tijdelijke queue overflow
+        if (mqttConnected) {
+            processMqttQueue();  // Probeer queue te legen
+        }
+        
+        // Check opnieuw na processing
+        if (mqttQueueCount >= MQTT_QUEUE_SIZE) {
+            // Queue nog steeds vol, log warning (maar niet te vaak)
+            static unsigned long lastQueueFullWarning = 0;
+            unsigned long now = millis();
+            if (now - lastQueueFullWarning > 5000) {  // Max 1 warning per 5 seconden
+                Serial_printf("[MQTT Queue] Queue vol, bericht verloren: %s\n", topic);
+                lastQueueFullWarning = now;
+            }
+            return false; // Queue nog steeds vol
+        }
+        // Queue heeft nu ruimte, val door naar normale enqueue
     }
     
     MqttMessage* msg = &mqttQueue[mqttQueueTail];
@@ -3168,9 +3293,9 @@ static void processMqttQueue() {
         return;
     }
     
-    // Process max 3 messages per call om niet te lang te blokkeren
+    // Process max 5 messages per call om queue sneller leeg te maken (was 3)
     uint8_t processed = 0;
-    while (mqttQueueCount > 0 && processed < 3) {
+    while (mqttQueueCount > 0 && processed < 5) {
         MqttMessage* msg = &mqttQueue[mqttQueueHead];
         if (!msg->valid) {
             mqttQueueHead = (mqttQueueHead + 1) % MQTT_QUEUE_SIZE;
@@ -3979,16 +4104,35 @@ float calculateAverage(float *array, uint8_t size, bool filled)
     float sum = 0.0f;
     uint8_t count = 0;
     
+    // FASE 4: Gemiddelde berekening verificatie
+    #if DEBUG_CALCULATIONS
+    uint8_t validCount = 0;
+    uint8_t invalidCount = 0;
+    #endif
+    
     for (uint8_t i = 0; i < size; i++)
     {
         if (filled || array[i] != 0.0f)
         {
             sum += array[i];
             count++;
+            #if DEBUG_CALCULATIONS
+            validCount++;
+            #endif
         }
+        #if DEBUG_CALCULATIONS
+        else {
+            invalidCount++;
+        }
+        #endif
     }
     
-    return (count == 0) ? 0.0f : (sum / count);
+    if (count == 0) {
+        return 0.0f;
+    }
+    
+    float avg = sum / count;
+    return avg;
 }
 
 // ============================================================================
@@ -4209,7 +4353,7 @@ void findMinMaxInSecondPrices(float &minVal, float &maxVal)
     bool arrayFilled = priceData.getSecondArrayFilled();
     uint8_t index = priceData.getSecondIndex();
     
-    findMinMaxInArray(prices, SECONDS_PER_MINUTE, index, arrayFilled, 0, false, minVal, maxVal);
+    bool result = findMinMaxInArray(prices, SECONDS_PER_MINUTE, index, arrayFilled, 0, false, minVal, maxVal);
 }
 
 // ============================================================================
@@ -4305,7 +4449,10 @@ static float calculateReturnGeneric(
     
     // Fase 2.2: Geconsolideerde return calculation
     // Fase 5.1: Gebruik geconsolideerde percentage berekening helper
-    return calculatePercentageReturn(priceNow, priceXAgo);
+    float returnValue = calculatePercentageReturn(priceNow, priceXAgo);
+    
+    
+    return returnValue;
 }
 
 // Fase 4.2.8: calculateReturn1Minute() verplaatst naar PriceData
@@ -4404,23 +4551,49 @@ float calculateReturn30Minutes()
         if (prev30Count > 0) {
             float prev30Avg = prev30Sum / prev30Count;
             if (areValidPrices(averagePrices[2], prev30Avg) && prev30Avg > 0.0f) {
-                return calculatePercentageReturn(averagePrices[2], prev30Avg);
+                float ret30m = calculatePercentageReturn(averagePrices[2], prev30Avg);
+                #if DEBUG_CALCULATIONS
+                Serial_printf(F("[Ret30m] >=60m: last30Avg=%.2f, prev30Avg=%.2f, ret=%.4f%%\n"),
+                             averagePrices[2], prev30Avg, ret30m);
+                #endif
+                return ret30m;
             }
         }
     }
 
-    // Fallback: gebruik huidige prijs vs gemiddelde van laatste 30 minuten
+    // Fallback: gebruik laatste minuut gemiddelde vs gemiddelde van laatste 30 minuten
     // Fase 6.1: Geconsolideerde validatie
-    float priceNow = prices[0];
-    float price30mAgo = averagePrices[2];
+    // Gebruik laatste minuut gemiddelde in plaats van huidige prijs voor consistentie
+    uint8_t lastMinuteIdx;
+    if (!minuteArrayFilled) {
+        if (minuteIndex == 0) {
+            return 0.0f;
+        }
+        lastMinuteIdx = minuteIndex - 1;
+    } else {
+        lastMinuteIdx = getLastWrittenIndex(minuteIndex, MINUTES_FOR_30MIN_CALC);
+    }
+    float priceNow = averages[lastMinuteIdx];  // Laatste minuut gemiddelde
+    float price30mAgo = averagePrices[2];  // Gemiddelde van laatste 30 minuten
     
     // Fase 6.1: Gebruik geconsolideerde validatie helper
     if (!areValidPrices(priceNow, price30mAgo) || price30mAgo <= 0.0f) {
+        #if DEBUG_CALCULATIONS
+        Serial_printf(F("[Ret30m] <60m: Invalid prices: priceNow=%.2f, price30mAgo=%.2f\n"),
+                     priceNow, price30mAgo);
+        #endif
         return 0.0f;
     }
     
     // Fase 5.1: Geconsolideerde percentage berekening
-    return calculatePercentageReturn(priceNow, price30mAgo);
+    float ret30m = calculatePercentageReturn(priceNow, price30mAgo);
+    
+    #if DEBUG_CALCULATIONS
+    Serial_printf(F("[Ret30m] <60m: priceNow=%.2f (lastMinAvg), price30mAgo=%.2f (avg30m), ret=%.4f%%\n"),
+                 priceNow, price30mAgo, ret30m);
+    #endif
+    
+    return ret30m;
 }
 
 // OUDE METHODE - behouden voor referentie, maar niet meer gebruikt
@@ -4850,6 +5023,12 @@ static float calculateReturn2Hours()
             
             // Return percentage: (now - X ago) / X ago * 100
             float ret = ((priceNow - priceXAgo) / priceXAgo) * 100.0f;
+            
+            #if DEBUG_CALCULATIONS
+            Serial_printf(F("[Ret2h] <120m: priceNow=%.2f (lastMinAvg), priceXAgo=%.2f (%u min ago), ret=%.4f%%\n"),
+                         priceNow, priceXAgo, minutesAgo, ret);
+            #endif
+            
             return ret;
         } else {
             Serial.printf("[Ret2h] ERROR: availableMinutes=%u < 2\n", availableMinutes);
@@ -4916,6 +5095,12 @@ static float calculateReturn2Hours()
     
     // Return percentage: (now - 120m ago) / 120m ago * 100
     float ret = ((priceNow - price120mAgo) / price120mAgo) * 100.0f;
+    
+    #if DEBUG_CALCULATIONS
+    Serial_printf(F("[Ret2h] >=120m: priceNow=%.2f (lastMinAvg), price120mAgo=%.2f, ret=%.4f%%\n"),
+                 priceNow, price120mAgo, ret);
+    #endif
+    
     return ret;
 }
 
@@ -5004,7 +5189,7 @@ static float calculateReturn7Days()
 // Fase 2.1: Geoptimaliseerd: gebruikt generic findMinMaxInArray() helper
 void findMinMaxInLast30Minutes(float &minVal, float &maxVal)
 {
-    findMinMaxInArray(minuteAverages, MINUTES_FOR_30MIN_CALC, minuteIndex, minuteArrayFilled, 30, true, minVal, maxVal);
+    bool result = findMinMaxInArray(minuteAverages, MINUTES_FOR_30MIN_CALC, minuteIndex, minuteArrayFilled, 30, true, minVal, maxVal);
 }
 
 #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
@@ -5013,7 +5198,7 @@ void findMinMaxInLast30Minutes(float &minVal, float &maxVal)
 // Fase 2.1: Geoptimaliseerd: gebruikt generic findMinMaxInArray() helper
 void findMinMaxInLast2Hours(float &minVal, float &maxVal)
 {
-    findMinMaxInArray(minuteAverages, MINUTES_FOR_30MIN_CALC, minuteIndex, minuteArrayFilled, 120, true, minVal, maxVal);
+    bool result = findMinMaxInArray(minuteAverages, MINUTES_FOR_30MIN_CALC, minuteIndex, minuteArrayFilled, 120, true, minVal, maxVal);
 }
 #endif
 
@@ -5175,19 +5360,26 @@ static void updateMinuteAverage()
         firstMinuteAverage = minuteAvg;
     }
     
-    // Bounds check voor minuteAverages array
+    // Bounds check voor minuteAverages array (array heeft indices 0-119, dus max index is 119)
+    // Als minuteIndex >= MINUTES_FOR_30MIN_CALC (120), reset naar 0 en markeer buffer als vol
     if (minuteIndex >= MINUTES_FOR_30MIN_CALC)
     {
-        Serial_printf("[Array] ERROR: minuteIndex buiten bereik: %u >= %u\n", minuteIndex, MINUTES_FOR_30MIN_CALC);
+        Serial_printf("[Array] ERROR: minuteIndex buiten bereik: %u >= %u, reset naar 0\n", minuteIndex, MINUTES_FOR_30MIN_CALC);
         minuteIndex = 0; // Reset naar veilige waarde
+        minuteArrayFilled = true; // Buffer is vol (wraparound)
     }
     
-    // Sla op in minute array
+    // Sla op in minute array (minuteIndex is nu gegarandeerd < MINUTES_FOR_30MIN_CALC)
+    uint8_t oldMinuteIndex = minuteIndex;
     minuteAverages[minuteIndex] = minuteAvg;
     minuteAveragesSource[minuteIndex] = SOURCE_LIVE;  // Mark as live data
+    
+    // Verhoog index met modulo om wraparound te garanderen
+    bool wasMinuteFilled = minuteArrayFilled;
     minuteIndex = (minuteIndex + 1) % MINUTES_FOR_30MIN_CALC;
     if (minuteIndex == 0)
         minuteArrayFilled = true;
+    
     
     // Update hourly aggregate buffer
     updateHourlyAverage();
@@ -5290,9 +5482,16 @@ void fetchPrice()
                 anchorSystem.updateAnchorMinMax(fetched);
             }
             
-            // Add price to second array (every second)
+            // Add price to second array (nieuwe prijs van API)
             // Fase 4.2.4: Gebruik PriceData::addPriceToSecondArray() (inline implementatie)
             priceData.addPriceToSecondArray(fetched);
+            
+            // Update laatste prijs voor periodieke herhaling
+            // Simpel: update alleen de globale variabele, timer task zorgt voor periodieke herhaling
+            extern float lastFetchedPrice;
+            if (fetched > 0.0f) {
+                lastFetchedPrice = fetched; // Timer task gebruikt deze waarde elke 2 seconden
+            }
             
             // Update minute average every minute
             unsigned long now = millis();
@@ -5306,9 +5505,6 @@ void fetchPrice()
             // Calculate returns for 1 minute, 5 minutes, 30 minutes, and 2 hours
             float ret_1m = calculateReturn1Minute();   // Percentage verandering laatste 1 minuut
             float ret_5m = calculateReturn5Minutes();  // Percentage verandering laatste 5 minuten
-            ret_30m = calculateReturn30Minutes(); // Percentage verandering laatste 30 minuten (update global)
-            ret_2h = calculateReturn2Hours();
-            
             
             // Update live availability flags: gebaseerd op data beschikbaarheid EN percentage live data
             // hasRet30mLive: true zodra er minimaal 30 minuten data is EN ≥80% daarvan SOURCE_LIVE is
@@ -5324,6 +5520,53 @@ void fetchPrice()
             hasRet2h = hasRet2hWarm || hasRet2hLive;
             hasRet30m = hasRet30mWarm || hasRet30mLive;
             
+            // Bereken ret_30m: herbereken zodra er 30+ minuten data zijn (ook als mix van warm-start en live)
+            // Dit zorgt ervoor dat de waarde wordt bijgewerkt naarmate er meer live data binnenkomt
+            if (availableMinutes >= 30) {
+                // Genoeg data beschikbaar: herbereken met beschikbare data (kan mix zijn)
+                ret_30m = calculateReturn30Minutes();
+                #if DEBUG_CALCULATIONS
+                Serial_printf(F("[API][30m] Recalculated: ret_30m=%.4f%%, availableMinutes=%u, livePct=%u%%\n"),
+                             ret_30m, availableMinutes, livePct30);
+                #endif
+            } else if (hasRet30mWarm) {
+                // Niet genoeg data, maar warm-start beschikbaar: behoud warm-start waarde
+                // ret_30m blijft de warm-start waarde
+            } else {
+                // Niet genoeg data en geen warm-start: reset naar 0
+                ret_30m = 0.0f;
+            }
+            
+            // Update hasRet30m: beschikbaar als warm-start OF live OF 30+ minuten data beschikbaar
+            hasRet30m = hasRet30mWarm || hasRet30mLive || (availableMinutes >= 30);
+            
+            // Bereken ret_2h: herbereken zodra er 2+ minuten data zijn (ook als mix van warm-start en live)
+            // Dit zorgt ervoor dat de waarde wordt bijgewerkt naarmate er meer live data binnenkomt
+            #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+            if (availableMinutes >= 2) {
+                // Genoeg data beschikbaar: herbereken met beschikbare data (kan mix zijn)
+                ret_2h = calculateReturn2Hours();
+                #if DEBUG_CALCULATIONS
+                Serial_printf(F("[API][2h] Recalculated: ret_2h=%.4f%%, availableMinutes=%u, livePct=%u%%\n"),
+                             ret_2h, availableMinutes, livePct120);
+                #endif
+            } else if (hasRet2hWarm) {
+                // Niet genoeg data, maar warm-start beschikbaar: behoud warm-start waarde
+                // ret_2h blijft de warm-start waarde
+            } else {
+                // Niet genoeg data en geen warm-start: reset naar 0
+                ret_2h = 0.0f;
+            }
+            #else
+            // Voor niet-CYD platforms: alleen herbereken als er 120+ minuten zijn
+            if (hasRet2hLive) {
+                ret_2h = calculateReturn2Hours();
+            } else if (!hasRet2hWarm) {
+                ret_2h = 0.0f;
+            }
+            // Als hasRet2hWarm true is maar hasRet2hLive false, behoud dan de warm-start waarde (doe niets)
+            #endif
+            
             // Hourly buffer availability
             uint16_t availableHours = getAvailableHours();
             hasRet4hLive = (availableHours >= 4);
@@ -5336,15 +5579,43 @@ void fetchPrice()
             hasRet1d = hasRet1dWarm || (availableHours >= 24);
             if (availableHours >= 24) {
                 ret_1d = calculateReturn24Hours();
+                #if DEBUG_CALCULATIONS
+                Serial_printf(F("[API][1d] Live calculation: ret_1d=%.4f%%, availableHours=%u\n"),
+                             ret_1d, availableHours);
+                #endif
             } else if (!hasRet1dWarm) {
                 ret_1d = 0.0f;
+                #if DEBUG_CALCULATIONS
+                Serial_printf(F("[API][1d] Reset to 0: hasRet1dWarm=%d, availableHours=%u\n"),
+                             hasRet1dWarm ? 1 : 0, availableHours);
+                #endif
+            } else {
+                // Behoud warm-start waarde
+                #if DEBUG_CALCULATIONS
+                Serial_printf(F("[API][1d] Keep warm-start: ret_1d=%.4f%%, hasRet1dWarm=%d, availableHours=%u\n"),
+                             ret_1d, hasRet1dWarm ? 1 : 0, availableHours);
+                #endif
             }
             bool hasRet7dLive = (availableHours >= HOURS_FOR_7D);
             hasRet7d = hasRet7dWarm || hasRet7dLive;
             if (hasRet7dLive) {
                 ret_7d = calculateReturn7Days();
+                #if DEBUG_CALCULATIONS
+                Serial_printf(F("[API][7d] Live calculation: ret_7d=%.4f%%, availableHours=%u\n"),
+                             ret_7d, availableHours);
+                #endif
             } else if (!hasRet7dWarm) {
                 ret_7d = 0.0f;
+                #if DEBUG_CALCULATIONS
+                Serial_printf(F("[API][7d] Reset to 0: hasRet7dWarm=%d, availableHours=%u\n"),
+                             hasRet7dWarm ? 1 : 0, availableHours);
+                #endif
+            } else {
+                // Behoud warm-start waarde
+                #if DEBUG_CALCULATIONS
+                Serial_printf(F("[API][7d] Keep warm-start: ret_7d=%.4f%%, hasRet7dWarm=%d, availableHours=%u\n"),
+                             ret_7d, hasRet7dWarm ? 1 : 0, availableHours);
+                #endif
             }
             
             // Fase 5.1: Bepaal trend state op basis van 2h return (gebruik TrendDetector module)
@@ -5415,7 +5686,8 @@ void fetchPrice()
             } else {
                 prices[1] = 0.0f; // Reset naar 0 om aan te geven dat er nog geen data is
             }
-            if (minuteArrayFilled || minuteIndex >= 30) {
+            // Update prices array met berekende returns
+            if (hasRet30m) {
                 prices[2] = ret_30m;
             } else {
                 prices[2] = 0.0f; // Reset naar 0 om aan te geven dat er nog geen data is
@@ -5425,7 +5697,11 @@ void fetchPrice()
             #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
             // ret_2h wordt nu altijd berekend in calculateReturn2Hours(), ook als er minder dan 120 minuten zijn
             // Het berekent een return op basis van beschikbare data (minimaal 2 minuten nodig)
-            prices[3] = ret_2h;
+            if (hasRet2h) {
+                prices[3] = ret_2h;
+            } else {
+                prices[3] = 0.0f; // Reset naar 0 om aan te geven dat er nog geen data is
+            }
             #endif
             
             // Check thresholds and send notifications if needed (met ret_5m voor extra filtering)
@@ -6178,7 +6454,7 @@ static void startFreeRTOSTasks()
     #else
     const uint32_t apiTaskStack = 8192;   // ESP32: standaard stack
     const uint32_t uiTaskStack = 8192;    // ESP32: standaard stack
-    const uint32_t webTaskStack = 4096;   // ESP32: standaard stack
+    const uint32_t webTaskStack = 5120;   // ESP32: verhoogd voor debug logging (was 4096)
     #endif
     
     // Core 1: API calls (elke seconde)
@@ -6192,6 +6468,23 @@ static void startFreeRTOSTasks()
         1                  // Core 1
     );
 
+    // Core 1: Periodieke prijs herhaling (elke 2 seconden) - onafhankelijk van API calls
+    // Stack size moet groot genoeg zijn voor mutex calls en Serial.printf
+    #if defined(PLATFORM_ESP32S3_SUPERMINI)
+    const uint32_t priceRepeatTaskStack = 4096; // ESP32-S3: meer stack
+    #else
+    const uint32_t priceRepeatTaskStack = 3072; // ESP32: voldoende stack voor mutex en debug logging
+    #endif
+    xTaskCreatePinnedToCore(
+        priceRepeatTask,   // Task function
+        "PriceRepeat",     // Task name
+        priceRepeatTaskStack, // Stack size
+        NULL,              // Parameters
+        1,                 // Priority (zelfde als API task)
+        NULL,              // Task handle
+        1                  // Core 1
+    );
+    
     // Core 2: UI updates (elke seconde)
     xTaskCreatePinnedToCore(
         uiTask,            // Task function
@@ -6542,7 +6835,7 @@ static bool setupWiFiConnection()
         
         lv_timer_handler();
         
-        Serial_printf("AP IP: %s\n", apIP.c_str());
+        Serial_printf("AP IP: %s\n", apIP);
         
         wm.setEnableConfigPortal(true);
         
@@ -6761,8 +7054,42 @@ void apiTask(void *parameter)
         }
         #endif
         
-        // Wacht tot volgende interval
+        // Duration-aware timing: wacht (interval - callDuration)
+        // Simpel: normale delay, prijs herhaling gebeurt onafhankelijk in priceRepeatTask
         vTaskDelay(pdMS_TO_TICKS(waitMs));
+    }
+}
+
+// FreeRTOS Task: Periodieke prijs herhaling (elke 2 seconden)
+// Simpel en robuust: onafhankelijke task die elke 2000ms de laatste prijs in ring buffer zet
+void priceRepeatTask(void *parameter)
+{
+    const uint32_t PRICE_REPEAT_INTERVAL_MS = UPDATE_API_INTERVAL; // 2000ms
+    
+    // Wacht tot WiFi verbonden is
+    while (WiFi.status() != WL_CONNECTED) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    
+    Serial.println("[PriceRepeat] Task gestart");
+    
+    for (;;)
+    {
+        extern float lastFetchedPrice;
+        
+        // Voeg laatste prijs toe aan ring buffer elke 2 seconden
+        if (lastFetchedPrice > 0.0f) {
+            if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "priceRepeatTask")) {
+                priceData.addPriceToSecondArray(lastFetchedPrice);
+                safeMutexGive(dataMutex, "priceRepeatTask");
+                
+                // Log alleen bij belangrijke momenten (niet elke 2 seconden)
+                // Wraparound logging gebeurt al in addPriceToSecondArray()
+            }
+        }
+        
+        // Wacht exact 2 seconden
+        vTaskDelay(pdMS_TO_TICKS(PRICE_REPEAT_INTERVAL_MS));
     }
 }
 

@@ -4,6 +4,17 @@
 #include <Arduino.h>
 #include "../ApiClient/ApiClient.h"  // Voor ApiClient::isValidPrice()
 
+// Forward declaration voor DEBUG_CALCULATIONS (om multiple definition errors te voorkomen)
+// BELANGRIJK: platform_config.h wordt geïncludeerd in .ino VOOR PriceData.h (regel 9),
+// dus DEBUG_CALCULATIONS zou al gedefinieerd moeten zijn op dit punt.
+// Als het niet gedefinieerd is, betekent dit dat platform_config.h niet geïncludeerd is
+// In dat geval default naar 0 (geen debug logging)
+// OPMERKING: Als DEBUG_CALCULATIONS al gedefinieerd is (bijv. door platform_config.h),
+// dan wordt deze definitie NIET uitgevoerd (door #ifndef guard)
+#ifndef DEBUG_CALCULATIONS
+#define DEBUG_CALCULATIONS 0
+#endif
+
 // Platform config moet eerst voor PLATFORM_* defines
 // Note: Als PriceData.h wordt geïncludeerd, moet platform_config.h al geïncludeerd zijn
 // Constants (moeten overeenkomen met .ino bestand)
@@ -122,13 +133,18 @@ public:
         // Gebruik nog globale arrays (worden later verplaatst in stap 4.2.6+)
         extern float secondPrices[];
         extern DataSource secondPricesSource[];
+        
         secondPrices[this->secondIndex] = price;
         secondPricesSource[this->secondIndex] = SOURCE_LIVE;  // Mark as live data
+        
         // Geconsolideerde index update: check en update in één keer
+        uint8_t oldSecondIndex = this->secondIndex;
         this->secondIndex = (this->secondIndex + 1) % SECONDS_PER_MINUTE;
+        bool wasFilled = this->secondArrayFilled;
         if (this->secondIndex == 0) {
             this->secondArrayFilled = true;
         }
+        
         
         // Ook toevoegen aan 5-minuten buffer met bounds checking
         // Note: Als fiveMinuteIndex == SECONDS_PER_5MINUTES, betekent dit dat buffer vol is, reset naar 0
@@ -155,11 +171,15 @@ public:
         
         fiveMinutePrices[this->fiveMinuteIndex] = price;
         fiveMinutePricesSource[this->fiveMinuteIndex] = SOURCE_LIVE;  // Mark as live data
+        
         // Geconsolideerde index update: check en update in één keer
+        uint16_t oldFiveMinuteIndex = this->fiveMinuteIndex;
         this->fiveMinuteIndex = (this->fiveMinuteIndex + 1) % SECONDS_PER_5MINUTES;
+        bool wasFiveMinuteFilled = this->fiveMinuteArrayFilled;
         if (this->fiveMinuteIndex == 0) {
             this->fiveMinuteArrayFilled = true;
         }
+        
         
         // Update warm-start status periodiek (elke 10 seconden)
         static unsigned long lastStatusUpdate = 0;

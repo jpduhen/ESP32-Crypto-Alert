@@ -18,14 +18,30 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 4
-#define VERSION_MINOR 31
-#define VERSION_STRING "4.31"
+#define VERSION_MINOR 40
+#define VERSION_STRING "4.40"
 #endif
 
 // --- Debug Configuration ---
 // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
 #ifndef DEBUG_BUTTON_ONLY
-#define DEBUG_BUTTON_ONLY 1
+#define DEBUG_BUTTON_ONLY 0
+#endif
+
+// Zet op 1 om uitgebreide debug logging toe te voegen voor berekeningen verificatie
+// WAARSCHUWING: DEBUG_CALCULATIONS gebruikt ~2808 bytes DRAM voor debug strings
+// 
+// TEST MODE: Zet op 1 om debug logging te activeren (voor verificatie/testen)
+// PRODUCTIE: Zet op 0 om DRAM te besparen (vooral belangrijk voor CYD/TTGO zonder PSRAM)
+//
+// Automatische configuratie: CYD/TTGO krijgen automatisch 0 (geen PSRAM, DRAM besparing)
+// ESP32-S3 kan handmatig op 1 worden gezet voor testen (heeft PSRAM)
+#ifndef DEBUG_CALCULATIONS
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
+        #define DEBUG_CALCULATIONS 0  // UIT voor CYD/TTGO (geen PSRAM, DRAM besparing)
+    #else
+        #define DEBUG_CALCULATIONS 0  // UIT voor ESP32-S3 (standaard productie)
+    #endif
 #endif
 
 // Standaard taal instelling (0 = Nederlands, 1 = English)

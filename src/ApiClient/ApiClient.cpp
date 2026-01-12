@@ -36,17 +36,17 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
     // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
     netMutexLock("ApiClient::httpGETInternal");
     
-    const uint8_t MAX_RETRIES = 1; // Max 1 retry (2 pogingen totaal) - verminderd voor snellere failure
-    // T1: Backoff retry delays: 250ms voor eerste retry, 500ms voor tweede retry
-    const uint32_t RETRY_DELAYS[] = {250, 500}; // Backoff delays in ms
+    const uint8_t MAX_RETRIES = 0; // Geen retries voor normale calls (snellere failure, voorkomt langzame calls)
+    // T1: Backoff retry delays: alleen voor speciale gevallen (niet gebruikt met MAX_RETRIES=0)
+    const uint32_t RETRY_DELAYS[] = {100, 200}; // Backoff delays in ms (verlaagd)
     
     bool result = false;
     for (uint8_t attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         // N2: Gebruik persistent HTTPClient voor keep-alive
         HTTPClient& http = httpClient;
         
-        // T1: Expliciete connect/read timeout settings (verhoogd naar 4000ms)
-        // Gebruik timeoutMs als read timeout, connect timeout is altijd 4000ms
+        // T1: Expliciete connect/read timeout settings (geoptimaliseerd: 2000ms connect, 2500ms read)
+        // Gebruik timeoutMs als read timeout, connect timeout is altijd 2000ms
         http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS_DEFAULT);
         http.setTimeout(timeoutMs > 0 ? timeoutMs : HTTP_READ_TIMEOUT_MS_DEFAULT);
         // N2: Enable connection reuse voor keep-alive
@@ -59,10 +59,14 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
         
         // S2: do-while(0) patroon voor consistente cleanup per attempt
         do {
-            // N2: Reset client state voor nieuwe request (belangrijk voor keep-alive)
-            // Als vorige request gefaald is of verbinding niet meer geldig, reset client
+            // N2: Optimaliseer keep-alive: alleen reset als verbinding niet meer geldig is
+            // Check of verbinding nog actief is voordat we resetten (bespaart tijd)
             if (http.connected()) {
-                http.end();  // Sluit vorige verbinding als die nog open is
+                // Verbinding is nog actief, probeer te hergebruiken (keep-alive optimalisatie)
+                // Alleen resetten als vorige request gefaald is (retry)
+                if (attempt > 0) {
+                    http.end();  // Alleen resetten bij retry
+                }
             }
             
             // N2: Gebruik persistent WiFiClient voor keep-alive
@@ -194,15 +198,26 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
 // Fase 4.1.6: Verplaatst naar ApiClient (parallel, nog niet gebruikt)
 // Handmatige JSON parsing (geen heap allocaties, geen ArduinoJson dependency)
 // Geoptimaliseerd: geconsolideerde validatie checks
+// FASE 1.1: Debug logging toegevoegd voor verificatie
 bool ApiClient::parseBinancePrice(const char *body, float &out)
 {
     // Geconsolideerde validatie: check alle voorwaarden in één keer
     if (body == nullptr || strlen(body) == 0) {
+        #if DEBUG_CALCULATIONS
+        Serial.println(F("[API][DEBUG] parseBinancePrice: body is null or empty"));
+        #endif
         return false;
     }
     
+    #if DEBUG_CALCULATIONS
+    Serial_printf(F("[API][DEBUG] parseBinancePrice: raw JSON body (first 100 chars): %.100s\n"), body);
+    #endif
+    
     const char *priceStart = strstr(body, "\"price\":\"");
     if (priceStart == nullptr) {
+        #if DEBUG_CALCULATIONS
+        Serial.println(F("[API][DEBUG] parseBinancePrice: 'price' field not found in JSON"));
+        #endif
         return false;
     }
     
@@ -210,12 +225,18 @@ bool ApiClient::parseBinancePrice(const char *body, float &out)
     
     const char *priceEnd = strchr(priceStart, '"');
     if (priceEnd == nullptr) {
+        #if DEBUG_CALCULATIONS
+        Serial.println(F("[API][DEBUG] parseBinancePrice: price field not properly terminated"));
+        #endif
         return false;
     }
     
     // Valideer lengte (geconsolideerd: check alles in één keer)
     size_t priceLen = priceEnd - priceStart;
     if (priceLen == 0 || priceLen > 20 || priceLen >= 32) {  // Max 20 karakters voor prijs, buffer is 32
+        #if DEBUG_CALCULATIONS
+        Serial_printf(F("[API][DEBUG] parseBinancePrice: invalid price length: %u\n"), priceLen);
+        #endif
         return false;
     }
     
@@ -224,13 +245,34 @@ bool ApiClient::parseBinancePrice(const char *body, float &out)
     strncpy(priceStr, priceStart, priceLen);
     priceStr[priceLen] = '\0';
     
+    #if DEBUG_CALCULATIONS
+    Serial_printf(F("[API][DEBUG] parseBinancePrice: extracted price string: '%s' (len=%u)\n"), priceStr, priceLen);
+    #endif
+    
     // Convert to float en valideer in één keer
     float val;
-    if (!safeAtof(priceStr, val) || !isValidPrice(val)) {
+    if (!safeAtof(priceStr, val)) {
+        #if DEBUG_CALCULATIONS
+        Serial_printf(F("[API][DEBUG] parseBinancePrice: safeAtof failed for '%s'\n"), priceStr);
+        #endif
+        return false;
+    }
+    
+    #if DEBUG_CALCULATIONS
+    Serial_printf(F("[API][DEBUG] parseBinancePrice: converted to float: %.8f\n"), val);
+    #endif
+    
+    if (!isValidPrice(val)) {
+        #if DEBUG_CALCULATIONS
+        Serial_printf(F("[API][DEBUG] parseBinancePrice: isValidPrice failed for %.8f\n"), val);
+        #endif
         return false;
     }
     
     out = val;
+    #if DEBUG_CALCULATIONS
+    Serial_printf(F("[API][DEBUG] parseBinancePrice: SUCCESS - final price: %.2f\n"), out);
+    #endif
     return true;
 }
 
@@ -307,6 +349,9 @@ bool ApiClient::safeAtof(const char* str, float& out)
 bool ApiClient::parseBinancePriceFromStream(WiFiClient* stream, float& out)
 {
     if (stream == nullptr) {
+        #if DEBUG_CALCULATIONS
+        Serial.println(F("[API][DEBUG] parseBinancePriceFromStream: stream is null"));
+        #endif
         return false;
     }
     
@@ -319,40 +364,74 @@ bool ApiClient::parseBinancePriceFromStream(WiFiClient* stream, float& out)
     
     if (error) {
         Serial.printf(F("[HTTP] JSON parse error: %s\n"), error.c_str());
+        #if DEBUG_CALCULATIONS
+        Serial_printf(F("[API][DEBUG] parseBinancePriceFromStream: ArduinoJson deserializeJson failed: %s\n"), error.c_str());
+        #endif
         return false;
     }
+    
+    #if DEBUG_CALCULATIONS
+    Serial.println(F("[API][DEBUG] parseBinancePriceFromStream: ArduinoJson parsing successful"));
+    #endif
     
     // Extract price field
     if (!doc.containsKey("price")) {
         Serial.println(F("[HTTP] JSON missing 'price' field"));
+        #if DEBUG_CALCULATIONS
+        Serial.println(F("[API][DEBUG] parseBinancePriceFromStream: JSON missing 'price' field"));
+        #endif
         return false;
     }
     
     const char* priceStr = doc["price"];
     if (priceStr == nullptr) {
         Serial.println(F("[HTTP] JSON 'price' field is null"));
+        #if DEBUG_CALCULATIONS
+        Serial.println(F("[API][DEBUG] parseBinancePriceFromStream: JSON 'price' field is null"));
+        #endif
         return false;
     }
+    
+    #if DEBUG_CALCULATIONS
+    Serial_printf(F("[API][DEBUG] parseBinancePriceFromStream: extracted price string: '%s'\n"), priceStr);
+    #endif
     
     // Convert to float
     float val;
     if (!safeAtof(priceStr, val)) {
+        #if DEBUG_CALCULATIONS
+        Serial_printf(F("[API][DEBUG] parseBinancePriceFromStream: safeAtof failed for '%s'\n"), priceStr);
+        #endif
         return false;
     }
     
+    #if DEBUG_CALCULATIONS
+    Serial_printf(F("[API][DEBUG] parseBinancePriceFromStream: converted to float: %.8f\n"), val);
+    #endif
+    
     // Validate price
     if (!isValidPrice(val)) {
+        #if DEBUG_CALCULATIONS
+        Serial_printf(F("[API][DEBUG] parseBinancePriceFromStream: isValidPrice failed for %.8f\n"), val);
+        #endif
         return false;
     }
     
     out = val;
     ok = true;
+    #if DEBUG_CALCULATIONS
+    Serial_printf(F("[API][DEBUG] parseBinancePriceFromStream: SUCCESS - final price: %.2f\n"), out);
+    #endif
     #else
     // Fallback: handmatige parsing (als ArduinoJson niet beschikbaar is)
     // Lees response in kleine chunks en parse handmatig
     char buffer[128];  // Stack buffer voor kleine responses
     size_t bytesRead = 0;
     const size_t MAX_READ = sizeof(buffer) - 1;
+    
+    #if DEBUG_CALCULATIONS
+    Serial.println(F("[API][DEBUG] parseBinancePriceFromStream: using manual parsing (ArduinoJson not available)"));
+    #endif
     
     // Lees response body in chunks met timeout
     unsigned long readStart = millis();
@@ -377,6 +456,10 @@ bool ApiClient::parseBinancePriceFromStream(WiFiClient* stream, float& out)
     }
     buffer[bytesRead] = '\0';
     
+    #if DEBUG_CALCULATIONS
+    Serial_printf(F("[API][DEBUG] parseBinancePriceFromStream: read %u bytes from stream\n"), bytesRead);
+    #endif
+    
     // Parse met bestaande handmatige parser
     ok = parseBinancePrice(buffer, out);
     #endif
@@ -391,8 +474,15 @@ bool ApiClient::parseBinancePriceFromStream(WiFiClient* stream, float& out)
 bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
 {
     if (symbol == nullptr || strlen(symbol) == 0) {
+        #if DEBUG_CALCULATIONS
+        Serial.println(F("[API][DEBUG] fetchBinancePrice: symbol is null or empty"));
+        #endif
         return false;
     }
+    
+    #if DEBUG_CALCULATIONS
+    Serial_printf(F("[API][DEBUG] fetchBinancePrice: starting fetch for symbol: %s\n"), symbol);
+    #endif
     
     // M1: Heap telemetry vóór URL build
     logHeap("API_URL_BUILD");
@@ -401,14 +491,18 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
     char url[128];
     snprintf(url, sizeof(url), "https://api.binance.com/api/v3/ticker/price?symbol=%s", symbol);
     
+    #if DEBUG_CALCULATIONS
+    Serial_printf(F("[API][DEBUG] fetchBinancePrice: URL: %s\n"), url);
+    #endif
+    
     // M1: Heap telemetry vóór HTTP GET
     logHeap("API_GET_PRE");
     
     // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
     netMutexLock("ApiClient::fetchBinancePrice");
     
-    const uint8_t MAX_RETRIES = 1; // Max 1 retry (2 pogingen totaal)
-    const uint32_t RETRY_DELAYS[] = {250, 750}; // Backoff delays in ms (extra delay voor rate limiting)
+    const uint8_t MAX_RETRIES = 0; // Geen retries voor normale price fetches (snellere failure)
+    const uint32_t RETRY_DELAYS[] = {100, 200}; // Backoff delays in ms (verlaagd, niet gebruikt met MAX_RETRIES=0)
     bool ok = false;
     
     for (uint8_t attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -421,7 +515,7 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
         
         // S2: do-while(0) patroon voor consistente cleanup per attempt
         do {
-            // T1: Expliciete connect/read timeout settings (verhoogd naar 4000ms)
+            // T1: Expliciete connect/read timeout settings (geoptimaliseerd: 2000ms connect, 2500ms read)
             http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS_DEFAULT);
             http.setTimeout(HTTP_READ_TIMEOUT_MS_DEFAULT);
             // Geen keep-alive voor nu (lokaal object, zoals fetchBinanceKlines)
@@ -495,11 +589,18 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
             // Parse price from stream
             if (!parseBinancePriceFromStream(stream, out)) {
                 Serial.println(F("[API] JSON parse failed"));
+                #if DEBUG_CALCULATIONS
+                Serial.println(F("[API][DEBUG] fetchBinancePrice: parseBinancePriceFromStream failed"));
+                #endif
                 break;
             }
             
             // M1: Heap telemetry na JSON parse
             logHeap("API_PARSE_POST");
+            
+            #if DEBUG_CALCULATIONS
+            Serial_printf(F("[API][DEBUG] fetchBinancePrice: SUCCESS - parsed price: %.2f for symbol: %s\n"), out, symbol);
+            #endif
             
             attemptOk = true;
             ok = true;

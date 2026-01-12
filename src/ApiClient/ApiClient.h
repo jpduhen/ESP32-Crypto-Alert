@@ -5,9 +5,16 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 
-// Include alleen DEBUG_BUTTON_ONLY, niet de hele platform_config.h (voorkomt PINS includes)
+// Include alleen DEBUG flags, niet de hele platform_config.h (voorkomt PINS includes)
+// Deze worden gedefinieerd in platform_config.h, hier alleen guards voor backward compatibility
+// Als platform_config.h al geïncludeerd is, worden deze guards niet uitgevoerd
 #ifndef DEBUG_BUTTON_ONLY
 #define DEBUG_BUTTON_ONLY 1
+#endif
+// DEBUG_CALCULATIONS wordt gedefinieerd in platform_config.h
+// Als het daar niet gedefinieerd is, gebruik dan default 0 (geen debug logging)
+#ifndef DEBUG_CALCULATIONS
+#define DEBUG_CALCULATIONS 0
 #endif
 
 // S0: FreeRTOS headers voor SemaphoreHandle_t
@@ -22,9 +29,11 @@
 #endif
 
 // API Configuration constants
-// T1: Verhoogde connect/read timeouts voor betere stabiliteit
-#define HTTP_CONNECT_TIMEOUT_MS_DEFAULT 4000  // Connect timeout (4000ms)
-#define HTTP_READ_TIMEOUT_MS_DEFAULT 4000     // Read timeout (4000ms)
+// T1: Geoptimaliseerde timeouts voor snellere API calls (verlaagd voor betere responsiviteit)
+// Connect timeout: 2000ms (genoeg voor meeste netwerken, maar sneller dan 4000ms)
+// Read timeout: 2500ms (genoeg voor kleine responses, maar sneller dan 4000ms)
+#define HTTP_CONNECT_TIMEOUT_MS_DEFAULT 2000  // Connect timeout (2000ms - geoptimaliseerd)
+#define HTTP_READ_TIMEOUT_MS_DEFAULT 2500     // Read timeout (2500ms - geoptimaliseerd voor kleine responses)
 #define HTTP_TIMEOUT_MS_DEFAULT HTTP_READ_TIMEOUT_MS_DEFAULT  // Backward compatibility: totale timeout = read timeout
 
 // M2: Extern declaratie voor globale response buffer (gedefinieerd in .ino)
