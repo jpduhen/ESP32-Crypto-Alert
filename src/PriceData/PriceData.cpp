@@ -58,7 +58,8 @@ bool PriceData::getMinuteArrayFilled() const {
 extern int32_t getRingBufferIndexAgo(uint32_t currentIndex, uint32_t positionsAgo, uint32_t bufferSize);
 extern uint32_t getLastWrittenIndex(uint32_t currentIndex, uint32_t bufferSize);
 extern bool areValidPrices(float price1, float price2);
-extern float calculateAverage(float *array, uint8_t size, bool filled);
+// Forward declaration updated: calculateAverage heeft nu currentIndex parameter
+extern float calculateAverage(float *array, uint8_t size, bool filled, uint8_t currentIndex);
 
 // Forward declaration voor macro (moet in .ino blijven)
 #ifndef VALUES_FOR_1MIN_RETURN
@@ -145,7 +146,10 @@ float PriceData::calculateReturn1Minute(float* averagePrices) {
     // Calculate average for display (if requested)
     if (averagePrices != nullptr && averagePriceIndex < 3 && averagePriceIndex == 1) {
         // For 1m: use calculateAverage helper
-        averagePrices[1] = calculateAverage(this->getSecondPrices(), SECONDS_PER_MINUTE, this->getSecondArrayFilled());
+        // FIX: Geef secondIndex door voor correcte ring buffer iteratie
+        // Note: calculateAverage is extern gedefinieerd in UNIFIED-LVGL9-Crypto_Monitor.ino
+        extern float calculateAverage(float *array, uint8_t size, bool filled, uint8_t currentIndex);
+        averagePrices[1] = calculateAverage(this->getSecondPrices(), SECONDS_PER_MINUTE, this->getSecondArrayFilled(), this->getSecondIndex());
     }
     
     // Return percentage: (now - X ago) / X ago * 100

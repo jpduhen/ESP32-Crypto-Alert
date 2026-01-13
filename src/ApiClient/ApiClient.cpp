@@ -61,25 +61,31 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
         do {
             // N2: Optimaliseer keep-alive: alleen reset als verbinding niet meer geldig is
             // Check of verbinding nog actief is voordat we resetten (bespaart tijd)
-            if (http.connected()) {
+            bool connectionActive = http.connected();
+            if (connectionActive) {
                 // Verbinding is nog actief, probeer te hergebruiken (keep-alive optimalisatie)
                 // Alleen resetten als vorige request gefaald is (retry)
                 if (attempt > 0) {
-                    http.end();  // Alleen resetten bij retry
+                    http.end();  // Reset bij retry
+                    connectionActive = false;
                 }
             }
             
             // N2: Gebruik persistent WiFiClient voor keep-alive
-            if (!http.begin(wifiClient, url)) {
-            if (attempt == MAX_RETRIES) {
-                    // S2: Log zonder String concatenatie
-                    Serial.printf(F("[HTTP] http.begin() gefaald na %d pogingen voor URL: %s\n"), attempt + 1, url);
+            // Alleen http.begin() aanroepen als verbinding niet actief is
+            if (!connectionActive) {
+                if (!http.begin(wifiClient, url)) {
+                    if (attempt == MAX_RETRIES) {
+                        // S2: Log zonder String concatenatie
+                        Serial.printf(F("[HTTP] http.begin() gefaald na %d pogingen voor URL: %s\n"), attempt + 1, url);
+                    }
+                    shouldRetry = (attempt < MAX_RETRIES);  // Retry bij begin failure
+                    break;
                 }
-                shouldRetry = (attempt < MAX_RETRIES);  // Retry bij begin failure
-                break;
             }
             
             // N2: Voeg User-Agent header toe om Cloudflare blocking te voorkomen
+            // Headers toevoegen voor elke request (ook bij keep-alive reuse)
             http.addHeader(F("User-Agent"), F("ESP32-CryptoMonitor/1.0"));
             http.addHeader(F("Accept"), F("application/json"));
             
@@ -129,19 +135,24 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
             
                 size_t bytesRead = 0;
             const size_t CHUNK_SIZE = 256;  // Lees in chunks
+            unsigned long readStart = millis();
+            const unsigned long READ_TIMEOUT_MS = timeoutMs > 0 ? timeoutMs : HTTP_READ_TIMEOUT_MS_DEFAULT;
             
-            // Read in chunks: continue zolang stream connected/available
-            while (http.connected() && bytesRead < (bufferSize - 1)) {
+            // Read in chunks: continue zolang stream connected/available en binnen timeout
+            while (http.connected() && bytesRead < (bufferSize - 1) && (millis() - readStart) < READ_TIMEOUT_MS) {
                 size_t remaining = bufferSize - 1 - bytesRead;
                 size_t chunkSize = (remaining < CHUNK_SIZE) ? remaining : CHUNK_SIZE;
                 
                 size_t n = stream->readBytes((uint8_t*)(buffer + bytesRead), chunkSize);
                 if (n == 0) {
                     if (!stream->available()) {
-                        break;
+                        // Geen data beschikbaar, check timeout
+                        if ((millis() - readStart) >= READ_TIMEOUT_MS) {
+                            break;  // Timeout bereikt
+                        }
+                        delay(5);  // Kortere delay voor snellere response (was 10ms)
+                        continue;
                     }
-                    delay(10);  // Wacht kort op meer data
-                    continue;
                 }
                 bytesRead += n;
                 }
@@ -159,20 +170,26 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
             result = true;
         } while(0);
         
-        // C2: ALTIJD cleanup (ook bij succes) - HTTPClient op ESP32 vereist dit voor correcte reset
-        // Hard close: http.end() + client.stop() voor volledige cleanup
-        http.end();
-        WiFiClient* stream = http.getStreamPtr();
-        if (stream != nullptr) {
-            stream->stop();
-        }
-        
-        // S2: Succes - stop retries
+        // N2: Keep-alive optimalisatie: alleen cleanup bij fouten of als verbinding niet meer actief
+        // Bij succes: laat verbinding open voor keep-alive (snellere volgende requests)
         if (attemptOk) {
+            // Succes: alleen cleanup als verbinding niet meer actief (voor keep-alive reuse)
+            if (!http.connected()) {
+                http.end();  // Alleen cleanup als verbinding al gesloten is
+            }
+            // Anders: laat verbinding open voor keep-alive (http.end() wordt later aangeroepen bij volgende request of bij fout)
+            
             if (attempt > 0) {
                 Serial.printf(F("[HTTP] Succes na retry (poging %d/%d)\n"), attempt + 1, MAX_RETRIES + 1);
             }
             break;
+        } else {
+            // Fout: altijd cleanup om verbinding te resetten
+            http.end();
+            WiFiClient* stream = http.getStreamPtr();
+            if (stream != nullptr) {
+                stream->stop();
+            }
         }
         
         // T1: Retry logica met backoff delays (alleen bij retry-waardige fouten en als attempt < MAX_RETRIES)
@@ -606,19 +623,22 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
             ok = true;
         } while(0);
         
-        // C2: ALTIJD cleanup (ook bij succes) - HTTPClient op ESP32 vereist dit voor correcte reset
-        // Hard close: http.end() + client.stop() voor volledige cleanup
-        http.end();
-        WiFiClient* stream = http.getStreamPtr();
-        if (stream != nullptr) {
-            stream->stop();
-        }
-        
+        // N2: Cleanup alleen bij fouten (lokaal HTTPClient object, geen keep-alive nodig)
+        // Voor fetchBinancePrice gebruiken we lokaal object, dus altijd cleanup
         if (attemptOk) {
+            // Succes: cleanup voor lokaal object
+            http.end();
             if (attempt > 0) {
                 Serial.printf(F("[API] Succes na retry (poging %d/%d)\n"), attempt + 1, MAX_RETRIES + 1);
             }
             break;
+        } else {
+            // Fout: cleanup
+            http.end();
+            WiFiClient* stream = http.getStreamPtr();
+            if (stream != nullptr) {
+                stream->stop();
+            }
         }
         
         if (shouldRetry && attempt < MAX_RETRIES) {

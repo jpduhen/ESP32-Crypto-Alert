@@ -4099,39 +4099,39 @@ void connectMQTT() {
 
 // Calculate average of array (optimized: single loop)
 // Fase 4.2.8: static verwijderd zodat PriceData.cpp deze functie kan aanroepen
-float calculateAverage(float *array, uint8_t size, bool filled)
+// FIX: calculateAverage moet currentIndex gebruiken voor correcte ring buffer iteratie
+float calculateAverage(float *array, uint8_t size, bool filled, uint8_t currentIndex)
 {
+    // Gebruik accumulateValidPricesFromRingBuffer helper voor correcte ring buffer iteratie
     float sum = 0.0f;
-    uint8_t count = 0;
+    uint16_t validCount = 0;
     
-    // FASE 4: Gemiddelde berekening verificatie
-    #if DEBUG_CALCULATIONS
-    uint8_t validCount = 0;
-    uint8_t invalidCount = 0;
-    #endif
-    
-    for (uint8_t i = 0; i < size; i++)
-    {
-        if (filled || array[i] != 0.0f)
-        {
-            sum += array[i];
-            count++;
-            #if DEBUG_CALCULATIONS
-            validCount++;
-            #endif
-        }
-        #if DEBUG_CALCULATIONS
-        else {
-            invalidCount++;
-        }
-        #endif
-    }
-    
-    if (count == 0) {
+    // Bereken beschikbare elementen
+    uint16_t availableElements = calculateAvailableElements(filled, currentIndex, size);
+    if (availableElements == 0) {
         return 0.0f;
     }
     
-    float avg = sum / count;
+    // Gebruik laatste 'availableElements' elementen (max size)
+    uint16_t elementsToUse = (availableElements < size) ? availableElements : size;
+    
+    // Gebruik helper functie voor correcte ring buffer iteratie
+    accumulateValidPricesFromRingBuffer(
+        array,
+        filled,
+        currentIndex,
+        size,
+        1,  // Start vanaf 1 positie terug (nieuwste)
+        elementsToUse,
+        sum,
+        validCount
+    );
+    
+    if (validCount == 0) {
+        return 0.0f;
+    }
+    
+    float avg = sum / validCount;
     return avg;
 }
 
@@ -4440,7 +4440,8 @@ static float calculateReturnGeneric(
         if (averagePriceIndex == 1) {
             // Fase 4.2.7: Gebruik PriceData getters (parallel, arrays blijven globaal)
             // For 1m: use calculateAverage helper
-            averagePrices[1] = calculateAverage(priceData.getSecondPrices(), SECONDS_PER_MINUTE, priceData.getSecondArrayFilled());
+            // FIX: Geef secondIndex door voor correcte ring buffer iteratie
+            averagePrices[1] = calculateAverage(priceData.getSecondPrices(), SECONDS_PER_MINUTE, priceData.getSecondArrayFilled(), priceData.getSecondIndex());
         } else if (averagePriceIndex == 2) {
             // For 30m: calculate average of last 30 minutes (handled separately in calculateReturn30Minutes)
             // This is a placeholder - actual calculation is done in the wrapper function
@@ -4616,7 +4617,8 @@ static float calculateLinearTrend1Minute()
     }
     
     // Bereken gemiddelde prijs voor weergave
-    float currentAvg = calculateAverage(prices, SECONDS_PER_MINUTE, arrayFilled);
+    // FIX: Geef index door voor correcte ring buffer iteratie
+    float currentAvg = calculateAverage(prices, SECONDS_PER_MINUTE, arrayFilled, index);
     averagePrices[1] = currentAvg;
     
     // Lineaire regressie: y = a + b*x
@@ -4686,7 +4688,8 @@ static float calculate1MinutePct()
     }
     
     // Bereken gemiddelde van laatste 60 seconden
-    float currentAvg = calculateAverage(secondPrices, SECONDS_PER_MINUTE, secondArrayFilled);
+    // FIX: Geef secondIndex door voor correcte ring buffer iteratie
+    float currentAvg = calculateAverage(secondPrices, SECONDS_PER_MINUTE, secondArrayFilled, secondIndex);
     averagePrices[1] = currentAvg; // Sla gemiddelde prijs op
     
     // Bereken gemiddelde van 60 seconden daarvoor (1 minuut geleden)
@@ -4928,180 +4931,127 @@ static float calculate30MinutePct()
 
 // ret_2h: prijs nu vs 120 minuten (2 uur) geleden (gebruik minuteAverages)
 // Fase 4.2.9: Gebruik PriceData getters (parallel, arrays blijven globaal)
-// Calculate 2-hour return: price now vs 120 minutes ago
-static float calculateReturn2Hours()
+// Calculate linear trend over last 2 hours (120 minutes) using linear regression
+// Returns slope as percentage per hour
+// Positive value = rising trend, negative value = falling trend
+// This is more robust than simple 2-point comparison as it uses all data points
+static float calculateLinearTrend2Hours()
 {
     bool arrayFilled = priceData.getMinuteArrayFilled();
     uint8_t index = priceData.getMinuteIndex();
     float* averages = priceData.getMinuteAverages();
     
-    // Fase 5.1: Geconsolideerde berekening
     uint8_t availableMinutes = calculateAvailableElements(arrayFilled, index, MINUTES_FOR_30MIN_CALC);
     
-    // Bereken gemiddelde van beschikbare minuten voor display (voor 2h box)
-    // Dit wordt gedaan ongeacht of er 120 minuten zijn, zodat de waarde getoond kan worden
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-    if (availableMinutes > 0) {
-        // Fase 5.2: Geconsolideerde loop voor ring buffer iteratie
-        float last120Sum = 0.0f;
-        uint16_t last120Count = 0;
-        uint16_t minutesToUse = (availableMinutes < 120) ? availableMinutes : 120;  // Gebruik beschikbare minuten, max 120
-        accumulateValidPricesFromRingBuffer(
-            averages,
-            arrayFilled,
-            index,
-            MINUTES_FOR_30MIN_CALC,
-            1,  // Start vanaf 1 positie terug (nieuwste)
-            minutesToUse,
-            last120Sum,
-            last120Count
-        );
-        if (last120Count > 0)
-        {
-            averagePrices[3] = last120Sum / last120Count;
-        }
-        else
-        {
-            averagePrices[3] = 0.0f;
-        }
-    } else {
-        averagePrices[3] = 0.0f;
-    }
-    #endif
-    
-    // Als er minder dan 120 minuten zijn, bereken return op basis van beschikbare data
-    if (availableMinutes < 120)
-    {
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-        // Bereken return op basis van beschikbare minuten (minimaal 2 minuten nodig)
-        if (availableMinutes >= 2) {
-            // Get current price (last minute average)
-            uint8_t lastMinuteIdx;
-            if (!arrayFilled)
-            {
-                if (index == 0) {
-                    Serial.printf("[Ret2h] ERROR: index == 0, availableMinutes=%u\n", availableMinutes);
-                    return 0.0f;
-                }
-                lastMinuteIdx = index - 1;
-            }
-            else
-            {
-                lastMinuteIdx = getLastWrittenIndex(index, MINUTES_FOR_30MIN_CALC);
-            }
-            float priceNow = averages[lastMinuteIdx];
-            
-            // Get price X minutes ago (waar X = availableMinutes - 1, maar min 1)
-            uint8_t minutesAgo = (availableMinutes > 1) ? (availableMinutes - 1) : 1;
-            uint8_t idxXAgo;
-            if (!arrayFilled)
-            {
-                if (index < minutesAgo) {
-                    Serial.printf("[Ret2h] ERROR: index=%u < minutesAgo=%u, availableMinutes=%u\n", index, minutesAgo, availableMinutes);
-                    return 0.0f;
-                }
-                idxXAgo = index - minutesAgo;
-            }
-            else
-            {
-                int32_t idxXAgo_temp = getRingBufferIndexAgo(index, minutesAgo, MINUTES_FOR_30MIN_CALC);
-                if (idxXAgo_temp < 0) {
-                    Serial.printf("[Ret2h] ERROR: idxXAgo_temp < 0, index=%u, minutesAgo=%u\n", index, minutesAgo);
-                    return 0.0f;
-                }
-                idxXAgo = (uint8_t)idxXAgo_temp;
-            }
-            
-            float priceXAgo = averages[idxXAgo];
-            
-            // Validate prices
-            if (priceXAgo <= 0.0f || priceNow <= 0.0f)
-            {
-                Serial.printf("[Ret2h] ERROR: Invalid prices: priceNow=%.2f, priceXAgo=%.2f\n", priceNow, priceXAgo);
-                return 0.0f;
-            }
-            
-            // Return percentage: (now - X ago) / X ago * 100
-            float ret = ((priceNow - priceXAgo) / priceXAgo) * 100.0f;
-            
-            #if DEBUG_CALCULATIONS
-            Serial_printf(F("[Ret2h] <120m: priceNow=%.2f (lastMinAvg), priceXAgo=%.2f (%u min ago), ret=%.4f%%\n"),
-                         priceNow, priceXAgo, minutesAgo, ret);
-            #endif
-            
-            return ret;
-        } else {
-            Serial.printf("[Ret2h] ERROR: availableMinutes=%u < 2\n", availableMinutes);
-        }
-        #endif
-        return 0.0f;
+    // We need at least 10 minutes for a reliable trend
+    uint8_t minutesToUse = (availableMinutes < 120) ? availableMinutes : 120;
+    if (minutesToUse < 10) {
+        return 0.0f;  // Not enough data
     }
     
-    // Get current price (last minute average)
-    uint8_t lastMinuteIdx;
+    // Linear regression: y = a + b*x
+    // x = time (0 to minutesToUse-1), y = price
+    // b (slope) = (n*Σxy - Σx*Σy) / (n*Σx² - (Σx)²)
+    
+    float sumX = 0.0f;
+    float sumY = 0.0f;
+    float sumXY = 0.0f;
+    float sumX2 = 0.0f;
+    uint8_t validPoints = 0;
+    float avgSum = 0.0f;
+    uint8_t avgCount = 0;
+    
+    // Loop through last minutesToUse minutes
+    // Start from the last written position (newest) and work backwards
+    uint8_t lastWrittenIdx;
     if (!arrayFilled)
     {
         if (index == 0) {
-            #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-            averagePrices[3] = 0.0f;  // Reset voor 2h box
-            #endif
-            Serial.printf("[Ret2h] ERROR: index == 0 in 120m path\n");
-            return 0.0f;
+            return 0.0f;  // No data yet
         }
-        lastMinuteIdx = index - 1;
+        lastWrittenIdx = index - 1;
     }
     else
     {
-        lastMinuteIdx = getLastWrittenIndex(index, MINUTES_FOR_30MIN_CALC);
+        lastWrittenIdx = getLastWrittenIndex(index, MINUTES_FOR_30MIN_CALC);
     }
-    float priceNow = averages[lastMinuteIdx];
     
-    // Get price 120 minutes ago
-    // Voor een ring buffer: als we 120 posities terug willen in een buffer van 120,
-    // dan moeten we de laatste geschreven positie gebruiken en dan 119 posities terug gaan
-    uint8_t idx120mAgo;
-    if (!arrayFilled)
+    for (uint8_t i = 0; i < minutesToUse; i++)
     {
-        if (index < 120) {
-            Serial.printf("[Ret2h] ERROR: index=%u < 120 in 120m path\n", index);
-            return 0.0f;  // averagePrices[3] is al berekend boven
+        uint8_t idx;
+        if (!arrayFilled)
+        {
+            if (i >= index) break;  // Not enough data
+            idx = index - 1 - i;  // Start at last minute and work backwards
         }
-        idx120mAgo = index - 120;
-    }
-    else
-    {
-        // Voor een ring buffer: als we 120 minuten terug willen in een buffer van 120,
-        // dan moeten we 119 posities terug gaan vanaf de laatste geschreven positie
-        // (omdat we al op de laatste geschreven positie staan)
-        uint8_t lastWrittenIdx = getLastWrittenIndex(index, MINUTES_FOR_30MIN_CALC);
-        // 119 posities terug (niet 120, omdat positionsAgo >= bufferSize niet toegestaan is)
-        int32_t idx120mAgo_temp = getRingBufferIndexAgo(lastWrittenIdx, 119, MINUTES_FOR_30MIN_CALC);
-        if (idx120mAgo_temp < 0) {
-            Serial.printf("[Ret2h] ERROR: idx120mAgo_temp < 0, index=%u, lastWrittenIdx=%u\n", index, lastWrittenIdx);
-            return 0.0f;  // averagePrices[3] is al berekend boven
+        else
+        {
+            // Ring buffer mode: use helper, starting from lastWrittenIdx
+            int32_t idx_temp = getRingBufferIndexAgo(lastWrittenIdx, i, MINUTES_FOR_30MIN_CALC);
+            if (idx_temp < 0) break;
+            idx = (uint8_t)idx_temp;
         }
-        idx120mAgo = (uint8_t)idx120mAgo_temp;
+        
+        float price = averages[idx];
+        if (isValidPrice(price))
+        {
+            float x = (float)i;  // Time index (0 to minutesToUse-1, where 0 = oldest, minutesToUse-1 = newest)
+            float y = price;
+            
+            sumX += x;
+            sumY += y;
+            sumXY += x * y;
+            sumX2 += x * x;
+            avgSum += price;
+            avgCount++;
+            validPoints++;
+        }
     }
     
-    float price120mAgo = averages[idx120mAgo];
-    
-    // Validate prices
-    if (price120mAgo <= 0.0f || priceNow <= 0.0f)
+    if (validPoints < 2)
     {
-        Serial.printf("[Ret2h] ERROR: Invalid prices in 120m path: priceNow=%.2f, price120mAgo=%.2f\n", 
-                      priceNow, price120mAgo);
-        return 0.0f;  // averagePrices[3] is al berekend boven
+        return 0.0f;
     }
     
-    // Return percentage: (now - 120m ago) / 120m ago * 100
-    float ret = ((priceNow - price120mAgo) / price120mAgo) * 100.0f;
-    
-    #if DEBUG_CALCULATIONS
-    Serial_printf(F("[Ret2h] >=120m: priceNow=%.2f (lastMinAvg), price120mAgo=%.2f, ret=%.4f%%\n"),
-                 priceNow, price120mAgo, ret);
+    // Calculate average price for display (update averagePrices[3])
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+    if (avgCount > 0) {
+        averagePrices[3] = avgSum / avgCount;
+    }
     #endif
     
-    return ret;
+    // Calculate slope (b)
+    float n = (float)validPoints;
+    float denominator = (n * sumX2) - (sumX * sumX);
+    
+    if (fabsf(denominator) < 0.0001f)  // Prevent division by zero
+    {
+        return 0.0f;
+    }
+    
+    float slope = ((n * sumXY) - (sumX * sumY)) / denominator;
+    
+    // Slope is now price change per minute
+    // Convert to percentage per hour: (slope * 60) / average_price * 100
+    // Then multiply by 2 to get percentage per 2 hours
+    if (avgCount > 0 && avgSum > 0.0f)
+    {
+        float avgPrice = avgSum / avgCount;
+        float slopePerHour = slope * 60.0f;  // Price change per hour
+        float pctPerHour = (slopePerHour / avgPrice) * 100.0f;
+        float pctPer2Hours = pctPerHour * 2.0f;  // Extrapolate to 2 hours
+        return pctPer2Hours;
+    }
+    
+    return 0.0f;
+}
+
+// Calculate 2-hour return: now uses linear regression for better trend detection
+// NOTE: This function now uses linear regression instead of simple 2-point comparison
+static float calculateReturn2Hours()
+{
+    // Use linear regression for more robust trend detection
+    return calculateLinearTrend2Hours();
 }
 
 // Helper: beschikbare uren in hourly buffer
@@ -5162,16 +5112,230 @@ static float calculateReturnFromHourly(uint16_t hoursBack)
     return calculatePercentageReturn(priceNow, priceAgo);
 }
 
-// ret_1d: prijs nu vs 24 uur geleden (hourly buffer)
-static float calculateReturn24Hours()
+// Calculate linear trend over last 24 hours (1 day) using linear regression
+// Returns slope as percentage per day
+// Positive value = rising trend, negative value = falling trend
+static float calculateLinearTrend1Day()
 {
-    return calculateReturnFromHourly(24);
+    if (hourlyAverages == nullptr) {
+        return 0.0f;
+    }
+    
+    uint16_t availableHours = getAvailableHours();
+    
+    // We need at least 6 hours for a reliable trend
+    uint16_t hoursToUse = (availableHours < 24) ? availableHours : 24;
+    if (hoursToUse < 6) {
+        return 0.0f;  // Not enough data
+    }
+    
+    // Linear regression: y = a + b*x
+    // x = time (0 to hoursToUse-1), y = price
+    // b (slope) = (n*Σxy - Σx*Σy) / (n*Σx² - (Σx)²)
+    
+    float sumX = 0.0f;
+    float sumY = 0.0f;
+    float sumXY = 0.0f;
+    float sumX2 = 0.0f;
+    uint16_t validPoints = 0;
+    float avgSum = 0.0f;
+    uint16_t avgCount = 0;
+    
+    uint16_t lastHourIdx;
+    if (!hourArrayFilled)
+    {
+        if (hourIndex == 0) {
+            return 0.0f;
+        }
+        lastHourIdx = hourIndex - 1;
+    }
+    else
+    {
+        lastHourIdx = getLastWrittenIndex(hourIndex, HOURS_FOR_7D);
+    }
+    
+    // Loop through last hoursToUse hours
+    // Start from the last written position (newest) and work backwards
+    for (uint16_t i = 0; i < hoursToUse; i++)
+    {
+        uint16_t idx;
+        if (!hourArrayFilled)
+        {
+            if (i >= hourIndex) break;  // Not enough data
+            idx = hourIndex - 1 - i;  // Start at last hour and work backwards
+        }
+        else
+        {
+            // Ring buffer mode: use helper, starting from lastHourIdx
+            int32_t idx_temp = getRingBufferIndexAgo(lastHourIdx, i, HOURS_FOR_7D);
+            if (idx_temp < 0) break;
+            idx = (uint16_t)idx_temp;
+        }
+        
+        float price = hourlyAverages[idx];
+        if (isValidPrice(price))
+        {
+            float x = (float)i;  // Time index (0 to hoursToUse-1, where 0 = oldest, hoursToUse-1 = newest)
+            float y = price;
+            
+            sumX += x;
+            sumY += y;
+            sumXY += x * y;
+            sumX2 += x * x;
+            avgSum += price;
+            avgCount++;
+            validPoints++;
+        }
+    }
+    
+    if (validPoints < 2)
+    {
+        return 0.0f;
+    }
+    
+    // Calculate average price
+    float avgPrice = avgSum / avgCount;
+    
+    // Calculate slope (b)
+    float n = (float)validPoints;
+    float denominator = (n * sumX2) - (sumX * sumX);
+    
+    if (fabsf(denominator) < 0.0001f)  // Prevent division by zero
+    {
+        return 0.0f;
+    }
+    
+    float slope = ((n * sumXY) - (sumX * sumY)) / denominator;
+    
+    // Slope is now price change per hour
+    // Convert to percentage per day: (slope * 24) / average_price * 100
+    if (avgPrice > 0.0f)
+    {
+        float slopePerDay = slope * 24.0f;  // Price change per day
+        float pctPerDay = (slopePerDay / avgPrice) * 100.0f;
+        return pctPerDay;
+    }
+    
+    return 0.0f;
 }
 
-// ret_7d: prijs nu vs 7 dagen geleden (hourly buffer)
+// Calculate linear trend over last 7 days (168 hours) using linear regression
+// Returns slope as percentage per week
+// Positive value = rising trend, negative value = falling trend
+static float calculateLinearTrend7Days()
+{
+    if (hourlyAverages == nullptr) {
+        return 0.0f;
+    }
+    
+    uint16_t availableHours = getAvailableHours();
+    
+    // We need at least 24 hours (1 day) for a reliable trend
+    uint16_t hoursToUse = (availableHours < HOURS_FOR_7D) ? availableHours : HOURS_FOR_7D;
+    if (hoursToUse < 24) {
+        return 0.0f;  // Not enough data
+    }
+    
+    // Linear regression: y = a + b*x
+    // x = time (0 to hoursToUse-1), y = price
+    // b (slope) = (n*Σxy - Σx*Σy) / (n*Σx² - (Σx)²)
+    
+    float sumX = 0.0f;
+    float sumY = 0.0f;
+    float sumXY = 0.0f;
+    float sumX2 = 0.0f;
+    uint16_t validPoints = 0;
+    float avgSum = 0.0f;
+    uint16_t avgCount = 0;
+    
+    uint16_t lastHourIdx;
+    if (!hourArrayFilled)
+    {
+        if (hourIndex == 0) {
+            return 0.0f;
+        }
+        lastHourIdx = hourIndex - 1;
+    }
+    else
+    {
+        lastHourIdx = getLastWrittenIndex(hourIndex, HOURS_FOR_7D);
+    }
+    
+    // Loop through last hoursToUse hours
+    // Start from the last written position (newest) and work backwards
+    for (uint16_t i = 0; i < hoursToUse; i++)
+    {
+        uint16_t idx;
+        if (!hourArrayFilled)
+        {
+            if (i >= hourIndex) break;  // Not enough data
+            idx = hourIndex - 1 - i;  // Start at last hour and work backwards
+        }
+        else
+        {
+            // Ring buffer mode: use helper, starting from lastHourIdx
+            int32_t idx_temp = getRingBufferIndexAgo(lastHourIdx, i, HOURS_FOR_7D);
+            if (idx_temp < 0) break;
+            idx = (uint16_t)idx_temp;
+        }
+        
+        float price = hourlyAverages[idx];
+        if (isValidPrice(price))
+        {
+            float x = (float)i;  // Time index (0 to hoursToUse-1, where 0 = oldest, hoursToUse-1 = newest)
+            float y = price;
+            
+            sumX += x;
+            sumY += y;
+            sumXY += x * y;
+            sumX2 += x * x;
+            avgSum += price;
+            avgCount++;
+            validPoints++;
+        }
+    }
+    
+    if (validPoints < 2)
+    {
+        return 0.0f;
+    }
+    
+    // Calculate average price
+    float avgPrice = avgSum / avgCount;
+    
+    // Calculate slope (b)
+    float n = (float)validPoints;
+    float denominator = (n * sumX2) - (sumX * sumX);
+    
+    if (fabsf(denominator) < 0.0001f)  // Prevent division by zero
+    {
+        return 0.0f;
+    }
+    
+    float slope = ((n * sumXY) - (sumX * sumY)) / denominator;
+    
+    // Slope is now price change per hour
+    // Convert to percentage per week: (slope * 168) / average_price * 100
+    if (avgPrice > 0.0f)
+    {
+        float slopePerWeek = slope * 168.0f;  // Price change per week
+        float pctPerWeek = (slopePerWeek / avgPrice) * 100.0f;
+        return pctPerWeek;
+    }
+    
+    return 0.0f;
+}
+
+// ret_1d: prijs nu vs 24 uur geleden - now uses linear regression
+static float calculateReturn24Hours()
+{
+    return calculateLinearTrend1Day();
+}
+
+// ret_7d: prijs nu vs 7 dagen geleden - now uses linear regression
 static float calculateReturn7Days()
 {
-    return calculateReturnFromHourly(HOURS_FOR_7D);
+    return calculateLinearTrend7Days();
 }
 
 // ============================================================================
@@ -5345,7 +5509,8 @@ static void updateMinuteAverage()
 {
     // Fase 4.2.7: Gebruik PriceData getters (parallel, arrays blijven globaal)
     // Bereken gemiddelde van de 60 seconden
-    float minuteAvg = calculateAverage(priceData.getSecondPrices(), SECONDS_PER_MINUTE, priceData.getSecondArrayFilled());
+    // FIX: Geef secondIndex door voor correcte ring buffer iteratie
+    float minuteAvg = calculateAverage(priceData.getSecondPrices(), SECONDS_PER_MINUTE, priceData.getSecondArrayFilled(), priceData.getSecondIndex());
     
     // Valideer gemiddelde
     if (isnan(minuteAvg) || isinf(minuteAvg) || minuteAvg <= 0.0f)
