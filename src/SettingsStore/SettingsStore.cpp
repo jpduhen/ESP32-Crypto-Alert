@@ -121,14 +121,14 @@ extern bool hasPSRAM();
 #ifndef DEFAULT_LANGUAGE
 #define DEFAULT_LANGUAGE 0
 #endif
-#ifndef BINANCE_SYMBOL_DEFAULT
-#define BINANCE_SYMBOL_DEFAULT "BTCEUR"
+#ifndef BITVAVO_SYMBOL_DEFAULT
+#define BITVAVO_SYMBOL_DEFAULT "BTC-EUR"
 #endif
 
 // Preference namespace en keys
 const char* SettingsStore::PREF_NAMESPACE = "crypto";
 const char* SettingsStore::PREF_KEY_NTFY_TOPIC = "ntfyTopic";
-const char* SettingsStore::PREF_KEY_BINANCE_SYMBOL = "binanceSymbol";
+const char* SettingsStore::PREF_KEY_BITVAVO_SYMBOL = "bitvavoSymbol";
 const char* SettingsStore::PREF_KEY_LANGUAGE = "language";
 const char* SettingsStore::PREF_KEY_DISPLAY_ROTATION = "displayRotation";
 const char* SettingsStore::PREF_KEY_TH1_UP = "th1Up";
@@ -291,8 +291,8 @@ void SettingsStore::generateDefaultNtfyTopic(char* buffer, size_t bufferSize) {
 CryptoMonitorSettings::CryptoMonitorSettings() {
     // Initialize met defaults
     ntfyTopic[0] = '\0';
-    strncpy(binanceSymbol, BINANCE_SYMBOL_DEFAULT, sizeof(binanceSymbol) - 1);
-    binanceSymbol[sizeof(binanceSymbol) - 1] = '\0';
+    strncpy(bitvavoSymbol, BITVAVO_SYMBOL_DEFAULT, sizeof(bitvavoSymbol) - 1);
+    bitvavoSymbol[sizeof(bitvavoSymbol) - 1] = '\0';
     language = DEFAULT_LANGUAGE;
     displayRotation = 0;  // Default: normaal (0 graden)
     
@@ -421,8 +421,8 @@ CryptoMonitorSettings SettingsStore::load() {
     settings.ntfyTopic[sizeof(settings.ntfyTopic) - 1] = '\0';
     
     // Geoptimaliseerd: gebruik helper functie voor string loading
-    loadStringPreference(PREF_KEY_BINANCE_SYMBOL, settings.binanceSymbol, 
-                        sizeof(settings.binanceSymbol), BINANCE_SYMBOL_DEFAULT);
+    loadStringPreference(PREF_KEY_BITVAVO_SYMBOL, settings.bitvavoSymbol, 
+                        sizeof(settings.bitvavoSymbol), BITVAVO_SYMBOL_DEFAULT);
     
     // Load language
     settings.language = prefs.getUChar(PREF_KEY_LANGUAGE, DEFAULT_LANGUAGE);
@@ -600,7 +600,7 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     
     // Save basic settings
     prefs.putString(PREF_KEY_NTFY_TOPIC, settings.ntfyTopic);
-    prefs.putString(PREF_KEY_BINANCE_SYMBOL, settings.binanceSymbol);
+    prefs.putString(PREF_KEY_BITVAVO_SYMBOL, settings.bitvavoSymbol);
     prefs.putUChar(PREF_KEY_LANGUAGE, settings.language);
     prefs.putUChar(PREF_KEY_DISPLAY_ROTATION, settings.displayRotation);
     

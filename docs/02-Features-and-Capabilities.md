@@ -1,10 +1,10 @@
 # Chapter 2: Features and Capabilities
 
 ## 2.1 Overview of Core Features
-ESP32-Crypto-Alert provides a range of advanced features to monitor cryptocurrency prices without overwhelming notifications. The system retrieves real-time data from Binance and focuses on **contextual alerts** through multi-timeframe analysis and smart filters.
+ESP32-Crypto-Alert provides a range of advanced features to monitor cryptocurrency prices without overwhelming notifications. The system retrieves real-time data from Bitvavo and focuses on **contextual alerts** through multi-timeframe analysis and smart filters.
 
 Key features:
-- Real-time price monitoring of a selected Binance pair (e.g., BTCEUR).
+- Real-time price monitoring of a selected Bitvavo market (e.g., BTC-EUR).
 - Multi-timeframe analysis across 1m, 5m, 30m, and 2h.
 - Contextual alert generation based on price changes, trend, volatility, and **anchor price**.
 - Free notifications to your phone via NTFY.sh, plus local web interface, display, and MQTT.

@@ -1,10 +1,10 @@
 # Hoofdstuk 2: Functies en Mogelijkheden
 
 ## 2.1 Overzicht van de Kernfuncties
-ESP32-Crypto-Alert biedt een reeks geavanceerde functies om cryptocurrency-prijzen te monitoren zonder overmatige notificaties. Het systeem haalt realtime data op van Binance en richt zich op **contextuele alerts** door multi-timeframe analyse en slimme filters.
+ESP32-Crypto-Alert biedt een reeks geavanceerde functies om cryptocurrency-prijzen te monitoren zonder overmatige notificaties. Het systeem haalt realtime data op van Bitvavo en richt zich op **contextuele alerts** door multi-timeframe analyse en slimme filters.
 
 Belangrijkste functies:
-- Realtime prijsmonitoring van een gekozen Binance-pair (bijv. BTCEUR).
+- Realtime prijsmonitoring van een gekozen Bitvavo-market (bijv. BTC-EUR).
 - Multi-timeframe analyse over 1m, 5m, 30m en 2h.
 - Contextuele alert-generatie gebaseerd op prijsveranderingen, trend, volatiliteit en **anchor price**.
 - Notificaties (gratis) op je telefoon via NTFY.sh, lokale web-interface, display en MQTT.
@@ -18,7 +18,7 @@ Het systeem analyseert prijsactie op meerdere timeframes tegelijk om ruis te fil
 - **30m**: Bevestigt momentum.
 - **2h**: Biedt bredere context (trend, range, volatiliteit).
 
-![Multi-timeframe analyse voorbeeld 1](img/multi-timeframe-1.jpg)  
+![Multi-timeframe analyse voorbeeld 1](img/multi-timeframe-1.png)  
 *Voorbeeld van multi-timeframe analyse: hogere timeframe toont trend, lagere timeframes entry-signalen.*
 
 ## 2.3 Anchor Price en Risicobeheer

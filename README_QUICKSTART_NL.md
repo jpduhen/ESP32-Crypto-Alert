@@ -5,7 +5,7 @@
 - ESP32 met display (CYD, ESP32-S3 SuperMini, ESP32-S3 GEEK, TTGO T-Display, of vergelijkbaar)
 - WiFi verbinding
 - NTFY.sh account (of publiek topic)
-- Binance API (publieke endpoints, geen key vereist)
+- Bitvavo API (publieke endpoints, geen key vereist)
 
 ---
 
@@ -16,7 +16,7 @@
 3. **Verbind met WiFi** (bij eerste opstarten verschijnt WiFi manager)
 4. **Open de web-interface** (IP-adres staat op het scherm)
 5. **Configureer instellingen:**
-   - Binance symbol (bijv. BTCEUR, ETHUSDT)
+   - Bitvavo market (bijv. BTC-EUR, ETH-EUR)
    - NTFY topic (waar alerts worden verstuurd)
    - Anchor prijs (jouw referentieniveau)
    - Alert drempels (gevoeligheid)

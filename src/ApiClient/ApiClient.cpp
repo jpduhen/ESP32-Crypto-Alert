@@ -12,7 +12,7 @@ ApiClient::ApiClient() {
 // Begin - configureer persistent clients voor keep-alive
 void ApiClient::begin() {
     // N2: Configureer HTTPClient voor keep-alive (connection reuse)
-    // setReuse(true) wordt per call gedaan in httpGETInternal en fetchBinancePrice
+    // setReuse(true) wordt per call gedaan in httpGETInternal en fetchBitvavoPrice
 }
 
 // Public HTTP GET method
@@ -216,24 +216,26 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
 // Handmatige JSON parsing (geen heap allocaties, geen ArduinoJson dependency)
 // Geoptimaliseerd: geconsolideerde validatie checks
 // FASE 1.1: Debug logging toegevoegd voor verificatie
-bool ApiClient::parseBinancePrice(const char *body, float &out)
+bool ApiClient::parseBitvavoPrice(const char *body, float &out)
 {
+    // Bitvavo response format: [{"market":"BTC-EUR","price":"34243"}]
     // Geconsolideerde validatie: check alle voorwaarden in één keer
     if (body == nullptr || strlen(body) == 0) {
         #if DEBUG_CALCULATIONS
-        Serial.println(F("[API][DEBUG] parseBinancePrice: body is null or empty"));
+        Serial.println(F("[API][DEBUG] parseBitvavoPrice: body is null or empty"));
         #endif
         return false;
     }
     
     #if DEBUG_CALCULATIONS
-    Serial_printf(F("[API][DEBUG] parseBinancePrice: raw JSON body (first 100 chars): %.100s\n"), body);
+    Serial_printf(F("[API][DEBUG] parseBitvavoPrice: raw JSON body (first 100 chars): %.100s\n"), body);
     #endif
     
+    // Bitvavo retourneert een array met objecten, zoek naar "price":" in het eerste object
     const char *priceStart = strstr(body, "\"price\":\"");
     if (priceStart == nullptr) {
         #if DEBUG_CALCULATIONS
-        Serial.println(F("[API][DEBUG] parseBinancePrice: 'price' field not found in JSON"));
+        Serial.println(F("[API][DEBUG] parseBitvavoPrice: 'price' field not found in JSON"));
         #endif
         return false;
     }
@@ -243,7 +245,7 @@ bool ApiClient::parseBinancePrice(const char *body, float &out)
     const char *priceEnd = strchr(priceStart, '"');
     if (priceEnd == nullptr) {
         #if DEBUG_CALCULATIONS
-        Serial.println(F("[API][DEBUG] parseBinancePrice: price field not properly terminated"));
+        Serial.println(F("[API][DEBUG] parseBitvavoPrice: price field not properly terminated"));
         #endif
         return false;
     }
@@ -252,7 +254,7 @@ bool ApiClient::parseBinancePrice(const char *body, float &out)
     size_t priceLen = priceEnd - priceStart;
     if (priceLen == 0 || priceLen > 20 || priceLen >= 32) {  // Max 20 karakters voor prijs, buffer is 32
         #if DEBUG_CALCULATIONS
-        Serial_printf(F("[API][DEBUG] parseBinancePrice: invalid price length: %u\n"), priceLen);
+        Serial_printf(F("[API][DEBUG] parseBitvavoPrice: invalid price length: %u\n"), priceLen);
         #endif
         return false;
     }
@@ -263,32 +265,32 @@ bool ApiClient::parseBinancePrice(const char *body, float &out)
     priceStr[priceLen] = '\0';
     
     #if DEBUG_CALCULATIONS
-    Serial_printf(F("[API][DEBUG] parseBinancePrice: extracted price string: '%s' (len=%u)\n"), priceStr, priceLen);
+    Serial_printf(F("[API][DEBUG] parseBitvavoPrice: extracted price string: '%s' (len=%u)\n"), priceStr, priceLen);
     #endif
     
     // Convert to float en valideer in één keer
     float val;
     if (!safeAtof(priceStr, val)) {
         #if DEBUG_CALCULATIONS
-        Serial_printf(F("[API][DEBUG] parseBinancePrice: safeAtof failed for '%s'\n"), priceStr);
+        Serial_printf(F("[API][DEBUG] parseBitvavoPrice: safeAtof failed for '%s'\n"), priceStr);
         #endif
         return false;
     }
     
     #if DEBUG_CALCULATIONS
-    Serial_printf(F("[API][DEBUG] parseBinancePrice: converted to float: %.8f\n"), val);
+    Serial_printf(F("[API][DEBUG] parseBitvavoPrice: converted to float: %.8f\n"), val);
     #endif
     
     if (!isValidPrice(val)) {
         #if DEBUG_CALCULATIONS
-        Serial_printf(F("[API][DEBUG] parseBinancePrice: isValidPrice failed for %.8f\n"), val);
+        Serial_printf(F("[API][DEBUG] parseBitvavoPrice: isValidPrice failed for %.8f\n"), val);
         #endif
         return false;
     }
     
     out = val;
     #if DEBUG_CALCULATIONS
-    Serial_printf(F("[API][DEBUG] parseBinancePrice: SUCCESS - final price: %.2f\n"), out);
+    Serial_printf(F("[API][DEBUG] parseBitvavoPrice: SUCCESS - final price: %.2f\n"), out);
     #endif
     return true;
 }
@@ -308,7 +310,7 @@ const char* ApiClient::detectHttpErrorPhase(int code)
 }
 
 // Helper: Log HTTP error (consolideert error logging logica)
-// Geoptimaliseerd: elimineert code duplicatie tussen httpGETInternal en fetchBinancePrice
+// Geoptimaliseerd: elimineert code duplicatie tussen httpGETInternal en fetchBitvavoPrice
 void ApiClient::logHttpError(int code, const char* phase, unsigned long requestTime, 
                             uint8_t attempt, uint8_t maxAttempts, const char* prefix)
 {
@@ -363,11 +365,12 @@ bool ApiClient::safeAtof(const char* str, float& out)
 // S1: Streaming JSON parsing helper (gebruikt ArduinoJson als beschikbaar)
 // Parse price direct van WiFiClient stream zonder body buffer
 // S2: Gebruikt do-while(0) patroon voor consistente cleanup
-bool ApiClient::parseBinancePriceFromStream(WiFiClient* stream, float& out)
+bool ApiClient::parseBitvavoPriceFromStream(WiFiClient* stream, float& out)
 {
+    // Bitvavo response format: [{"market":"BTC-EUR","price":"34243"}]
     if (stream == nullptr) {
         #if DEBUG_CALCULATIONS
-        Serial.println(F("[API][DEBUG] parseBinancePriceFromStream: stream is null"));
+        Serial.println(F("[API][DEBUG] parseBitvavoPriceFromStream: stream is null"));
         #endif
         return false;
     }
@@ -376,60 +379,69 @@ bool ApiClient::parseBinancePriceFromStream(WiFiClient* stream, float& out)
     
     #if USE_ARDUINOJSON_STREAMING
     // Gebruik ArduinoJson voor streaming parsing (geen heap allocaties)
-    StaticJsonDocument<256> doc;  // 256 bytes is ruim voldoende voor Binance price response (~100 bytes)
+    StaticJsonDocument<256> doc;  // 256 bytes is ruim voldoende voor Bitvavo price response (~100 bytes)
     DeserializationError error = deserializeJson(doc, *stream);
     
     if (error) {
         Serial.printf(F("[HTTP] JSON parse error: %s\n"), error.c_str());
         #if DEBUG_CALCULATIONS
-        Serial_printf(F("[API][DEBUG] parseBinancePriceFromStream: ArduinoJson deserializeJson failed: %s\n"), error.c_str());
+        Serial_printf(F("[API][DEBUG] parseBitvavoPriceFromStream: ArduinoJson deserializeJson failed: %s\n"), error.c_str());
         #endif
         return false;
     }
     
     #if DEBUG_CALCULATIONS
-    Serial.println(F("[API][DEBUG] parseBinancePriceFromStream: ArduinoJson parsing successful"));
+    Serial.println(F("[API][DEBUG] parseBitvavoPriceFromStream: ArduinoJson parsing successful"));
     #endif
     
-    // Extract price field
-    if (!doc.containsKey("price")) {
-        Serial.println(F("[HTTP] JSON missing 'price' field"));
+    // Bitvavo retourneert een array, pak het eerste element
+    if (!doc.is<JsonArray>() || doc.size() == 0) {
+        Serial.println(F("[HTTP] JSON is not an array or array is empty"));
         #if DEBUG_CALCULATIONS
-        Serial.println(F("[API][DEBUG] parseBinancePriceFromStream: JSON missing 'price' field"));
+        Serial.println(F("[API][DEBUG] parseBitvavoPriceFromStream: JSON is not an array or array is empty"));
         #endif
         return false;
     }
     
-    const char* priceStr = doc["price"];
+    JsonObject firstItem = doc[0];
+    if (!firstItem.containsKey("price")) {
+        Serial.println(F("[HTTP] JSON missing 'price' field"));
+        #if DEBUG_CALCULATIONS
+        Serial.println(F("[API][DEBUG] parseBitvavoPriceFromStream: JSON missing 'price' field"));
+        #endif
+        return false;
+    }
+    
+    const char* priceStr = firstItem["price"];
     if (priceStr == nullptr) {
         Serial.println(F("[HTTP] JSON 'price' field is null"));
         #if DEBUG_CALCULATIONS
-        Serial.println(F("[API][DEBUG] parseBinancePriceFromStream: JSON 'price' field is null"));
+        Serial.println(F("[API][DEBUG] parseBitvavoPriceFromStream: JSON 'price' field is null"));
         #endif
         return false;
     }
     
     #if DEBUG_CALCULATIONS
-    Serial_printf(F("[API][DEBUG] parseBinancePriceFromStream: extracted price string: '%s'\n"), priceStr);
+    Serial_printf(F("[API][DEBUG] parseBitvavoPriceFromStream: extracted price string: '%s'\n"), priceStr);
     #endif
     
     // Convert to float
     float val;
     if (!safeAtof(priceStr, val)) {
         #if DEBUG_CALCULATIONS
-        Serial_printf(F("[API][DEBUG] parseBinancePriceFromStream: safeAtof failed for '%s'\n"), priceStr);
+        Serial_printf(F("[API][DEBUG] parseBitvavoPriceFromStream: safeAtof failed for '%s'\n"), priceStr);
         #endif
         return false;
     }
     
     #if DEBUG_CALCULATIONS
-    Serial_printf(F("[API][DEBUG] parseBinancePriceFromStream: converted to float: %.8f\n"), val);
+    Serial_printf(F("[API][DEBUG] parseBitvavoPriceFromStream: converted to float: %.8f\n"), val);
     #endif
     
     // Validate price
     if (!isValidPrice(val)) {
         #if DEBUG_CALCULATIONS
-        Serial_printf(F("[API][DEBUG] parseBinancePriceFromStream: isValidPrice failed for %.8f\n"), val);
+        Serial_printf(F("[API][DEBUG] parseBitvavoPriceFromStream: isValidPrice failed for %.8f\n"), val);
         #endif
         return false;
     }
@@ -437,7 +449,7 @@ bool ApiClient::parseBinancePriceFromStream(WiFiClient* stream, float& out)
     out = val;
     ok = true;
     #if DEBUG_CALCULATIONS
-    Serial_printf(F("[API][DEBUG] parseBinancePriceFromStream: SUCCESS - final price: %.2f\n"), out);
+    Serial_printf(F("[API][DEBUG] parseBitvavoPriceFromStream: SUCCESS - final price: %.2f\n"), out);
     #endif
     #else
     // Fallback: handmatige parsing (als ArduinoJson niet beschikbaar is)
@@ -447,7 +459,7 @@ bool ApiClient::parseBinancePriceFromStream(WiFiClient* stream, float& out)
     const size_t MAX_READ = sizeof(buffer) - 1;
     
     #if DEBUG_CALCULATIONS
-    Serial.println(F("[API][DEBUG] parseBinancePriceFromStream: using manual parsing (ArduinoJson not available)"));
+    Serial.println(F("[API][DEBUG] parseBitvavoPriceFromStream: using manual parsing (ArduinoJson not available)"));
     #endif
     
     // Lees response body in chunks met timeout
@@ -474,49 +486,49 @@ bool ApiClient::parseBinancePriceFromStream(WiFiClient* stream, float& out)
     buffer[bytesRead] = '\0';
     
     #if DEBUG_CALCULATIONS
-    Serial_printf(F("[API][DEBUG] parseBinancePriceFromStream: read %u bytes from stream\n"), bytesRead);
+    Serial_printf(F("[API][DEBUG] parseBitvavoPriceFromStream: read %u bytes from stream\n"), bytesRead);
     #endif
     
     // Parse met bestaande handmatige parser
-    ok = parseBinancePrice(buffer, out);
+    ok = parseBitvavoPrice(buffer, out);
     #endif
     
     return ok;
 }
 
-// High-level method: Fetch Binance price for a symbol
-// Fase 4.1.7: Combineert httpGET + parseBinancePrice
+// High-level method: Fetch Bitvavo price for a market
+// Fase 4.1.7: Combineert httpGET + parseBitvavoPrice
 // S1: Gebruikt nu streaming JSON parsing (geen buffer allocatie)
 // S2: Gebruikt do-while(0) patroon voor consistente cleanup
-bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
+bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
 {
     if (symbol == nullptr || strlen(symbol) == 0) {
         #if DEBUG_CALCULATIONS
-        Serial.println(F("[API][DEBUG] fetchBinancePrice: symbol is null or empty"));
+        Serial.println(F("[API][DEBUG] fetchBitvavoPrice: symbol is null or empty"));
         #endif
         return false;
     }
     
     #if DEBUG_CALCULATIONS
-    Serial_printf(F("[API][DEBUG] fetchBinancePrice: starting fetch for symbol: %s\n"), symbol);
+    Serial_printf(F("[API][DEBUG] fetchBitvavoPrice: starting fetch for market: %s\n"), symbol);
     #endif
     
     // M1: Heap telemetry vóór URL build
     logHeap("API_URL_BUILD");
     
-    // Build Binance API URL
+    // Build Bitvavo API URL
     char url[128];
-    snprintf(url, sizeof(url), "https://api.binance.com/api/v3/ticker/price?symbol=%s", symbol);
+    snprintf(url, sizeof(url), "https://api.bitvavo.com/v2/ticker/price?market=%s", symbol);
     
     #if DEBUG_CALCULATIONS
-    Serial_printf(F("[API][DEBUG] fetchBinancePrice: URL: %s\n"), url);
+    Serial_printf(F("[API][DEBUG] fetchBitvavoPrice: URL: %s\n"), url);
     #endif
     
     // M1: Heap telemetry vóór HTTP GET
     logHeap("API_GET_PRE");
     
     // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
-    netMutexLock("ApiClient::fetchBinancePrice");
+    netMutexLock("ApiClient::fetchBitvavoPrice");
     
     const uint8_t MAX_RETRIES = 0; // Geen retries voor normale price fetches (snellere failure)
     const uint32_t RETRY_DELAYS[] = {100, 200}; // Backoff delays in ms (verlaagd, niet gebruikt met MAX_RETRIES=0)
@@ -527,7 +539,7 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
         bool shouldRetry = false;
         int lastCode = 0;
         
-        // Gebruik lokaal HTTPClient object (zoals fetchBinanceKlines doet) - persistent client geeft HTTP 400
+        // Gebruik lokaal HTTPClient object (zoals fetchBitvavoCandles doet) - persistent client geeft HTTP 400
         HTTPClient http;
         
         // S2: do-while(0) patroon voor consistente cleanup per attempt
@@ -535,7 +547,7 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
             // T1: Expliciete connect/read timeout settings (geoptimaliseerd: 2000ms connect, 2500ms read)
             http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS_DEFAULT);
             http.setTimeout(HTTP_READ_TIMEOUT_MS_DEFAULT);
-            // Geen keep-alive voor nu (lokaal object, zoals fetchBinanceKlines)
+            // Geen keep-alive voor nu (lokaal object, zoals fetchBitvavoCandles)
             http.setReuse(false);
             
             // N2: Voeg User-Agent header toe VOOR http.begin() om Cloudflare blocking te voorkomen
@@ -604,10 +616,10 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
             logHeap("API_PARSE_PRE");
             
             // Parse price from stream
-            if (!parseBinancePriceFromStream(stream, out)) {
+            if (!parseBitvavoPriceFromStream(stream, out)) {
                 Serial.println(F("[API] JSON parse failed"));
                 #if DEBUG_CALCULATIONS
-                Serial.println(F("[API][DEBUG] fetchBinancePrice: parseBinancePriceFromStream failed"));
+                Serial.println(F("[API][DEBUG] fetchBitvavoPrice: parseBitvavoPriceFromStream failed"));
                 #endif
                 break;
             }
@@ -616,7 +628,7 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
             logHeap("API_PARSE_POST");
             
             #if DEBUG_CALCULATIONS
-            Serial_printf(F("[API][DEBUG] fetchBinancePrice: SUCCESS - parsed price: %.2f for symbol: %s\n"), out, symbol);
+            Serial_printf(F("[API][DEBUG] fetchBitvavoPrice: SUCCESS - parsed price: %.2f for market: %s\n"), out, symbol);
             #endif
             
             attemptOk = true;
@@ -624,7 +636,7 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
         } while(0);
         
         // N2: Cleanup alleen bij fouten (lokaal HTTPClient object, geen keep-alive nodig)
-        // Voor fetchBinancePrice gebruiken we lokaal object, dus altijd cleanup
+        // Voor fetchBitvavoPrice gebruiken we lokaal object, dus altijd cleanup
         if (attemptOk) {
             // Succes: cleanup voor lokaal object
             http.end();
@@ -653,7 +665,7 @@ bool ApiClient::fetchBinancePrice(const char* symbol, float& out)
     }
     
     // C2: Geef netwerk mutex vrij (met debug logging)
-    netMutexUnlock("ApiClient::fetchBinancePrice");
+    netMutexUnlock("ApiClient::fetchBitvavoPrice");
     
     return ok;
 }

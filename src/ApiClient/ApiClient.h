@@ -60,22 +60,23 @@ public:
     // Fase 4.1.4: Eerste integratie - gebruikt in fetchPrice()
     bool httpGET(const char *url, char *buffer, size_t bufferSize, uint32_t timeoutMs = HTTP_TIMEOUT_MS_DEFAULT);
     
-    // Parse Binance price from JSON response
-    // Fase 4.1.6: Verplaatst naar ApiClient
-    static bool parseBinancePrice(const char *body, float &out);
+    // Parse Bitvavo price from JSON response
+    // Bitvavo response format: [{"market":"BTC-EUR","price":"34243"}]
+    static bool parseBitvavoPrice(const char *body, float &out);
     
-    // High-level method: Fetch Binance price for a symbol
-    // Fase 4.1.7: Combineert httpGET + parseBinancePrice
+    // High-level method: Fetch Bitvavo price for a market
+    // Fase 4.1.7: Combineert httpGET + parseBitvavoPrice
     // S1: Gebruikt nu streaming JSON parsing (geen buffer allocatie)
-    // symbol: Binance symbol (bijv. "BTCEUR")
+    // symbol: Bitvavo market (bijv. "BTC-EUR")
     // out: output parameter voor prijs
     // Returns: true bij succes, false bij fout
-    bool fetchBinancePrice(const char* symbol, float& out);
+    bool fetchBitvavoPrice(const char* symbol, float& out);
     
     // S1: Streaming JSON parsing helper (gebruikt ArduinoJson als beschikbaar)
     // Parse price direct van WiFiClient stream zonder body buffer
+    // Bitvavo response format: [{"market":"BTC-EUR","price":"34243"}]
     // Returns: true bij succes, false bij fout
-    bool parseBinancePriceFromStream(WiFiClient* stream, float& out);
+    bool parseBitvavoPriceFromStream(WiFiClient* stream, float& out);
     
     // Helper functions (static, kunnen ook buiten class gebruikt worden)
     static bool isValidPrice(float price);

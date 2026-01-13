@@ -122,8 +122,8 @@
 #endif
 
 // --- API Configuration ---
-#define BINANCE_API "https://api.binance.com/api/v3/ticker/price?symbol="  // Binance API endpoint
-#define BINANCE_SYMBOL_DEFAULT "BTCEUR"  // Default Binance symbol
+#define BITVAVO_API_BASE "https://api.bitvavo.com/v2"  // Bitvavo API base URL
+#define BITVAVO_SYMBOL_DEFAULT "BTC-EUR"  // Default Bitvavo symbol (format: BASE-QUOTE met streepje)
 // T1: Verhoogde connect/read timeouts voor betere stabiliteit
 #define HTTP_CONNECT_TIMEOUT_MS 2000  // Connect timeout (2000ms - geoptimaliseerd)
 #define HTTP_READ_TIMEOUT_MS 2500     // Read timeout (2500ms - geoptimaliseerd voor kleine responses)
@@ -172,7 +172,7 @@
 #define WARM_START_5M_CANDLES_DEFAULT 12  // Aantal 5m candles (default: 12 = 1 uur)
 #define WARM_START_30M_CANDLES_DEFAULT 8  // Aantal 30m candles (default: 8 = 4 uur)
 #define WARM_START_2H_CANDLES_DEFAULT 6  // Aantal 2h candles (default: 6 = 12 uur)
-#define BINANCE_KLINES_API "https://api.binance.com/api/v3/klines"  // Binance klines endpoint
+// Bitvavo candlestick endpoint: /{market}/candles (wordt dynamisch gebouwd)
 #define WARM_START_TIMEOUT_MS 10000  // Timeout voor warm-start API calls (10 seconden)
 
 // --- Auto-Volatility Mode Configuration ---
@@ -274,13 +274,13 @@ SemaphoreHandle_t dataMutex = NULL;
 // S0: FreeRTOS mutex voor netwerk/HTTP operaties (voorkomt gelijktijdige HTTPClient allocaties)
 SemaphoreHandle_t gNetMutex = NULL;
 
-// Symbols array - eerste element wordt dynamisch ingesteld via binanceSymbol
+// Symbols array - eerste element wordt dynamisch ingesteld via bitvavoSymbol
 // Fase 8: UI data - gebruikt door UIController module
 #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-char symbolsArray[SYMBOL_COUNT][16] = {"BTCEUR", SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL};
+char symbolsArray[SYMBOL_COUNT][16] = {"BTC-EUR", SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL};
 const char *symbols[SYMBOL_COUNT] = {symbolsArray[0], symbolsArray[1], symbolsArray[2], symbolsArray[3]};
 #else
-char symbolsArray[SYMBOL_COUNT][16] = {"BTCEUR", SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL};
+char symbolsArray[SYMBOL_COUNT][16] = {"BTC-EUR", SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL};
 const char *symbols[SYMBOL_COUNT] = {symbolsArray[0], symbolsArray[1], symbolsArray[2]};
 #endif
 // Fase 6.1: AlertEngine module gebruikt deze variabele (extern declaration in AlertEngine.cpp)
@@ -455,10 +455,10 @@ static char httpResponseBuffer[248];  // Buffer voor HTTP responses (NTFY, etc.)
 // Note: Niet static zodat ApiClient.cpp er toegang toe heeft via extern declaratie in ApiClient.h
 // Verkleind van 2048 naar 512 bytes (genoeg voor price responses, ~100 bytes)
 char gApiResp[304];  // Verkleind van 320 naar 304 bytes (bespaart 16 bytes DRAM)     // Buffer voor API price responses (M2: streaming)
-// gKlinesResp verwijderd: fetchBinanceKlines gebruikt streaming parsing met binanceStreamBuffer
+// gKlinesResp verwijderd: fetchBitvavoCandles gebruikt streaming parsing met bitvavoStreamBuffer
 
-// Streaming buffer voor Binance klines parsing (geen grote heap allocaties)
-static char binanceStreamBuffer[560];  // Fixed-size buffer voor chunked JSON parsing - verkleind van 576 naar 560 bytes (bespaart 16 bytes DRAM)
+// Streaming buffer voor Bitvavo candlestick parsing (geen grote heap allocaties)
+static char bitvavoStreamBuffer[560];  // Fixed-size buffer voor chunked JSON parsing - verkleind van 576 naar 560 bytes (bespaart 16 bytes DRAM)
 
 // LVGL UI buffers en cache (voorkomt herhaalde allocaties en onnodige updates)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
@@ -607,7 +607,7 @@ void setDisplayBrigthness();
 // Fase 8.7.1: static verwijderd zodat UIController module deze kan gebruiken
 char ntfyTopic[64] = "";  // NTFY topic (max 63 karakters)
 // Fase 5.1: static verwijderd zodat TrendDetector module deze variabele kan gebruiken
-char binanceSymbol[16] = BINANCE_SYMBOL_DEFAULT;  // Binance symbool (max 15 karakters, bijv. BTCEUR, BTCUSDT)
+char bitvavoSymbol[16] = BITVAVO_SYMBOL_DEFAULT;  // Bitvavo symbool (max 15 karakters, bijv. BTC-EUR, ETH-EUR)
 
 // Alert thresholds in struct voor betere organisatie
 // Fase 6.1: AlertEngine module gebruikt deze struct (extern declaration in AlertEngine.cpp)
@@ -864,19 +864,19 @@ static bool parseKlineEntry(const char* jsonStr, float* closePrice, unsigned lon
 // Haal Binance klines op voor een specifiek timeframe
 // Memory efficient: streaming parsing, bewaar alleen laatste maxCount candles
 // Returns: aantal candles opgehaald, of -1 bij fout
-int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit, float* prices, unsigned long* timestamps, uint16_t maxCount, float* highs = nullptr, float* lows = nullptr, float* volumes = nullptr)
+int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit, float* prices, unsigned long* timestamps, uint16_t maxCount, float* highs = nullptr, float* lows = nullptr, float* volumes = nullptr)
 {
     if (symbol == nullptr || interval == nullptr || prices == nullptr || maxCount == 0) {
         return -1;
     }
     
     // M1: Heap telemetry vóór URL build
-    logHeap("KLINES_URL_BUILD");
+    logHeap("CANDLES_URL_BUILD");
     
-    // Build URL
+    // Build Bitvavo URL: https://api.bitvavo.com/v2/{market}/candles?interval={interval}&limit={limit}
     char url[256];
-    int urlLen = snprintf(url, sizeof(url), "%s?symbol=%s&interval=%s&limit=%u", 
-                         BINANCE_KLINES_API, symbol, interval, limit);
+    int urlLen = snprintf(url, sizeof(url), "%s/%s/candles?interval=%s&limit=%u", 
+                         BITVAVO_API_BASE, symbol, interval, limit);
     if (urlLen < 0 || urlLen >= (int)sizeof(url)) {
         return -1;
     }
@@ -885,7 +885,7 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
     logHeap("KLINES_GET_PRE");
     
     // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
-    netMutexLock("fetchBinanceKlines");
+    netMutexLock("fetchBitvavoCandles");
     
     int result = -1;
     HTTPClient http;
@@ -905,7 +905,7 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
         http.addHeader(F("Accept"), F("application/json"));
     
     if (!http.begin(url)) {
-            Serial.println(F("[Klines] http.begin() gefaald"));
+            Serial.println(F("[Candles] http.begin() gefaald"));
             break;
     }
     
@@ -913,18 +913,18 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
         unsigned long requestTime = millis() - requestStart;
         
         // M1: Heap telemetry na HTTP GET
-        logHeap("KLINES_GET_POST");
+        logHeap("CANDLES_GET_POST");
         
     if (code != 200) {
             // Fase 6.2: Geconsolideerde error logging - gebruik ApiClient helpers
             const char* phase = ApiClient::detectHttpErrorPhase(code);
-            ApiClient::logHttpError(code, phase, requestTime, 0, 1, "[Klines]");
+            ApiClient::logHttpError(code, phase, requestTime, 0, 1, "[Candles]");
             break;
     }
     
     WiFiClient* stream = http.getStreamPtr();
     if (stream == nullptr) {
-            Serial.println(F("[Klines] Stream pointer is null"));
+            Serial.println(F("[Candles] Stream pointer is null"));
             break;
     }
     
@@ -957,7 +957,7 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
     // Buffer voor chunked reading (hergebruik fixed buffer)
     size_t bufferPos = 0;
     size_t bufferLen = 0;
-    const size_t BUFFER_SIZE = sizeof(binanceStreamBuffer);
+    const size_t BUFFER_SIZE = sizeof(bitvavoStreamBuffer);
     
     // Feed watchdog tijdens parsing
     unsigned long lastWatchdogFeed = millis();
@@ -970,7 +970,7 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
     const unsigned long DATA_TIMEOUT_MS = 2000;
     
     // M1: Heap telemetry vóór JSON parse
-    logHeap("KLINES_PARSE_PRE");
+    logHeap("CANDLES_PARSE_PRE");
     
     // Parse streaming JSON
     // Continue zolang stream connected/available OF er nog data in buffer is
@@ -990,8 +990,8 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
         // Read chunk into buffer als nodig
         if (bufferPos >= bufferLen) {
             if (stream->available()) {
-                bufferLen = stream->readBytes((uint8_t*)binanceStreamBuffer, BUFFER_SIZE - 1);
-                binanceStreamBuffer[bufferLen] = '\0';
+                bufferLen = stream->readBytes((uint8_t*)bitvavoStreamBuffer, BUFFER_SIZE - 1);
+                bitvavoStreamBuffer[bufferLen] = '\0';
                 bufferPos = 0;
                 lastDataTime = millis();
                 
@@ -1009,7 +1009,7 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
             }
         }
         
-        char c = binanceStreamBuffer[bufferPos++];
+        char c = bitvavoStreamBuffer[bufferPos++];
         
         // State machine voor JSON parsing
         switch (state) {
@@ -1189,7 +1189,7 @@ int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit,
     
 parse_done:
     // M1: Heap telemetry na JSON parse
-    logHeap("KLINES_PARSE_POST");
+    logHeap("CANDLES_PARSE_POST");
     
     if (lastParsedKline.valid && interval != nullptr) {
         if (strcmp(interval, "1m") == 0) {
@@ -1338,7 +1338,7 @@ parse_done:
     }
     
     // C2: Geef netwerk mutex vrij (met debug logging)
-    netMutexUnlock("fetchBinanceKlines");
+    netMutexUnlock("fetchBitvavoCandles");
     
     return result;
 }
@@ -1434,7 +1434,7 @@ static WarmStartMode performWarmStart()
     // Memory efficient: alleen laatste SECONDS_PER_MINUTE closes bewaren
     float temp1mPrices[SECONDS_PER_MINUTE];  // Alleen laatste 60 nodig
     lv_timer_handler();  // Update spinner animatie vóór fetch
-    int count1m = fetchBinanceKlines(binanceSymbol, "1m", req1mCandles, temp1mPrices, nullptr, SECONDS_PER_MINUTE);
+    int count1m = fetchBitvavoCandles(bitvavoSymbol, "1m", req1mCandles, temp1mPrices, nullptr, SECONDS_PER_MINUTE);
     lv_timer_handler();  // Update spinner animatie na fetch
     if (count1m > 0) {
         // Vul secondPrices buffer (gebruik laatste count1m candles, max SECONDS_PER_MINUTE)
@@ -1461,7 +1461,7 @@ static WarmStartMode performWarmStart()
     // 2. Vul 5m buffer (returns-only: alleen laatste 2 closes nodig)
     float temp5mPrices[2];
     lv_timer_handler();  // Update spinner animatie vóór fetch
-    int count5m = fetchBinanceKlines(binanceSymbol, "5m", req5mCandles, temp5mPrices, nullptr, 2);
+    int count5m = fetchBitvavoCandles(bitvavoSymbol, "5m", req5mCandles, temp5mPrices, nullptr, 2);
     lv_timer_handler();  // Update spinner animatie na fetch
     if (count5m >= 2) {
         // Interpoleer laatste 2 candles naar fiveMinutePrices buffer
@@ -1497,7 +1497,7 @@ static WarmStartMode performWarmStart()
             lv_timer_handler();  // Update spinner animatie
         }
         lv_timer_handler();  // Update spinner animatie vóór fetch
-        count30m = fetchBinanceKlines(binanceSymbol, "30m", req30mCandles, temp30mPrices, nullptr, 2);
+        count30m = fetchBitvavoCandles(bitvavoSymbol, "30m", req30mCandles, temp30mPrices, nullptr, 2);
         lv_timer_handler();  // Update spinner animatie na fetch
         if (count30m >= 2) {
             break;  // Succes, stop retries
@@ -1556,7 +1556,7 @@ static WarmStartMode performWarmStart()
             lv_timer_handler();  // Update spinner animatie
         }
         lv_timer_handler();  // Update spinner animatie vóór fetch
-        count2h = fetchBinanceKlines(binanceSymbol, "2h", req2hCandles, temp2hPrices, nullptr, 2);
+        count2h = fetchBitvavoCandles(bitvavoSymbol, "2h", req2hCandles, temp2hPrices, nullptr, 2);
         lv_timer_handler();  // Update spinner animatie na fetch
         if (count2h >= 2) {
             break;  // Succes, stop retries
@@ -1600,7 +1600,7 @@ static WarmStartMode performWarmStart()
             lv_timer_handler();
         }
         lv_timer_handler();
-        count4h = fetchBinanceKlines(binanceSymbol, "4h", 2, temp4hPrices, nullptr, 2);
+        count4h = fetchBitvavoCandles(bitvavoSymbol, "4h", 2, temp4hPrices, nullptr, 2);
         lv_timer_handler();
         if (count4h >= 2) {
             break;
@@ -1632,7 +1632,7 @@ static WarmStartMode performWarmStart()
             lv_timer_handler();
         }
         lv_timer_handler();
-        count1d = fetchBinanceKlines(binanceSymbol, "1d", 2, temp1dPrices, nullptr, 2);
+        count1d = fetchBitvavoCandles(bitvavoSymbol, "1d", 2, temp1dPrices, nullptr, 2);
         lv_timer_handler();
         if (count1d >= 2) {
             break;
@@ -1675,7 +1675,7 @@ static WarmStartMode performWarmStart()
             lv_timer_handler();
         }
         lv_timer_handler();
-        count1w = fetchBinanceKlines(binanceSymbol, "1w", 2, temp1wPrices, nullptr, 2);
+        count1w = fetchBitvavoCandles(bitvavoSymbol, "1W", 2, temp1wPrices, nullptr, 2);  // Bitvavo gebruikt "1W" (hoofdletter W)
         lv_timer_handler();
         if (count1w >= 2) {
             break;
@@ -1976,89 +1976,89 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
         bool attemptOk = false;
         bool shouldRetry = false;
         int lastCode = 0;
-        HTTPClient http;
-        
-        // S2: do-while(0) patroon voor consistente cleanup
-        do {
-            // S2: Expliciete timeout settings
+    HTTPClient http;
+    
+    // S2: do-while(0) patroon voor consistente cleanup
+    do {
+        // S2: Expliciete timeout settings
             http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
             http.setTimeout(HTTP_READ_TIMEOUT_MS);
-            http.setReuse(false);
-        
-            if (!http.begin(url)) {
+        http.setReuse(false);
+    
+        if (!http.begin(url)) {
                 if (attempt == MAX_RETRIES) {
-                    Serial_println(F("[Notify] Ntfy HTTP begin gefaald"));
+        Serial_println(F("[Notify] Ntfy HTTP begin gefaald"));
                 }
                 shouldRetry = (attempt < MAX_RETRIES);
-                break;
-            }
-        
-            http.addHeader("Title", title);
-            http.addHeader("Priority", "high");
-        
-            // Voeg kleur tag toe als opgegeven
-            if (colorTag != nullptr && strlen(colorTag) > 0) {
-                if (strlen(colorTag) <= 64) { // Valideer lengte
-                    http.addHeader(F("Tags"), colorTag);
-                    Serial_printf(F("[Notify] Ntfy Tag: %s\n"), colorTag);
-                }
-            }
-        
-            Serial_println(F("[Notify] Ntfy POST versturen..."));
-            int code = http.POST(message);
+            break;
+    }
+    
+    http.addHeader("Title", title);
+    http.addHeader("Priority", "high");
+    
+    // Voeg kleur tag toe als opgegeven
+        if (colorTag != nullptr && strlen(colorTag) > 0) {
+            if (strlen(colorTag) <= 64) { // Valideer lengte
+            http.addHeader(F("Tags"), colorTag);
+            Serial_printf(F("[Notify] Ntfy Tag: %s\n"), colorTag);
+        }
+    }
+    
+    Serial_println(F("[Notify] Ntfy POST versturen..."));
+    int code = http.POST(message);
             lastCode = code;
-        
-            // Haal response alleen op bij succes (bespaar geheugen)
-            // Gebruik static buffer i.p.v. String om fragmentatie te voorkomen
-            if (code == 200 || code == 201) {
-                WiFiClient* stream = http.getStreamPtr();
-                if (stream != nullptr) {
-                    size_t totalLen = 0;
-                    while (stream->available() && totalLen < (sizeof(httpResponseBuffer) - 1)) {
-                        size_t bytesRead = stream->readBytes((uint8_t*)(httpResponseBuffer + totalLen), sizeof(httpResponseBuffer) - 1 - totalLen);
-                        totalLen += bytesRead;
+    
+    // Haal response alleen op bij succes (bespaar geheugen)
+    // Gebruik static buffer i.p.v. String om fragmentatie te voorkomen
+        if (code == 200 || code == 201) {
+        WiFiClient* stream = http.getStreamPtr();
+        if (stream != nullptr) {
+            size_t totalLen = 0;
+            while (stream->available() && totalLen < (sizeof(httpResponseBuffer) - 1)) {
+                size_t bytesRead = stream->readBytes((uint8_t*)(httpResponseBuffer + totalLen), sizeof(httpResponseBuffer) - 1 - totalLen);
+                totalLen += bytesRead;
+            }
+            httpResponseBuffer[totalLen] = '\0';
+            if (totalLen > 0) {
+                Serial_printf(F("[Notify] Ntfy response: %s\n"), httpResponseBuffer);
+            }
+        } else {
+                // M2: Fallback: stream niet beschikbaar, lees response body direct
+                // Voor POST responses kunnen we niet httpGetToBuffer() gebruiken
+                // In plaats daarvan lezen we de response body in chunks
+                size_t totalLen = 0;
+                const size_t CHUNK_SIZE = 256;
+                while (http.connected() && totalLen < (sizeof(httpResponseBuffer) - 1)) {
+                    size_t remaining = sizeof(httpResponseBuffer) - 1 - totalLen;
+                    size_t chunkSize = (remaining < CHUNK_SIZE) ? remaining : CHUNK_SIZE;
+                    
+                    // Probeer response body te lezen (POST response)
+                    WiFiClient* client = http.getStreamPtr();
+                    if (client == nullptr) {
+                        break;
                     }
-                    httpResponseBuffer[totalLen] = '\0';
-                    if (totalLen > 0) {
-                        Serial_printf(F("[Notify] Ntfy response: %s\n"), httpResponseBuffer);
-                    }
-                } else {
-                    // M2: Fallback: stream niet beschikbaar, lees response body direct
-                    // Voor POST responses kunnen we niet httpGetToBuffer() gebruiken
-                    // In plaats daarvan lezen we de response body in chunks
-                    size_t totalLen = 0;
-                    const size_t CHUNK_SIZE = 256;
-                    while (http.connected() && totalLen < (sizeof(httpResponseBuffer) - 1)) {
-                        size_t remaining = sizeof(httpResponseBuffer) - 1 - totalLen;
-                        size_t chunkSize = (remaining < CHUNK_SIZE) ? remaining : CHUNK_SIZE;
-                        
-                        // Probeer response body te lezen (POST response)
-                        WiFiClient* client = http.getStreamPtr();
-                        if (client == nullptr) {
+                    
+                    size_t bytesRead = client->readBytes((uint8_t*)(httpResponseBuffer + totalLen), chunkSize);
+                    if (bytesRead == 0) {
+                        if (!client->available()) {
                             break;
                         }
-                        
-                        size_t bytesRead = client->readBytes((uint8_t*)(httpResponseBuffer + totalLen), chunkSize);
-                        if (bytesRead == 0) {
-                            if (!client->available()) {
-                                break;
-                            }
-                            delay(10);
-                            continue;
-                        }
-                        totalLen += bytesRead;
+                        delay(10);
+                        continue;
                     }
-                    httpResponseBuffer[totalLen] = '\0';
-                    if (totalLen > 0) {
-                        Serial_printf(F("[Notify] Ntfy response: %s\n"), httpResponseBuffer);
-                    }
+                    totalLen += bytesRead;
                 }
-                
-                Serial_printf(F("[Notify] Ntfy bericht succesvol verstuurd! (code: %d)\n"), code);
+                httpResponseBuffer[totalLen] = '\0';
+                if (totalLen > 0) {
+                    Serial_printf(F("[Notify] Ntfy response: %s\n"), httpResponseBuffer);
+                }
+            }
+            
+        Serial_printf(F("[Notify] Ntfy bericht succesvol verstuurd! (code: %d)\n"), code);
                 attemptOk = true;
-                ok = true;
-            } else {
-                Serial_printf(F("[Notify] Ntfy fout bij versturen (code: %d)\n"), code);
+            ok = true;
+        } else {
+        Serial_printf(F("[Notify] Ntfy fout bij versturen (code: %d)\n"), code);
                 shouldRetry = (code == HTTPC_ERROR_CONNECTION_REFUSED ||
                                code == HTTPC_ERROR_CONNECTION_LOST ||
                                code == HTTPC_ERROR_READ_TIMEOUT ||
@@ -2066,15 +2066,15 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
                                code == HTTPC_ERROR_SEND_PAYLOAD_FAILED ||
                                code == 429 ||
                                (code >= 500 && code < 600));
-            }
-        } while(0);
-        
-        // C2: ALTIJD cleanup (ook bij code<0, code!=200, parse error)
-        // Hard close: http.end() + client.stop() voor volledige cleanup
-        http.end();
-        WiFiClient* stream = http.getStreamPtr();
-        if (stream != nullptr) {
-            stream->stop();
+    }
+    } while(0);
+    
+    // C2: ALTIJD cleanup (ook bij code<0, code!=200, parse error)
+    // Hard close: http.end() + client.stop() voor volledige cleanup
+    http.end();
+    WiFiClient* stream = http.getStreamPtr();
+    if (stream != nullptr) {
+        stream->stop();
         }
         
         if (attemptOk) {
@@ -2612,9 +2612,9 @@ static void loadSettings()
     
     // Copy settings to global variables (backward compatibility)
     safeStrncpy(ntfyTopic, settings.ntfyTopic, sizeof(ntfyTopic));
-    safeStrncpy(binanceSymbol, settings.binanceSymbol, sizeof(binanceSymbol));
-    // Update symbols array with the loaded binance symbol
-    safeStrncpy(symbolsArray[0], binanceSymbol, sizeof(symbolsArray[0]));
+    safeStrncpy(bitvavoSymbol, settings.bitvavoSymbol, sizeof(bitvavoSymbol));
+    // Update symbols array with the loaded bitvavo symbol
+    safeStrncpy(symbolsArray[0], bitvavoSymbol, sizeof(symbolsArray[0]));
     language = settings.language;
     displayRotation = settings.displayRotation;
     
@@ -2668,7 +2668,7 @@ static void loadSettings()
     volatilityHighThreshold = settings.volatilityHighThreshold;
     
     Serial_printf(F("[Settings] Loaded: topic=%s, symbol=%s, 1min trend=%.2f/%.2f%%/min, 30min trend=%.2f/%.2f%%/uur, cooldown=%lu/%lu ms\n"),
-                  ntfyTopic, binanceSymbol, threshold1MinUp, threshold1MinDown, threshold30MinUp, threshold30MinDown,
+                  ntfyTopic, bitvavoSymbol, threshold1MinUp, threshold1MinDown, threshold30MinUp, threshold30MinDown,
                   notificationCooldown1MinMs, notificationCooldown30MinMs);
 }
 
@@ -2681,7 +2681,7 @@ void saveSettings()
     
     // Copy basic settings
     safeStrncpy(settings.ntfyTopic, ntfyTopic, sizeof(settings.ntfyTopic));
-    safeStrncpy(settings.binanceSymbol, binanceSymbol, sizeof(settings.binanceSymbol));
+    safeStrncpy(settings.bitvavoSymbol, bitvavoSymbol, sizeof(settings.bitvavoSymbol));
     settings.language = language;
     
     // Copy alert thresholds
@@ -3105,11 +3105,11 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     
     // Special cases (niet in lookup table vanwege complexe logica)
     if (!handled) {
-        // binanceSymbol - speciale logica (uppercase + symbolsArray update)
-        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/binanceSymbol/set", prefixBuffer);
+        // bitvavoSymbol - speciale logica (uppercase + symbolsArray update)
+        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/bitvavoSymbol/set", prefixBuffer);
         if (strcmp(topicBuffer, topicBufferFull) == 0) {
-            if (handleMqttStringSetting(msgBuffer, msgLen, binanceSymbol, sizeof(binanceSymbol), true, "/config/binanceSymbol", prefixBuffer)) {
-                safeStrncpy(symbolsArray[0], binanceSymbol, sizeof(symbolsArray[0]));
+            if (handleMqttStringSetting(msgBuffer, msgLen, bitvavoSymbol, sizeof(bitvavoSymbol), true, "/config/bitvavoSymbol", prefixBuffer)) {
+                safeStrncpy(symbolsArray[0], bitvavoSymbol, sizeof(symbolsArray[0]));
                 settingChanged = true;
             }
         } else {
@@ -3266,7 +3266,7 @@ static bool enqueueMqttMessage(const char* topic, const char* payload, bool reta
             static unsigned long lastQueueFullWarning = 0;
             unsigned long now = millis();
             if (now - lastQueueFullWarning > 5000) {  // Max 1 warning per 5 seconden
-                Serial_printf("[MQTT Queue] Queue vol, bericht verloren: %s\n", topic);
+        Serial_printf("[MQTT Queue] Queue vol, bericht verloren: %s\n", topic);
                 lastQueueFullWarning = now;
             }
             return false; // Queue nog steeds vol
@@ -3450,7 +3450,7 @@ void publishMqttSettings() {
     enqueueMqttMessage(topicBuffer, valueBuffer, true);
     
     // String settings
-    publishMqttString("binanceSymbol", binanceSymbol);
+    publishMqttString("bitvavoSymbol", bitvavoSymbol);
     publishMqttString("ntfyTopic", ntfyTopic);
     
     // Anchor value - publish current price as default (or current anchor if set)
@@ -3633,8 +3633,8 @@ void publishMqttDiscovery() {
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
-    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/text/%s_binanceSymbol/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Binance Symbol\",\"unique_id\":\"%s_binanceSymbol\",\"state_topic\":\"%s/config/binanceSymbol\",\"command_topic\":\"%s/config/binanceSymbol/set\",\"icon\":\"mdi:currency-btc\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/text/%s_bitvavoSymbol/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Bitvavo Market\",\"unique_id\":\"%s_bitvavoSymbol\",\"state_topic\":\"%s/config/bitvavoSymbol\",\"command_topic\":\"%s/config/bitvavoSymbol/set\",\"icon\":\"mdi:currency-btc\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
@@ -3982,7 +3982,7 @@ void connectMQTT() {
         mqttClient.subscribe(topicBuffer);
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/cooldown30min/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
-        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/binanceSymbol/set", mqttPrefix);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/bitvavoSymbol/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/ntfyTopic/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
@@ -4095,7 +4095,7 @@ void connectMQTT() {
 // ============================================================================
 // Fase 9: Alle web server functionaliteit verplaatst naar WebServerModule (zie src/WebServer/)
 
-// Parse Binance JSON functies zijn verwijderd - nu via ApiClient::parseBinancePrice()
+// Parse Bitvavo JSON functies zijn verwijderd - nu via ApiClient::parseBitvavoPrice()
 
 // Calculate average of array (optimized: single loop)
 // Fase 4.2.8: static verwijderd zodat PriceData.cpp deze functie kan aanroepen
@@ -4568,8 +4568,8 @@ float calculateReturn30Minutes()
     uint8_t lastMinuteIdx;
     if (!minuteArrayFilled) {
         if (minuteIndex == 0) {
-            return 0.0f;
-        }
+        return 0.0f;
+    }
         lastMinuteIdx = minuteIndex - 1;
     } else {
         lastMinuteIdx = getLastWrittenIndex(minuteIndex, MINUTES_FOR_30MIN_CALC);
@@ -4976,21 +4976,21 @@ static float calculateLinearTrend2Hours()
         lastWrittenIdx = getLastWrittenIndex(index, MINUTES_FOR_30MIN_CALC);
     }
     
-    for (uint8_t i = 0; i < minutesToUse; i++)
-    {
-        uint8_t idx;
-        if (!arrayFilled)
+        for (uint8_t i = 0; i < minutesToUse; i++)
         {
+            uint8_t idx;
+            if (!arrayFilled)
+            {
             if (i >= index) break;  // Not enough data
             idx = index - 1 - i;  // Start at last minute and work backwards
-        }
-        else
-        {
+            }
+            else
+            {
             // Ring buffer mode: use helper, starting from lastWrittenIdx
             int32_t idx_temp = getRingBufferIndexAgo(lastWrittenIdx, i, MINUTES_FOR_30MIN_CALC);
-            if (idx_temp < 0) break;
-            idx = (uint8_t)idx_temp;
-        }
+                if (idx_temp < 0) break;
+                idx = (uint8_t)idx_temp;
+            }
         
         float price = averages[idx];
         if (isValidPrice(price))
@@ -5026,8 +5026,8 @@ static float calculateLinearTrend2Hours()
     
     if (fabsf(denominator) < 0.0001f)  // Prevent division by zero
     {
-        return 0.0f;
-    }
+                    return 0.0f;
+                }
     
     float slope = ((n * sumXY) - (sumX * sumY)) / denominator;
     
@@ -5043,8 +5043,8 @@ static float calculateLinearTrend2Hours()
         return pctPer2Hours;
     }
     
-    return 0.0f;
-}
+                    return 0.0f;
+                }
 
 // Calculate 2-hour return: now uses linear regression for better trend detection
 // NOTE: This function now uses linear regression instead of simple 2-point comparison
@@ -5068,9 +5068,9 @@ static float calculateReturnFromHourly(uint16_t hoursBack)
 {
     uint16_t availableHours = getAvailableHours();
     if (availableHours < 2 || hoursBack == 0) {
-        return 0.0f;
-    }
-    
+                return 0.0f;
+            }
+            
     uint16_t hoursAgo = (availableHours > hoursBack) ? hoursBack : (availableHours - 1);
     if (hoursAgo == 0) {
         return 0.0f;
@@ -5096,9 +5096,9 @@ static float calculateReturnFromHourly(uint16_t hoursBack)
     if (!hourArrayFilled)
     {
         idxHoursAgo = lastHourIdx - hoursAgo;
-            }
-            else
-            {
+    }
+    else
+    {
         int32_t idxHoursAgoTemp = getRingBufferIndexAgo(lastHourIdx, hoursAgo, HOURS_FOR_7D);
         if (idxHoursAgoTemp < 0) {
             return 0.0f;
@@ -5163,9 +5163,9 @@ static float calculateLinearTrend1Day()
         {
             if (i >= hourIndex) break;  // Not enough data
             idx = hourIndex - 1 - i;  // Start at last hour and work backwards
-        }
-        else
-        {
+    }
+    else
+    {
             // Ring buffer mode: use helper, starting from lastHourIdx
             int32_t idx_temp = getRingBufferIndexAgo(lastHourIdx, i, HOURS_FOR_7D);
             if (idx_temp < 0) break;
@@ -5270,9 +5270,9 @@ static float calculateLinearTrend7Days()
         {
             if (i >= hourIndex) break;  // Not enough data
             idx = hourIndex - 1 - i;  // Start at last hour and work backwards
-        }
-        else
-        {
+    }
+    else
+    {
             // Ring buffer mode: use helper, starting from lastHourIdx
             int32_t idx_temp = getRingBufferIndexAgo(lastHourIdx, i, HOURS_FOR_7D);
             if (idx_temp < 0) break;
@@ -5571,7 +5571,7 @@ static void updateLatestKlineMetricsIfNeeded()
     
     if (last1mFetchMs == 0 || (now - last1mFetchMs) >= 60000UL) {
         float temp1mPrices[2];
-        int fetched1m = fetchBinanceKlines(binanceSymbol, "1m", 2, temp1mPrices, nullptr, 2);
+        int fetched1m = fetchBitvavoCandles(bitvavoSymbol, "1m", 2, temp1mPrices, nullptr, 2);
         if (fetched1m > 0) {
             last1mFetchMs = now;
         }
@@ -5579,7 +5579,7 @@ static void updateLatestKlineMetricsIfNeeded()
     
     if (last5mFetchMs == 0 || (now - last5mFetchMs) >= 300000UL) {
         float temp5mPrices[2];
-        int fetched5m = fetchBinanceKlines(binanceSymbol, "5m", 2, temp5mPrices, nullptr, 2);
+        int fetched5m = fetchBitvavoCandles(bitvavoSymbol, "5m", 2, temp5mPrices, nullptr, 2);
         if (fetched5m > 0) {
             last5mFetchMs = now;
         }
@@ -5600,21 +5600,21 @@ void fetchPrice()
     float fetched = prices[0]; // Start met huidige waarde als fallback
     bool ok = false;
 
-    // Fase 4.1.7: Gebruik hoog-niveau fetchBinancePrice() method
-    bool httpSuccess = apiClient.fetchBinancePrice(binanceSymbol, fetched);
+    // Fase 4.1.7: Gebruik hoog-niveau fetchBitvavoPrice() method
+    bool httpSuccess = apiClient.fetchBitvavoPrice(bitvavoSymbol, fetched);
     unsigned long fetchTime = millis() - fetchStart;
     
     if (!httpSuccess) {
         // Leeg response - kan komen door timeout of netwerkproblemen
         #if !DEBUG_BUTTON_ONLY
-        Serial.printf("[API] WARN -> %s leeg response (tijd: %lu ms) - mogelijk timeout of netwerkprobleem\n", binanceSymbol, fetchTime);
+        Serial.printf("[API] WARN -> %s leeg response (tijd: %lu ms) - mogelijk timeout of netwerkprobleem\n", bitvavoSymbol, fetchTime);
         #endif
         // Gebruik laatste bekende prijs als fallback (al ingesteld als fetched = prices[0])
     } else {
         // Succesvol opgehaald (alleen loggen bij langzame calls > 1200ms)
         #if !DEBUG_BUTTON_ONLY
         if (fetchTime > 1200) {
-            Serial.printf(F("[API] OK -> %s %.2f (tijd: %lu ms) - langzaam\n"), binanceSymbol, fetched, fetchTime);
+            Serial.printf(F("[API] OK -> %s %.2f (tijd: %lu ms) - langzaam\n"), bitvavoSymbol, fetched, fetchTime);
         }
         #endif
         
@@ -5863,7 +5863,7 @@ void fetchPrice()
             // ret_2h wordt nu altijd berekend in calculateReturn2Hours(), ook als er minder dan 120 minuten zijn
             // Het berekent een return op basis van beschikbare data (minimaal 2 minuten nodig)
             if (hasRet2h) {
-                prices[3] = ret_2h;
+            prices[3] = ret_2h;
             } else {
                 prices[3] = 0.0f; // Reset naar 0 om aan te geven dat er nog geen data is
             }
@@ -5914,7 +5914,7 @@ void fetchPrice()
             }
         } else {
             // Fase 4.1: Geconsolideerde mutex timeout handling
-            handleMutexTimeout(mutexTimeoutCount, "API", binanceSymbol);
+            handleMutexTimeout(mutexTimeoutCount, "API", bitvavoSymbol);
         }
     }
 }
@@ -6649,7 +6649,7 @@ static void startFreeRTOSTasks()
         NULL,              // Task handle
         1                  // Core 1
     );
-    
+
     // Core 2: UI updates (elke seconde)
     xTaskCreatePinnedToCore(
         uiTask,            // Task function

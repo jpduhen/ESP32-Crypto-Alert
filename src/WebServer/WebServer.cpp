@@ -24,7 +24,7 @@ extern float prices[];
 extern bool anchorActive;
 extern float anchorPrice;
 extern char ntfyTopic[];
-extern char binanceSymbol[];
+extern char bitvavoSymbol[];  // Bitvavo market (bijv. "BTC-EUR")
 extern uint8_t language;
 extern uint8_t displayRotation;
 extern char mqttHost[];
@@ -325,8 +325,8 @@ void WebServerModule::renderSettingsHTML() {
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='info'>%s</div>", 
              getText("NTFY.sh topic voor notificaties", "NTFY.sh topic for notifications"));
     server->sendContent(tmpBuf);
-    sendInputRow(getText("Binance Symbol", "Binance Symbol"), "binancesymbol", "text", binanceSymbol, 
-                 getText("Bijv. BTCEUR, ETHBTC", "E.g. BTCEUR, ETHBTC"));
+    sendInputRow(getText("Bitvavo Market", "Bitvavo Market"), "bitvavosymbol", "text", bitvavoSymbol, 
+                 getText("Bijv. BTC-EUR, ETH-EUR", "E.g. BTC-EUR, ETH-EUR"));
     sendInputRow(getText("Taal", "Language"), "language", "number", (language == 0) ? "0" : "1", 
                  getText("0 = Nederlands, 1 = English", "0 = Dutch, 1 = English"), 0, 1, 1);
     sendInputRow(getText("Display Rotatie", "Display Rotation"), "displayRotation", "number", 
@@ -796,9 +796,9 @@ void WebServerModule::handleSave() {
             ntfyTopic[topicLen] = '\0';
         }
     }
-    if (server->hasArg("binancesymbol")) {
+    if (server->hasArg("bitvavosymbol")) {
         // Fix: gebruik String object eerst om dangling pointer te voorkomen
-        String symbolStr = server->arg("binancesymbol");
+        String symbolStr = server->arg("bitvavosymbol");
         char symbolBuffer[16];
         size_t symbolLen = symbolStr.length();
         
@@ -818,26 +818,21 @@ void WebServerModule::handleSave() {
         }
         symbolLen = strlen(start);
         
-        if (symbolLen > 0 && symbolLen < 16) {  // binanceSymbol is 16 bytes
-            // Convert to uppercase
-            for (size_t i = 0; i < symbolLen; i++) {
-                symbolBuffer[i] = (start[i] >= 'a' && start[i] <= 'z') 
-                    ? (start[i] - 'a' + 'A') 
-                    : start[i];
-            }
+        if (symbolLen > 0 && symbolLen < 16) {  // bitvavoSymbol is 16 bytes
+            // Bitvavo gebruikt streepjes (BTC-EUR), geen uppercase conversie nodig
             symbolBuffer[symbolLen] = '\0';
             
             // Check if symbol actually changed
-            bool symbolChanged = (strcmp(binanceSymbol, symbolBuffer) != 0);
+            bool symbolChanged = (strcmp(bitvavoSymbol, symbolBuffer) != 0);
             
             if (symbolChanged) {
                 // Symbol changed - reboot for clean state
-                Serial_printf(F("[Settings] Binance symbol changed from %s to %s - rebooting\n"), 
-                             binanceSymbol, symbolBuffer);
+                Serial_printf(F("[Settings] Bitvavo market changed from %s to %s - rebooting\n"), 
+                             bitvavoSymbol, symbolBuffer);
                 
                 // Update symbol before reboot
-                safeStrncpy(binanceSymbol, symbolBuffer, 16);  // binanceSymbol is 16 bytes
-                safeStrncpy(symbolsArray[0], binanceSymbol, 16);
+                safeStrncpy(bitvavoSymbol, symbolBuffer, 16);  // bitvavoSymbol is 16 bytes
+                safeStrncpy(symbolsArray[0], bitvavoSymbol, 16);
                 
                 // Save settings before reboot
                 saveSettings();
@@ -851,8 +846,8 @@ void WebServerModule::handleSave() {
                 ESP.restart();
             } else {
                 // No change, just update normally
-                safeStrncpy(binanceSymbol, symbolBuffer, 16);  // binanceSymbol is 16 bytes
-                safeStrncpy(symbolsArray[0], binanceSymbol, 16);
+                safeStrncpy(bitvavoSymbol, symbolBuffer, 16);  // bitvavoSymbol is 16 bytes
+                safeStrncpy(symbolsArray[0], bitvavoSymbol, 16);
             }
         }
     }
@@ -1301,7 +1296,7 @@ void WebServerModule::handleStatus() {
         "\"heapFree\":%u,"
         "\"heapLargest\":%u"
         "}",
-        binanceSymbol,
+        bitvavoSymbol,
         price,
         trend2hText,
         getVolatilityText(volatility),
@@ -1494,10 +1489,10 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     // HTML doctype en head (lang='en' om punt als decimaal scheidingsteken te forceren)
     server->sendContent(F("<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"));
     
-    // Title - gebruik binanceSymbol in plaats van platformName, voeg versie toe
+    // Title - gebruik bitvavoSymbol in plaats van platformName, voeg versie toe
     char titleBuf[128];
     snprintf(titleBuf, sizeof(titleBuf), "<title>%s %s %s v%s</title>", 
-             getText("Instellingen", "Settings"), binanceSymbol, ntfyTopic, VERSION_STRING);
+             getText("Instellingen", "Settings"), bitvavoSymbol, ntfyTopic, VERSION_STRING);
     server->sendContent(titleBuf);
     
     // CSS - Performance optimalisatie: combineer statische CSS in één PROGMEM string
@@ -1687,10 +1682,10 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(F("</head><body>"));
     server->sendContent(F("<div class='container'>"));
     
-    // Title - gebruik binanceSymbol in plaats van platformName, voeg versie toe
+    // Title - gebruik bitvavoSymbol in plaats van platformName, voeg versie toe
     char h1Buf[128];
     snprintf(h1Buf, sizeof(h1Buf), "<h1>%s %s %s v%s</h1>", 
-             getText("Instellingen", "Settings"), binanceSymbol, ntfyTopic, VERSION_STRING);
+             getText("Instellingen", "Settings"), bitvavoSymbol, ntfyTopic, VERSION_STRING);
     server->sendContent(h1Buf);
 }
 

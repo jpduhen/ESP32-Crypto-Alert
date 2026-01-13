@@ -5,7 +5,7 @@
 
 // Forward declarations voor dependencies (worden later via modules)
 extern bool sendNotification(const char *title, const char *message, const char *colorTag = nullptr);
-extern char binanceSymbol[];
+extern char bitvavoSymbol[];  // Bitvavo market (bijv. "BTC-EUR")
 extern float prices[];  // Voor notificatie formaat
 extern uint8_t language;  // Taalinstelling (0 = Nederlands, 1 = English)
 extern const char* getText(const char* nlText, const char* enText);  // Taalvertaling functie
@@ -192,8 +192,8 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
     }
     
     // Geconsolideerde checks: cooldown en data validiteit in één keer
-    bool cooldownPassed = (lastTrendChangeNotification == 0 || 
-                          (now - lastTrendChangeNotification >= TREND_CHANGE_COOLDOWN_MS));
+        bool cooldownPassed = (lastTrendChangeNotification == 0 || 
+                               (now - lastTrendChangeNotification >= TREND_CHANGE_COOLDOWN_MS));
     bool hasValidData = (ret_2h != 0.0f && (minuteArrayFilled || minuteIndex >= 120));
     
     if (cooldownPassed && hasValidData) {
@@ -274,8 +274,8 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
         }
         
         snprintf(title, sizeof(title), "%s %s", 
-                 binanceSymbol, getText("Trend Wijziging", "Trend Change"));
-        snprintf(msg, sizeof(msg), 
+                 bitvavoSymbol, getText("Trend Wijziging", "Trend Change"));
+            snprintf(msg, sizeof(msg), 
                  "%.2f (%s)\n%s: %s → %s\n2h: %+.2f%%\n30m: %+.2f%%\n%s: %s\n%s: %s",
                  prices[0], timestamp,
                  getText("Trend change", "Trend change"), fromTrendTranslated, toTrendTranslated,
@@ -288,22 +288,22 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
         if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag)) {
             lastTrendChangeNotification = now;
         }
-        
+            
         #if !DEBUG_BUTTON_ONLY
-        Serial_printf(F("[Trend] Trend change notificatie verzonden: %s → %s (2h: %.2f%%, 30m: %.2f%%, Vol: %s)\n"), 
-                     fromTrend, toTrend, ret_2h, ret_30m_value, volText);
+            Serial_printf(F("[Trend] Trend change notificatie verzonden: %s → %s (2h: %.2f%%, 30m: %.2f%%, Vol: %s)\n"), 
+                         fromTrend, toTrend, ret_2h, ret_30m_value, volText);
         #endif
+        }
+        
+        // Update previous trend state
+        this->previousTrendState = this->trendState;
+        
+        // Update globale variabelen voor backward compatibility
+        extern TrendState trendState;
+        extern TrendState previousTrendState;
+        trendState = this->trendState;
+        previousTrendState = this->previousTrendState;
     }
-    
-    // Update previous trend state
-    this->previousTrendState = this->trendState;
-    
-    // Update globale variabelen voor backward compatibility
-    extern TrendState trendState;
-    extern TrendState previousTrendState;
-    trendState = this->trendState;
-    previousTrendState = this->previousTrendState;
-}
 
 // Medium trend change detection en notificatie
 void TrendDetector::checkMediumTrendChange(float ret_4h_value, float ret_1d_value, float mediumThreshold) {
@@ -366,7 +366,7 @@ void TrendDetector::checkMediumTrendChange(float ret_4h_value, float ret_1d_valu
         }
         
         snprintf(title, sizeof(title), "%s %s", 
-                 binanceSymbol, getText("1d Trend Wijziging", "1d Trend Change"));
+                 bitvavoSymbol, getText("1d Trend Wijziging", "1d Trend Change"));
         snprintf(msg, sizeof(msg), 
                  "%.2f (%s)\n%s: %s → %s\n1d: %+.2f%%\n%s: %s",
                  prices[0], timestamp,
@@ -452,7 +452,7 @@ void TrendDetector::checkLongTermTrendChange(float ret_7d_value, float longTermT
         }
         
         snprintf(title, sizeof(title), "%s %s", 
-                 binanceSymbol, getText("7d Trend Wijziging", "7d Trend Change"));
+                 bitvavoSymbol, getText("7d Trend Wijziging", "7d Trend Change"));
         snprintf(msg, sizeof(msg), 
                  "%.2f (%s)\n%s: %s → %s\n7d: %+.2f%%\n%s: %s",
                  prices[0], timestamp,

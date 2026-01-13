@@ -5,7 +5,7 @@
 
 // Forward declarations voor dependencies (worden later via modules)
 extern bool sendNotification(const char *title, const char *message, const char *colorTag);
-extern char binanceSymbol[];
+extern char bitvavoSymbol[];  // Bitvavo market (bijv. "BTC-EUR")
 extern float prices[];  // Voor anchor price checks
 extern uint8_t language;  // Taalinstelling (0 = Nederlands, 1 = English)
 extern const char* getText(const char* nlText, const char* enText);  // Taalvertaling functie

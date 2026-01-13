@@ -126,7 +126,7 @@ struct Alert2HThresholds {
 struct CryptoMonitorSettings {
     // Basic settings
     char ntfyTopic[64];
-    char binanceSymbol[16];
+    char bitvavoSymbol[16];  // Bitvavo market (bijv. "BTC-EUR")
     uint8_t language;
     uint8_t displayRotation;  // Display rotatie: 0 = normaal, 2 = 180 graden gedraaid
     
@@ -207,7 +207,7 @@ private:
     
     // Preference keys
     static const char* PREF_KEY_NTFY_TOPIC;
-    static const char* PREF_KEY_BINANCE_SYMBOL;
+    static const char* PREF_KEY_BITVAVO_SYMBOL;
     static const char* PREF_KEY_LANGUAGE;
     static const char* PREF_KEY_DISPLAY_ROTATION;
     static const char* PREF_KEY_TH1_UP;

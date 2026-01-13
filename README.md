@@ -5,7 +5,7 @@
 
 **🇳🇱 Deze handleiding is ook beschikbaar in het Nederlands** → [README_NL.md](README_NL.md)
 
-A standalone ESP32 device that monitors cryptocurrency prices in real-time via Binance and generates **contextual alerts** based on multi-timeframe analysis.  
+A standalone ESP32 device that monitors cryptocurrency prices in real-time via Bitvavo and generates **contextual alerts** based on multi-timeframe analysis.  
 No constant notifications — only meaningful signals like spikes, breakouts, compression, and trend changes, with smart filters and your personal **anchor price** as reference.
 
 ### Key Features

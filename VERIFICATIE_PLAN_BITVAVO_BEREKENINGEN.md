@@ -13,12 +13,12 @@ Verifiëren en verbeteren van de betrouwbaarheid, robuustheid en consistentie va
 
 ## FASE 1: API Data Parsing Verificatie
 
-### 1.1 Binance Price API Response Parsing
-**Locatie:** `src/ApiClient/ApiClient.cpp` - `fetchBinancePrice()`
+### 1.1 Bitvavo Price API Response Parsing
+**Locatie:** `src/ApiClient/ApiClient.cpp` - `fetchBitvavoPrice()`
 
 **Te verifiëren:**
 - [ ] JSON response wordt correct geparsed
-- [ ] Price waarde wordt correct geëxtraheerd uit `{"symbol":"BTCEUR","price":"12345.67"}`
+- [ ] Price waarde wordt correct geëxtraheerd uit `[{"market":"BTC-EUR","price":"12345.67"}]`
 - [ ] Float conversie is correct (geen precision loss)
 - [ ] Error handling bij malformed JSON
 - [ ] Validatie van price waarde (> 0, geen NaN/Inf)
@@ -29,8 +29,8 @@ Verifiëren en verbeteren van de betrouwbaarheid, robuustheid en consistentie va
 3. Test edge cases: lege response, invalid JSON, zeer grote/kleine waarden
 4. Voeg validatie toe: `isValidPrice()` check direct na parsing
 
-### 1.2 Binance Klines API Response Parsing
-**Locatie:** `src/ApiClient/ApiClient.cpp` - `fetchBinanceKlines()`
+### 1.2 Bitvavo Candles API Response Parsing
+**Locatie:** `UNIFIED-LVGL9-Crypto_Monitor.ino` - `fetchBitvavoCandles()`
 
 **Te verifiëren:**
 - [ ] Streaming JSON parsing werkt correct
@@ -57,7 +57,7 @@ Verifiëren en verbeteren van de betrouwbaarheid, robuustheid en consistentie va
 - [ ] `secondIndex` wordt correct geïncrementeerd
 - [ ] `secondArrayFilled` flag wordt correct gezet
 - [ ] Oude data wordt correct overschreven
-- [ ] DataSource tracking werkt (SOURCE_LIVE vs SOURCE_BINANCE)
+- [ ] DataSource tracking werkt (SOURCE_LIVE vs SOURCE_BITVAVO)
 
 **Acties:**
 1. Test wraparound scenario: vul 60 entries, voeg 61e toe

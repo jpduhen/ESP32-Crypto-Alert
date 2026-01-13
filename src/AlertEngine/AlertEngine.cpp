@@ -29,7 +29,7 @@ extern PriceData priceData;  // Voor getFiveMinutePrices()
 
 // Forward declarations voor dependencies (worden later via modules)
 extern bool sendNotification(const char *title, const char *message, const char *colorTag = nullptr);
-extern char binanceSymbol[];
+extern char bitvavoSymbol[];  // Bitvavo market (bijv. "BTC-EUR")
 extern float prices[];  // Fase 6.1.4: Voor formatNotificationMessage
 extern uint8_t language;  // Taalinstelling (0 = Nederlands, 1 = English)
 extern const char* getText(const char* nlText, const char* enText);  // Taalvertaling functie
@@ -274,14 +274,14 @@ bool AlertEngine::sendAlertNotification(float ret, float threshold, float strong
     const char* colorTag = determineColorTag(ret, threshold, strongThreshold);
     
     char title[48];
-    snprintf(title, sizeof(title), "%s %s Alert", binanceSymbol, alertType);
+    snprintf(title, sizeof(title), "%s %s Alert", bitvavoSymbol, alertType);
     
     bool sent = sendNotification(title, msg, colorTag);
     if (sent) {
-        lastNotification = now;
-        alertsThisHour++;
+    lastNotification = now;
+    alertsThisHour++;
         #if !DEBUG_BUTTON_ONLY
-        Serial_printf(F("[Notify] %s notificatie verstuurd (%d/%d dit uur)\n"), alertType, alertsThisHour, maxAlertsPerHour);
+    Serial_printf(F("[Notify] %s notificatie verstuurd (%d/%d dit uur)\n"), alertType, alertsThisHour, maxAlertsPerHour);
         #endif
     }
     
@@ -441,7 +441,7 @@ bool AlertEngine::checkAndSendConfluenceAlert(unsigned long now, float ret_30m)
     
     // Hergebruik class buffers i.p.v. lokale stack allocaties
     getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
-    snprintf(titleBuffer, sizeof(titleBuffer), "%s %s (1m+5m+Trend)", binanceSymbol, 
+    snprintf(titleBuffer, sizeof(titleBuffer), "%s %s (1m+5m+Trend)", bitvavoSymbol, 
              getText("Samenloop", "Confluence"));
     
     // Vertaal trend naar juiste taal
@@ -473,11 +473,11 @@ bool AlertEngine::checkAndSendConfluenceAlert(unsigned long now, float ret_30m)
     bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
     if (sent) {
         lastVolumeEventMs = now;
-        
-        // Mark events as used
-        last1mEvent.usedInConfluence = true;
-        last5mEvent.usedInConfluence = true;
-        lastConfluenceAlert = now;
+    
+    // Mark events as used
+    last1mEvent.usedInConfluence = true;
+    last5mEvent.usedInConfluence = true;
+    lastConfluenceAlert = now;
     }
     
     #if !DEBUG_BUTTON_ONLY
@@ -665,56 +665,56 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         if (absRet1m < effThresh.spike1m || absRet5m < alertThresholds.spike5m) {
             // Thresholds niet gehaald, skip rest
         } else {
-            // Check of beide in dezelfde richting zijn (beide positief of beide negatief)
-            bool sameDirection = ((ret_1m > 0 && ret_5m > 0) || (ret_1m < 0 && ret_5m < 0));
-            
-            // Threshold check: ret_1m >= effectiveSpike1mThreshold EN ret_5m >= spike5mThreshold
-            // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
+        // Check of beide in dezelfde richting zijn (beide positief of beide negatief)
+        bool sameDirection = ((ret_1m > 0 && ret_5m > 0) || (ret_1m < 0 && ret_5m < 0));
+        
+        // Threshold check: ret_1m >= effectiveSpike1mThreshold EN ret_5m >= spike5mThreshold
+        // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
             bool spikeDetected = sameDirection;
             bool volumeRangeOk1m = (volumeRange1m.valid && volumeRange1m.volumeOk && volumeRange1m.rangeOk);
-            
+        
             // Update 1m event state voor Smart Confluence Mode (alleen bij volume/range confirmatie)
             if (spikeDetected && volumeRangeOk1m) {
-                update1mEvent(ret_1m, now, effThresh.spike1m);
-            }
-            
-            // Debug logging alleen bij spike detectie
-            if (spikeDetected) {
+            update1mEvent(ret_1m, now, effThresh.spike1m);
+        }
+        
+        // Debug logging alleen bij spike detectie
+        if (spikeDetected) {
                 #if !DEBUG_BUTTON_ONLY
-                Serial_printf(F("[Notify] 1m spike: ret_1m=%.2f%%, ret_5m=%.2f%%\n"), ret_1m, ret_5m);
+            Serial_printf(F("[Notify] 1m spike: ret_1m=%.2f%%, ret_5m=%.2f%%\n"), ret_1m, ret_5m);
                 #endif
-                
+            
                 if (!volumeRangeOk1m) {
                     #if !DEBUG_BUTTON_ONLY
                     Serial_printf(F("[Notify] 1m spike onderdrukt (volume/range confirmatie fail)\n"));
                     #endif
                 } else {
-                    // Check for confluence first (Smart Confluence Mode)
-                    bool confluenceFound = false;
-                    if (smartConfluenceEnabled) {
-                        confluenceFound = checkAndSendConfluenceAlert(now, ret_30m);
-                    }
-                    
-                    // Als confluence werd gevonden, skip individuele alert
-                    if (confluenceFound) {
+            // Check for confluence first (Smart Confluence Mode)
+            bool confluenceFound = false;
+            if (smartConfluenceEnabled) {
+                confluenceFound = checkAndSendConfluenceAlert(now, ret_30m);
+            }
+            
+            // Als confluence werd gevonden, skip individuele alert
+            if (confluenceFound) {
                         #if !DEBUG_BUTTON_ONLY
-                        Serial_printf(F("[Notify] 1m spike onderdrukt (gebruikt in confluence alert)\n"));
+                Serial_printf(F("[Notify] 1m spike onderdrukt (gebruikt in confluence alert)\n"));
                         #endif
-                    } else {
-                        // Check of dit event al gebruikt is in confluence (suppress individuele alert)
-                        if (smartConfluenceEnabled && last1mEvent.usedInConfluence) {
+            } else {
+                // Check of dit event al gebruikt is in confluence (suppress individuele alert)
+                if (smartConfluenceEnabled && last1mEvent.usedInConfluence) {
                             #if !DEBUG_BUTTON_ONLY
-                            Serial_printf(F("[Notify] 1m spike onderdrukt (al gebruikt in confluence)\n"));
+                    Serial_printf(F("[Notify] 1m spike onderdrukt (al gebruikt in confluence)\n"));
                             #endif
                         } else if (!volumeEventCooldownOk(now)) {
                             #if !DEBUG_BUTTON_ONLY
                             Serial_printf(F("[Notify] 1m spike onderdrukt (volume-event cooldown)\n"));
                             #endif
-                        } else {
-                            // Bereken min en max uit secondPrices buffer
-                            float minVal, maxVal;
-                            findMinMaxInSecondPrices(minVal, maxVal);
-                            
+                } else {
+                    // Bereken min en max uit secondPrices buffer
+                    float minVal, maxVal;
+                    findMinMaxInSecondPrices(minVal, maxVal);
+                    
                             // FASE 8.1: Notificatie waarden verificatie logging (1m spike)
                             #if DEBUG_CALCULATIONS
                             Serial.printf(F("[Notify][1mSpike] ret_1m=%.2f%%, ret_5m=%.2f%%, minVal=%.2f, maxVal=%.2f, price=%.2f\n"),
@@ -723,14 +723,14 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             
                             // Format message met hergebruik van class buffer
                             getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
-                            if (ret_1m >= 0) {
+                    if (ret_1m >= 0) {
                                 snprintf(msgBuffer, sizeof(msgBuffer), 
                                          "%.2f (%s)\n1m %s spike: +%.2f%% (5m: +%.2f%%)\n1m %s: %.2f\n1m %s: %.2f", 
                                          prices[0], timestampBuffer, 
                                          getText("OP", "UP"), ret_1m, ret_5m,
                                          getText("Top", "Top"), maxVal,
                                          getText("Dal", "Low"), minVal);
-                            } else {
+                    } else {
                                 snprintf(msgBuffer, sizeof(msgBuffer), 
                                          "%.2f (%s)\n1m %s spike: %.2f%% (5m: %.2f%%)\n1m %s: %.2f\n1m %s: %.2f", 
                                          prices[0], timestampBuffer,
@@ -739,20 +739,20 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                                          getText("Dal", "Low"), minVal);
                             }
                             appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange1m);
-                            
-                            const char* colorTag = determineColorTag(ret_1m, effThresh.spike1m, effThresh.spike1m * 1.5f);
-                            snprintf(titleBuffer, sizeof(titleBuffer), "%s 1m %s", binanceSymbol, getText("Spike", "Spike"));
-                            
-                            // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
-                            if (checkAlertConditions(now, lastNotification1Min, notificationCooldowns.cooldown1MinMs, 
-                                                     alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR, "1m spike")) {
+                    
+                    const char* colorTag = determineColorTag(ret_1m, effThresh.spike1m, effThresh.spike1m * 1.5f);
+                            snprintf(titleBuffer, sizeof(titleBuffer), "%s 1m %s", bitvavoSymbol, getText("Spike", "Spike"));
+                    
+                    // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
+                    if (checkAlertConditions(now, lastNotification1Min, notificationCooldowns.cooldown1MinMs, 
+                                             alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR, "1m spike")) {
                                 bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
                                 if (sent) {
-                                    lastNotification1Min = now;
-                                    alerts1MinThisHour++;
+                        lastNotification1Min = now;
+                        alerts1MinThisHour++;
                                     lastVolumeEventMs = now;
                                     #if !DEBUG_BUTTON_ONLY
-                                    Serial_printf(F("[Notify] 1m spike notificatie verstuurd (%d/%d dit uur)\n"), alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR);
+                        Serial_printf(F("[Notify] 1m spike notificatie verstuurd (%d/%d dit uur)\n"), alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR);
                                     #endif
                                 }
                             }
@@ -775,40 +775,40 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         if (absRet30m < effThresh.move30m || absRet5m < alertThresholds.move5m) {
             // Thresholds niet gehaald, skip rest
         } else {
-            // Check of beide in dezelfde richting zijn
-            bool sameDirection = ((ret_30m > 0 && ret_5m > 0) || (ret_30m < 0 && ret_5m < 0));
-            
-            // Threshold check: ret_30m >= effectiveMove30mThreshold EN ret_5m >= move5mThreshold
-            // Note: move5mThreshold is de filter threshold, niet de alert threshold
-            // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
+        // Check of beide in dezelfde richting zijn
+        bool sameDirection = ((ret_30m > 0 && ret_5m > 0) || (ret_30m < 0 && ret_5m < 0));
+        
+        // Threshold check: ret_30m >= effectiveMove30mThreshold EN ret_5m >= move5mThreshold
+        // Note: move5mThreshold is de filter threshold, niet de alert threshold
+        // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
             bool moveDetected = sameDirection;
             bool volumeRangeOk5m = (volumeRange5m.valid && volumeRange5m.volumeOk && volumeRange5m.rangeOk);
-            
-            // Debug logging alleen bij move detectie
-            if (moveDetected) {
+        
+        // Debug logging alleen bij move detectie
+        if (moveDetected) {
                 #if !DEBUG_BUTTON_ONLY
-                Serial_printf(F("[Notify] 30m move: ret_30m=%.2f%%, ret_5m=%.2f%%\n"), ret_30m, ret_5m);
+            Serial_printf(F("[Notify] 30m move: ret_30m=%.2f%%, ret_5m=%.2f%%\n"), ret_30m, ret_5m);
                 #endif
-                
+            
                 if (!volumeRangeOk5m) {
                     #if !DEBUG_BUTTON_ONLY
                     Serial_printf(F("[Notify] 30m move onderdrukt (volume/range confirmatie fail)\n"));
                     #endif
                 } else {
-                    // Bereken min en max uit laatste 30 minuten van minuteAverages buffer
-                    float minVal, maxVal;
-                    findMinMaxInLast30Minutes(minVal, maxVal);
-                    
+            // Bereken min en max uit laatste 30 minuten van minuteAverages buffer
+            float minVal, maxVal;
+            findMinMaxInLast30Minutes(minVal, maxVal);
+            
                     // Format message met hergebruik van class buffer
                     getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
-                    if (ret_30m >= 0) {
+            if (ret_30m >= 0) {
                         snprintf(msgBuffer, sizeof(msgBuffer), 
                                  "%.2f (%s)\n30m %s move: +%.2f%% (5m: +%.2f%%)\n30m %s: %.2f\n30m %s: %.2f", 
                                  prices[0], timestampBuffer,
                                  getText("OP", "UP"), ret_30m, ret_5m,
                                  getText("Top", "Top"), maxVal,
                                  getText("Dal", "Low"), minVal);
-                    } else {
+            } else {
                         snprintf(msgBuffer, sizeof(msgBuffer), 
                                  "%.2f (%s)\n30m %s move: %.2f%% (5m: %.2f%%)\n30m %s: %.2f\n30m %s: %.2f", 
                                  prices[0], timestampBuffer,
@@ -817,24 +817,24 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                                  getText("Dal", "Low"), minVal);
                     }
                     appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange5m);
-                    
-                    const char* colorTag = determineColorTag(ret_30m, effThresh.move30m, effThresh.move30m * 1.5f);
-                    snprintf(titleBuffer, sizeof(titleBuffer), "%s 30m %s", binanceSymbol, getText("Move", "Move"));
-                    
-                    // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
+            
+            const char* colorTag = determineColorTag(ret_30m, effThresh.move30m, effThresh.move30m * 1.5f);
+                    snprintf(titleBuffer, sizeof(titleBuffer), "%s 30m %s", bitvavoSymbol, getText("Move", "Move"));
+            
+            // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
                     if (!volumeEventCooldownOk(now)) {
                         #if !DEBUG_BUTTON_ONLY
                         Serial_printf(F("[Notify] 30m move onderdrukt (volume-event cooldown)\n"));
                         #endif
                     } else if (checkAlertConditions(now, lastNotification30Min, notificationCooldowns.cooldown30MinMs, 
-                                                    alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR, "30m move")) {
+                                     alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR, "30m move")) {
                         bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
                         if (sent) {
-                            lastNotification30Min = now;
-                            alerts30MinThisHour++;
+                lastNotification30Min = now;
+                alerts30MinThisHour++;
                             lastVolumeEventMs = now;
                             #if !DEBUG_BUTTON_ONLY
-                            Serial_printf(F("[Notify] 30m move notificatie verstuurd (%d/%d dit uur)\n"), alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR);
+                Serial_printf(F("[Notify] 30m move notificatie verstuurd (%d/%d dit uur)\n"), alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR);
                             #endif
                         }
                     }
@@ -854,48 +854,48 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         if (absRet5m < effThresh.move5m) {
             // Threshold niet gehaald, skip rest
         } else {
-            // Threshold check: ret_5m >= effectiveMove5mThreshold
+        // Threshold check: ret_5m >= effectiveMove5mThreshold
             bool move5mDetected = true;
             bool volumeRangeOk5m = (volumeRange5m.valid && volumeRange5m.volumeOk && volumeRange5m.rangeOk);
-            
+        
             // Update 5m event state voor Smart Confluence Mode (alleen bij volume/range confirmatie)
             if (volumeRangeOk5m) {
-                update5mEvent(ret_5m, now, effThresh.move5m);
-            }
-            
-            // Debug logging alleen bij move detectie
-            if (move5mDetected) {
+            update5mEvent(ret_5m, now, effThresh.move5m);
+        }
+        
+        // Debug logging alleen bij move detectie
+        if (move5mDetected) {
                 #if !DEBUG_BUTTON_ONLY
-                Serial_printf(F("[Notify] 5m move: ret_5m=%.2f%%\n"), ret_5m);
+            Serial_printf(F("[Notify] 5m move: ret_5m=%.2f%%\n"), ret_5m);
                 #endif
-                
+            
                 if (!volumeRangeOk5m) {
                     #if !DEBUG_BUTTON_ONLY
                     Serial_printf(F("[Notify] 5m move onderdrukt (volume/range confirmatie fail)\n"));
                     #endif
                 } else {
-                    // Check for confluence first (Smart Confluence Mode)
-                    bool confluenceFound = false;
-                    if (smartConfluenceEnabled) {
-                        confluenceFound = checkAndSendConfluenceAlert(now, ret_30m);
-                    }
-                    
-                    // Als confluence werd gevonden, skip individuele alert
-                    if (confluenceFound) {
+            // Check for confluence first (Smart Confluence Mode)
+            bool confluenceFound = false;
+            if (smartConfluenceEnabled) {
+                confluenceFound = checkAndSendConfluenceAlert(now, ret_30m);
+            }
+            
+            // Als confluence werd gevonden, skip individuele alert
+            if (confluenceFound) {
                         #if !DEBUG_BUTTON_ONLY
-                        Serial_printf(F("[Notify] 5m move onderdrukt (gebruikt in confluence alert)\n"));
+                Serial_printf(F("[Notify] 5m move onderdrukt (gebruikt in confluence alert)\n"));
                         #endif
-                    } else {
-                        // Check of dit event al gebruikt is in confluence (suppress individuele alert)
-                        if (smartConfluenceEnabled && last5mEvent.usedInConfluence) {
+            } else {
+                // Check of dit event al gebruikt is in confluence (suppress individuele alert)
+                if (smartConfluenceEnabled && last5mEvent.usedInConfluence) {
                             #if !DEBUG_BUTTON_ONLY
-                            Serial_printf(F("[Notify] 5m move onderdrukt (al gebruikt in confluence)\n"));
+                    Serial_printf(F("[Notify] 5m move onderdrukt (al gebruikt in confluence)\n"));
                             #endif
                         } else if (!volumeEventCooldownOk(now)) {
                             #if !DEBUG_BUTTON_ONLY
                             Serial_printf(F("[Notify] 5m move onderdrukt (volume-event cooldown)\n"));
                             #endif
-                        } else {
+                } else {
                             // Bereken min en max uit fiveMinutePrices buffer (geoptimaliseerde versie)
                             float minVal, maxVal;
                             findMinMaxInFiveMinutePrices(minVal, maxVal);
@@ -903,14 +903,14 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             // Format message met hergebruik van class buffer
                             getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
                             // ret_30m is beschikbaar in checkAndNotify scope
-                            if (ret_5m >= 0) {
+                    if (ret_5m >= 0) {
                                 snprintf(msgBuffer, sizeof(msgBuffer), 
                                          "%.2f (%s)\n5m %s move: +%.2f%% (30m: %+.2f%%)\n5m %s: %.2f\n5m %s: %.2f", 
                                          prices[0], timestampBuffer,
                                          getText("OP", "UP"), ret_5m, ret_30m,
                                          getText("Top", "Top"), maxVal,
                                          getText("Dal", "Low"), minVal);
-                            } else {
+                    } else {
                                 snprintf(msgBuffer, sizeof(msgBuffer), 
                                          "%.2f (%s)\n5m %s move: %.2f%% (30m: %+.2f%%)\n5m %s: %.2f\n5m %s: %.2f", 
                                          prices[0], timestampBuffer,
@@ -919,20 +919,20 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                                          getText("Dal", "Low"), minVal);
                             }
                             appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange5m);
-                            
-                            const char* colorTag = determineColorTag(ret_5m, effThresh.move5m, effThresh.move5m * 1.5f);
-                            snprintf(titleBuffer, sizeof(titleBuffer), "%s 5m %s", binanceSymbol, getText("Move", "Move"));
-                            
-                            // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
-                            if (checkAlertConditions(now, lastNotification5Min, notificationCooldowns.cooldown5MinMs, 
-                                                     alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR, "5m move")) {
+                    
+                    const char* colorTag = determineColorTag(ret_5m, effThresh.move5m, effThresh.move5m * 1.5f);
+                            snprintf(titleBuffer, sizeof(titleBuffer), "%s 5m %s", bitvavoSymbol, getText("Move", "Move"));
+                    
+                    // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
+                    if (checkAlertConditions(now, lastNotification5Min, notificationCooldowns.cooldown5MinMs, 
+                                             alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR, "5m move")) {
                                 bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
                                 if (sent) {
-                                    lastNotification5Min = now;
-                                    alerts5MinThisHour++;
+                        lastNotification5Min = now;
+                        alerts5MinThisHour++;
                                     lastVolumeEventMs = now;
                                     #if !DEBUG_BUTTON_ONLY
-                                    Serial_printf(F("[Notify] 5m move notificatie verstuurd (%d/%d dit uur)\n"), alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR);
+                        Serial_printf(F("[Notify] 5m move notificatie verstuurd (%d/%d dit uur)\n"), alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR);
                                     #endif
                                 }
                             }
@@ -1055,7 +1055,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
             #endif
             getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
             snprintf(title, sizeof(title), "%s 2h %s", 
-                     binanceSymbol, getText("Compressie", "Compression"));
+                     bitvavoSymbol, getText("Compressie", "Compression"));
             snprintf(msg, sizeof(msg), "%.2f (%s)\n%s: %.2f%% (<%.2f%%)\n2h %s: %.2f\n2h %s: %.2f\n2h %s: %.2f",
                      lastPrice, timestamp,
                      getText("Band", "Range"), metrics.rangePct, alert2HThresholds.compressThresholdPct,
@@ -1064,8 +1064,8 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                      getText("Dal", "Low"), metrics.low2h);
             // FASE X.2: Gebruik throttling wrapper
             if (send2HNotification(ALERT2H_COMPRESS, title, msg, "yellow_square,📉")) {
-                gAlert2H.lastCompressMs = now;
-                gAlert2H.setCompressArmed(false);
+            gAlert2H.lastCompressMs = now;
+            gAlert2H.setCompressArmed(false);
             }
         }
         
@@ -1097,7 +1097,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
             #endif
             getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
             snprintf(title, sizeof(title), "%s 2h %s", 
-                     binanceSymbol, getText("Raakt Gemiddelde", "Mean Touch"));
+                     bitvavoSymbol, getText("Raakt Gemiddelde", "Mean Touch"));
             const char* directionText = (gAlert2H.getMeanFarSide() > 0) ? 
                                         getText("van boven", "from above") : 
                                         getText("van onderen", "from below");
@@ -1107,10 +1107,10 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                      getText("na", "after"), distPct, getText("verwijdering", "away"));
             // FASE X.2: Gebruik throttling wrapper
             if (send2HNotification(ALERT2H_MEAN_TOUCH, title, msg, "green_square,📊")) {
-                gAlert2H.lastMeanMs = now;
-                gAlert2H.setMeanArmed(false);
-                gAlert2H.setMeanWasFar(false);
-                gAlert2H.setMeanFarSide(0);
+            gAlert2H.lastMeanMs = now;
+            gAlert2H.setMeanArmed(false);
+            gAlert2H.setMeanWasFar(false);
+            gAlert2H.setMeanFarSide(0);
             }
         }
         
@@ -1137,7 +1137,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
             #endif
             getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
             snprintf(title, sizeof(title), "%s %s 2h", 
-                     binanceSymbol, 
+                     bitvavoSymbol,
                      getText("Anker buiten", "Anchor outside"));
             snprintf(msg, sizeof(msg), "%.2f (%s)\n%s %.2f %s 2h\n2h %s: %.2f\n2h %s: %.2f\n2h %s: %.2f",
                      lastPrice, timestamp,
@@ -1147,8 +1147,8 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                      getText("Dal", "Low"), metrics.low2h);
             // FASE X.2: Gebruik throttling wrapper
             if (send2HNotification(ALERT2H_ANCHOR_CTX, title, msg, "purple_square,⚓")) {
-                gAlert2H.lastAnchorCtxMs = now;
-                gAlert2H.setAnchorCtxArmed(false);
+            gAlert2H.lastAnchorCtxMs = now;
+            gAlert2H.setAnchorCtxArmed(false);
             }
         }
         
@@ -1179,7 +1179,7 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
                      lastPrice, metrics.high2h, metrics.avg2h, metrics.rangePct);
         #endif
         snprintf(title, sizeof(title), "%s 2h %s ↑", 
-                 binanceSymbol, getText("breakout", "breakout"));
+                 bitvavoSymbol, getText("breakout", "breakout"));
         snprintf(msg, sizeof(msg), "%.2f (%s)\n%s > 2h %s %.2f\n%s: %.2f %s: %.2f%%",
                  lastPrice, timestamp,
                  getText("Prijs", "Price"), getText("Top", "High"), metrics.high2h,
@@ -1192,7 +1192,7 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
                      lastPrice, metrics.low2h, metrics.avg2h, metrics.rangePct);
         #endif
         snprintf(title, sizeof(title), "%s 2h %s ↓", 
-                 binanceSymbol, getText("breakdown", "breakdown"));
+                 bitvavoSymbol, getText("breakdown", "breakdown"));
         snprintf(msg, sizeof(msg), "%.2f (%s)\n%s < 2h %s: %.2f\n%s: %.2f %s: %.2f%%",
                  lastPrice, timestamp,
                  getText("Prijs", "Price"), getText("Dal", "Low"), metrics.low2h,
@@ -1524,7 +1524,7 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
     extern SettingsStore settingsStore;
     
     Serial.printf("[ANCHOR][AUTO] maybeUpdateAutoAnchor called: force=%d mode=%d symbol=%s\n", 
-                  force, alert2HThresholds.anchorSourceMode, binanceSymbol);
+                  force, alert2HThresholds.anchorSourceMode, bitvavoSymbol);
     
     uint8_t mode = alert2HThresholds.anchorSourceMode;
     if (mode == 0 || mode == 3) {  // MANUAL of OFF
@@ -1549,15 +1549,15 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
         }
     }
     
-    // Forward declaration voor fetchBinanceKlines (gedefinieerd in .ino)
-    extern int fetchBinanceKlines(const char* symbol, const char* interval, uint16_t limit, float* prices, unsigned long* timestamps, uint16_t maxCount, float* highs = nullptr, float* lows = nullptr, float* volumes = nullptr);
+    // Forward declaration voor fetchBitvavoCandles (gedefinieerd in .ino)
+    extern int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit, float* prices, unsigned long* timestamps, uint16_t maxCount, float* highs = nullptr, float* lows = nullptr, float* volumes = nullptr);
     
     // Fetch 4h candles
     uint8_t count4h = alert2HThresholds.autoAnchor4hCandles;
     const char* interval4h = get4hIntervalStr();
     float tempPrices[12];  // Herbruikbare buffer (max 12 candles)
     
-    int fetched4h = fetchBinanceKlines(binanceSymbol, interval4h, count4h, tempPrices, nullptr, 12);
+    int fetched4h = fetchBitvavoCandles(bitvavoSymbol, interval4h, count4h, tempPrices, nullptr, 12);
     Serial.printf("[ANCHOR][AUTO] 4h fetch result: %d candles\n", fetched4h);
     
     if (fetched4h < 2) {
@@ -1583,7 +1583,7 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
     uint8_t count1d = alert2HThresholds.autoAnchor1dCandles;
     const char* interval1d = get1dIntervalStr();
     
-    int fetched1d = fetchBinanceKlines(binanceSymbol, interval1d, count1d, tempPrices, nullptr, 12);
+    int fetched1d = fetchBitvavoCandles(bitvavoSymbol, interval1d, count1d, tempPrices, nullptr, 12);
     Serial.printf("[ANCHOR][AUTO] 1d fetch result: %d candles\n", fetched1d);
     
     if (fetched1d < 2) {
@@ -1666,7 +1666,7 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
                     char title[40];
                     char msg[120];  // Verhoogd van 80 naar 120 bytes voor langere notificaties
                     getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
-                    snprintf(title, sizeof(title), "%s %s", binanceSymbol, getText("Auto Anker", "Auto Anchor"));
+                    snprintf(title, sizeof(title), "%s %s", bitvavoSymbol, getText("Auto Anker", "Auto Anchor"));
                     snprintf(msg, sizeof(msg), "%.2f (%s)\n%s: %.2f", 
                              newAutoAnchor, timestamp,
                              getText("Bijgewerkt", "Updated"), newAutoAnchor);

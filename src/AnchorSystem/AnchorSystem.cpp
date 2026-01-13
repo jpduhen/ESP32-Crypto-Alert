@@ -149,7 +149,7 @@ void AnchorSystem::formatAnchorNotification(AnchorEventType eventType, float anc
     
     // Geoptimaliseerd: enum switch i.p.v. strcmp (sneller, geen string vergelijkingen)
     if (eventType == ANCHOR_EVENT_TAKE_PROFIT) {
-        snprintf(titleBuffer, titleSize, "%s %s: %s", binanceSymbol, 
+        snprintf(titleBuffer, titleSize, "%s %s: %s", bitvavoSymbol, 
                  getText("Anker", "Anchor"), getText("Winstpakker", "Take Profit"));
         if (this->trendAdaptiveAnchorsEnabled) {
             snprintf(msgBuffer, msgSize, 
@@ -169,7 +169,7 @@ void AnchorSystem::formatAnchorNotification(AnchorEventType eventType, float anc
                      anchorPct, getText("thr", "thr"), effAnchor.takeProfitPct);
         }
     } else {  // ANCHOR_EVENT_MAX_LOSS
-        snprintf(titleBuffer, titleSize, "%s %s: %s", binanceSymbol,
+        snprintf(titleBuffer, titleSize, "%s %s: %s", bitvavoSymbol,
                  getText("Anker", "Anchor"), getText("Verliesbeperker", "Max Loss"));
         if (this->trendAdaptiveAnchorsEnabled) {
             snprintf(msgBuffer, msgSize, 
@@ -412,7 +412,7 @@ bool AnchorSystem::setAnchorPrice(float anchorValue, bool shouldUpdateUI, bool s
             char title[40];
             char msg[80];
             getFormattedTimestamp(timestamp, sizeof(timestamp));
-            snprintf(title, sizeof(title), "%s Anchor Set", binanceSymbol);
+            snprintf(title, sizeof(title), "%s Anchor Set", bitvavoSymbol);
             snprintf(msg, sizeof(msg), "%s: %.2f EUR", timestamp, priceToSet);
             sendNotification(title, msg, "white_check_mark");
         }
