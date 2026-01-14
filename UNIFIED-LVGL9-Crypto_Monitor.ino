@@ -4995,7 +4995,9 @@ static float calculateLinearTrend2Hours()
         float price = averages[idx];
         if (isValidPrice(price))
         {
-            float x = (float)i;  // Time index (0 to minutesToUse-1, where 0 = oldest, minutesToUse-1 = newest)
+            // Time index should increase from oldest -> newest.
+            // Loop iterates newest -> oldest, so reverse index for correct slope sign.
+            float x = (float)(minutesToUse - 1 - i);  // 0 = oldest, minutesToUse-1 = newest
             float y = price;
             
             sumX += x;
