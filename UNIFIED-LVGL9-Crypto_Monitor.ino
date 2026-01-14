@@ -431,6 +431,7 @@ lv_obj_t *longTermTrendLabel; // Label voor lange termijn trend weergave (7d)
 
 // Fase 8: UI state - gebruikt door UIController module
 uint32_t lastApiMs = 0; // Time of last api call
+uint32_t lastPriceFetchDurationMs = 0; // Duur van laatste prijs-fetch (ms)
 
 // Variabelen voor periodieke prijs herhaling (elke 2 seconden in ring buffer)
 // Dit zorgt voor exacte 1m en 5m berekeningen, ook als API calls langzaam zijn
@@ -5565,21 +5566,23 @@ static void updateMinuteAverage()
 
 // Fetch the symbols' current prices (thread-safe met mutex)
 // Fase 8.9.1: static verwijderd zodat UIController module deze kan gebruiken
-static void updateLatestKlineMetricsIfNeeded()
+static bool updateLatestKlineMetricsIfNeeded()
 {
     if (WiFi.status() != WL_CONNECTED) {
-        return;
+        return false;
     }
     
     static unsigned long last1mFetchMs = 0;
     static unsigned long last5mFetchMs = 0;
     unsigned long now = millis();
+    bool didFetch = false;
     
     if (last1mFetchMs == 0 || (now - last1mFetchMs) >= 60000UL) {
         float temp1mPrices[2];
         int fetched1m = fetchBitvavoCandles(bitvavoSymbol, "1m", 2, temp1mPrices, nullptr, 2);
         if (fetched1m > 0) {
             last1mFetchMs = now;
+            didFetch = true;
         }
     }
     
@@ -5588,8 +5591,41 @@ static void updateLatestKlineMetricsIfNeeded()
         int fetched5m = fetchBitvavoCandles(bitvavoSymbol, "5m", 2, temp5mPrices, nullptr, 2);
         if (fetched5m > 0) {
             last5mFetchMs = now;
+            didFetch = true;
         }
     }
+
+    return didFetch;
+}
+
+static bool maybeRunAutoAnchorUpdate(bool allowRun)
+{
+    if (!allowRun) {
+        return false;
+    }
+
+    static unsigned long lastAutoAnchorCheckMs = 0;
+    static bool firstAutoAnchorUpdateDone = false;
+    unsigned long nowMs = millis();
+
+    // Eerste update: wacht 5 seconden na boot om race conditions te voorkomen
+    if (!firstAutoAnchorUpdateDone && nowMs >= 5000) {
+        Serial.println("[API Task] Eerste auto anchor update (na 5s delay)...");
+        bool result = AlertEngine::maybeUpdateAutoAnchor(true);  // Force update na warm-start
+        Serial.printf("[API Task] Auto anchor update result: %s\n", result ? "SUCCESS" : "FAILED");
+        firstAutoAnchorUpdateDone = true;
+        lastAutoAnchorCheckMs = nowMs;
+        return true;
+    }
+
+    if (firstAutoAnchorUpdateDone && (nowMs - lastAutoAnchorCheckMs) >= (5UL * 60UL * 1000UL)) {
+        // Periodieke updates: elke 5 minuten
+        AlertEngine::maybeUpdateAutoAnchor(false);  // Non-force update
+        lastAutoAnchorCheckMs = nowMs;
+        return true;
+    }
+
+    return false;
 }
 
 void fetchPrice()
@@ -5609,6 +5645,7 @@ void fetchPrice()
     // Fase 4.1.7: Gebruik hoog-niveau fetchBitvavoPrice() method
     bool httpSuccess = apiClient.fetchBitvavoPrice(bitvavoSymbol, fetched);
     unsigned long fetchTime = millis() - fetchStart;
+    lastPriceFetchDurationMs = fetchTime;
     
     if (!httpSuccess) {
         // Leeg response - kan komen door timeout of netwerkproblemen
@@ -5900,24 +5937,6 @@ void fetchPrice()
             safeMutexGive(dataMutex, "fetchPrice");  // MUTEX EERST VRIJGEVEN!
             ok = true;
             
-            // Periodieke auto anchor update (elke 5 minuten checken)
-            // BELANGRIJK: Dit moet BUITEN de mutex gebeuren om deadlocks te voorkomen!
-            static unsigned long lastAutoAnchorCheckMs = 0;
-            static bool firstAutoAnchorUpdateDone = false;
-            unsigned long nowMs = millis();
-            
-            // Eerste update: wacht 5 seconden na boot om race conditions te voorkomen
-            if (!firstAutoAnchorUpdateDone && nowMs >= 5000) {
-                Serial.println("[API Task] Eerste auto anchor update (na 5s delay, buiten mutex)...");
-                bool result = AlertEngine::maybeUpdateAutoAnchor(true);  // Force update na warm-start
-                Serial.printf("[API Task] Auto anchor update result: %s\n", result ? "SUCCESS" : "FAILED");
-                firstAutoAnchorUpdateDone = true;
-                lastAutoAnchorCheckMs = nowMs;
-            } else if (firstAutoAnchorUpdateDone && (nowMs - lastAutoAnchorCheckMs) >= (5UL * 60UL * 1000UL)) {
-                // Periodieke updates: elke 5 minuten
-                AlertEngine::maybeUpdateAutoAnchor(false);  // Non-force update
-                lastAutoAnchorCheckMs = nowMs;
-            }
         } else {
             // Fase 4.1: Geconsolideerde mutex timeout handling
             handleMutexTimeout(mutexTimeoutCount, "API", bitvavoSymbol);
@@ -7178,7 +7197,14 @@ void apiTask(void *parameter)
         if (WiFi.status() == WL_CONNECTED) {
             // Voer 1 API call uit
             fetchPrice();
-            updateLatestKlineMetricsIfNeeded();
+
+            const uint32_t maintenanceBudgetMs = apiIntervalMs / 2;
+            bool hasBudget = (lastPriceFetchDurationMs == 0) || (lastPriceFetchDurationMs < maintenanceBudgetMs);
+            bool didKlineFetch = false;
+            if (hasBudget) {
+                didKlineFetch = updateLatestKlineMetricsIfNeeded();
+            }
+            maybeRunAutoAnchorUpdate(hasBudget && !didKlineFetch);
             
             // C1: Verwerk pending anchor setting (network-safe: gebeurt in apiTask waar HTTPS calls al zijn)
             if (pendingAnchorSetting.pending) {
