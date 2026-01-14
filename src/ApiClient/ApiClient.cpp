@@ -684,3 +684,5 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
     
     return ok;
 }
+
+
