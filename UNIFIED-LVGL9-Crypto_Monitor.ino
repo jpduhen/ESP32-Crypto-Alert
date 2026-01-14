@@ -468,7 +468,7 @@ char anchorMaxLabelBuffer[24];  // Buffer voor anchor max label (max: "12345.67"
 char anchorLabelBuffer[24];  // Buffer voor anchor label (max: "12345.67" = ~8 chars)
 char anchorMinLabelBuffer[24];  // Buffer voor anchor min label (max: "12345.67" = ~8 chars)
 // Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
-char priceTitleBuffer[SYMBOL_COUNT][40];  // Buffers voor price titles (verkleind van 48 naar 40 bytes, bespaart 24 bytes voor CYD)
+char priceTitleBuffer[SYMBOL_COUNT][32];  // Buffers voor price titles (verkleind van 48 naar 32 bytes, bespaart 16 bytes per symbool)
 char price1MinMaxLabelBuffer[20];  // Buffer voor 1m max label (max: "12345.67" = ~8 chars)
 char price1MinMinLabelBuffer[20];  // Buffer voor 1m min label (max: "12345.67" = ~8 chars)
 char price1MinDiffLabelBuffer[20];  // Buffer voor 1m diff label (max: "12345.67" = ~8 chars)
