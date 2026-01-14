@@ -13,6 +13,8 @@ ApiClient::ApiClient() {
 void ApiClient::begin() {
     // N2: Configureer HTTPClient voor keep-alive (connection reuse)
     // setReuse(true) wordt per call gedaan in httpGETInternal en fetchBitvavoPrice
+    // N3: Configureer TLS client als insecure voor Bitvavo (vermijdt cert issues)
+    wifiClientSecure.setInsecure();
 }
 
 // Public HTTP GET method
@@ -564,7 +566,6 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
                 #if !DEBUG_BUTTON_ONLY
                 Serial.printf(F("[API] Fetching price from: %s\n"), url);
                 #endif
-                wifiClientSecure.setInsecure();
                 if (!http.begin(wifiClientSecure, url)) {
                     #if !DEBUG_BUTTON_ONLY
                     if (attempt == MAX_RETRIES) {
@@ -683,4 +684,3 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
     
     return ok;
 }
-
