@@ -5175,7 +5175,9 @@ static float calculateLinearTrend1Day()
         float price = hourlyAverages[idx];
         if (isValidPrice(price))
         {
-            float x = (float)i;  // Time index (0 to hoursToUse-1, where 0 = oldest, hoursToUse-1 = newest)
+            // Time index should increase from oldest -> newest.
+            // Loop iterates newest -> oldest, so reverse index for correct slope sign.
+            float x = (float)(hoursToUse - 1 - i);  // 0 = oldest, hoursToUse-1 = newest
             float y = price;
             
             sumX += x;
@@ -5282,7 +5284,9 @@ static float calculateLinearTrend7Days()
         float price = hourlyAverages[idx];
         if (isValidPrice(price))
         {
-            float x = (float)i;  // Time index (0 to hoursToUse-1, where 0 = oldest, hoursToUse-1 = newest)
+            // Time index should increase from oldest -> newest.
+            // Loop iterates newest -> oldest, so reverse index for correct slope sign.
+            float x = (float)(hoursToUse - 1 - i);  // 0 = oldest, hoursToUse-1 = newest
             float y = price;
             
             sumX += x;
