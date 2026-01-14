@@ -464,21 +464,21 @@ static char bitvavoStreamBuffer[560];  // Fixed-size buffer voor chunked JSON pa
 
 // LVGL UI buffers en cache (voorkomt herhaalde allocaties en onnodige updates)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
-char priceLblBuffer[24];  // Buffer voor price label (%.2f format, max: "12345.67" = ~8 chars)
-char anchorMaxLabelBuffer[24];  // Buffer voor anchor max label (max: "12345.67" = ~8 chars)
-char anchorLabelBuffer[24];  // Buffer voor anchor label (max: "12345.67" = ~8 chars)
-char anchorMinLabelBuffer[24];  // Buffer voor anchor min label (max: "12345.67" = ~8 chars)
+char priceLblBuffer[16];  // Buffer voor price label (%.2f format, max: "12345.67" = ~8 chars)
+char anchorMaxLabelBuffer[20];  // Buffer voor anchor max label (max: "+12.34% 12345.67")
+char anchorLabelBuffer[20];  // Buffer voor anchor label (max: "+12.34% 12345.67")
+char anchorMinLabelBuffer[20];  // Buffer voor anchor min label (max: "-12.34% 12345.67")
 // Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
-char priceTitleBuffer[SYMBOL_COUNT][32];  // Buffers voor price titles (verkleind van 48 naar 32 bytes, bespaart 16 bytes per symbool)
-char price1MinMaxLabelBuffer[20];  // Buffer voor 1m max label (max: "12345.67" = ~8 chars)
-char price1MinMinLabelBuffer[20];  // Buffer voor 1m min label (max: "12345.67" = ~8 chars)
-char price1MinDiffLabelBuffer[20];  // Buffer voor 1m diff label (max: "12345.67" = ~8 chars)
-char price30MinMaxLabelBuffer[20];  // Buffer voor 30m max label (max: "12345.67" = ~8 chars)
-char price30MinMinLabelBuffer[20];  // Buffer voor 30m min label (max: "12345.67" = ~8 chars)
-char price30MinDiffLabelBuffer[20];  // Buffer voor 30m diff label (max: "12345.67" = ~8 chars)
-char price2HMaxLabelBuffer[20];  // Buffer voor 2h max label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
-char price2HMinLabelBuffer[20];  // Buffer voor 2h min label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
-char price2HDiffLabelBuffer[20];  // Buffer voor 2h diff label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
+char priceTitleBuffer[SYMBOL_COUNT][28];  // Buffers voor price titles (verkleind van 48 naar 28 bytes, bespaart 20 bytes per symbool)
+char price1MinMaxLabelBuffer[16];  // Buffer voor 1m max label (max: "12345.67" = ~8 chars)
+char price1MinMinLabelBuffer[16];  // Buffer voor 1m min label (max: "12345.67" = ~8 chars)
+char price1MinDiffLabelBuffer[16];  // Buffer voor 1m diff label (max: "12345.67" = ~8 chars)
+char price30MinMaxLabelBuffer[16];  // Buffer voor 30m max label (max: "12345.67" = ~8 chars)
+char price30MinMinLabelBuffer[16];  // Buffer voor 30m min label (max: "12345.67" = ~8 chars)
+char price30MinDiffLabelBuffer[16];  // Buffer voor 30m diff label (max: "12345.67" = ~8 chars)
+char price2HMaxLabelBuffer[16];  // Buffer voor 2h max label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
+char price2HMinLabelBuffer[16];  // Buffer voor 2h min label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
+char price2HDiffLabelBuffer[16];  // Buffer voor 2h diff label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
 
 // Cache laatste waarden (alleen updaten als veranderd)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
@@ -496,8 +496,8 @@ float lastPrice30MinDiffValue = -1.0f;  // Cache voor 30m diff
 float lastPrice2HMaxValue = -1.0f;  // Cache voor 2h max (alleen gebruikt voor CYD platforms)
 float lastPrice2HMinValue = -1.0f;  // Cache voor 2h min (alleen gebruikt voor CYD platforms)
 float lastPrice2HDiffValue = -1.0f;  // Cache voor 2h diff (alleen gebruikt voor CYD platforms)
-char lastPriceTitleText[SYMBOL_COUNT][32] = {""};  // Cache voor price titles (max: "30 min  +12.34%" = ~20 chars, verkleind van 48 naar 32 bytes)
-char priceLblBufferArray[SYMBOL_COUNT][24];  // Buffers voor average price labels (max: "12345.67" = ~8 chars)
+char lastPriceTitleText[SYMBOL_COUNT][28] = {""};  // Cache voor price titles (max: "30 min  +12.34%" = ~20 chars, verkleind van 48 naar 28 bytes)
+char priceLblBufferArray[SYMBOL_COUNT][16];  // Buffers voor average price labels (max: "12345.67" = ~8 chars)
 static char footerRssiBuffer[16];  // Buffer voor footer RSSI
 static char footerRamBuffer[16];  // Buffer voor footer RAM
 // Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
