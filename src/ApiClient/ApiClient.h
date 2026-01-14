@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 
 // Include alleen DEBUG flags, niet de hele platform_config.h (voorkomt PINS includes)
@@ -93,6 +94,7 @@ public:
 private:
     // N2: Persistent HTTPClient en WiFiClient voor keep-alive connecties
     WiFiClient wifiClient;
+    WiFiClientSecure wifiClientSecure;
     HTTPClient httpClient;
     
     // Private HTTP GET implementation
@@ -100,6 +102,5 @@ private:
 };
 
 #endif // APICLIENT_H
-
 
 

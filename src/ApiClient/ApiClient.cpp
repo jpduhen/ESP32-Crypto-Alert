@@ -538,39 +538,52 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
         bool attemptOk = false;
         bool shouldRetry = false;
         int lastCode = 0;
-        
-        // Gebruik lokaal HTTPClient object (zoals fetchBitvavoCandles doet) - persistent client geeft HTTP 400
-        HTTPClient http;
-        
+
+        // N2: Gebruik persistent HTTPClient/WiFiClient voor keep-alive
+        HTTPClient& http = httpClient;
+
         // S2: do-while(0) patroon voor consistente cleanup per attempt
         do {
             // T1: Expliciete connect/read timeout settings (geoptimaliseerd: 2000ms connect, 2500ms read)
             http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS_DEFAULT);
             http.setTimeout(HTTP_READ_TIMEOUT_MS_DEFAULT);
-            // Geen keep-alive voor nu (lokaal object, zoals fetchBitvavoCandles)
-            http.setReuse(false);
-            
-            // N2: Voeg User-Agent header toe VOOR http.begin() om Cloudflare blocking te voorkomen
-            // Headers moeten worden toegevoegd voordat de verbinding wordt geopend
+            // N2: Enable keep-alive voor snellere opvolgende requests
+            http.setReuse(true);
+
+            unsigned long requestStart = millis();
+
+            // N2: Optimaliseer keep-alive: alleen reset bij retry of ongeldige verbinding
+            bool connectionActive = http.connected();
+            if (connectionActive && attempt > 0) {
+                http.end();
+                connectionActive = false;
+            }
+
+            // Alleen http.begin() als er geen actieve verbinding is
+            if (!connectionActive) {
+                #if !DEBUG_BUTTON_ONLY
+                Serial.printf(F("[API] Fetching price from: %s\n"), url);
+                #endif
+                wifiClientSecure.setInsecure();
+                if (!http.begin(wifiClientSecure, url)) {
+                    #if !DEBUG_BUTTON_ONLY
+                    if (attempt == MAX_RETRIES) {
+                        Serial.printf(F("[API] http.begin() gefaald voor URL: %s\n"), url);
+                    }
+                    #endif
+                    shouldRetry = (attempt < MAX_RETRIES);
+                    break;
+                }
+            } else {
+                #if !DEBUG_BUTTON_ONLY
+                Serial.printf(F("[API] Fetching price from (keep-alive): %s\n"), url);
+                #endif
+            }
+
+            // N2: Voeg headers toe voor elke request (ook bij keep-alive reuse)
             http.addHeader(F("User-Agent"), F("ESP32-CryptoMonitor/1.0"));
             http.addHeader(F("Accept"), F("application/json"));
-            
-            unsigned long requestStart = millis();
-            
-            // Normale URL flow (zoals voorheen, zonder DNS cache)
-            #if !DEBUG_BUTTON_ONLY
-            Serial.printf(F("[API] Fetching price from: %s\n"), url);
-            #endif
-            if (!http.begin(url)) {
-                #if !DEBUG_BUTTON_ONLY
-                if (attempt == MAX_RETRIES) {
-                    Serial.printf(F("[API] http.begin() gefaald voor URL: %s\n"), url);
-                }
-                #endif
-                shouldRetry = (attempt < MAX_RETRIES);
-                break;
-            }
-            
+
             int code = http.GET();
             unsigned long requestTime = millis() - requestStart;
             lastCode = code;
@@ -635,11 +648,12 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
             ok = true;
         } while(0);
         
-        // N2: Cleanup alleen bij fouten (lokaal HTTPClient object, geen keep-alive nodig)
-        // Voor fetchBitvavoPrice gebruiken we lokaal object, dus altijd cleanup
+        // N2: Cleanup alleen bij fouten (keep-alive bij succes)
         if (attemptOk) {
-            // Succes: cleanup voor lokaal object
-            http.end();
+            // Succes: alleen cleanup als verbinding niet meer actief is
+            if (!http.connected()) {
+                http.end();
+            }
             if (attempt > 0) {
                 Serial.printf(F("[API] Succes na retry (poging %d/%d)\n"), attempt + 1, MAX_RETRIES + 1);
             }
@@ -669,6 +683,4 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
     
     return ok;
 }
-
-
 
