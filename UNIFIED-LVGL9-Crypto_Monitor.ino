@@ -456,11 +456,11 @@ static char httpResponseBuffer[248];  // Buffer voor HTTP responses (NTFY, etc.)
 // M2: Globale herbruikbare buffer voor HTTP responses (voorkomt String allocaties)
 // Note: Niet static zodat ApiClient.cpp er toegang toe heeft via extern declaratie in ApiClient.h
 // Verkleind van 2048 naar 512 bytes (genoeg voor price responses, ~100 bytes)
-char gApiResp[304];  // Verkleind van 320 naar 304 bytes (bespaart 16 bytes DRAM)     // Buffer voor API price responses (M2: streaming)
+char gApiResp[256];  // Verkleind van 320 naar 256 bytes (bespaart 64 bytes DRAM)     // Buffer voor API price responses (M2: streaming)
 // gKlinesResp verwijderd: fetchBitvavoCandles gebruikt streaming parsing met bitvavoStreamBuffer
 
 // Streaming buffer voor Bitvavo candlestick parsing (geen grote heap allocaties)
-static char bitvavoStreamBuffer[560];  // Fixed-size buffer voor chunked JSON parsing - verkleind van 576 naar 560 bytes (bespaart 16 bytes DRAM)
+static char bitvavoStreamBuffer[512];  // Fixed-size buffer voor chunked JSON parsing - verkleind van 576 naar 512 bytes (bespaart 64 bytes DRAM)
 
 // LVGL UI buffers en cache (voorkomt herhaalde allocaties en onnodige updates)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
