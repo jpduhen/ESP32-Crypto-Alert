@@ -1214,7 +1214,7 @@ static uint32_t lastSecondarySentMillis = 0;
 static Alert2HType pendingSecondaryType = ALERT2H_NONE;
 static uint32_t pendingSecondaryCreatedMillis = 0;
 static char pendingSecondaryTitle[64];
-static char pendingSecondaryMsg[256];
+static char pendingSecondaryMsg[240];
 static char pendingSecondaryColorTag[32];
 
 // FASE X.3: Check of alert PRIMARY is (override throttling)

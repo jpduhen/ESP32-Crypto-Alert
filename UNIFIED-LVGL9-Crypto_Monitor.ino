@@ -9,6 +9,7 @@
 #include "platform_config.h"
 
 #include <WiFi.h>                   // Included with Espressif ESP32 Dev Module
+#include <WiFiClientSecure.h>       // HTTPS support
 #include <HTTPClient.h>             // Included with Espressif ESP32 Dev Module
 #include <WiFiManager.h>            // Install "WiFiManager" with the Library Manager
 #include <WebServer.h>              // Included with Espressif ESP32 Dev Module
@@ -174,6 +175,7 @@
 #define WARM_START_2H_CANDLES_DEFAULT 6  // Aantal 2h candles (default: 6 = 12 uur)
 // Bitvavo candlestick endpoint: /{market}/candles (wordt dynamisch gebouwd)
 #define WARM_START_TIMEOUT_MS 10000  // Timeout voor warm-start API calls (10 seconden)
+#define WARM_START_CALL_SPACING_MS 150  // Korte pauze tussen warm-start HTTP calls (vermindert connect errors)
 
 // --- Auto-Volatility Mode Configuration ---
 #define AUTO_VOLATILITY_ENABLED_DEFAULT false      // Default: uitgeschakeld
@@ -455,29 +457,29 @@ static char httpResponseBuffer[248];  // Buffer voor HTTP responses (NTFY, etc.)
 // M2: Globale herbruikbare buffer voor HTTP responses (voorkomt String allocaties)
 // Note: Niet static zodat ApiClient.cpp er toegang toe heeft via extern declaratie in ApiClient.h
 // Verkleind van 2048 naar 512 bytes (genoeg voor price responses, ~100 bytes)
-char gApiResp[304];  // Verkleind van 320 naar 304 bytes (bespaart 16 bytes DRAM)     // Buffer voor API price responses (M2: streaming)
+char gApiResp[256];  // Verkleind van 320 naar 256 bytes (bespaart 64 bytes DRAM)     // Buffer voor API price responses (M2: streaming)
 // gKlinesResp verwijderd: fetchBitvavoCandles gebruikt streaming parsing met bitvavoStreamBuffer
 
 // Streaming buffer voor Bitvavo candlestick parsing (geen grote heap allocaties)
-static char bitvavoStreamBuffer[560];  // Fixed-size buffer voor chunked JSON parsing - verkleind van 576 naar 560 bytes (bespaart 16 bytes DRAM)
+static char bitvavoStreamBuffer[512];  // Fixed-size buffer voor chunked JSON parsing - verkleind van 576 naar 512 bytes (bespaart 64 bytes DRAM)
 
 // LVGL UI buffers en cache (voorkomt herhaalde allocaties en onnodige updates)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
-char priceLblBuffer[24];  // Buffer voor price label (%.2f format, max: "12345.67" = ~8 chars)
-char anchorMaxLabelBuffer[24];  // Buffer voor anchor max label (max: "12345.67" = ~8 chars)
-char anchorLabelBuffer[24];  // Buffer voor anchor label (max: "12345.67" = ~8 chars)
-char anchorMinLabelBuffer[24];  // Buffer voor anchor min label (max: "12345.67" = ~8 chars)
+char priceLblBuffer[16];  // Buffer voor price label (%.2f format, max: "12345.67" = ~8 chars)
+char anchorMaxLabelBuffer[20];  // Buffer voor anchor max label (max: "+12.34% 12345.67")
+char anchorLabelBuffer[20];  // Buffer voor anchor label (max: "+12.34% 12345.67")
+char anchorMinLabelBuffer[20];  // Buffer voor anchor min label (max: "-12.34% 12345.67")
 // Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
-char priceTitleBuffer[SYMBOL_COUNT][40];  // Buffers voor price titles (verkleind van 48 naar 40 bytes, bespaart 24 bytes voor CYD)
-char price1MinMaxLabelBuffer[20];  // Buffer voor 1m max label (max: "12345.67" = ~8 chars)
-char price1MinMinLabelBuffer[20];  // Buffer voor 1m min label (max: "12345.67" = ~8 chars)
-char price1MinDiffLabelBuffer[20];  // Buffer voor 1m diff label (max: "12345.67" = ~8 chars)
-char price30MinMaxLabelBuffer[20];  // Buffer voor 30m max label (max: "12345.67" = ~8 chars)
-char price30MinMinLabelBuffer[20];  // Buffer voor 30m min label (max: "12345.67" = ~8 chars)
-char price30MinDiffLabelBuffer[20];  // Buffer voor 30m diff label (max: "12345.67" = ~8 chars)
-char price2HMaxLabelBuffer[20];  // Buffer voor 2h max label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
-char price2HMinLabelBuffer[20];  // Buffer voor 2h min label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
-char price2HDiffLabelBuffer[20];  // Buffer voor 2h diff label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
+char priceTitleBuffer[SYMBOL_COUNT][28];  // Buffers voor price titles (verkleind van 48 naar 28 bytes, bespaart 20 bytes per symbool)
+char price1MinMaxLabelBuffer[16];  // Buffer voor 1m max label (max: "12345.67" = ~8 chars)
+char price1MinMinLabelBuffer[16];  // Buffer voor 1m min label (max: "12345.67" = ~8 chars)
+char price1MinDiffLabelBuffer[16];  // Buffer voor 1m diff label (max: "12345.67" = ~8 chars)
+char price30MinMaxLabelBuffer[16];  // Buffer voor 30m max label (max: "12345.67" = ~8 chars)
+char price30MinMinLabelBuffer[16];  // Buffer voor 30m min label (max: "12345.67" = ~8 chars)
+char price30MinDiffLabelBuffer[16];  // Buffer voor 30m diff label (max: "12345.67" = ~8 chars)
+char price2HMaxLabelBuffer[16];  // Buffer voor 2h max label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
+char price2HMinLabelBuffer[16];  // Buffer voor 2h min label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
+char price2HDiffLabelBuffer[16];  // Buffer voor 2h diff label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
 
 // Cache laatste waarden (alleen updaten als veranderd)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
@@ -495,8 +497,8 @@ float lastPrice30MinDiffValue = -1.0f;  // Cache voor 30m diff
 float lastPrice2HMaxValue = -1.0f;  // Cache voor 2h max (alleen gebruikt voor CYD platforms)
 float lastPrice2HMinValue = -1.0f;  // Cache voor 2h min (alleen gebruikt voor CYD platforms)
 float lastPrice2HDiffValue = -1.0f;  // Cache voor 2h diff (alleen gebruikt voor CYD platforms)
-char lastPriceTitleText[SYMBOL_COUNT][32] = {""};  // Cache voor price titles (max: "30 min  +12.34%" = ~20 chars, verkleind van 48 naar 32 bytes)
-char priceLblBufferArray[SYMBOL_COUNT][24];  // Buffers voor average price labels (max: "12345.67" = ~8 chars)
+char lastPriceTitleText[SYMBOL_COUNT][28] = {""};  // Cache voor price titles (max: "30 min  +12.34%" = ~20 chars, verkleind van 48 naar 28 bytes)
+char priceLblBufferArray[SYMBOL_COUNT][16];  // Buffers voor average price labels (max: "12345.67" = ~8 chars)
 static char footerRssiBuffer[16];  // Buffer voor footer RSSI
 static char footerRamBuffer[16];  // Buffer voor footer RAM
 // Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
@@ -685,6 +687,7 @@ static WarmStartWrapper warmWrap;
 // ApiClient instance (Fase 4.1 voltooid)
 #include "src/ApiClient/ApiClient.h"
 ApiClient apiClient;
+static WiFiClientSecure candleClient;  // HTTPS client voor warm-start candles (vermijdt cert issues)
 
 // PriceData instance (Fase 4.2.1: module structuur aangemaakt)
 PriceData priceData;
@@ -889,89 +892,102 @@ int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit
     netMutexLock("fetchBitvavoCandles");
     
     int result = -1;
-    HTTPClient http;
+    const uint8_t maxAttempts = 2;
+    const uint32_t retryDelayMs = 250;
     
-    // S2: do-while(0) patroon voor consistente cleanup
-    do {
-        // N1: Expliciete connect/read timeout settings (geoptimaliseerd: 2000ms connect, 2500ms read)
-    http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
-        http.setTimeout(WARM_START_TIMEOUT_MS > HTTP_READ_TIMEOUT_MS ? WARM_START_TIMEOUT_MS : HTTP_READ_TIMEOUT_MS);
-    http.setReuse(false);
+    for (uint8_t attempt = 0; attempt < maxAttempts; attempt++) {
+        bool attemptOk = false;
+        bool shouldRetry = false;
+        int code = 0;
+        HTTPClient http;
         
-        unsigned long requestStart = millis();
-    
-        // N2: Voeg User-Agent header toe VOOR http.begin() om Cloudflare blocking te voorkomen
-        // Headers moeten worden toegevoegd voordat de verbinding wordt geopend
-        http.addHeader(F("User-Agent"), F("ESP32-CryptoMonitor/1.0"));
-        http.addHeader(F("Accept"), F("application/json"));
-    
-    if (!http.begin(url)) {
-            Serial.println(F("[Candles] http.begin() gefaald"));
-            break;
-    }
-    
-    int code = http.GET();
-        unsigned long requestTime = millis() - requestStart;
+        // S2: do-while(0) patroon voor consistente cleanup
+        do {
+            // N1: Expliciete connect/read timeout settings (geoptimaliseerd: 2000ms connect, 2500ms read)
+            http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+            http.setTimeout(WARM_START_TIMEOUT_MS > HTTP_READ_TIMEOUT_MS ? WARM_START_TIMEOUT_MS : HTTP_READ_TIMEOUT_MS);
+            http.setReuse(true);
+            
+            unsigned long requestStart = millis();
         
-        // M1: Heap telemetry na HTTP GET
-        logHeap("CANDLES_GET_POST");
+            // N2: Voeg User-Agent header toe VOOR http.begin() om Cloudflare blocking te voorkomen
+            // Headers moeten worden toegevoegd voordat de verbinding wordt geopend
+            http.addHeader(F("User-Agent"), F("ESP32-CryptoMonitor/1.0"));
+            http.addHeader(F("Accept"), F("application/json"));
         
-    if (code != 200) {
-            // Fase 6.2: Geconsolideerde error logging - gebruik ApiClient helpers
-            const char* phase = ApiClient::detectHttpErrorPhase(code);
-            ApiClient::logHttpError(code, phase, requestTime, 0, 1, "[Candles]");
-            break;
-    }
-    
-    WiFiClient* stream = http.getStreamPtr();
-    if (stream == nullptr) {
-            Serial.println(F("[Candles] Stream pointer is null"));
-            break;
-    }
-    
-    // Streaming JSON parser: gebruik fixed-size buffer voor chunked reading
-    // Parse iteratief en sla alleen noodzakelijke values op (closes/returns)
-    int writeIdx = 0;  // Schrijf index in circulaire buffer
-    int totalParsed = 0;
-    bool bufferFilled = false;  // True wanneer buffer vol is en we gaan wrappen
-    
-    // Parser state
-    enum ParseState {
-        PS_START,
-        PS_OUTER_ARRAY,
-        PS_ENTRY_START,
-        PS_FIELD,
-        PS_ENTRY_END
-    };
-    ParseState state = PS_START;
-    int fieldIdx = 0;
-    char fieldBuf[64];
-    int fieldBufIdx = 0;
-    unsigned long openTime = 0;
-    float highPrice = 0.0f;
-    float lowPrice = 0.0f;
-    float closePrice = 0.0f;
-    float volume = 0.0f;
-    KlineMetrics lastParsedKline = {};
-    float volumeValue = 0.0f;
-    
-    // Buffer voor chunked reading (hergebruik fixed buffer)
-    size_t bufferPos = 0;
-    size_t bufferLen = 0;
-    const size_t BUFFER_SIZE = sizeof(bitvavoStreamBuffer);
-    
-    // Feed watchdog tijdens parsing
-    unsigned long lastWatchdogFeed = millis();
-    const unsigned long WATCHDOG_FEED_INTERVAL = 1000; // Feed elke seconde
-    
-    // Timeout voor parsing
-    unsigned long parseStartTime = millis();
-    const unsigned long PARSE_TIMEOUT_MS = 8000;
-    unsigned long lastDataTime = millis();
-    const unsigned long DATA_TIMEOUT_MS = 2000;
-    
-    // M1: Heap telemetry vóór JSON parse
-    logHeap("CANDLES_PARSE_PRE");
+            if (!http.begin(candleClient, url)) {
+                Serial.println(F("[Candles] http.begin() gefaald"));
+                shouldRetry = true;
+                break;
+            }
+        
+            code = http.GET();
+            unsigned long requestTime = millis() - requestStart;
+            
+            // M1: Heap telemetry na HTTP GET
+            logHeap("CANDLES_GET_POST");
+            
+            if (code != 200) {
+                // Fase 6.2: Geconsolideerde error logging - gebruik ApiClient helpers
+                const char* phase = ApiClient::detectHttpErrorPhase(code);
+                ApiClient::logHttpError(code, phase, requestTime, attempt, maxAttempts, "[Candles]");
+                shouldRetry = (code == HTTPC_ERROR_CONNECTION_REFUSED ||
+                               code == HTTPC_ERROR_CONNECTION_LOST ||
+                               code == HTTPC_ERROR_READ_TIMEOUT ||
+                               code == 429);
+                break;
+            }
+        
+            WiFiClient* stream = http.getStreamPtr();
+            if (stream == nullptr) {
+                Serial.println(F("[Candles] Stream pointer is null"));
+                shouldRetry = true;
+                break;
+            }
+        
+        // Streaming JSON parser: gebruik fixed-size buffer voor chunked reading
+        // Parse iteratief en sla alleen noodzakelijke values op (closes/returns)
+        int writeIdx = 0;  // Schrijf index in circulaire buffer
+        int totalParsed = 0;
+        bool bufferFilled = false;  // True wanneer buffer vol is en we gaan wrappen
+        
+        // Parser state
+        enum ParseState {
+            PS_START,
+            PS_OUTER_ARRAY,
+            PS_ENTRY_START,
+            PS_FIELD,
+            PS_ENTRY_END
+        };
+        ParseState state = PS_START;
+        int fieldIdx = 0;
+        char fieldBuf[64];
+        int fieldBufIdx = 0;
+        unsigned long openTime = 0;
+        float highPrice = 0.0f;
+        float lowPrice = 0.0f;
+        float closePrice = 0.0f;
+        float volume = 0.0f;
+        KlineMetrics lastParsedKline = {};
+        float volumeValue = 0.0f;
+        
+        // Buffer voor chunked reading (hergebruik fixed buffer)
+        size_t bufferPos = 0;
+        size_t bufferLen = 0;
+        const size_t BUFFER_SIZE = sizeof(bitvavoStreamBuffer);
+        
+        // Feed watchdog tijdens parsing
+        unsigned long lastWatchdogFeed = millis();
+        const unsigned long WATCHDOG_FEED_INTERVAL = 1000; // Feed elke seconde
+        
+        // Timeout voor parsing
+        unsigned long parseStartTime = millis();
+        const unsigned long PARSE_TIMEOUT_MS = 8000;
+        unsigned long lastDataTime = millis();
+        const unsigned long DATA_TIMEOUT_MS = 2000;
+        
+        // M1: Heap telemetry vóór JSON parse
+        logHeap("CANDLES_PARSE_PRE");
     
     // Parse streaming JSON
     // Continue zolang stream connected/available OF er nog data in buffer is
@@ -1200,9 +1216,10 @@ parse_done:
         }
     }
     
-    // Bereken resultaat
-    int storedCount = bufferFilled ? (int)maxCount : writeIdx;
-    result = storedCount;  // S2: Zet result voordat do-while eindigt
+        // Bereken resultaat
+        int storedCount = bufferFilled ? (int)maxCount : writeIdx;
+        result = storedCount;  // S2: Zet result voordat do-while eindigt
+        attemptOk = true;
     
     if (bufferFilled && writeIdx > 0) {
         // Buffer is gewrapped: [writeIdx..maxCount-1, 0..writeIdx-1] -> [0..maxCount-1]
@@ -1328,14 +1345,25 @@ parse_done:
         }
     }
     
-    } while(0);
-    
-    // C2: ALTIJD cleanup (ook bij code<0, code!=200, parse error)
-    // Hard close: http.end() + client.stop() voor volledige cleanup
-    http.end();
-    WiFiClient* stream = http.getStreamPtr();
-    if (stream != nullptr) {
-        stream->stop();
+        } while(0);
+        
+        // C2: ALTIJD cleanup (ook bij code<0, code!=200, parse error)
+        // Hard close: http.end() + client.stop() voor volledige cleanup
+        http.end();
+        WiFiClient* stream = http.getStreamPtr();
+        if (stream != nullptr) {
+            stream->stop();
+        }
+        
+        if (attemptOk) {
+            break;
+        }
+        
+        if (!shouldRetry || (attempt + 1) >= maxAttempts) {
+            break;
+        }
+        
+        delay(retryDelayMs);
     }
     
     // C2: Geef netwerk mutex vrij (met debug logging)
@@ -1437,6 +1465,7 @@ static WarmStartMode performWarmStart()
     lv_timer_handler();  // Update spinner animatie vóór fetch
     int count1m = fetchBitvavoCandles(bitvavoSymbol, "1m", req1mCandles, temp1mPrices, nullptr, SECONDS_PER_MINUTE);
     lv_timer_handler();  // Update spinner animatie na fetch
+    delay(WARM_START_CALL_SPACING_MS);
     if (count1m > 0) {
         // Vul secondPrices buffer (gebruik laatste count1m candles, max SECONDS_PER_MINUTE)
         int copyCount = (count1m < SECONDS_PER_MINUTE) ? count1m : SECONDS_PER_MINUTE;
@@ -1464,6 +1493,7 @@ static WarmStartMode performWarmStart()
     lv_timer_handler();  // Update spinner animatie vóór fetch
     int count5m = fetchBitvavoCandles(bitvavoSymbol, "5m", req5mCandles, temp5mPrices, nullptr, 2);
     lv_timer_handler();  // Update spinner animatie na fetch
+    delay(WARM_START_CALL_SPACING_MS);
     if (count5m >= 2) {
         // Interpoleer laatste 2 candles naar fiveMinutePrices buffer
         // Elke 5m candle = 300 seconden, gebruik laatste candle voor hele buffer
@@ -1504,6 +1534,7 @@ static WarmStartMode performWarmStart()
             break;  // Succes, stop retries
         }
     }
+    delay(WARM_START_CALL_SPACING_MS);
     
     if (count30m >= 2) {
         // Bereken ret_30m uit eerste en laatste 30m candle (gesloten candles)
@@ -1563,6 +1594,7 @@ static WarmStartMode performWarmStart()
             break;  // Succes, stop retries
         }
     }
+    delay(WARM_START_CALL_SPACING_MS);
     
     if (count2h >= 2) {
         // Bereken ret_2h uit eerste en laatste candle (gesloten candles)
@@ -1607,6 +1639,7 @@ static WarmStartMode performWarmStart()
             break;
         }
     }
+    delay(WARM_START_CALL_SPACING_MS);
     
     if (count4h >= 2) {
         float firstPrice = temp4hPrices[0];
@@ -1639,6 +1672,7 @@ static WarmStartMode performWarmStart()
             break;
         }
     }
+    delay(WARM_START_CALL_SPACING_MS);
     
     if (count1d >= 2) {
         float firstPrice = temp1dPrices[0];
@@ -1682,6 +1716,7 @@ static WarmStartMode performWarmStart()
             break;
         }
     }
+    delay(WARM_START_CALL_SPACING_MS);
 
     if (count1w >= 2) {
         float firstPrice = temp1wPrices[0];
@@ -6216,6 +6251,7 @@ static void setupSerialAndDevice()
     
     // Fase 4.1: Initialize ApiClient
     apiClient.begin();
+    candleClient.setInsecure();  // Warm-start HTTPS zonder cert validatie
     
     // Fase 4.2.1: Initialize PriceData (module structuur)
     // Fase 4.2.5: State variabelen worden geïnitialiseerd in constructor en gesynchroniseerd in begin()

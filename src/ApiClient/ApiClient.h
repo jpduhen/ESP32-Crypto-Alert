@@ -38,7 +38,7 @@
 #define HTTP_TIMEOUT_MS_DEFAULT HTTP_READ_TIMEOUT_MS_DEFAULT  // Backward compatibility: totale timeout = read timeout
 
 // M2: Extern declaratie voor globale response buffer (gedefinieerd in .ino)
-extern char gApiResp[304];  // Verkleind van 320 naar 304 bytes (bespaart 16 bytes DRAM)
+extern char gApiResp[256];  // Verkleind van 320 naar 256 bytes (bespaart 64 bytes DRAM)
 
 // S0: Extern declaratie voor netwerk mutex (gedefinieerd in .ino)
 extern SemaphoreHandle_t gNetMutex;
@@ -102,5 +102,4 @@ private:
 };
 
 #endif // APICLIENT_H
-
 
