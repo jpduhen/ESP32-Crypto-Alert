@@ -9,6 +9,7 @@
 #include "platform_config.h"
 
 #include <WiFi.h>                   // Included with Espressif ESP32 Dev Module
+#include <WiFiClientSecure.h>       // HTTPS support
 #include <HTTPClient.h>             // Included with Espressif ESP32 Dev Module
 #include <WiFiManager.h>            // Install "WiFiManager" with the Library Manager
 #include <WebServer.h>              // Included with Espressif ESP32 Dev Module
@@ -685,6 +686,7 @@ static WarmStartWrapper warmWrap;
 // ApiClient instance (Fase 4.1 voltooid)
 #include "src/ApiClient/ApiClient.h"
 ApiClient apiClient;
+static WiFiClientSecure candleClient;  // HTTPS client voor warm-start candles (vermijdt cert issues)
 
 // PriceData instance (Fase 4.2.1: module structuur aangemaakt)
 PriceData priceData;
@@ -894,9 +896,9 @@ int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit
     // S2: do-while(0) patroon voor consistente cleanup
     do {
         // N1: Expliciete connect/read timeout settings (geoptimaliseerd: 2000ms connect, 2500ms read)
-    http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+        http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
         http.setTimeout(WARM_START_TIMEOUT_MS > HTTP_READ_TIMEOUT_MS ? WARM_START_TIMEOUT_MS : HTTP_READ_TIMEOUT_MS);
-    http.setReuse(false);
+        http.setReuse(true);
         
         unsigned long requestStart = millis();
     
@@ -905,29 +907,29 @@ int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit
         http.addHeader(F("User-Agent"), F("ESP32-CryptoMonitor/1.0"));
         http.addHeader(F("Accept"), F("application/json"));
     
-    if (!http.begin(url)) {
+        if (!http.begin(candleClient, url)) {
             Serial.println(F("[Candles] http.begin() gefaald"));
             break;
-    }
+        }
     
-    int code = http.GET();
+        int code = http.GET();
         unsigned long requestTime = millis() - requestStart;
         
         // M1: Heap telemetry na HTTP GET
         logHeap("CANDLES_GET_POST");
         
-    if (code != 200) {
+        if (code != 200) {
             // Fase 6.2: Geconsolideerde error logging - gebruik ApiClient helpers
             const char* phase = ApiClient::detectHttpErrorPhase(code);
             ApiClient::logHttpError(code, phase, requestTime, 0, 1, "[Candles]");
             break;
-    }
+        }
     
-    WiFiClient* stream = http.getStreamPtr();
-    if (stream == nullptr) {
+        WiFiClient* stream = http.getStreamPtr();
+        if (stream == nullptr) {
             Serial.println(F("[Candles] Stream pointer is null"));
             break;
-    }
+        }
     
     // Streaming JSON parser: gebruik fixed-size buffer voor chunked reading
     // Parse iteratief en sla alleen noodzakelijke values op (closes/returns)
@@ -6216,6 +6218,7 @@ static void setupSerialAndDevice()
     
     // Fase 4.1: Initialize ApiClient
     apiClient.begin();
+    candleClient.setInsecure();  // Warm-start HTTPS zonder cert validatie
     
     // Fase 4.2.1: Initialize PriceData (module structuur)
     // Fase 4.2.5: State variabelen worden geïnitialiseerd in constructor en gesynchroniseerd in begin()
