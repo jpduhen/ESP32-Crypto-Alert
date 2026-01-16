@@ -1552,18 +1552,38 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
     // Forward declaration voor fetchBitvavoCandles (gedefinieerd in .ino)
     extern int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit, float* prices, unsigned long* timestamps, uint16_t maxCount, float* highs = nullptr, float* lows = nullptr, float* volumes = nullptr);
     
+    // Helper: zorg dat candles oldest -> newest staan (EMA verwacht chronologische volgorde)
+    auto ensureOldestFirst = [](float* prices, unsigned long* times, int count) {
+        if (prices == nullptr || times == nullptr || count < 2) {
+            return;
+        }
+        if (times[0] > times[count - 1]) {
+            for (int i = 0; i < count / 2; i++) {
+                float tmpPrice = prices[i];
+                prices[i] = prices[count - 1 - i];
+                prices[count - 1 - i] = tmpPrice;
+                unsigned long tmpTime = times[i];
+                times[i] = times[count - 1 - i];
+                times[count - 1 - i] = tmpTime;
+            }
+        }
+    };
+
     // Fetch 4h candles
     uint8_t count4h = alert2HThresholds.autoAnchor4hCandles;
     const char* interval4h = get4hIntervalStr();
     float tempPrices[12];  // Herbruikbare buffer (max 12 candles)
+    unsigned long tempTimes[12];
     
-    int fetched4h = fetchBitvavoCandles(bitvavoSymbol, interval4h, count4h, tempPrices, nullptr, 12);
+    int fetched4h = fetchBitvavoCandles(bitvavoSymbol, interval4h, count4h, tempPrices, tempTimes, 12);
     Serial.printf("[ANCHOR][AUTO] 4h fetch result: %d candles\n", fetched4h);
     
     if (fetched4h < 2) {
         Serial.println("[ANCHOR][AUTO] Not enough 4h candles");
         return false;
     }
+
+    ensureOldestFirst(tempPrices, tempTimes, fetched4h);
     
     // Bereken 4h EMA
     EmaAccumulator ema4h;
@@ -1583,13 +1603,15 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
     uint8_t count1d = alert2HThresholds.autoAnchor1dCandles;
     const char* interval1d = get1dIntervalStr();
     
-    int fetched1d = fetchBitvavoCandles(bitvavoSymbol, interval1d, count1d, tempPrices, nullptr, 12);
+    int fetched1d = fetchBitvavoCandles(bitvavoSymbol, interval1d, count1d, tempPrices, tempTimes, 12);
     Serial.printf("[ANCHOR][AUTO] 1d fetch result: %d candles\n", fetched1d);
     
     if (fetched1d < 2) {
         Serial.println("[ANCHOR][AUTO] Not enough 1d candles");
         return false;
     }
+
+    ensureOldestFirst(tempPrices, tempTimes, fetched1d);
     
     // Bereken 1d EMA
     EmaAccumulator ema1d;

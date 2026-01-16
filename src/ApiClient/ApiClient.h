@@ -90,6 +90,9 @@ public:
     
     // Helper: Detect HTTP error phase (consolideert fase detectie)
     static const char* detectHttpErrorPhase(int code);
+
+    // Expose secure client for warm-start candles (avoid duplicate TLS config)
+    WiFiClientSecure& getSecureClient() { return wifiClientSecure; }
     
 private:
     // N2: Persistent HTTPClient en WiFiClient voor keep-alive connecties

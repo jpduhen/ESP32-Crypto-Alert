@@ -1177,12 +1177,15 @@ int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit
                     totalParsed++;
                     
                     if (highPrice > 0.0f && lowPrice > 0.0f && highPrice >= lowPrice) {
-                        lastParsedKline.high = highPrice;
-                        lastParsedKline.low = lowPrice;
-                        lastParsedKline.close = closePrice;
-                        lastParsedKline.volume = volume;
-                        lastParsedKline.openTime = openTime;
-                        lastParsedKline.valid = true;
+                        // Bewaar altijd de nieuwste candle op basis van openTime
+                        if (!lastParsedKline.valid || (openTime != 0 && openTime >= lastParsedKline.openTime)) {
+                            lastParsedKline.high = highPrice;
+                            lastParsedKline.low = lowPrice;
+                            lastParsedKline.close = closePrice;
+                            lastParsedKline.volume = volume;
+                            lastParsedKline.openTime = openTime;
+                            lastParsedKline.valid = true;
+                        }
                     }
                     
                     if (totalParsed >= (int)limit) {
@@ -1534,10 +1537,33 @@ static WarmStartMode performWarmStart()
     
     yield();
     delay(0);
+
+    // Helper: bepaal oudste/nieuwste op basis van timestamps (Bitvavo kan newest-first retourneren)
+    auto selectOldestNewest = [](const float* prices, const unsigned long* times, int count, float& oldest, float& newest) {
+        if (count < 2) {
+            oldest = 0.0f;
+            newest = 0.0f;
+            return;
+        }
+        if (times != nullptr && times[0] != 0 && times[count - 1] != 0) {
+            if (times[0] <= times[count - 1]) {
+                oldest = prices[0];
+                newest = prices[count - 1];
+            } else {
+                oldest = prices[count - 1];
+                newest = prices[0];
+            }
+        } else {
+            // Fallback: aanname oldest->newest
+            oldest = prices[0];
+            newest = prices[count - 1];
+        }
+    };
     
     // 3. Vul 30m buffer via minuteAverages (returns-only: alleen laatste 2 closes nodig)
     // Retry-logica: probeer maximaal 3 keer als eerste poging faalt
     float temp30mPrices[2];
+    unsigned long temp30mTimes[2];
     int count30m = 0;
     const int maxRetries30m = 3;
     for (int retry = 0; retry < maxRetries30m; retry++) {
@@ -1548,7 +1574,7 @@ static WarmStartMode performWarmStart()
             lv_timer_handler();  // Update spinner animatie
         }
         lv_timer_handler();  // Update spinner animatie vóór fetch
-        count30m = fetchBitvavoCandles(bitvavoSymbol, "30m", req30mCandles, temp30mPrices, nullptr, 2);
+        count30m = fetchBitvavoCandles(bitvavoSymbol, "30m", req30mCandles, temp30mPrices, temp30mTimes, 2);
         lv_timer_handler();  // Update spinner animatie na fetch
         if (count30m >= 2) {
             break;  // Succes, stop retries
@@ -1557,9 +1583,10 @@ static WarmStartMode performWarmStart()
     delay(WARM_START_CALL_SPACING_MS);
     
     if (count30m >= 2) {
-        // Bereken ret_30m uit eerste en laatste 30m candle (gesloten candles)
-        float first30mPrice = temp30mPrices[0];
-        float last30mPrice = temp30mPrices[count30m - 1];
+        // Bereken ret_30m uit oudste en nieuwste 30m candle (gesloten candles)
+        float first30mPrice = 0.0f;
+        float last30mPrice = 0.0f;
+        selectOldestNewest(temp30mPrices, temp30mTimes, count30m, first30mPrice, last30mPrice);
         if (first30mPrice > 0.0f && last30mPrice > 0.0f) {
             ret_30m = ((last30mPrice - first30mPrice) / first30mPrice) * 100.0f;
             hasRet30mWarm = true;
@@ -1598,6 +1625,7 @@ static WarmStartMode performWarmStart()
     // 4. Initieer 2h trend berekening
     // Retry-logica: probeer maximaal 3 keer als eerste poging faalt
     float temp2hPrices[2];
+    unsigned long temp2hTimes[2];
     int count2h = 0;
     const int maxRetries2h = 3;
     for (int retry = 0; retry < maxRetries2h; retry++) {
@@ -1608,7 +1636,7 @@ static WarmStartMode performWarmStart()
             lv_timer_handler();  // Update spinner animatie
         }
         lv_timer_handler();  // Update spinner animatie vóór fetch
-        count2h = fetchBitvavoCandles(bitvavoSymbol, "2h", req2hCandles, temp2hPrices, nullptr, 2);
+        count2h = fetchBitvavoCandles(bitvavoSymbol, "2h", req2hCandles, temp2hPrices, temp2hTimes, 2);
         lv_timer_handler();  // Update spinner animatie na fetch
         if (count2h >= 2) {
             break;  // Succes, stop retries
@@ -1617,9 +1645,10 @@ static WarmStartMode performWarmStart()
     delay(WARM_START_CALL_SPACING_MS);
     
     if (count2h >= 2) {
-        // Bereken ret_2h uit eerste en laatste candle (gesloten candles)
-        float firstPrice = temp2hPrices[0];
-        float lastPrice = temp2hPrices[count2h - 1];
+        // Bereken ret_2h uit oudste en nieuwste candle (gesloten candles)
+        float firstPrice = 0.0f;
+        float lastPrice = 0.0f;
+        selectOldestNewest(temp2hPrices, temp2hTimes, count2h, firstPrice, lastPrice);
         if (firstPrice > 0.0f && lastPrice > 0.0f) {
             ret_2h = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
             hasRet2hWarm = true;
@@ -1643,6 +1672,7 @@ static WarmStartMode performWarmStart()
     
     // 5. Haal 4h candles op voor lange termijn trend
     float temp4hPrices[2];
+    unsigned long temp4hTimes[2];
     int count4h = 0;
     const int maxRetries4h = 3;
     for (int retry = 0; retry < maxRetries4h; retry++) {
@@ -1653,7 +1683,7 @@ static WarmStartMode performWarmStart()
             lv_timer_handler();
         }
         lv_timer_handler();
-        count4h = fetchBitvavoCandles(bitvavoSymbol, "4h", 2, temp4hPrices, nullptr, 2);
+        count4h = fetchBitvavoCandles(bitvavoSymbol, "4h", 2, temp4hPrices, temp4hTimes, 2);
         lv_timer_handler();
         if (count4h >= 2) {
             break;
@@ -1662,8 +1692,9 @@ static WarmStartMode performWarmStart()
     delay(WARM_START_CALL_SPACING_MS);
     
     if (count4h >= 2) {
-        float firstPrice = temp4hPrices[0];
-        float lastPrice = temp4hPrices[count4h - 1];
+        float firstPrice = 0.0f;
+        float lastPrice = 0.0f;
+        selectOldestNewest(temp4hPrices, temp4hTimes, count4h, firstPrice, lastPrice);
         if (firstPrice > 0.0f && lastPrice > 0.0f) {
             ret_4h = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
             hasRet4hWarm = true;
@@ -1676,6 +1707,7 @@ static WarmStartMode performWarmStart()
     
     // 6. Haal 1d candles op voor lange termijn trend
     float temp1dPrices[2];
+    unsigned long temp1dTimes[2];
     int count1d = 0;
     const int maxRetries1d = 3;
     for (int retry = 0; retry < maxRetries1d; retry++) {
@@ -1686,7 +1718,7 @@ static WarmStartMode performWarmStart()
             lv_timer_handler();
         }
         lv_timer_handler();
-        count1d = fetchBitvavoCandles(bitvavoSymbol, "1d", 2, temp1dPrices, nullptr, 2);
+        count1d = fetchBitvavoCandles(bitvavoSymbol, "1d", 2, temp1dPrices, temp1dTimes, 2);
         lv_timer_handler();
         if (count1d >= 2) {
             break;
@@ -1695,8 +1727,9 @@ static WarmStartMode performWarmStart()
     delay(WARM_START_CALL_SPACING_MS);
     
     if (count1d >= 2) {
-        float firstPrice = temp1dPrices[0];
-        float lastPrice = temp1dPrices[count1d - 1];
+        float firstPrice = 0.0f;
+        float lastPrice = 0.0f;
+        selectOldestNewest(temp1dPrices, temp1dTimes, count1d, firstPrice, lastPrice);
         if (firstPrice > 0.0f && lastPrice > 0.0f) {
             ret_1d = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
             hasRet1dWarm = true;
@@ -1718,35 +1751,38 @@ static WarmStartMode performWarmStart()
         #endif
     }
 
-    // 7. Haal 1w candles op voor lange termijn trend
-    float temp1wPrices[2];
-    int count1w = 0;
-    const int maxRetries1w = 3;
-    for (int retry = 0; retry < maxRetries1w; retry++) {
+    // 7. Haal 7d candles op voor lange termijn trend
+    // Bitvavo ondersteunt geen "1w" of "7d" interval; gebruik 7x "1d"
+    float temp7dPrices[7];
+    unsigned long temp7dTimes[7];
+    int count7d = 0;
+    const int maxRetries7d = 3;
+    for (int retry = 0; retry < maxRetries7d; retry++) {
         if (retry > 0) {
-            Serial_printf(F("[WarmStart] 1w retry %d/%d...\n"), retry, maxRetries1w - 1);
+            Serial_printf(F("[WarmStart] 7d retry %d/%d...\n"), retry, maxRetries7d - 1);
             yield();
             delay(500);
             lv_timer_handler();
         }
         lv_timer_handler();
-        count1w = fetchBitvavoCandles(bitvavoSymbol, "1W", 2, temp1wPrices, nullptr, 2);  // Bitvavo gebruikt "1W" (hoofdletter W)
+        count7d = fetchBitvavoCandles(bitvavoSymbol, "1d", 7, temp7dPrices, temp7dTimes, 7);
         lv_timer_handler();
-        if (count1w >= 2) {
+        if (count7d >= 2) {
             break;
         }
     }
     delay(WARM_START_CALL_SPACING_MS);
 
-    if (count1w >= 2) {
-        float firstPrice = temp1wPrices[0];
-        float lastPrice = temp1wPrices[count1w - 1];
+    if (count7d >= 2) {
+        float firstPrice = 0.0f;
+        float lastPrice = 0.0f;
+        selectOldestNewest(temp7dPrices, temp7dTimes, count7d, firstPrice, lastPrice);
         if (firstPrice > 0.0f && lastPrice > 0.0f) {
             ret_7d = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
             hasRet7dWarm = true;
             #if DEBUG_CALCULATIONS
-            Serial_printf(F("[WarmStart][7d] ret_7d=%.4f%%, firstPrice=%.2f, lastPrice=%.2f, hasRet7dWarm=%d\n"),
-                         ret_7d, firstPrice, lastPrice, hasRet7dWarm ? 1 : 0);
+            Serial_printf(F("[WarmStart][7d] ret_7d=%.4f%%, firstPrice=%.2f, lastPrice=%.2f, hasRet7dWarm=%d (count7d=%d)\n"),
+                         ret_7d, firstPrice, lastPrice, hasRet7dWarm ? 1 : 0, count7d);
             #endif
         } else {
             hasRet7dWarm = false;
@@ -1758,7 +1794,7 @@ static WarmStartMode performWarmStart()
     } else {
         hasRet7dWarm = false;
         #if DEBUG_CALCULATIONS
-        Serial_printf(F("[WarmStart][7d] ERROR: count1w=%d < 2\n"), count1w);
+        Serial_printf(F("[WarmStart][7d] ERROR: count7d=%d < 2\n"), count7d);
         #endif
     }
     
@@ -4539,22 +4575,96 @@ float calculateReturn5Minutes()
     );
 }
 
-// Calculate 30-minute return: price now vs 30 minutes ago (using minute averages)
+// Calculate linear trend over last 30 minutes using linear regression
+// Returns slope as percentage per 30 minutes
+static float calculateLinearTrend30Minutes()
+{
+    bool arrayFilled = priceData.getMinuteArrayFilled();
+    uint8_t index = priceData.getMinuteIndex();
+    float* averages = priceData.getMinuteAverages();
+    
+    uint8_t availableMinutes = calculateAvailableElements(arrayFilled, index, MINUTES_FOR_30MIN_CALC);
+    if (availableMinutes < 30) {
+        return 0.0f;
+    }
+    
+    uint8_t minutesToUse = 30;
+    
+    float sumX = 0.0f;
+    float sumY = 0.0f;
+    float sumXY = 0.0f;
+    float sumX2 = 0.0f;
+    uint8_t validPoints = 0;
+    float avgSum = 0.0f;
+    uint8_t avgCount = 0;
+    
+    uint8_t lastWrittenIdx;
+    if (!arrayFilled) {
+        if (index == 0) {
+            return 0.0f;
+        }
+        lastWrittenIdx = index - 1;
+    } else {
+        lastWrittenIdx = getLastWrittenIndex(index, MINUTES_FOR_30MIN_CALC);
+    }
+    
+    for (uint8_t i = 0; i < minutesToUse; i++) {
+        uint8_t idx;
+        if (!arrayFilled) {
+            if (i >= index) break;
+            idx = index - 1 - i;  // newest -> oldest
+        } else {
+            int32_t idx_temp = getRingBufferIndexAgo(lastWrittenIdx, i, MINUTES_FOR_30MIN_CALC);
+            if (idx_temp < 0) break;
+            idx = (uint8_t)idx_temp;
+        }
+        
+        float price = averages[idx];
+        if (isValidPrice(price)) {
+            // i=0 is newest, reverse x to make 0 = oldest
+            float x = (float)(minutesToUse - 1 - i);
+            float y = price;
+            sumX += x;
+            sumY += y;
+            sumXY += x * y;
+            sumX2 += x * x;
+            avgSum += price;
+            avgCount++;
+            validPoints++;
+        }
+    }
+    
+    if (validPoints < 2 || avgCount == 0) {
+        return 0.0f;
+    }
+    
+    // Update gemiddelde prijs voor display
+    averagePrices[2] = avgSum / avgCount;
+    
+    float n = (float)validPoints;
+    float denominator = (n * sumX2) - (sumX * sumX);
+    if (fabsf(denominator) < 0.0001f || averagePrices[2] <= 0.0f) {
+        return 0.0f;
+    }
+    
+    float slope = ((n * sumXY) - (sumX * sumY)) / denominator;  // price per minute
+    float pctPer30Min = (slope * 30.0f / averagePrices[2]) * 100.0f;
+    return pctPer30Min;
+}
+
+// Calculate 30-minute return: now uses linear regression over last 30 minutes
 // Fase 4.2.9: Gebruik PriceData getters (parallel, arrays blijven globaal)
 // Fase 9.1.4: static verwijderd zodat WebServerModule deze functie kan aanroepen
 float calculateReturn30Minutes()
 {
-    // Need at least 30 minutes of history
     bool arrayFilled = priceData.getMinuteArrayFilled();
     uint8_t index = priceData.getMinuteIndex();
-    // Fase 5.1: Geconsolideerde berekening
     uint8_t availableMinutes = calculateAvailableElements(arrayFilled, index, MINUTES_FOR_30MIN_CALC);
-    if (availableMinutes < 30)
-    {
+    if (availableMinutes < 30) {
         static uint32_t lastLogTime = 0;
         uint32_t now = millis();
         if (now - lastLogTime > 60000) {
-            Serial_printf("[Ret30m] Wachten op data: minuteIndex=%u (nodig: 30, available=%u)\n", 
+            Serial_printf("[Ret30m] Wachten op data: minuteIndex=%u (nodig: 30, available=%u)\n",
                          index, availableMinutes);
             lastLogTime = now;
         }
@@ -4562,95 +4672,7 @@ float calculateReturn30Minutes()
         return 0.0f;
     }
     
-    // Fase 4.2.9: Gebruik PriceData getters (parallel, arrays blijven globaal)
-    // Calculate average of last 30 minutes for display (specific to 30m calculation)
-    float* averages = priceData.getMinuteAverages();
-    bool minuteArrayFilled = arrayFilled;
-    uint8_t minuteIndex = index;
-    
-    // Fase 5.2: Geconsolideerde loop voor ring buffer iteratie
-    float last30Sum = 0.0f;
-    uint16_t last30Count = 0;
-    accumulateValidPricesFromRingBuffer(
-        averages,
-        minuteArrayFilled,
-        minuteIndex,
-        MINUTES_FOR_30MIN_CALC,
-        1,  // Start vanaf 1 positie terug (nieuwste)
-        30, // 30 minuten
-        last30Sum,
-        last30Count
-    );
-    if (last30Count > 0)
-    {
-        averagePrices[2] = last30Sum / last30Count;
-    }
-    else
-    {
-        averagePrices[2] = 0.0f;
-    }
-    
-    // Calculate return: use average of last 30 minutes vs average of previous 30 minutes (if available)
-    if (availableMinutes >= 60) {
-        float prev30Sum = 0.0f;
-        uint16_t prev30Count = 0;
-        accumulateValidPricesFromRingBuffer(
-            averages,
-            minuteArrayFilled,
-            minuteIndex,
-            MINUTES_FOR_30MIN_CALC,
-            31, // Start vanaf 31 posities terug (30 minuten vóór de laatste 30)
-            30,
-            prev30Sum,
-            prev30Count
-        );
-
-        if (prev30Count > 0) {
-            float prev30Avg = prev30Sum / prev30Count;
-            if (areValidPrices(averagePrices[2], prev30Avg) && prev30Avg > 0.0f) {
-                float ret30m = calculatePercentageReturn(averagePrices[2], prev30Avg);
-                #if DEBUG_CALCULATIONS
-                Serial_printf(F("[Ret30m] >=60m: last30Avg=%.2f, prev30Avg=%.2f, ret=%.4f%%\n"),
-                             averagePrices[2], prev30Avg, ret30m);
-                #endif
-                return ret30m;
-            }
-        }
-    }
-
-    // Fallback: gebruik laatste minuut gemiddelde vs gemiddelde van laatste 30 minuten
-    // Fase 6.1: Geconsolideerde validatie
-    // Gebruik laatste minuut gemiddelde in plaats van huidige prijs voor consistentie
-    uint8_t lastMinuteIdx;
-    if (!minuteArrayFilled) {
-        if (minuteIndex == 0) {
-        return 0.0f;
-    }
-        lastMinuteIdx = minuteIndex - 1;
-    } else {
-        lastMinuteIdx = getLastWrittenIndex(minuteIndex, MINUTES_FOR_30MIN_CALC);
-    }
-    float priceNow = averages[lastMinuteIdx];  // Laatste minuut gemiddelde
-    float price30mAgo = averagePrices[2];  // Gemiddelde van laatste 30 minuten
-    
-    // Fase 6.1: Gebruik geconsolideerde validatie helper
-    if (!areValidPrices(priceNow, price30mAgo) || price30mAgo <= 0.0f) {
-        #if DEBUG_CALCULATIONS
-        Serial_printf(F("[Ret30m] <60m: Invalid prices: priceNow=%.2f, price30mAgo=%.2f\n"),
-                     priceNow, price30mAgo);
-        #endif
-        return 0.0f;
-    }
-    
-    // Fase 5.1: Geconsolideerde percentage berekening
-    float ret30m = calculatePercentageReturn(priceNow, price30mAgo);
-    
-    #if DEBUG_CALCULATIONS
-    Serial_printf(F("[Ret30m] <60m: priceNow=%.2f (lastMinAvg), price30mAgo=%.2f (avg30m), ret=%.4f%%\n"),
-                 priceNow, price30mAgo, ret30m);
-    #endif
-    
-    return ret30m;
+    return calculateLinearTrend30Minutes();
 }
 
 // OUDE METHODE - behouden voor referentie, maar niet meer gebruikt
@@ -4765,103 +4787,6 @@ static float calculate1MinutePct()
     
     // Fase 5.1: Geconsolideerde percentage berekening
     return calculatePercentageReturn(currentAvg, prevMinuteAvg);
-}
-
-// Bereken lineaire regressie (trend) over de laatste 30 minuten
-// Retourneert de helling (slope) als percentage per uur
-// Positieve waarde = stijgende trend, negatieve waarde = dalende trend
-static float calculateLinearTrend30Minutes()
-{
-    // Tel aantal beschikbare minuten
-    uint8_t availableMinutes = 0;
-    if (!minuteArrayFilled)
-    {
-        availableMinutes = minuteIndex;
-    }
-    else
-    {
-        availableMinutes = MINUTES_FOR_30MIN_CALC;
-    }
-    
-    // We hebben minimaal 30 minuten nodig voor een betrouwbare trend
-    if (availableMinutes < 30)
-    {
-        averagePrices[2] = 0.0f;
-        return 0.0f;
-    }
-    
-    // Gebruik laatste 30 minuten voor trend berekening
-    float sumX = 0.0f;
-    float sumY = 0.0f;
-    float sumXY = 0.0f;
-    float sumX2 = 0.0f;
-    uint8_t validPoints = 0;
-    float last30Sum = 0.0f;
-    uint8_t last30Count = 0;
-    
-    // Loop door laatste 30 minuten
-    for (uint8_t i = 0; i < 30; i++)
-    {
-        uint8_t idx;
-        if (!minuteArrayFilled)
-        {
-            // Array nog niet rond, gebruik laatste 30 minuten vanaf minuteIndex
-            if (i >= minuteIndex) break; // Niet genoeg data
-            idx = minuteIndex - 1 - i; // Start bij laatste minuut en werk achteruit
-        }
-        else
-        {
-            // Array is rond, gebruik laatste 30 minuten
-            idx = (minuteIndex - 1 - i + MINUTES_FOR_30MIN_CALC) % MINUTES_FOR_30MIN_CALC;
-        }
-        
-        float price = minuteAverages[idx];
-        if (price > 0.0f)
-        {
-            float x = (float)i; // Tijd index (0 tot 29, waarbij 0 = oudste, 29 = nieuwste)
-            float y = price;
-            
-            sumX += x;
-            sumY += y;
-            sumXY += x * y;
-            sumX2 += x * x;
-            last30Sum += price;
-            last30Count++;
-            validPoints++;
-        }
-    }
-    
-    if (validPoints < 2)
-    {
-        averagePrices[2] = 0.0f;
-        return 0.0f;
-    }
-    
-    // Bereken gemiddelde prijs voor weergave
-    float last30Avg = last30Sum / last30Count;
-    averagePrices[2] = last30Avg;
-    
-    // Bereken slope (b)
-    float n = (float)validPoints;
-    float denominator = (n * sumX2) - (sumX * sumX);
-    
-    if (fabsf(denominator) < 0.0001f) // Voorkom deling door nul
-    {
-        return 0.0f;
-    }
-    
-    float slope = ((n * sumXY) - (sumX * sumY)) / denominator;
-    
-    // Slope is nu de prijsverandering per minuut
-    // Omzetten naar percentage per uur: (slope * 60) / gemiddelde_prijs * 100
-    if (last30Avg > 0.0f)
-    {
-        float slopePerHour = slope * 60.0f; // Prijsverandering per uur
-        float pctPerHour = (slopePerHour / last30Avg) * 100.0f;
-        return pctPerHour;
-    }
-    
-    return 0.0f;
 }
 
 // Calculate 30 minute moving average percentage
@@ -6271,7 +6196,6 @@ static void setupSerialAndDevice()
     
     // Fase 4.1: Initialize ApiClient
     apiClient.begin();
-    candleClient.setInsecure();  // Warm-start HTTPS zonder cert validatie
     
     // Fase 4.2.1: Initialize PriceData (module structuur)
     // Fase 4.2.5: State variabelen worden geïnitialiseerd in constructor en gesynchroniseerd in begin()
