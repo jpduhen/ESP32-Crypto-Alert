@@ -707,6 +707,7 @@ static WiFiClientSecure candleClient;  // HTTPS client voor warm-start candles (
 #if USE_WEBSOCKETS
 static WebSocketsClient bitvavoWs;
 static bool bitvavoWsConnected = false;
+static bool bitvavoWsNeedsReconnect = false;
 #endif
 
 // PriceData instance (Fase 4.2.1: module structuur aangemaakt)
@@ -6496,6 +6497,9 @@ static void setupWiFiEventHandlers()
                     wifiReconnectEnabled = true;
                     lastReconnectAttempt = 0;
                     reconnectAttemptCount = 0; // Reset reconnect counter
+                    #if USE_WEBSOCKETS
+                    bitvavoWsNeedsReconnect = true;
+                    #endif
                 }
                 break;
             case ARDUINO_EVENT_WIFI_STA_CONNECTED:
@@ -6541,6 +6545,7 @@ static void onBitvavoWsEvent(WStype_t type, uint8_t *payload, size_t length)
     switch (type) {
         case WStype_CONNECTED:
             bitvavoWsConnected = true;
+            bitvavoWsNeedsReconnect = false;
             Serial.println("[WS] Connected to Bitvavo");
             break;
         case WStype_DISCONNECTED:
@@ -7210,6 +7215,10 @@ void wsTask(void *parameter)
     for (;;)
     {
         if (WiFi.status() == WL_CONNECTED) {
+            if (bitvavoWsNeedsReconnect && !bitvavoWsConnected) {
+                Serial.println("[WS Task] WiFi hersteld, opnieuw verbinden met Bitvavo");
+                setupBitvavoWebSocket();
+            }
             bitvavoWs.loop();
         } else {
             if (bitvavoWsConnected) {
