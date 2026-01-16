@@ -48,6 +48,11 @@ tussenresultaat en een testactie zodat je op de ESP32 tussentijds kunt valideren
 **Tussenresultaat / test**
 - Serial log toont `WS connected` en reconnects als WiFi wegvalt.
 
+**Implementatie (uitgevoerd)**
+- Optionele `WebSocketsClient` include toegevoegd met `USE_WEBSOCKETS` guard.
+- `setupBitvavoWebSocket()` opent een TLS connectie naar `ws.bitvavo.com/v2/` en logt connect/disconnect.
+- Nieuwe `WS_Task` draait `bitvavoWs.loop()` en wacht op WiFi reconnect.
+
 ---
 
 ## Stap 2 — Subscribe op `ticker` voor real-time prijs

@@ -73,6 +73,16 @@
     #endif
 #endif
 
+// WebSocket support (optioneel - vereist WebSocketsClient library)
+#define USE_WEBSOCKETS 0
+#ifdef __has_include
+    #if __has_include(<WebSocketsClient.h>)
+        #include <WebSocketsClient.h>
+        #undef USE_WEBSOCKETS
+        #define USE_WEBSOCKETS 1
+    #endif
+#endif
+
 // ============================================================================
 // Constants and Configuration
 // ============================================================================
@@ -124,6 +134,9 @@
 
 // --- API Configuration ---
 #define BITVAVO_API_BASE "https://api.bitvavo.com/v2"  // Bitvavo API base URL
+#define BITVAVO_WS_HOST "ws.bitvavo.com"
+#define BITVAVO_WS_PORT 443
+#define BITVAVO_WS_PATH "/v2/"
 #define BITVAVO_SYMBOL_DEFAULT "BTC-EUR"  // Default Bitvavo symbol (format: BASE-QUOTE met streepje)
 // T1: Verhoogde connect/read timeouts voor betere stabiliteit
 #define HTTP_CONNECT_TIMEOUT_MS 2000  // Connect timeout (2000ms - geoptimaliseerd)
@@ -599,6 +612,9 @@ void apiTask(void *parameter);
 void uiTask(void *parameter);
 void webTask(void *parameter);
 void priceRepeatTask(void *parameter); // Aparte task voor periodieke prijs herhaling
+#if USE_WEBSOCKETS
+void wsTask(void *parameter);
+#endif
 void wifiConnectionAndFetchPrice();
 void setDisplayBrigthness();
 
@@ -688,6 +704,10 @@ static WarmStartWrapper warmWrap;
 #include "src/ApiClient/ApiClient.h"
 ApiClient apiClient;
 static WiFiClientSecure candleClient;  // HTTPS client voor warm-start candles (vermijdt cert issues)
+#if USE_WEBSOCKETS
+static WebSocketsClient bitvavoWs;
+static bool bitvavoWsConnected = false;
+#endif
 
 // PriceData instance (Fase 4.2.1: module structuur aangemaakt)
 PriceData priceData;
@@ -6588,6 +6608,43 @@ static void setupWiFiEventHandlers()
     });
 }
 
+// ============================================================================
+// Bitvavo WebSocket (Stap 1: minimale connect)
+// ============================================================================
+#if USE_WEBSOCKETS
+static void onBitvavoWsEvent(WStype_t type, uint8_t *payload, size_t length)
+{
+    switch (type) {
+        case WStype_CONNECTED:
+            bitvavoWsConnected = true;
+            Serial.println("[WS] Connected to Bitvavo");
+            break;
+        case WStype_DISCONNECTED:
+            bitvavoWsConnected = false;
+            Serial.println("[WS] Disconnected from Bitvavo");
+            break;
+        case WStype_TEXT:
+            Serial_printf("[WS] Message received (%u bytes)\n", static_cast<unsigned>(length));
+            break;
+        default:
+            break;
+    }
+}
+
+static void setupBitvavoWebSocket()
+{
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[WS] WiFi niet verbonden, skip WS setup");
+        return;
+    }
+
+    bitvavoWs.onEvent(onBitvavoWsEvent);
+    bitvavoWs.setReconnectInterval(5000);
+    bitvavoWs.beginSSL(BITVAVO_WS_HOST, BITVAVO_WS_PORT, BITVAVO_WS_PATH);
+    Serial.println("[WS] Initial connect gestart (Bitvavo)");
+}
+#endif
+
 static void setupMutex()
 {
     // Maak mutexen VOOR we ze gebruiken (moeten eerst aangemaakt worden)
@@ -6677,10 +6734,12 @@ static void startFreeRTOSTasks()
     const uint32_t apiTaskStack = 10240;  // ESP32-S3: meer stack voor API task
     const uint32_t uiTaskStack = 10240;   // ESP32-S3: meer stack voor UI task
     const uint32_t webTaskStack = 6144;   // ESP32-S3: meer stack voor web task
+    const uint32_t wsTaskStack = 4096;    // ESP32-S3: WebSocket loop task
     #else
     const uint32_t apiTaskStack = 8192;   // ESP32: standaard stack
     const uint32_t uiTaskStack = 8192;    // ESP32: standaard stack
     const uint32_t webTaskStack = 5120;   // ESP32: verhoogd voor debug logging (was 4096)
+    const uint32_t wsTaskStack = 4096;    // ESP32: WebSocket loop task
     #endif
     
     // Core 1: API calls (elke seconde)
@@ -6710,6 +6769,18 @@ static void startFreeRTOSTasks()
         NULL,              // Task handle
         1                  // Core 1
     );
+
+    #if USE_WEBSOCKETS
+    xTaskCreatePinnedToCore(
+        wsTask,
+        "WS_Task",
+        wsTaskStack,
+        NULL,
+        1,
+        NULL,
+        1
+    );
+    #endif
 
     // Core 2: UI updates (elke seconde)
     xTaskCreatePinnedToCore(
@@ -6777,6 +6848,12 @@ void setup()
     
     // WiFi connection and initial data fetch (maakt tijdelijk UI aan)
     wifiConnectionAndFetchPrice();
+
+    #if USE_WEBSOCKETS
+    setupBitvavoWebSocket();
+    #else
+    Serial.println("[WS] WebSocketsClient library niet beschikbaar, WS disabled");
+    #endif
     
     // Fase 4.2.5: Synchroniseer PriceData state na warm-start (als warm-start is uitgevoerd)
     priceData.syncStateFromGlobals();
@@ -7194,6 +7271,32 @@ void wifiConnectionAndFetchPrice()
 // ============================================================================
 // FreeRTOS Tasks
 // ============================================================================
+
+#if USE_WEBSOCKETS
+void wsTask(void *parameter)
+{
+    // Wacht tot WiFi verbonden is voordat we beginnen
+    while (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[WS Task] Wachten op WiFi verbinding...");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+
+    Serial.println("[WS Task] Gestart");
+
+    for (;;)
+    {
+        if (WiFi.status() == WL_CONNECTED) {
+            bitvavoWs.loop();
+        } else {
+            if (bitvavoWsConnected) {
+                bitvavoWsConnected = false;
+                Serial.println("[WS Task] WiFi verbinding verloren");
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+#endif
 
 // FreeRTOS Task: API calls op Core 1 (elke 1.3 seconde)
 void apiTask(void *parameter)
