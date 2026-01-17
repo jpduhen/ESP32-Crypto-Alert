@@ -685,4 +685,77 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
     return ok;
 }
 
+// Generic secure GET: open stream en laat caller lezen (mutex blijft gelocked)
+// Caller moet altijd endSecureGet() aanroepen na gebruik.
+bool ApiClient::beginSecureGet(const char* url, int& outCode, WiFiClient*& outStream,
+                               unsigned long& requestTime, uint32_t connectTimeoutMs,
+                               uint32_t readTimeoutMs)
+{
+    if (url == nullptr || strlen(url) == 0) {
+        return false;
+    }
+
+    outCode = -1;
+    outStream = nullptr;
+    requestTime = 0;
+
+    // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
+    netMutexLock("ApiClient::beginSecureGet");
+
+    HTTPClient& http = httpClient;
+
+    http.setConnectTimeout(connectTimeoutMs);
+    http.setTimeout(readTimeoutMs);
+    http.setReuse(true);
+    wifiClientSecure.setInsecure();
+
+    // Forceer schone start voor deze verbinding
+    if (http.connected()) {
+        http.end();
+    }
+
+    if (!http.begin(wifiClientSecure, url)) {
+        netMutexUnlock("ApiClient::beginSecureGet");
+        return false;
+    }
+
+    // Headers toevoegen voor elke request
+    http.addHeader(F("User-Agent"), F("ESP32-CryptoMonitor/1.0"));
+    http.addHeader(F("Accept"), F("application/json"));
+
+    unsigned long requestStart = millis();
+    int code = http.GET();
+    requestTime = millis() - requestStart;
+    outCode = code;
+
+    if (code != 200) {
+        http.end();
+        netMutexUnlock("ApiClient::beginSecureGet");
+        return false;
+    }
+
+    WiFiClient* stream = http.getStreamPtr();
+    if (stream == nullptr) {
+        http.end();
+        netMutexUnlock("ApiClient::beginSecureGet");
+        return false;
+    }
+
+    outStream = stream;
+    return true;
+}
+
+void ApiClient::endSecureGet()
+{
+    // Hard close: http.end() + client.stop() voor volledige cleanup
+    httpClient.end();
+    WiFiClient* stream = httpClient.getStreamPtr();
+    if (stream != nullptr) {
+        stream->stop();
+    }
+
+    // C2: Geef netwerk mutex vrij (met debug logging)
+    netMutexUnlock("ApiClient::beginSecureGet");
+}
+
 
