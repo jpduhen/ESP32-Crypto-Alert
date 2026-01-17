@@ -175,6 +175,7 @@
 #define WARM_START_2H_CANDLES_DEFAULT 6  // Aantal 2h candles (default: 6 = 12 uur)
 // Bitvavo candlestick endpoint: /{market}/candles (wordt dynamisch gebouwd)
 #define WARM_START_TIMEOUT_MS 10000  // Timeout voor warm-start API calls (10 seconden)
+#define WARM_START_CALL_SPACING_MS 150  // Korte pauze tussen warm-start HTTP calls (vermindert connect errors)
 
 // --- Auto-Volatility Mode Configuration ---
 #define AUTO_VOLATILITY_ENABLED_DEFAULT false      // Default: uitgeschakeld
@@ -456,11 +457,11 @@ static char httpResponseBuffer[248];  // Buffer voor HTTP responses (NTFY, etc.)
 // M2: Globale herbruikbare buffer voor HTTP responses (voorkomt String allocaties)
 // Note: Niet static zodat ApiClient.cpp er toegang toe heeft via extern declaratie in ApiClient.h
 // Verkleind van 2048 naar 512 bytes (genoeg voor price responses, ~100 bytes)
-char gApiResp[304];  // Verkleind van 320 naar 304 bytes (bespaart 16 bytes DRAM)     // Buffer voor API price responses (M2: streaming)
+char gApiResp[256];  // Verkleind van 320 naar 256 bytes (bespaart 64 bytes DRAM)     // Buffer voor API price responses (M2: streaming)
 // gKlinesResp verwijderd: fetchBitvavoCandles gebruikt streaming parsing met bitvavoStreamBuffer
 
 // Streaming buffer voor Bitvavo candlestick parsing (geen grote heap allocaties)
-static char bitvavoStreamBuffer[560];  // Fixed-size buffer voor chunked JSON parsing - verkleind van 576 naar 560 bytes (bespaart 16 bytes DRAM)
+static char bitvavoStreamBuffer[512];  // Fixed-size buffer voor chunked JSON parsing - verkleind van 576 naar 512 bytes (bespaart 64 bytes DRAM)
 
 // LVGL UI buffers en cache (voorkomt herhaalde allocaties en onnodige updates)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
@@ -887,93 +888,103 @@ int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit
     // M1: Heap telemetry vóór HTTP GET
     logHeap("KLINES_GET_PRE");
     
-    // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
-    netMutexLock("fetchBitvavoCandles");
-    
     int result = -1;
-    HTTPClient http;
+    const uint8_t maxAttempts = 2;
+    const uint32_t retryDelayMs = 250;
     
-    // S2: do-while(0) patroon voor consistente cleanup
-    do {
-        // N1: Expliciete connect/read timeout settings (geoptimaliseerd: 2000ms connect, 2500ms read)
-        http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
-        http.setTimeout(WARM_START_TIMEOUT_MS > HTTP_READ_TIMEOUT_MS ? WARM_START_TIMEOUT_MS : HTTP_READ_TIMEOUT_MS);
-        http.setReuse(true);
+    for (uint8_t attempt = 0; attempt < maxAttempts; attempt++) {
+        bool attemptOk = false;
+        bool shouldRetry = false;
+        int code = 0;
+        bool hasActiveStream = false;
+        WiFiClient* stream = nullptr;
         
-        unsigned long requestStart = millis();
-    
-        // N2: Voeg User-Agent header toe VOOR http.begin() om Cloudflare blocking te voorkomen
-        // Headers moeten worden toegevoegd voordat de verbinding wordt geopend
-        http.addHeader(F("User-Agent"), F("ESP32-CryptoMonitor/1.0"));
-        http.addHeader(F("Accept"), F("application/json"));
-    
-        if (!http.begin(candleClient, url)) {
-            Serial.println(F("[Candles] http.begin() gefaald"));
-            break;
-        }
-    
-        int code = http.GET();
-        unsigned long requestTime = millis() - requestStart;
+        // S2: do-while(0) patroon voor consistente cleanup
+        do {
+            // N1: Expliciete connect/read timeout settings (geoptimaliseerd: 2000ms connect, 2500ms read)
+            unsigned long requestTime = 0;
+            bool beginOk = apiClient.beginSecureGet(
+                url,
+                code,
+                stream,
+                requestTime,
+                HTTP_CONNECT_TIMEOUT_MS,
+                (WARM_START_TIMEOUT_MS > HTTP_READ_TIMEOUT_MS ? WARM_START_TIMEOUT_MS : HTTP_READ_TIMEOUT_MS)
+            );
+            if (!beginOk) {
+                const char* phase = ApiClient::detectHttpErrorPhase(code);
+                ApiClient::logHttpError(code, phase, requestTime, attempt, maxAttempts, "[Candles]");
+                shouldRetry = (code == HTTPC_ERROR_CONNECTION_REFUSED ||
+                               code == HTTPC_ERROR_CONNECTION_LOST ||
+                               code == HTTPC_ERROR_READ_TIMEOUT ||
+                               code == 429);
+                break;
+            }
+            hasActiveStream = true;
+            
+            // M1: Heap telemetry na HTTP GET
+            logHeap("CANDLES_GET_POST");
+            
+            if (code != 200) {
+                // Fase 6.2: Geconsolideerde error logging - gebruik ApiClient helpers
+                const char* phase = ApiClient::detectHttpErrorPhase(code);
+                ApiClient::logHttpError(code, phase, requestTime, attempt, maxAttempts, "[Candles]");
+                shouldRetry = (code == HTTPC_ERROR_CONNECTION_REFUSED ||
+                               code == HTTPC_ERROR_CONNECTION_LOST ||
+                               code == HTTPC_ERROR_READ_TIMEOUT ||
+                               code == 429);
+                break;
+            }
+            
+            if (stream == nullptr) {
+                Serial.println(F("[Candles] Stream pointer is null"));
+                shouldRetry = true;
+                break;
+            }
         
-        // M1: Heap telemetry na HTTP GET
-        logHeap("CANDLES_GET_POST");
+        // Streaming JSON parser: gebruik fixed-size buffer voor chunked reading
+        // Parse iteratief en sla alleen noodzakelijke values op (closes/returns)
+        int writeIdx = 0;  // Schrijf index in circulaire buffer
+        int totalParsed = 0;
+        bool bufferFilled = false;  // True wanneer buffer vol is en we gaan wrappen
         
-        if (code != 200) {
-            // Fase 6.2: Geconsolideerde error logging - gebruik ApiClient helpers
-            const char* phase = ApiClient::detectHttpErrorPhase(code);
-            ApiClient::logHttpError(code, phase, requestTime, 0, 1, "[Candles]");
-            break;
-        }
-    
-        WiFiClient* stream = http.getStreamPtr();
-        if (stream == nullptr) {
-            Serial.println(F("[Candles] Stream pointer is null"));
-            break;
-        }
-    
-    // Streaming JSON parser: gebruik fixed-size buffer voor chunked reading
-    // Parse iteratief en sla alleen noodzakelijke values op (closes/returns)
-    int writeIdx = 0;  // Schrijf index in circulaire buffer
-    int totalParsed = 0;
-    bool bufferFilled = false;  // True wanneer buffer vol is en we gaan wrappen
-    
-    // Parser state
-    enum ParseState {
-        PS_START,
-        PS_OUTER_ARRAY,
-        PS_ENTRY_START,
-        PS_FIELD,
-        PS_ENTRY_END
-    };
-    ParseState state = PS_START;
-    int fieldIdx = 0;
-    char fieldBuf[64];
-    int fieldBufIdx = 0;
-    unsigned long openTime = 0;
-    float highPrice = 0.0f;
-    float lowPrice = 0.0f;
-    float closePrice = 0.0f;
-    float volume = 0.0f;
-    KlineMetrics lastParsedKline = {};
-    float volumeValue = 0.0f;
-    
-    // Buffer voor chunked reading (hergebruik fixed buffer)
-    size_t bufferPos = 0;
-    size_t bufferLen = 0;
-    const size_t BUFFER_SIZE = sizeof(bitvavoStreamBuffer);
-    
-    // Feed watchdog tijdens parsing
-    unsigned long lastWatchdogFeed = millis();
-    const unsigned long WATCHDOG_FEED_INTERVAL = 1000; // Feed elke seconde
-    
-    // Timeout voor parsing
-    unsigned long parseStartTime = millis();
-    const unsigned long PARSE_TIMEOUT_MS = 8000;
-    unsigned long lastDataTime = millis();
-    const unsigned long DATA_TIMEOUT_MS = 2000;
-    
-    // M1: Heap telemetry vóór JSON parse
-    logHeap("CANDLES_PARSE_PRE");
+        // Parser state
+        enum ParseState {
+            PS_START,
+            PS_OUTER_ARRAY,
+            PS_ENTRY_START,
+            PS_FIELD,
+            PS_ENTRY_END
+        };
+        ParseState state = PS_START;
+        int fieldIdx = 0;
+        char fieldBuf[64];
+        int fieldBufIdx = 0;
+        unsigned long openTime = 0;
+        float highPrice = 0.0f;
+        float lowPrice = 0.0f;
+        float closePrice = 0.0f;
+        float volume = 0.0f;
+        KlineMetrics lastParsedKline = {};
+        float volumeValue = 0.0f;
+        
+        // Buffer voor chunked reading (hergebruik fixed buffer)
+        size_t bufferPos = 0;
+        size_t bufferLen = 0;
+        const size_t BUFFER_SIZE = sizeof(bitvavoStreamBuffer);
+        
+        // Feed watchdog tijdens parsing
+        unsigned long lastWatchdogFeed = millis();
+        const unsigned long WATCHDOG_FEED_INTERVAL = 1000; // Feed elke seconde
+        
+        // Timeout voor parsing
+        unsigned long parseStartTime = millis();
+        const unsigned long PARSE_TIMEOUT_MS = 8000;
+        unsigned long lastDataTime = millis();
+        const unsigned long DATA_TIMEOUT_MS = 2000;
+        
+        // M1: Heap telemetry vóór JSON parse
+        logHeap("CANDLES_PARSE_PRE");
     
     // Parse streaming JSON
     // Continue zolang stream connected/available OF er nog data in buffer is
@@ -1202,9 +1213,10 @@ parse_done:
         }
     }
     
-    // Bereken resultaat
-    int storedCount = bufferFilled ? (int)maxCount : writeIdx;
-    result = storedCount;  // S2: Zet result voordat do-while eindigt
+        // Bereken resultaat
+        int storedCount = bufferFilled ? (int)maxCount : writeIdx;
+        result = storedCount;  // S2: Zet result voordat do-while eindigt
+        attemptOk = true;
     
     if (bufferFilled && writeIdx > 0) {
         // Buffer is gewrapped: [writeIdx..maxCount-1, 0..writeIdx-1] -> [0..maxCount-1]
@@ -1330,18 +1342,24 @@ parse_done:
         }
     }
     
-    } while(0);
-    
-    // C2: ALTIJD cleanup (ook bij code<0, code!=200, parse error)
-    // Hard close: http.end() + client.stop() voor volledige cleanup
-    http.end();
-    WiFiClient* stream = http.getStreamPtr();
-    if (stream != nullptr) {
-        stream->stop();
+        } while(0);
+        
+        // C2: ALTIJD cleanup (ook bij code<0, code!=200, parse error)
+        if (hasActiveStream) {
+            apiClient.endSecureGet();
+            hasActiveStream = false;
+        }
+        
+        if (attemptOk) {
+            break;
+        }
+        
+        if (!shouldRetry || (attempt + 1) >= maxAttempts) {
+            break;
+        }
+        
+        delay(retryDelayMs);
     }
-    
-    // C2: Geef netwerk mutex vrij (met debug logging)
-    netMutexUnlock("fetchBitvavoCandles");
     
     return result;
 }
@@ -1439,6 +1457,7 @@ static WarmStartMode performWarmStart()
     lv_timer_handler();  // Update spinner animatie vóór fetch
     int count1m = fetchBitvavoCandles(bitvavoSymbol, "1m", req1mCandles, temp1mPrices, nullptr, SECONDS_PER_MINUTE);
     lv_timer_handler();  // Update spinner animatie na fetch
+    delay(WARM_START_CALL_SPACING_MS);
     if (count1m > 0) {
         // Vul secondPrices buffer (gebruik laatste count1m candles, max SECONDS_PER_MINUTE)
         int copyCount = (count1m < SECONDS_PER_MINUTE) ? count1m : SECONDS_PER_MINUTE;
@@ -1466,6 +1485,7 @@ static WarmStartMode performWarmStart()
     lv_timer_handler();  // Update spinner animatie vóór fetch
     int count5m = fetchBitvavoCandles(bitvavoSymbol, "5m", req5mCandles, temp5mPrices, nullptr, 2);
     lv_timer_handler();  // Update spinner animatie na fetch
+    delay(WARM_START_CALL_SPACING_MS);
     if (count5m >= 2) {
         // Interpoleer laatste 2 candles naar fiveMinutePrices buffer
         // Elke 5m candle = 300 seconden, gebruik laatste candle voor hele buffer
@@ -1506,6 +1526,7 @@ static WarmStartMode performWarmStart()
             break;  // Succes, stop retries
         }
     }
+    delay(WARM_START_CALL_SPACING_MS);
     
     if (count30m >= 2) {
         // Bereken ret_30m uit eerste en laatste 30m candle (gesloten candles)
@@ -1565,6 +1586,7 @@ static WarmStartMode performWarmStart()
             break;  // Succes, stop retries
         }
     }
+    delay(WARM_START_CALL_SPACING_MS);
     
     if (count2h >= 2) {
         // Bereken ret_2h uit eerste en laatste candle (gesloten candles)
@@ -1609,6 +1631,7 @@ static WarmStartMode performWarmStart()
             break;
         }
     }
+    delay(WARM_START_CALL_SPACING_MS);
     
     if (count4h >= 2) {
         float firstPrice = temp4hPrices[0];
@@ -1641,6 +1664,7 @@ static WarmStartMode performWarmStart()
             break;
         }
     }
+    delay(WARM_START_CALL_SPACING_MS);
     
     if (count1d >= 2) {
         float firstPrice = temp1dPrices[0];
@@ -1684,6 +1708,7 @@ static WarmStartMode performWarmStart()
             break;
         }
     }
+    delay(WARM_START_CALL_SPACING_MS);
 
     if (count1w >= 2) {
         float firstPrice = temp1wPrices[0];
