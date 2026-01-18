@@ -995,6 +995,8 @@ int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit
         unsigned long openTime = 0;
         unsigned long firstOpenTime = 0;
         unsigned long lastOpenTime = 0;
+        bool orderKnown = false;
+        bool orderDescending = false;
         float highPrice = 0.0f;
         float lowPrice = 0.0f;
         float closePrice = 0.0f;
@@ -1183,12 +1185,28 @@ int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit
                         firstOpenTime = openTime;
                     }
                     lastOpenTime = openTime;
+                    
+                    // Detecteer volgorde zodra we minimaal 2 candles hebben gezien
+                    // Bij aflopende volgorde (nieuwste -> oudste) stoppen we vroeg om de meest recente candles te bewaren
+                    if (!orderKnown && totalParsed == 1) {
+                        if (openTime > firstOpenTime) {
+                            orderKnown = true;
+                            orderDescending = false;
+                        } else if (openTime < firstOpenTime) {
+                            orderKnown = true;
+                            orderDescending = true;
+                        }
+                    }
                     writeIdx++;
                     if (writeIdx >= (int)maxCount) {
                         writeIdx = 0;  // Wrap around
                         bufferFilled = true;
                     }
                     totalParsed++;
+                    
+                    if (orderKnown && orderDescending && totalParsed >= (int)maxCount) {
+                        goto parse_done;
+                    }
                     
                     if (highPrice > 0.0f && lowPrice > 0.0f && highPrice >= lowPrice) {
                         lastParsedKline.high = highPrice;
