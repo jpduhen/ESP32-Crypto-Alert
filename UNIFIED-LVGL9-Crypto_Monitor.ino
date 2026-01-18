@@ -865,6 +865,38 @@ static bool parseKlineEntry(const char* jsonStr, float* closePrice, unsigned lon
     return true;
 }
 
+static void reverseCandleArrays(float* prices, unsigned long* timestamps, float* highs, float* lows, float* volumes, int count)
+{
+    if (prices == nullptr || count <= 1) {
+        return;
+    }
+    for (int i = 0; i < count / 2; i++) {
+        int j = count - 1 - i;
+        float tmp = prices[i];
+        prices[i] = prices[j];
+        prices[j] = tmp;
+        if (timestamps != nullptr) {
+            unsigned long t = timestamps[i];
+            timestamps[i] = timestamps[j];
+            timestamps[j] = t;
+        }
+        if (highs != nullptr) {
+            float h = highs[i];
+            highs[i] = highs[j];
+            highs[j] = h;
+        }
+        if (lows != nullptr) {
+            float l = lows[i];
+            lows[i] = lows[j];
+            lows[j] = l;
+        }
+        if (volumes != nullptr) {
+            float v = volumes[i];
+            volumes[i] = volumes[j];
+            volumes[j] = v;
+        }
+    }
+}
 // Haal Binance klines op voor een specifiek timeframe
 // Memory efficient: streaming parsing, bewaar alleen laatste maxCount candles
 // Returns: aantal candles opgehaald, of -1 bij fout
@@ -961,6 +993,8 @@ int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit
         char fieldBuf[64];
         int fieldBufIdx = 0;
         unsigned long openTime = 0;
+        unsigned long firstOpenTime = 0;
+        unsigned long lastOpenTime = 0;
         float highPrice = 0.0f;
         float lowPrice = 0.0f;
         float closePrice = 0.0f;
@@ -1145,7 +1179,10 @@ int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit
                         volumes[writeIdx] = volumeValue;
                     }
                     
-                    
+                    if (totalParsed == 0) {
+                        firstOpenTime = openTime;
+                    }
+                    lastOpenTime = openTime;
                     writeIdx++;
                     if (writeIdx >= (int)maxCount) {
                         writeIdx = 0;  // Wrap around
@@ -1341,6 +1378,10 @@ parse_done:
             // Bij heap allocatie failure: buffer blijft in wrapped volgorde (geen probleem)
         }
     }
+    
+        if (storedCount >= 2 && firstOpenTime > lastOpenTime) {
+            reverseCandleArrays(prices, timestamps, highs, lows, volumes, storedCount);
+        }
     
         } while(0);
         
@@ -1782,6 +1823,7 @@ static WarmStartMode performWarmStart()
             }
         }
     }
+
     #endif
     if (hasRet30m) {
         prices[2] = ret_30m;  // Zet 30m return direct na warm-start
