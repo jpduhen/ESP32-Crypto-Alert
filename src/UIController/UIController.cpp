@@ -168,8 +168,8 @@ extern float lastAnchorMaxValue;
 extern float lastAnchorValue;
 extern float lastAnchorMinValue;
 // Buffer sizes (gedefinieerd in .ino)
-#define PRICE_LBL_BUFFER_SIZE 16
-#define ANCHOR_LABEL_BUFFER_SIZE 20
+#define PRICE_LBL_BUFFER_SIZE 24
+#define ANCHOR_LABEL_BUFFER_SIZE 24
 extern char priceLblBuffer[PRICE_LBL_BUFFER_SIZE];
 extern char anchorMaxLabelBuffer[ANCHOR_LABEL_BUFFER_SIZE];
 extern char anchorLabelBuffer[ANCHOR_LABEL_BUFFER_SIZE];
@@ -191,16 +191,16 @@ extern lv_obj_t *price30MinDiffLabel;
 extern lv_obj_t *price2HMaxLabel;
 extern lv_obj_t *price2HMinLabel;
 extern lv_obj_t *price2HDiffLabel;
-extern char priceTitleBuffer[SYMBOL_COUNT][28];  // Verkleind van 48 naar 28 bytes
-extern char price1MinMaxLabelBuffer[16];
-extern char price1MinMinLabelBuffer[16];
-extern char price1MinDiffLabelBuffer[16];
-extern char price30MinMaxLabelBuffer[16];
-extern char price2HMaxLabelBuffer[16];
-extern char price2HMinLabelBuffer[16];
-extern char price2HDiffLabelBuffer[16];
-extern char price30MinMinLabelBuffer[16];
-extern char price30MinDiffLabelBuffer[16];
+extern char priceTitleBuffer[SYMBOL_COUNT][40];  // Verkleind van 48 naar 40 bytes
+extern char price1MinMaxLabelBuffer[20];
+extern char price1MinMinLabelBuffer[20];
+extern char price1MinDiffLabelBuffer[20];
+extern char price30MinMaxLabelBuffer[20];
+extern char price2HMaxLabelBuffer[20];
+extern char price2HMinLabelBuffer[20];
+extern char price2HDiffLabelBuffer[20];
+extern char price30MinMinLabelBuffer[20];
+extern char price30MinDiffLabelBuffer[32];
 extern float lastPrice1MinMaxValue;
 extern float lastPrice1MinMinValue;
 extern float lastPrice1MinDiffValue;
@@ -210,8 +210,8 @@ extern float lastPrice30MinDiffValue;
 extern float lastPrice2HMaxValue;
 extern float lastPrice2HMinValue;
 extern float lastPrice2HDiffValue;
-extern char lastPriceTitleText[SYMBOL_COUNT][28];  // Verkleind van 48 naar 28 bytes
-extern char priceLblBufferArray[SYMBOL_COUNT][16];
+extern char lastPriceTitleText[SYMBOL_COUNT][32];  // Verkleind van 48 naar 32 bytes
+extern char priceLblBufferArray[SYMBOL_COUNT][24];
 extern float lastPriceLblValueArray[SYMBOL_COUNT];
 
 // Forward declarations voor globale UI pointers (parallel implementatie - moeten ook geïnitialiseerd worden)

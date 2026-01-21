@@ -13,8 +13,6 @@ ApiClient::ApiClient() {
 void ApiClient::begin() {
     // N2: Configureer HTTPClient voor keep-alive (connection reuse)
     // setReuse(true) wordt per call gedaan in httpGETInternal en fetchBitvavoPrice
-    // N3: Configureer TLS client als insecure voor Bitvavo (vermijdt cert issues)
-    wifiClientSecure.setInsecure();
 }
 
 // Public HTTP GET method
@@ -540,51 +538,39 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
         bool attemptOk = false;
         bool shouldRetry = false;
         int lastCode = 0;
-
-        // N2: Gebruik persistent HTTPClient/WiFiClient voor keep-alive
-        HTTPClient& http = httpClient;
-
+        
+        // Gebruik lokaal HTTPClient object (zoals fetchBitvavoCandles doet) - persistent client geeft HTTP 400
+        HTTPClient http;
+        
         // S2: do-while(0) patroon voor consistente cleanup per attempt
         do {
             // T1: Expliciete connect/read timeout settings (geoptimaliseerd: 2000ms connect, 2500ms read)
             http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS_DEFAULT);
             http.setTimeout(HTTP_READ_TIMEOUT_MS_DEFAULT);
-            // N2: Enable keep-alive voor snellere opvolgende requests
-            http.setReuse(true);
-
-            unsigned long requestStart = millis();
-
-            // N2: Optimaliseer keep-alive: alleen reset bij retry of ongeldige verbinding
-            bool connectionActive = http.connected();
-            if (connectionActive && attempt > 0) {
-                http.end();
-                connectionActive = false;
-            }
-
-            // Alleen http.begin() als er geen actieve verbinding is
-            if (!connectionActive) {
-                #if !DEBUG_BUTTON_ONLY
-                Serial.printf(F("[API] Fetching price from: %s\n"), url);
-                #endif
-                if (!http.begin(wifiClientSecure, url)) {
-                    #if !DEBUG_BUTTON_ONLY
-                    if (attempt == MAX_RETRIES) {
-                        Serial.printf(F("[API] http.begin() gefaald voor URL: %s\n"), url);
-                    }
-                    #endif
-                    shouldRetry = (attempt < MAX_RETRIES);
-                    break;
-                }
-            } else {
-                #if !DEBUG_BUTTON_ONLY
-                Serial.printf(F("[API] Fetching price from (keep-alive): %s\n"), url);
-                #endif
-            }
-
-            // N2: Voeg headers toe voor elke request (ook bij keep-alive reuse)
+            // Geen keep-alive voor nu (lokaal object, zoals fetchBitvavoCandles)
+            http.setReuse(false);
+            
+            // N2: Voeg User-Agent header toe VOOR http.begin() om Cloudflare blocking te voorkomen
+            // Headers moeten worden toegevoegd voordat de verbinding wordt geopend
             http.addHeader(F("User-Agent"), F("ESP32-CryptoMonitor/1.0"));
             http.addHeader(F("Accept"), F("application/json"));
-
+            
+            unsigned long requestStart = millis();
+            
+            // Normale URL flow (zoals voorheen, zonder DNS cache)
+            #if !DEBUG_BUTTON_ONLY
+            Serial.printf(F("[API] Fetching price from: %s\n"), url);
+            #endif
+            if (!http.begin(url)) {
+                #if !DEBUG_BUTTON_ONLY
+                if (attempt == MAX_RETRIES) {
+                    Serial.printf(F("[API] http.begin() gefaald voor URL: %s\n"), url);
+                }
+                #endif
+                shouldRetry = (attempt < MAX_RETRIES);
+                break;
+            }
+            
             int code = http.GET();
             unsigned long requestTime = millis() - requestStart;
             lastCode = code;
@@ -649,12 +635,11 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
             ok = true;
         } while(0);
         
-        // N2: Cleanup alleen bij fouten (keep-alive bij succes)
+        // N2: Cleanup alleen bij fouten (lokaal HTTPClient object, geen keep-alive nodig)
+        // Voor fetchBitvavoPrice gebruiken we lokaal object, dus altijd cleanup
         if (attemptOk) {
-            // Succes: alleen cleanup als verbinding niet meer actief is
-            if (!http.connected()) {
-                http.end();
-            }
+            // Succes: cleanup voor lokaal object
+            http.end();
             if (attempt > 0) {
                 Serial.printf(F("[API] Succes na retry (poging %d/%d)\n"), attempt + 1, MAX_RETRIES + 1);
             }
@@ -685,77 +670,5 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
     return ok;
 }
 
-// Generic secure GET: open stream en laat caller lezen (mutex blijft gelocked)
-// Caller moet altijd endSecureGet() aanroepen na gebruik.
-bool ApiClient::beginSecureGet(const char* url, int& outCode, WiFiClient*& outStream,
-                               unsigned long& requestTime, uint32_t connectTimeoutMs,
-                               uint32_t readTimeoutMs)
-{
-    if (url == nullptr || strlen(url) == 0) {
-        return false;
-    }
-
-    outCode = -1;
-    outStream = nullptr;
-    requestTime = 0;
-
-    // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
-    netMutexLock("ApiClient::beginSecureGet");
-
-    HTTPClient& http = httpClient;
-
-    http.setConnectTimeout(connectTimeoutMs);
-    http.setTimeout(readTimeoutMs);
-    http.setReuse(true);
-    wifiClientSecure.setInsecure();
-
-    // Forceer schone start voor deze verbinding
-    if (http.connected()) {
-        http.end();
-    }
-
-    if (!http.begin(wifiClientSecure, url)) {
-        netMutexUnlock("ApiClient::beginSecureGet");
-        return false;
-    }
-
-    // Headers toevoegen voor elke request
-    http.addHeader(F("User-Agent"), F("ESP32-CryptoMonitor/1.0"));
-    http.addHeader(F("Accept"), F("application/json"));
-
-    unsigned long requestStart = millis();
-    int code = http.GET();
-    requestTime = millis() - requestStart;
-    outCode = code;
-
-    if (code != 200) {
-        http.end();
-        netMutexUnlock("ApiClient::beginSecureGet");
-        return false;
-    }
-
-    WiFiClient* stream = http.getStreamPtr();
-    if (stream == nullptr) {
-        http.end();
-        netMutexUnlock("ApiClient::beginSecureGet");
-        return false;
-    }
-
-    outStream = stream;
-    return true;
-}
-
-void ApiClient::endSecureGet()
-{
-    // Hard close: http.end() + client.stop() voor volledige cleanup
-    httpClient.end();
-    WiFiClient* stream = httpClient.getStreamPtr();
-    if (stream != nullptr) {
-        stream->stop();
-    }
-
-    // C2: Geef netwerk mutex vrij (met debug logging)
-    netMutexUnlock("ApiClient::beginSecureGet");
-}
 
 

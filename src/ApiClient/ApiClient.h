@@ -3,7 +3,6 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 
 // Include alleen DEBUG flags, niet de hele platform_config.h (voorkomt PINS includes)
@@ -38,7 +37,7 @@
 #define HTTP_TIMEOUT_MS_DEFAULT HTTP_READ_TIMEOUT_MS_DEFAULT  // Backward compatibility: totale timeout = read timeout
 
 // M2: Extern declaratie voor globale response buffer (gedefinieerd in .ino)
-extern char gApiResp[256];  // Verkleind van 320 naar 256 bytes (bespaart 64 bytes DRAM)
+extern char gApiResp[304];  // Verkleind van 320 naar 304 bytes (bespaart 16 bytes DRAM)
 
 // S0: Extern declaratie voor netwerk mutex (gedefinieerd in .ino)
 extern SemaphoreHandle_t gNetMutex;
@@ -90,18 +89,10 @@ public:
     
     // Helper: Detect HTTP error phase (consolideert fase detectie)
     static const char* detectHttpErrorPhase(int code);
-
-    // Generic secure GET: open stream en laat caller lezen (mutex blijft gelocked)
-    // Caller moet altijd endSecureGet() aanroepen na gebruik.
-    bool beginSecureGet(const char* url, int& outCode, WiFiClient*& outStream,
-                        unsigned long& requestTime, uint32_t connectTimeoutMs,
-                        uint32_t readTimeoutMs);
-    void endSecureGet();
     
 private:
     // N2: Persistent HTTPClient en WiFiClient voor keep-alive connecties
     WiFiClient wifiClient;
-    WiFiClientSecure wifiClientSecure;
     HTTPClient httpClient;
     
     // Private HTTP GET implementation
@@ -109,4 +100,6 @@ private:
 };
 
 #endif // APICLIENT_H
+
+
 
