@@ -62,7 +62,7 @@ extern float autoVolatilityBaseline1mStdPct;
 extern float autoVolatilityMinMultiplier;
 extern float autoVolatilityMaxMultiplier;
 // Note: notificationCooldown1MinMs, etc. zijn macro's (gedefinieerd hieronder)
-extern char symbolsArray[][16];
+extern char symbol0[16];
 
 // Helper functies
 extern const char* getText(const char* dutch, const char* english);
@@ -832,7 +832,7 @@ void WebServerModule::handleSave() {
                 
                 // Update symbol before reboot
                 safeStrncpy(bitvavoSymbol, symbolBuffer, 16);  // bitvavoSymbol is 16 bytes
-                safeStrncpy(symbolsArray[0], bitvavoSymbol, 16);
+                safeStrncpy(symbol0, bitvavoSymbol, 16);
                 
                 // Save settings before reboot
                 saveSettings();
@@ -847,7 +847,7 @@ void WebServerModule::handleSave() {
             } else {
                 // No change, just update normally
                 safeStrncpy(bitvavoSymbol, symbolBuffer, 16);  // bitvavoSymbol is 16 bytes
-                safeStrncpy(symbolsArray[0], bitvavoSymbol, 16);
+                safeStrncpy(symbol0, bitvavoSymbol, 16);
             }
         }
     }
@@ -1189,6 +1189,11 @@ void WebServerModule::handleStatus() {
     #if !DEBUG_BUTTON_ONLY
     unsigned long statusStart = millis();
     #endif
+    static unsigned long lastStatusLogMs = 0;
+    static uint32_t statusLogCount = 0;
+    static IPAddress lastStatusIp;
+    statusLogCount++;
+    lastStatusIp = server->client().remoteIP();
     
     // Lokale variabelen voor thread-safe data kopiëren
     float price = 0.0f;
@@ -1332,7 +1337,14 @@ void WebServerModule::handleStatus() {
     
     #if !DEBUG_BUTTON_ONLY
     unsigned long statusEnd = millis();
-    Serial_printf(F("[WEB] /status in %lu ms\n"), statusEnd - statusStart);
+    if (statusEnd - lastStatusLogMs >= 60000UL) {
+        lastStatusLogMs = statusEnd;
+        char ipBuf[16];
+        formatIPAddress(lastStatusIp, ipBuf, sizeof(ipBuf));
+        Serial_printf(F("[WEB] /status count=%lu last=%s dur=%lu ms\n"),
+                      (unsigned long)statusLogCount, ipBuf, statusEnd - statusStart);
+        statusLogCount = 0;
+    }
     #endif
 }
 

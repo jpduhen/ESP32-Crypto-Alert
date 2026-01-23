@@ -144,6 +144,11 @@ public:
         if (this->secondIndex == 0) {
             this->secondArrayFilled = true;
         }
+        // Synchroniseer globale state (UI gebruikt nog globals)
+        extern uint8_t secondIndex;
+        extern bool secondArrayFilled;
+        secondIndex = this->secondIndex;
+        secondArrayFilled = this->secondArrayFilled;
         
         
         // Ook toevoegen aan 5-minuten buffer met bounds checking
@@ -179,6 +184,11 @@ public:
         if (this->fiveMinuteIndex == 0) {
             this->fiveMinuteArrayFilled = true;
         }
+        // Synchroniseer globale state (UI gebruikt nog globals)
+        extern uint16_t fiveMinuteIndex;
+        extern bool fiveMinuteArrayFilled;
+        fiveMinuteIndex = this->fiveMinuteIndex;
+        fiveMinuteArrayFilled = this->fiveMinuteArrayFilled;
         
         
         // Update warm-start status periodiek (elke 10 seconden)

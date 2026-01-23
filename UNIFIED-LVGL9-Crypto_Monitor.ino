@@ -17,6 +17,10 @@
 #include "atomic.h"                 // Included in this project
 #include <lvgl.h>                   // Install "lvgl" with the Library Manager (last tested on v9.2.2)
 #include "Arduino.h"
+#if WS_ENABLED
+    #include <WebSocketsClient.h>
+    #define WS_LIB_AVAILABLE 1
+#endif
 
 // Touchscreen functionaliteit volledig verwijderd - gebruik nu fysieke boot knop (GPIO 0)
 #include <SPI.h>
@@ -79,6 +83,10 @@
 // --- Version and Build Configuration ---
 // VERSION_STRING wordt gedefinieerd in platform_config.h (beschikbaar voor alle modules)
 // Geen fallback nodig omdat platform_config.h altijd wordt geïncludeerd
+
+#if WS_ENABLED && !WS_LIB_AVAILABLE
+    #warning "WS_ENABLED is 1 maar WebSocketsClient.h ontbreekt. Installeer de WebSockets library of zet WS_ENABLED op 0."
+#endif
 
 // --- Debug Configuration ---
 // DEBUG_BUTTON_ONLY en DEBUG_CALCULATIONS worden gedefinieerd in platform_config.h
@@ -172,6 +180,9 @@
 #define WARM_START_5M_CANDLES_DEFAULT 12  // Aantal 5m candles (default: 12 = 1 uur)
 #define WARM_START_30M_CANDLES_DEFAULT 8  // Aantal 30m candles (default: 8 = 4 uur)
 #define WARM_START_2H_CANDLES_DEFAULT 6  // Aantal 2h candles (default: 6 = 12 uur)
+// Optimalisatie: skip warm-start voor 1m/5m als live data snel genoeg is
+#define WARM_START_SKIP_1M_DEFAULT true
+#define WARM_START_SKIP_5M_DEFAULT true
 // Bitvavo candlestick endpoint: /{market}/candles (wordt dynamisch gebouwd)
 #define WARM_START_TIMEOUT_MS 10000  // Timeout voor warm-start API calls (10 seconden)
 
@@ -217,6 +228,8 @@
 #define MQTT_PORT_DEFAULT 1883             // Standaard MQTT poort
 #define MQTT_USER_DEFAULT "mosquitto"       // Standaard MQTT gebruiker (pas aan)
 #define MQTT_PASS_DEFAULT "mqtt_password"  // Standaard MQTT wachtwoord (pas aan)
+#define MQTT_VALUES_PUBLISH_INTERVAL_MS 30000UL
+#define MQTT_IP_PUBLISH_INTERVAL_MS 600000UL
 
 // --- Language Configuration ---
 #ifndef DEFAULT_LANGUAGE
@@ -277,11 +290,11 @@ SemaphoreHandle_t gNetMutex = NULL;
 // Symbols array - eerste element wordt dynamisch ingesteld via bitvavoSymbol
 // Fase 8: UI data - gebruikt door UIController module
 #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-char symbolsArray[SYMBOL_COUNT][16] = {"BTC-EUR", SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL};
-const char *symbols[SYMBOL_COUNT] = {symbolsArray[0], symbolsArray[1], symbolsArray[2], symbolsArray[3]};
+char symbol0[16] = "BTC-EUR";
+extern const char *const symbols[SYMBOL_COUNT] = {symbol0, SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL};
 #else
-char symbolsArray[SYMBOL_COUNT][16] = {"BTC-EUR", SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL};
-const char *symbols[SYMBOL_COUNT] = {symbolsArray[0], symbolsArray[1], symbolsArray[2]};
+char symbol0[16] = "BTC-EUR";
+extern const char *const symbols[SYMBOL_COUNT] = {symbol0, SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL};
 #endif
 // Fase 6.1: AlertEngine module gebruikt deze variabele (extern declaration in AlertEngine.cpp)
 float prices[SYMBOL_COUNT] = {0};
@@ -397,6 +410,45 @@ float currentVolFactor = 1.0f;  // Huidige volatility factor
 static unsigned long lastVolatilityLog = 0;  // Timestamp van laatste volatility log (voor debug)
 #define VOLATILITY_LOG_INTERVAL_MS 300000UL  // Log elke 5 minuten
 
+// WebSocket (stap-voor-stap migratie)
+static bool wsInitialized = false;
+bool wsConnected = false;
+bool wsConnecting = false;
+unsigned long wsConnectStartMs = 0;
+unsigned long wsConnectedMs = 0;
+static uint32_t wsMsgCount = 0;
+static unsigned long wsLastLogMs = 0;
+static float wsLastPrice = 0.0f;
+static unsigned long wsLastPriceMs = 0;
+static unsigned long wsLastCandle1mMs = 0;
+static unsigned long wsLastCandle5mMs = 0;
+static unsigned long wsLastCandle4hMs = 0;
+static unsigned long wsLastCandle1dMs = 0;
+
+struct WsCandleState {
+    unsigned long openTime = 0;
+    float lastClose = 0.0f;
+    bool has = false;
+};
+static WsCandleState wsCandle4h;
+static WsCandleState wsCandle1d;
+static EmaAccumulator wsEma4h;
+static EmaAccumulator wsEma1d;
+static uint8_t wsEma4hN = 0;
+static uint8_t wsEma1dN = 0;
+static bool wsEma4hInit = false;
+static bool wsEma1dInit = false;
+float wsAnchorEma4hLive = 0.0f;
+float wsAnchorEma1dLive = 0.0f;
+bool wsAnchorEma4hValid = false;
+bool wsAnchorEma1dValid = false;
+static bool wsAutoAnchorTrigger = false;
+static unsigned long wsLastCandleLogMs = 0;
+#if WS_ENABLED && WS_LIB_AVAILABLE
+static WebSocketsClient* wsClientPtr = nullptr;
+#endif
+
+
 // Fase 8: UI state - gebruikt door UIController module
 uint8_t symbolIndexToChart = 0; // The symbol index to chart
 uint32_t maxRange;
@@ -449,29 +501,32 @@ static unsigned long lastHeapTelemetryLog = 0;   // Timestamp van laatste heap t
 static const unsigned long HEAP_TELEMETRY_INTERVAL_MS = 60000UL; // Elke 60 seconden
 
 // Static buffers voor hot paths (voorkomt String allocaties)
-static char httpResponseBuffer[248];  // Buffer voor HTTP responses (NTFY, etc.) - verkleind van 264 naar 248 bytes (bespaart 16 bytes DRAM)
+static char httpResponseBuffer[240];  // Buffer voor HTTP responses (NTFY, etc.) - verkleind naar 240 bytes (bespaart 8 bytes DRAM)
 
 // M2: Globale herbruikbare buffer voor HTTP responses (voorkomt String allocaties)
 // Note: Niet static zodat ApiClient.cpp er toegang toe heeft via extern declaratie in ApiClient.h
 // Verkleind van 2048 naar 512 bytes (genoeg voor price responses, ~100 bytes)
-char gApiResp[304];  // Verkleind van 320 naar 304 bytes (bespaart 16 bytes DRAM)     // Buffer voor API price responses (M2: streaming)
+char gApiResp[296];  // Verkleind naar 296 bytes (bespaart 8 bytes DRAM) // Buffer voor API price responses (M2: streaming)
 // gKlinesResp verwijderd: fetchBitvavoCandles gebruikt streaming parsing met bitvavoStreamBuffer
 
-// Streaming buffer voor Bitvavo candlestick parsing (geen grote heap allocaties)
-static char bitvavoStreamBuffer[560];  // Fixed-size buffer voor chunked JSON parsing - verkleind van 576 naar 560 bytes (bespaart 16 bytes DRAM)
+// Streaming buffer voor Bitvavo candlestick parsing (heap-first, fallback naar kleine static buffer)
+#define BITVAVO_STREAM_BUFFER_HEAP_SIZE 512
+static char bitvavoStreamBufferFallback[128];
+static char* bitvavoStreamBuffer = bitvavoStreamBufferFallback;
+static size_t bitvavoStreamBufferSize = sizeof(bitvavoStreamBufferFallback);
 
 // LVGL UI buffers en cache (voorkomt herhaalde allocaties en onnodige updates)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
-char priceLblBuffer[24];  // Buffer voor price label (%.2f format, max: "12345.67" = ~8 chars)
-char anchorMaxLabelBuffer[24];  // Buffer voor anchor max label (max: "12345.67" = ~8 chars)
+char priceLblBuffer[18];  // Buffer voor price label (%.2f format, max: "12345.67" = ~8 chars)
+char anchorMaxLabelBuffer[18];  // Buffer voor anchor max label (max: "12345.67" = ~8 chars)
 char anchorLabelBuffer[24];  // Buffer voor anchor label (max: "12345.67" = ~8 chars)
 char anchorMinLabelBuffer[24];  // Buffer voor anchor min label (max: "12345.67" = ~8 chars)
 // Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
 char priceTitleBuffer[SYMBOL_COUNT][40];  // Buffers voor price titles (verkleind van 48 naar 40 bytes, bespaart 24 bytes voor CYD)
-char price1MinMaxLabelBuffer[20];  // Buffer voor 1m max label (max: "12345.67" = ~8 chars)
-char price1MinMinLabelBuffer[20];  // Buffer voor 1m min label (max: "12345.67" = ~8 chars)
-char price1MinDiffLabelBuffer[20];  // Buffer voor 1m diff label (max: "12345.67" = ~8 chars)
-char price30MinMaxLabelBuffer[20];  // Buffer voor 30m max label (max: "12345.67" = ~8 chars)
+char price1MinMaxLabelBuffer[18];  // Buffer voor 1m max label (max: "12345.67" = ~8 chars)
+char price1MinMinLabelBuffer[18];  // Buffer voor 1m min label (max: "12345.67" = ~8 chars)
+char price1MinDiffLabelBuffer[18];  // Buffer voor 1m diff label (max: "12345.67" = ~8 chars)
+char price30MinMaxLabelBuffer[18];  // Buffer voor 30m max label (max: "12345.67" = ~8 chars)
 char price30MinMinLabelBuffer[20];  // Buffer voor 30m min label (max: "12345.67" = ~8 chars)
 char price30MinDiffLabelBuffer[20];  // Buffer voor 30m diff label (max: "12345.67" = ~8 chars)
 char price2HMaxLabelBuffer[20];  // Buffer voor 2h max label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
@@ -496,8 +551,8 @@ float lastPrice2HMinValue = -1.0f;  // Cache voor 2h min (alleen gebruikt voor C
 float lastPrice2HDiffValue = -1.0f;  // Cache voor 2h diff (alleen gebruikt voor CYD platforms)
 char lastPriceTitleText[SYMBOL_COUNT][32] = {""};  // Cache voor price titles (max: "30 min  +12.34%" = ~20 chars, verkleind van 48 naar 32 bytes)
 char priceLblBufferArray[SYMBOL_COUNT][24];  // Buffers voor average price labels (max: "12345.67" = ~8 chars)
-static char footerRssiBuffer[16];  // Buffer voor footer RSSI
-static char footerRamBuffer[16];  // Buffer voor footer RAM
+static char footerRssiBuffer[10];  // Buffer voor footer RSSI
+static char footerRamBuffer[10];  // Buffer voor footer RAM
 // Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
 float lastPriceLblValueArray[SYMBOL_COUNT];  // Cache voor average price labels (geïnitialiseerd in setup)
 static int32_t lastRssiValue = -999;  // Cache voor RSSI
@@ -571,6 +626,8 @@ uint8_t warmStart1mExtraCandles = WARM_START_1M_EXTRA_CANDLES_DEFAULT;
 uint8_t warmStart5mCandles = WARM_START_5M_CANDLES_DEFAULT;
 uint8_t warmStart30mCandles = WARM_START_30M_CANDLES_DEFAULT;
 uint8_t warmStart2hCandles = WARM_START_2H_CANDLES_DEFAULT;
+bool warmStartSkip1m = WARM_START_SKIP_1M_DEFAULT;
+bool warmStartSkip5m = WARM_START_SKIP_5M_DEFAULT;
 // Fase 8.5.4: static verwijderd zodat UIController module deze kan gebruiken
 WarmStartStatus warmStartStatus = LIVE;  // Default: LIVE (cold start als warm-start faalt)
 static unsigned long warmStartCompleteTime = 0;  // Timestamp wanneer systeem volledig LIVE werd
@@ -606,6 +663,12 @@ void setDisplayBrigthness();
 // Note: ntfyTopic wordt geïnitialiseerd in loadSettings() met unieke ESP32 ID
 // Fase 8.7.1: static verwijderd zodat UIController module deze kan gebruiken
 char ntfyTopic[64] = "";  // NTFY topic (max 63 karakters)
+// NTFY backoff om fout-stormen te voorkomen
+static unsigned long ntfyNextAllowedMs = 0;
+static uint8_t ntfyFailStreak = 0;
+// Candles backoff om connect errors te temperen
+static unsigned long candlesNextAllowedMs = 0;
+static uint8_t candlesFailStreak = 0;
 // Fase 5.1: static verwijderd zodat TrendDetector module deze variabele kan gebruiken
 char bitvavoSymbol[16] = BITVAVO_SYMBOL_DEFAULT;  // Bitvavo symbool (max 15 karakters, bijv. BTC-EUR, ETH-EUR)
 
@@ -770,6 +833,9 @@ bool queueAnchorSetting(float value, bool useCurrentPrice) {
 }
 static uint8_t mqttQueueTail = 0;
 static uint8_t mqttQueueCount = 0;
+static bool mqttDiscoveryPublished = false;
+static unsigned long mqttLastDiscoveryMs = 0;
+static unsigned long mqttLastSettingsPublishMs = 0;
 
 // WiFi reconnect controle
 // Geoptimaliseerd: betere reconnect logica met retry counter en exponential backoff
@@ -889,10 +955,10 @@ int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit
     
     int result = -1;
     HTTPClient http;
-    
-    // S2: do-while(0) patroon voor consistente cleanup
-    do {
-        // N1: Expliciete connect/read timeout settings (geoptimaliseerd: 2000ms connect, 2500ms read)
+        
+        // S2: do-while(0) patroon voor consistente cleanup
+        do {
+            // N1: Expliciete connect/read timeout settings (geoptimaliseerd: 2000ms connect, 2500ms read)
     http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
         http.setTimeout(WARM_START_TIMEOUT_MS > HTTP_READ_TIMEOUT_MS ? WARM_START_TIMEOUT_MS : HTTP_READ_TIMEOUT_MS);
     http.setReuse(false);
@@ -906,71 +972,82 @@ int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit
     
     if (!http.begin(url)) {
             Serial.println(F("[Candles] http.begin() gefaald"));
-            break;
-    }
+            if (candlesFailStreak < 6) candlesFailStreak++;
+            uint32_t backoffMs = 5000UL << (candlesFailStreak - 1);
+            if (backoffMs > 60000UL) backoffMs = 60000UL;
+            candlesNextAllowedMs = millis() + backoffMs;
+                break;
+            }
     
     int code = http.GET();
         unsigned long requestTime = millis() - requestStart;
-        
-        // M1: Heap telemetry na HTTP GET
-        logHeap("CANDLES_GET_POST");
-        
-    if (code != 200) {
-            // Fase 6.2: Geconsolideerde error logging - gebruik ApiClient helpers
-            const char* phase = ApiClient::detectHttpErrorPhase(code);
+            
+            // M1: Heap telemetry na HTTP GET
+            logHeap("CANDLES_GET_POST");
+            
+            if (code != 200) {
+                // Fase 6.2: Geconsolideerde error logging - gebruik ApiClient helpers
+                const char* phase = ApiClient::detectHttpErrorPhase(code);
             ApiClient::logHttpError(code, phase, requestTime, 0, 1, "[Candles]");
-            break;
-    }
-    
+                if (candlesFailStreak < 6) candlesFailStreak++;
+                uint32_t backoffMs = 5000UL << (candlesFailStreak - 1);
+                if (backoffMs > 60000UL) backoffMs = 60000UL;
+                candlesNextAllowedMs = millis() + backoffMs;
+                break;
+            }
+            
     WiFiClient* stream = http.getStreamPtr();
-    if (stream == nullptr) {
-            Serial.println(F("[Candles] Stream pointer is null"));
+            if (stream == nullptr) {
+                Serial.println(F("[Candles] Stream pointer is null"));
+                break;
+            }
+        
+        // Streaming JSON parser: gebruik fixed-size buffer voor chunked reading
+        // Parse iteratief en sla alleen noodzakelijke values op (closes/returns)
+        int writeIdx = 0;  // Schrijf index in circulaire buffer
+        int totalParsed = 0;
+        bool bufferFilled = false;  // True wanneer buffer vol is en we gaan wrappen
+        
+        // Parser state
+        enum ParseState {
+            PS_START,
+            PS_OUTER_ARRAY,
+            PS_ENTRY_START,
+            PS_FIELD,
+            PS_ENTRY_END
+        };
+        ParseState state = PS_START;
+        int fieldIdx = 0;
+        char fieldBuf[64];
+        int fieldBufIdx = 0;
+        unsigned long openTime = 0;
+        float highPrice = 0.0f;
+        float lowPrice = 0.0f;
+        float closePrice = 0.0f;
+        float volume = 0.0f;
+        KlineMetrics lastParsedKline = {};
+        float volumeValue = 0.0f;
+        
+        // Buffer voor chunked reading (hergebruik fixed buffer)
+        size_t bufferPos = 0;
+        size_t bufferLen = 0;
+        if (bitvavoStreamBuffer == nullptr || bitvavoStreamBufferSize < 2) {
             break;
-    }
-    
-    // Streaming JSON parser: gebruik fixed-size buffer voor chunked reading
-    // Parse iteratief en sla alleen noodzakelijke values op (closes/returns)
-    int writeIdx = 0;  // Schrijf index in circulaire buffer
-    int totalParsed = 0;
-    bool bufferFilled = false;  // True wanneer buffer vol is en we gaan wrappen
-    
-    // Parser state
-    enum ParseState {
-        PS_START,
-        PS_OUTER_ARRAY,
-        PS_ENTRY_START,
-        PS_FIELD,
-        PS_ENTRY_END
-    };
-    ParseState state = PS_START;
-    int fieldIdx = 0;
-    char fieldBuf[64];
-    int fieldBufIdx = 0;
-    unsigned long openTime = 0;
-    float highPrice = 0.0f;
-    float lowPrice = 0.0f;
-    float closePrice = 0.0f;
-    float volume = 0.0f;
-    KlineMetrics lastParsedKline = {};
-    float volumeValue = 0.0f;
-    
-    // Buffer voor chunked reading (hergebruik fixed buffer)
-    size_t bufferPos = 0;
-    size_t bufferLen = 0;
-    const size_t BUFFER_SIZE = sizeof(bitvavoStreamBuffer);
-    
-    // Feed watchdog tijdens parsing
-    unsigned long lastWatchdogFeed = millis();
-    const unsigned long WATCHDOG_FEED_INTERVAL = 1000; // Feed elke seconde
-    
-    // Timeout voor parsing
-    unsigned long parseStartTime = millis();
-    const unsigned long PARSE_TIMEOUT_MS = 8000;
-    unsigned long lastDataTime = millis();
-    const unsigned long DATA_TIMEOUT_MS = 2000;
-    
-    // M1: Heap telemetry vóór JSON parse
-    logHeap("CANDLES_PARSE_PRE");
+        }
+        const size_t BUFFER_SIZE = bitvavoStreamBufferSize;
+        
+        // Feed watchdog tijdens parsing
+        unsigned long lastWatchdogFeed = millis();
+        const unsigned long WATCHDOG_FEED_INTERVAL = 1000; // Feed elke seconde
+        
+        // Timeout voor parsing
+        unsigned long parseStartTime = millis();
+        const unsigned long PARSE_TIMEOUT_MS = 8000;
+        unsigned long lastDataTime = millis();
+        const unsigned long DATA_TIMEOUT_MS = 2000;
+        
+        // M1: Heap telemetry vóór JSON parse
+        logHeap("CANDLES_PARSE_PRE");
     
     // Parse streaming JSON
     // Continue zolang stream connected/available OF er nog data in buffer is
@@ -1198,10 +1275,13 @@ parse_done:
             lastKline5m = lastParsedKline;
         }
     }
+    // Reset backoff bij succesvolle parse
+    candlesFailStreak = 0;
+    candlesNextAllowedMs = 0;
     
-    // Bereken resultaat
-    int storedCount = bufferFilled ? (int)maxCount : writeIdx;
-    result = storedCount;  // S2: Zet result voordat do-while eindigt
+        // Bereken resultaat
+        int storedCount = bufferFilled ? (int)maxCount : writeIdx;
+        result = storedCount;  // S2: Zet result voordat do-while eindigt
     
     if (bufferFilled && writeIdx > 0) {
         // Buffer is gewrapped: [writeIdx..maxCount-1, 0..writeIdx-1] -> [0..maxCount-1]
@@ -1325,11 +1405,11 @@ parse_done:
             }
             // Bij heap allocatie failure: buffer blijft in wrapped volgorde (geen probleem)
         }
-    }
+        }
     
-    } while(0);
-    
-    // C2: ALTIJD cleanup (ook bij code<0, code!=200, parse error)
+        } while(0);
+        
+        // C2: ALTIJD cleanup (ook bij code<0, code!=200, parse error)
     // Hard close: http.end() + client.stop() voor volledige cleanup
     http.end();
     WiFiClient* stream = http.getStreamPtr();
@@ -1421,16 +1501,21 @@ static WarmStartMode performWarmStart()
     
     // Bereken dynamische candle limits (PSRAM-aware clamping)
     bool psramAvailable = hasPSRAM();
-    uint16_t req1mCandles = calculate1mCandles();  // PSRAM-aware (max 150 met PSRAM, 80 zonder)
+    uint16_t req1mCandles = warmStartSkip1m ? 0 : calculate1mCandles();  // PSRAM-aware (max 150 met PSRAM, 80 zonder)
     uint16_t max5m = psramAvailable ? 24 : 12;  // Met PSRAM: 24, zonder: 12
     uint16_t max30m = psramAvailable ? 12 : 6;  // Met PSRAM: 12, zonder: 6
     uint16_t max2h = psramAvailable ? 8 : 4;  // Met PSRAM: 8, zonder: 4
-    uint16_t req5mCandles = clampUint16(warmStart5mCandles, 2, max5m);
+    uint16_t req5mCandles = warmStartSkip5m ? 0 : clampUint16(warmStart5mCandles, 2, max5m);
     uint16_t req30mCandles = clampUint16(warmStart30mCandles, 2, max30m);
     uint16_t req2hCandles = clampUint16(warmStart2hCandles, 2, max2h);
     
     
     // 1. Vul 1m buffer voor volatiliteit (returns-only: alleen laatste closes nodig)
+    if (warmStartSkip1m) {
+        warmStartStats.loaded1m = 0;
+        warmStartStats.warmStartOk1m = true;  // Skip is OK
+        Serial.println(F("[WarmStart][1m] SKIPPED (warmStartSkip1m=1)"));
+    } else {
     // Memory efficient: alleen laatste SECONDS_PER_MINUTE closes bewaren
     float temp1mPrices[SECONDS_PER_MINUTE];  // Alleen laatste 60 nodig
     lv_timer_handler();  // Update spinner animatie vóór fetch
@@ -1456,9 +1541,15 @@ static WarmStartMode performWarmStart()
         #if DEBUG_CALCULATIONS
         Serial.printf(F("[WarmStart][1m] FAILED: count1m=%d\n"), count1m);
         #endif
+        }
     }
     
     // 2. Vul 5m buffer (returns-only: alleen laatste 2 closes nodig)
+    if (warmStartSkip5m) {
+        warmStartStats.loaded5m = 0;
+        warmStartStats.warmStartOk5m = true;  // Skip is OK
+        Serial.println(F("[WarmStart][5m] SKIPPED (warmStartSkip5m=1)"));
+    } else {
     float temp5mPrices[2];
     lv_timer_handler();  // Update spinner animatie vóór fetch
     int count5m = fetchBitvavoCandles(bitvavoSymbol, "5m", req5mCandles, temp5mPrices, nullptr, 2);
@@ -1479,12 +1570,175 @@ static WarmStartMode performWarmStart()
         warmStartStats.warmStartOk5m = true;
     } else {
         warmStartStats.warmStartOk5m = false;
+        }
     }
     
     yield();
     delay(0);
     
-    // 3. Vul 30m buffer via minuteAverages (returns-only: alleen laatste 2 closes nodig)
+    // 3. Haal 1w candles op voor lange termijn trend (fallback)
+    float temp1wPrices[2];
+    int count1w = 0;
+    const int maxRetries1w = 3;
+    for (int retry = 0; retry < maxRetries1w; retry++) {
+        if (retry > 0) {
+            Serial_printf(F("[WarmStart] 1w retry %d/%d...\n"), retry, maxRetries1w - 1);
+            yield();
+            delay(500);
+            lv_timer_handler();
+        }
+        lv_timer_handler();
+        count1w = fetchBitvavoCandles(bitvavoSymbol, "1W", 2, temp1wPrices, nullptr, 2);  // Bitvavo gebruikt "1W" (hoofdletter W)
+        lv_timer_handler();
+        if (count1w >= 2) {
+            break;
+        }
+    }
+
+    if (count1w >= 2) {
+        float firstPrice = temp1wPrices[0];
+        float lastPrice = temp1wPrices[count1w - 1];
+        if (firstPrice > 0.0f && lastPrice > 0.0f) {
+            ret_7d = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
+            hasRet7dWarm = true;
+        } else {
+            hasRet7dWarm = false;
+        }
+    } else {
+        hasRet7dWarm = false;
+    }
+
+    // 4. Haal 1d candles op voor lange termijn trend (regressie over 7 dagen)
+    float temp1dPrices[8];
+    unsigned long temp1dTimes[8];
+    int count1d = 0;
+    const int maxRetries1d = 3;
+    for (int retry = 0; retry < maxRetries1d; retry++) {
+        if (retry > 0) {
+            Serial_printf(F("[WarmStart] 1d retry %d/%d...\n"), retry, maxRetries1d - 1);
+            yield();
+            delay(500);
+            lv_timer_handler();
+        }
+        lv_timer_handler();
+        count1d = fetchBitvavoCandles(bitvavoSymbol, "1d", 8, temp1dPrices, temp1dTimes, 8);
+        lv_timer_handler();
+        if (count1d >= 2) {
+            break;
+        }
+    }
+    
+    // Sorteer 1d candles op tijd (oudste -> nieuwste) zodat trendrichting klopt
+    if (count1d > 1) {
+        for (int i = 1; i < count1d; i++) {
+            unsigned long t = temp1dTimes[i];
+            float p = temp1dPrices[i];
+            int j = i - 1;
+            while (j >= 0 && temp1dTimes[j] > t) {
+                temp1dTimes[j + 1] = temp1dTimes[j];
+                temp1dPrices[j + 1] = temp1dPrices[j];
+                j--;
+            }
+            temp1dTimes[j + 1] = t;
+            temp1dPrices[j + 1] = p;
+        }
+    }
+
+    if (count1d >= 2) {
+        float firstPrice = temp1dPrices[count1d - 2];
+        float lastPrice = temp1dPrices[count1d - 1];
+        if (firstPrice > 0.0f && lastPrice > 0.0f) {
+            ret_1d = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
+            hasRet1dWarm = true;
+            #if DEBUG_CALCULATIONS
+            Serial_printf(F("[WarmStart][1d] ret_1d=%.4f%%, firstPrice=%.2f, lastPrice=%.2f, hasRet1dWarm=%d\n"),
+                         ret_1d, firstPrice, lastPrice, hasRet1dWarm ? 1 : 0);
+            #endif
+        } else {
+            hasRet1dWarm = false;
+            #if DEBUG_CALCULATIONS
+            Serial_printf(F("[WarmStart][1d] ERROR: Invalid prices: firstPrice=%.2f, lastPrice=%.2f\n"),
+                         firstPrice, lastPrice);
+            #endif
+        }
+    } else {
+        hasRet1dWarm = false;
+        #if DEBUG_CALCULATIONS
+        Serial_printf(F("[WarmStart][1d] ERROR: count1d=%d < 2\n"), count1d);
+        #endif
+    }
+
+    // Warm-start 7d regressie op basis van 7 dagelijkse candles (oudste -> nieuwste)
+    if (count1d >= 7) {
+        float sumX = 0.0f;
+        float sumY = 0.0f;
+        float sumXY = 0.0f;
+        float sumX2 = 0.0f;
+        float avgSum = 0.0f;
+        uint8_t validPoints = 0;
+        // Gebruik de laatste 7 candles
+        const int startIdx = count1d - 7;
+        for (int i = 0; i < 7; i++) {
+            float price = temp1dPrices[startIdx + i];
+            if (price > 0.0f) {
+                float x = (float)i; // 0 = oudste, 6 = nieuwste
+                sumX += x;
+                sumY += price;
+                sumXY += x * price;
+                sumX2 += x * x;
+                avgSum += price;
+                validPoints++;
+            }
+        }
+        if (validPoints >= 2) {
+            float avgPrice = avgSum / (float)validPoints;
+            float n = (float)validPoints;
+            float denominator = (n * sumX2) - (sumX * sumX);
+            if (fabsf(denominator) > 0.0001f && avgPrice > 0.0f) {
+                float slope = ((n * sumXY) - (sumX * sumY)) / denominator; // prijs per dag
+                float slopePerWeek = slope * 7.0f;
+                ret_7d = (slopePerWeek / avgPrice) * 100.0f;
+                hasRet7dWarm = true;
+                #if DEBUG_CALCULATIONS
+                Serial_printf(F("[WarmStart][7d] REG ret_7d=%.4f%% (7d daily regression)\n"), ret_7d);
+                #endif
+            }
+        }
+    }
+    
+    // 5. Haal 4h candles op voor lange termijn trend
+    float temp4hPrices[2];
+    int count4h = 0;
+    const int maxRetries4h = 3;
+    for (int retry = 0; retry < maxRetries4h; retry++) {
+        if (retry > 0) {
+            Serial_printf(F("[WarmStart] 4h retry %d/%d...\n"), retry, maxRetries4h - 1);
+            yield();
+            delay(500);
+            lv_timer_handler();
+        }
+        lv_timer_handler();
+        count4h = fetchBitvavoCandles(bitvavoSymbol, "4h", 2, temp4hPrices, nullptr, 2);
+        lv_timer_handler();
+        if (count4h >= 2) {
+            break;
+        }
+    }
+    
+    if (count4h >= 2) {
+        float firstPrice = temp4hPrices[0];
+        float lastPrice = temp4hPrices[count4h - 1];
+        if (firstPrice > 0.0f && lastPrice > 0.0f) {
+            ret_4h = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
+            hasRet4hWarm = true;
+        } else {
+            hasRet4hWarm = false;
+        }
+    } else {
+        hasRet4hWarm = false;
+    }
+    
+    // 6. Vul 30m buffer via minuteAverages (returns-only: alleen laatste 2 closes nodig)
     // Retry-logica: probeer maximaal 3 keer als eerste poging faalt
     float temp30mPrices[2];
     int count30m = 0;
@@ -1543,7 +1797,7 @@ static WarmStartMode performWarmStart()
     delay(0);
     lv_timer_handler();
     
-    // 4. Initieer 2h trend berekening
+    // 7. Initieer 2h trend berekening
     // Retry-logica: probeer maximaal 3 keer als eerste poging faalt
     float temp2hPrices[2];
     int count2h = 0;
@@ -1586,124 +1840,6 @@ static WarmStartMode performWarmStart()
         } else {
             Serial_printf(F("[WarmStart] 2h fetch: onvoldoende candles na %d pogingen (%d, minimaal 2 nodig)\n"), maxRetries2h, count2h);
         }
-    }
-    
-    // 5. Haal 4h candles op voor lange termijn trend
-    float temp4hPrices[2];
-    int count4h = 0;
-    const int maxRetries4h = 3;
-    for (int retry = 0; retry < maxRetries4h; retry++) {
-        if (retry > 0) {
-            Serial_printf(F("[WarmStart] 4h retry %d/%d...\n"), retry, maxRetries4h - 1);
-            yield();
-            delay(500);
-            lv_timer_handler();
-        }
-        lv_timer_handler();
-        count4h = fetchBitvavoCandles(bitvavoSymbol, "4h", 2, temp4hPrices, nullptr, 2);
-        lv_timer_handler();
-        if (count4h >= 2) {
-            break;
-        }
-    }
-    
-    if (count4h >= 2) {
-        float firstPrice = temp4hPrices[0];
-        float lastPrice = temp4hPrices[count4h - 1];
-        if (firstPrice > 0.0f && lastPrice > 0.0f) {
-            ret_4h = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
-            hasRet4hWarm = true;
-        } else {
-            hasRet4hWarm = false;
-        }
-    } else {
-        hasRet4hWarm = false;
-    }
-    
-    // 6. Haal 1d candles op voor lange termijn trend
-    float temp1dPrices[2];
-    int count1d = 0;
-    const int maxRetries1d = 3;
-    for (int retry = 0; retry < maxRetries1d; retry++) {
-        if (retry > 0) {
-            Serial_printf(F("[WarmStart] 1d retry %d/%d...\n"), retry, maxRetries1d - 1);
-            yield();
-            delay(500);
-            lv_timer_handler();
-        }
-        lv_timer_handler();
-        count1d = fetchBitvavoCandles(bitvavoSymbol, "1d", 2, temp1dPrices, nullptr, 2);
-        lv_timer_handler();
-        if (count1d >= 2) {
-            break;
-        }
-    }
-    
-    if (count1d >= 2) {
-        float firstPrice = temp1dPrices[0];
-        float lastPrice = temp1dPrices[count1d - 1];
-        if (firstPrice > 0.0f && lastPrice > 0.0f) {
-            ret_1d = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
-            hasRet1dWarm = true;
-            #if DEBUG_CALCULATIONS
-            Serial_printf(F("[WarmStart][1d] ret_1d=%.4f%%, firstPrice=%.2f, lastPrice=%.2f, hasRet1dWarm=%d\n"),
-                         ret_1d, firstPrice, lastPrice, hasRet1dWarm ? 1 : 0);
-            #endif
-        } else {
-            hasRet1dWarm = false;
-            #if DEBUG_CALCULATIONS
-            Serial_printf(F("[WarmStart][1d] ERROR: Invalid prices: firstPrice=%.2f, lastPrice=%.2f\n"),
-                         firstPrice, lastPrice);
-            #endif
-        }
-    } else {
-        hasRet1dWarm = false;
-        #if DEBUG_CALCULATIONS
-        Serial_printf(F("[WarmStart][1d] ERROR: count1d=%d < 2\n"), count1d);
-        #endif
-    }
-
-    // 7. Haal 1w candles op voor lange termijn trend
-    float temp1wPrices[2];
-    int count1w = 0;
-    const int maxRetries1w = 3;
-    for (int retry = 0; retry < maxRetries1w; retry++) {
-        if (retry > 0) {
-            Serial_printf(F("[WarmStart] 1w retry %d/%d...\n"), retry, maxRetries1w - 1);
-            yield();
-            delay(500);
-            lv_timer_handler();
-        }
-        lv_timer_handler();
-        count1w = fetchBitvavoCandles(bitvavoSymbol, "1W", 2, temp1wPrices, nullptr, 2);  // Bitvavo gebruikt "1W" (hoofdletter W)
-        lv_timer_handler();
-        if (count1w >= 2) {
-            break;
-        }
-    }
-
-    if (count1w >= 2) {
-        float firstPrice = temp1wPrices[0];
-        float lastPrice = temp1wPrices[count1w - 1];
-        if (firstPrice > 0.0f && lastPrice > 0.0f) {
-            ret_7d = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
-            hasRet7dWarm = true;
-            #if DEBUG_CALCULATIONS
-            Serial_printf(F("[WarmStart][7d] ret_7d=%.4f%%, firstPrice=%.2f, lastPrice=%.2f, hasRet7dWarm=%d\n"),
-                         ret_7d, firstPrice, lastPrice, hasRet7dWarm ? 1 : 0);
-            #endif
-        } else {
-            hasRet7dWarm = false;
-            #if DEBUG_CALCULATIONS
-            Serial_printf(F("[WarmStart][7d] ERROR: Invalid prices: firstPrice=%.2f, lastPrice=%.2f\n"),
-                         firstPrice, lastPrice);
-            #endif
-        }
-    } else {
-        hasRet7dWarm = false;
-        #if DEBUG_CALCULATIONS
-        Serial_printf(F("[WarmStart][7d] ERROR: count1w=%d < 2\n"), count1w);
-        #endif
     }
     
     // Update combined flags na warm-start
@@ -1772,8 +1908,8 @@ static WarmStartMode performWarmStart()
     // FULL: alle true (alle timeframes succesvol geladen)
     // PARTIAL: ok1m true maar >=1 van de others false (1m OK maar 5m/30m/2h niet volledig)
     // FAILED: ok1m false (1m gefaald, others ook false)
-    bool ok1m = warmStartStats.warmStartOk1m;
-    bool ok5m = warmStartStats.warmStartOk5m;
+    bool ok1m = warmStartSkip1m ? true : warmStartStats.warmStartOk1m;
+    bool ok5m = warmStartSkip5m ? true : warmStartStats.warmStartOk5m;
     bool ok30m = warmStartStats.warmStartOk30m;
     bool ok2h = warmStartStats.warmStartOk2h;
     
@@ -1797,6 +1933,10 @@ static WarmStartMode performWarmStart()
                   (warmStartStats.mode == WS_MODE_FULL) ? "FULL" :
                   (warmStartStats.mode == WS_MODE_PARTIAL) ? "PARTIAL" :
                   (warmStartStats.mode == WS_MODE_FAILED) ? "FAILED" : "DISABLED");
+    if (warmStartSkip1m || warmStartSkip5m) {
+        Serial_printf(F("[WarmStart] Skips: 1m=%d 5m=%d\n"),
+                      warmStartSkip1m ? 1 : 0, warmStartSkip5m ? 1 : 0);
+    }
     
     // Compacte boot log regel (gedetailleerde logging gebeurt in WarmStartWrapper)
     // Deze regel blijft voor backward compatibility en snelle boot overview
@@ -1926,6 +2066,17 @@ void updateWarmStartStatus()
 // Geoptimaliseerd: betere error handling en resource cleanup
 static bool sendNtfyNotification(const char *title, const char *message, const char *colorTag = nullptr)
 {
+    unsigned long nowMs = millis();
+    if (ntfyNextAllowedMs != 0 && nowMs < ntfyNextAllowedMs) {
+        // Rate-limit bij eerdere failures (voorkomt spam + netwerkdruk)
+        static unsigned long lastBackoffLogMs = 0;
+        if (nowMs - lastBackoffLogMs > 10000) {
+            Serial_printf(F("[Notify] Ntfy backoff actief (%lu ms resterend)\n"),
+                          (unsigned long)(ntfyNextAllowedMs - nowMs));
+            lastBackoffLogMs = nowMs;
+        }
+        return false;
+    }
     // Check WiFi verbinding eerst
     if (WiFi.status() != WL_CONNECTED)
     {
@@ -2055,6 +2206,9 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
             }
             
         Serial_printf(F("[Notify] Ntfy bericht succesvol verstuurd! (code: %d)\n"), code);
+                // Reset backoff bij succes
+                ntfyFailStreak = 0;
+                ntfyNextAllowedMs = 0;
                 attemptOk = true;
             ok = true;
         } else {
@@ -2084,6 +2238,13 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
             break;
         }
         
+        if (!attemptOk && attempt >= MAX_RETRIES) {
+            // Backoff bij failure (exponentieel, max 5 min)
+            if (ntfyFailStreak < 6) ntfyFailStreak++;
+            uint32_t backoffMs = 5000UL << (ntfyFailStreak - 1);
+            if (backoffMs > 300000UL) backoffMs = 300000UL;
+            ntfyNextAllowedMs = nowMs + backoffMs;
+        }
         if (shouldRetry && attempt < MAX_RETRIES) {
             uint32_t backoffDelay = (attempt < sizeof(RETRY_DELAYS)/sizeof(RETRY_DELAYS[0])) ? RETRY_DELAYS[attempt] : 500;
             if (lastCode == 429 && backoffDelay < 1000) {
@@ -2098,6 +2259,282 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
     netMutexUnlock("sendNtfyNotification");
     
     return ok;
+}
+
+// WebSocket init (alleen na warm-start, met heap guards)
+static void maybeInitWebSocketAfterWarmStart()
+{
+#if !WS_ENABLED
+    Serial.println(F("[WS] Disabled (WS_ENABLED=0)"));
+    return;
+#else
+    if (wsInitialized) {
+        return;
+    }
+    logHeap("WS_INIT_PRE");
+#if !WS_LIB_AVAILABLE
+    Serial.println(F("[WS] Library ontbreekt (WebSocketsClient.h)"));
+    return;
+#else
+    const uint32_t freeHeap = ESP.getFreeHeap();
+    const uint32_t largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    if (freeHeap < 20000 || largestBlock < 2000) {
+        Serial_printf(F("[WS] Skip init: low heap (free=%u, largest=%u)\n"), freeHeap, largestBlock);
+        return;
+    }
+    if (wsClientPtr == nullptr) {
+        wsClientPtr = new WebSocketsClient();
+        if (wsClientPtr == nullptr) {
+            Serial.println(F("[WS] ERROR: alloc failed"));
+            return;
+        }
+    }
+    const char* wsHost = "ws.bitvavo.com";
+    const uint16_t wsPort = 443;
+    const char* wsPath = "/v2/";
+    wsClientPtr->onEvent([](WStype_t type, uint8_t* payload, size_t length) {
+        switch (type) {
+            case WStype_CONNECTED:
+                Serial.println(F("[WS] Connected"));
+                wsConnected = true;
+                wsConnecting = false;
+                wsConnectedMs = millis();
+                // Subscribe op ticker + candles (1m/5m) voor volume/range confirmatie
+                if (wsClientPtr != nullptr) {
+                    char payloadBuf[256];
+                    snprintf(payloadBuf, sizeof(payloadBuf),
+                             "{\"action\":\"subscribe\",\"channels\":[{\"name\":\"ticker\",\"markets\":[\"%s\"]},{\"name\":\"candles\",\"interval\":[\"1m\",\"5m\",\"4h\",\"1d\"],\"markets\":[\"%s\"]}]}",
+                             bitvavoSymbol,
+                             bitvavoSymbol);
+                    wsClientPtr->sendTXT(payloadBuf);
+                    Serial.println(F("[WS] Subscribe sent"));
+                }
+                break;
+            case WStype_DISCONNECTED:
+                Serial.println(F("[WS] Disconnected"));
+                wsConnected = false;
+                wsConnecting = false;
+                break;
+            case WStype_ERROR:
+                Serial.println(F("[WS] Error"));
+                wsConnecting = false;
+                break;
+            case WStype_TEXT: {
+                wsMsgCount++;
+                if (payload != nullptr && length > 0) {
+                    // Maak tijdelijke null-terminated buffer voor parsing
+                    char wsBuf[360];
+                    size_t wsCopyLen = (length < (sizeof(wsBuf) - 1)) ? length : (sizeof(wsBuf) - 1);
+                    memcpy(wsBuf, payload, wsCopyLen);
+                    wsBuf[wsCopyLen] = '\0';
+
+                    // Candle updates (WS) -> update lastKline1m/5m voor volume UI
+                    if (strstr(wsBuf, "\"event\":\"candle\"") != nullptr) {
+                        const char* keyInterval = "\"interval\":\"";
+                        const char* keyMarket = "\"market\":\"";
+                        const char* keyCandle = "\"candle\":[";
+                        const char* posInterval = strstr(wsBuf, keyInterval);
+                        const char* posMarket = strstr(wsBuf, keyMarket);
+                        const char* posCandle = strstr(wsBuf, keyCandle);
+                        if (posInterval && posMarket && posCandle) {
+                            char intervalBuf[4] = {0};
+                            char marketBuf[16] = {0};
+                            posInterval += strlen(keyInterval);
+                            posMarket += strlen(keyMarket);
+                            size_t i = 0;
+                            while (i < sizeof(intervalBuf) - 1 && posInterval[i] && posInterval[i] != '"') {
+                                intervalBuf[i] = posInterval[i];
+                                i++;
+                            }
+                            intervalBuf[i] = '\0';
+                            i = 0;
+                            while (i < sizeof(marketBuf) - 1 && posMarket[i] && posMarket[i] != '"') {
+                                marketBuf[i] = posMarket[i];
+                                i++;
+                            }
+                            marketBuf[i] = '\0';
+
+                            // Parse candle array: [timestamp, open, high, low, close, volume]
+                            posCandle += strlen(keyCandle);
+                            char fieldBuf[20];
+                            uint64_t openTimeMs = 0;
+                            unsigned long openTime = 0;
+                            float open = 0.0f, high = 0.0f, low = 0.0f, close = 0.0f, volume = 0.0f;
+                            bool ok = true;
+                            for (uint8_t f = 0; f < 6; f++) {
+                                // Skip whitespace/quotes/brackets
+                                while (*posCandle == ' ' || *posCandle == '"' || *posCandle == '[') {
+                                    posCandle++;
+                                }
+                                size_t idx = 0;
+                                while (*posCandle && *posCandle != '"' && *posCandle != ',' && *posCandle != ']'
+                                       && idx < sizeof(fieldBuf) - 1) {
+                                    fieldBuf[idx++] = *posCandle++;
+                                }
+                                fieldBuf[idx] = '\0';
+                                while (*posCandle && *posCandle != ',' && *posCandle != ']') posCandle++;
+                                while (*posCandle == ',' || *posCandle == ']' || *posCandle == ' ' || *posCandle == '[') {
+                                    posCandle++;
+                                }
+                                if (idx == 0) { ok = false; break; }
+                                if (f == 0) {
+                                    openTimeMs = strtoull(fieldBuf, nullptr, 10);
+                                } else if (f == 1) {
+                                    ok = safeAtof(fieldBuf, open);
+                                } else if (f == 2) {
+                                    ok = safeAtof(fieldBuf, high);
+                                } else if (f == 3) {
+                                    ok = safeAtof(fieldBuf, low);
+                                } else if (f == 4) {
+                                    ok = safeAtof(fieldBuf, close);
+                                } else if (f == 5) {
+                                    ok = safeAtof(fieldBuf, volume);
+                                }
+                                if (!ok) break;
+                            }
+
+                            if (ok && strcmp(marketBuf, bitvavoSymbol) == 0) {
+                                if (openTimeMs > 0) {
+                                    openTime = (unsigned long)(openTimeMs / 1000ULL);
+                                } else {
+                                    openTime = 0;
+                                }
+                                KlineMetrics kline;
+                                kline.openTime = openTime;
+                                if (high <= 0.0f) high = close;
+                                if (low <= 0.0f) low = close;
+                                if (high < low) {
+                                    float tmp = high;
+                                    high = low;
+                                    low = tmp;
+                                }
+                                kline.high = high;
+                                kline.low = low;
+                                kline.close = close;
+                                kline.volume = volume;
+                                kline.valid = (openTime > 0 && close > 0.0f);
+                                if (strcmp(intervalBuf, "1m") == 0) {
+                                    lastKline1m = kline;
+                                    wsLastCandle1mMs = millis();
+                                } else if (strcmp(intervalBuf, "5m") == 0) {
+                                    lastKline5m = kline;
+                                    wsLastCandle5mMs = millis();
+                                } else if (strcmp(intervalBuf, "4h") == 0) {
+                                    wsLastCandle4hMs = millis();
+                                } else if (strcmp(intervalBuf, "1d") == 0) {
+                                    wsLastCandle1dMs = millis();
+                                }
+
+                                // Rate-limited log om WS candle flow te verifiëren
+                                unsigned long nowMs = millis();
+                                if (nowMs - wsLastCandleLogMs >= 60000UL) {
+                                    wsLastCandleLogMs = nowMs;
+                                    Serial_printf(F("[WS][Candle] %s close=%.2f vol=%.4f\n"),
+                                                 intervalBuf, close, volume);
+                                }
+
+                                // Update EMA voor auto-anchor op basis van WS candles (4h/1d)
+                                extern Alert2HThresholds alert2HThresholds;
+                                if (strcmp(intervalBuf, "4h") == 0) {
+                                    uint8_t n = alert2HThresholds.autoAnchor4hCandles;
+                                    if (!wsEma4hInit || wsEma4hN != n) {
+                                        wsEma4h.begin(n);
+                                        wsEma4hInit = true;
+                                        wsEma4hN = n;
+                                    }
+                                    if (wsCandle4h.has && openTime != wsCandle4h.openTime) {
+                                        wsEma4h.push(wsCandle4h.lastClose);
+                                        wsAnchorEma4hValid = wsEma4h.isValid();
+                                        wsAnchorEma4hLive = wsEma4h.ema;
+                                        wsAutoAnchorTrigger = true;
+                                    }
+                                    wsCandle4h.openTime = openTime;
+                                    wsCandle4h.lastClose = close;
+                                    wsCandle4h.has = true;
+                                    if (wsEma4h.isValid()) {
+                                        wsAnchorEma4hLive = (wsEma4h.alpha * close) + ((1.0f - wsEma4h.alpha) * wsEma4h.ema);
+                                        wsAnchorEma4hValid = true;
+                                    }
+                                } else if (strcmp(intervalBuf, "1d") == 0) {
+                                    uint8_t n = alert2HThresholds.autoAnchor1dCandles;
+                                    if (!wsEma1dInit || wsEma1dN != n) {
+                                        wsEma1d.begin(n);
+                                        wsEma1dInit = true;
+                                        wsEma1dN = n;
+                                    }
+                                    if (wsCandle1d.has && openTime != wsCandle1d.openTime) {
+                                        wsEma1d.push(wsCandle1d.lastClose);
+                                        wsAnchorEma1dValid = wsEma1d.isValid();
+                                        wsAnchorEma1dLive = wsEma1d.ema;
+                                        wsAutoAnchorTrigger = true;
+                                    }
+                                    wsCandle1d.openTime = openTime;
+                                    wsCandle1d.lastClose = close;
+                                    wsCandle1d.has = true;
+                                    if (wsEma1d.isValid()) {
+                                        wsAnchorEma1dLive = (wsEma1d.alpha * close) + ((1.0f - wsEma1d.alpha) * wsEma1d.ema);
+                                        wsAnchorEma1dValid = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    const char* keyBid = "\"bestBid\":\"";
+                    const char* keyAsk = "\"bestAsk\":\"";
+                    char* pos = strstr(wsBuf, keyBid);
+                    if (pos == nullptr) {
+                        pos = strstr(wsBuf, keyAsk);
+                        if (pos != nullptr) {
+                            pos += strlen(keyAsk);
+                        }
+                    } else {
+                        pos += strlen(keyBid);
+                    }
+                    if (pos != nullptr) {
+                        char valBuf[16];
+                        size_t idx = 0;
+                        while (idx < sizeof(valBuf) - 1 && pos[idx] != '\0' && pos[idx] != '"') {
+                            valBuf[idx] = pos[idx];
+                            idx++;
+                        }
+                        valBuf[idx] = '\0';
+                        float parsed = 0.0f;
+                        if (safeAtof(valBuf, parsed) && parsed > 0.0f) {
+                            wsLastPrice = roundToEuro(parsed);
+                            wsLastPriceMs = millis();
+                        }
+                    }
+                }
+                unsigned long now = millis();
+                if (now - wsLastLogMs >= 5000) {
+                    wsLastLogMs = now;
+                    char snippet[96];
+                    size_t copyLen = (length < (sizeof(snippet) - 1)) ? length : (sizeof(snippet) - 1);
+                    if (payload != nullptr && copyLen > 0) {
+                        memcpy(snippet, payload, copyLen);
+                        snippet[copyLen] = '\0';
+                    } else {
+                        snippet[0] = '\0';
+                    }
+                    Serial_printf(F("[WS] Msgs=%lu price=%.2f sample=%s\n"),
+                                 (unsigned long)wsMsgCount, wsLastPrice, snippet);
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    });
+    wsClientPtr->setReconnectInterval(5000);
+    wsClientPtr->beginSSL(wsHost, wsPort, wsPath);
+    Serial.printf("[WS] Connecting to wss://%s%s\n", wsHost, wsPath);
+    wsConnecting = true;
+    wsConnectStartMs = millis();
+    wsInitialized = true;
+    logHeap("WS_INIT_POST");
+#endif
+#endif
 }
 
 // ============================================================================
@@ -2138,6 +2575,15 @@ void getFormattedTimestampForNotification(char *buffer, size_t bufferSize) {
 bool isValidPrice(float price)
 {
     return !isnan(price) && !isinf(price) && price > 0.0f;
+}
+
+// Rond prijzen af op hele euro's (0.50 -> omhoog)
+static float roundToEuro(float price)
+{
+    if (price <= 0.0f) {
+        return price;
+    }
+    return (float)((uint32_t)(price + 0.5f));
 }
 
 // Helper: Validate if two prices are valid
@@ -2412,6 +2858,7 @@ bool sendNotification(const char *title, const char *message, const char *colorT
 
 void publishMqttAnchorEvent(float anchor_price, const char* event_type) {
     if (!mqttConnected) return;
+    float anchorRounded = roundToEuro(anchor_price);
     
     // Haal lokale tijd op
     struct tm timeinfo;
@@ -2426,9 +2873,9 @@ void publishMqttAnchorEvent(float anchor_price, const char* event_type) {
     
     // Maak JSON payload
     char payload[256];
-    snprintf(payload, sizeof(payload), 
-             "{\"time\":\"%s\",\"price\":%.2f,\"event\":\"%s\"}",
-             timeStr, anchor_price, event_type);
+    snprintf(payload, sizeof(payload),
+             "{\"time\":\"%s\",\"price\":%.0f,\"event\":\"%s\"}",
+             timeStr, anchorRounded, event_type);
     
     // Geoptimaliseerd: gebruik char array i.p.v. String
     char topic[128];
@@ -2439,13 +2886,13 @@ void publishMqttAnchorEvent(float anchor_price, const char* event_type) {
     
     // Try direct publish, queue if failed
     if (mqttConnected && mqttClient.publish(topic, payload, false)) {
-        Serial_printf(F("[MQTT] Anchor event gepubliceerd: %s (prijs: %.2f, event: %s)\n"), 
-                     timeStr, anchor_price, event_type);
+        Serial_printf(F("[MQTT] Anchor event gepubliceerd: %s (prijs: %.0f, event: %s)\n"),
+                     timeStr, anchorRounded, event_type);
     } else {
         // Queue message if not connected or publish failed
         enqueueMqttMessage(topic, payload, false);
-        Serial_printf(F("[MQTT] Anchor event in queue: %s (prijs: %.2f, event: %s)\n"), 
-                     timeStr, anchor_price, event_type);
+        Serial_printf(F("[MQTT] Anchor event in queue: %s (prijs: %.0f, event: %s)\n"),
+                     timeStr, anchorRounded, event_type);
     }
 }
 
@@ -2614,7 +3061,7 @@ static void loadSettings()
     safeStrncpy(ntfyTopic, settings.ntfyTopic, sizeof(ntfyTopic));
     safeStrncpy(bitvavoSymbol, settings.bitvavoSymbol, sizeof(bitvavoSymbol));
     // Update symbols array with the loaded bitvavo symbol
-    safeStrncpy(symbolsArray[0], bitvavoSymbol, sizeof(symbolsArray[0]));
+    safeStrncpy(symbol0, bitvavoSymbol, sizeof(symbol0));
     language = settings.language;
     displayRotation = settings.displayRotation;
     
@@ -3109,7 +3556,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/bitvavoSymbol/set", prefixBuffer);
         if (strcmp(topicBuffer, topicBufferFull) == 0) {
             if (handleMqttStringSetting(msgBuffer, msgLen, bitvavoSymbol, sizeof(bitvavoSymbol), true, "/config/bitvavoSymbol", prefixBuffer)) {
-                safeStrncpy(symbolsArray[0], bitvavoSymbol, sizeof(symbolsArray[0]));
+                safeStrncpy(symbol0, bitvavoSymbol, sizeof(symbol0));
                 settingChanged = true;
             }
         } else {
@@ -3482,7 +3929,8 @@ void publishMqttSettings() {
     }
     
     if (anchorValueToPublish > 0.0f) {
-        snprintf(valueBufferAnchor, sizeof(valueBufferAnchor), "%.2f", anchorValueToPublish);
+        float anchorRounded = roundToEuro(anchorValueToPublish);
+        snprintf(valueBufferAnchor, sizeof(valueBufferAnchor), "%.0f", anchorRounded);
         enqueueMqttMessage(topicBufferAnchor, valueBufferAnchor, true);
     }
 }
@@ -3509,11 +3957,18 @@ static void formatTrendLabel(char* buffer, size_t bufferSize, const char* prefix
 void publishMqttValues(float price, float ret_1m, float ret_5m, float ret_30m) {
     if (!mqttConnected) return;
     
+    static unsigned long lastValuesPublishMs = 0;
+    unsigned long nowMs = millis();
+    if (lastValuesPublishMs != 0 && (nowMs - lastValuesPublishMs) < MQTT_VALUES_PUBLISH_INTERVAL_MS) {
+        return;
+    }
+    lastValuesPublishMs = nowMs;
+
     char topicBuffer[128];
     char buffer[32];
     char mqttPrefix[64];
     getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
-    
+
     dtostrf(price, 0, 2, buffer);
     snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/price", mqttPrefix);
     mqttClient.publish(topicBuffer, buffer, false);
@@ -3565,8 +4020,17 @@ void publishMqttValues(float price, float ret_1m, float ret_5m, float ret_30m) {
     if (WiFi.status() == WL_CONNECTED) {
         char ipBuffer[16];
         formatIPAddress(WiFi.localIP(), ipBuffer, sizeof(ipBuffer));
-        snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/ip_address", mqttPrefix);
-        mqttClient.publish(topicBuffer, ipBuffer, false);
+        static char lastIp[16] = {0};
+        static unsigned long lastIpPublishMs = 0;
+        if (strncmp(lastIp, ipBuffer, sizeof(lastIp)) != 0 ||
+            lastIpPublishMs == 0 ||
+            (nowMs - lastIpPublishMs) >= MQTT_IP_PUBLISH_INTERVAL_MS) {
+            snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/ip_address", mqttPrefix);
+            mqttClient.publish(topicBuffer, ipBuffer, false);
+            strncpy(lastIp, ipBuffer, sizeof(lastIp) - 1);
+            lastIp[sizeof(lastIp) - 1] = '\0';
+            lastIpPublishMs = nowMs;
+        }
     }
 }
 
@@ -3950,6 +4414,9 @@ void connectMQTT() {
     
     mqttClient.setServer(mqttHost, mqttPort);
     mqttClient.setCallback(mqttCallback);
+    // Geef MQTT meer ademruimte bij lange API-calls
+    mqttClient.setKeepAlive(60);
+    mqttClient.setSocketTimeout(10);
     
     // Geoptimaliseerd: gebruik char array i.p.v. String
     // Gebruik dynamische MQTT prefix (gebaseerd op NTFY topic voor unieke identificatie)
@@ -4078,8 +4545,22 @@ void connectMQTT() {
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/move5mAlert/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
         
-        publishMqttSettings();
-        publishMqttDiscovery();
+        unsigned long nowMs = millis();
+        // Settings: rate-limit om queue druk te voorkomen (1x per 10 min)
+        if (mqttLastSettingsPublishMs == 0 || (nowMs - mqttLastSettingsPublishMs) >= 600000UL) {
+            publishMqttSettings();
+            mqttLastSettingsPublishMs = nowMs;
+        } else {
+            Serial_println("[MQTT] Settings publish skipped (rate-limited)");
+        }
+        // Discovery is zwaar: publiceer 1x per boot of max 1x per 6 uur
+        if (!mqttDiscoveryPublished || (nowMs - mqttLastDiscoveryMs) >= 21600000UL) {
+            publishMqttDiscovery();
+            mqttDiscoveryPublished = true;
+            mqttLastDiscoveryMs = nowMs;
+        } else {
+            Serial_println("[MQTT] Discovery skipped (recently published)");
+        }
         
         // Process queued messages after reconnection
         processMqttQueue();
@@ -5338,7 +5819,7 @@ static float calculateReturn24Hours()
     return calculateLinearTrend1Day();
 }
 
-// ret_7d: prijs nu vs 7 dagen geleden - now uses linear regression
+// ret_7d: prijs nu vs 7 dagen geleden - via regressie over hourly buffer
 static float calculateReturn7Days()
 {
     return calculateLinearTrend7Days();
@@ -5570,6 +6051,36 @@ static void updateLatestKlineMetricsIfNeeded()
     if (WiFi.status() != WL_CONNECTED) {
         return;
     }
+    if (candlesNextAllowedMs != 0 && millis() < candlesNextAllowedMs) {
+        return;
+    }
+#if WS_ENABLED && WS_LIB_AVAILABLE
+    if (wsConnected) {
+        unsigned long now = millis();
+        // Net verbonden: geef WS even de tijd om eerste candles te leveren
+        if (wsLastCandle1mMs == 0 && (now - wsConnectedMs) < 20000UL) {
+            return;
+        }
+        bool recent1m = (wsLastCandle1mMs != 0 && (now - wsLastCandle1mMs) < 90000UL);
+        bool recent5m = (wsLastCandle5mMs != 0 && (now - wsLastCandle5mMs) < 360000UL);
+        if (recent1m && recent5m) {
+            static unsigned long lastWsSkipLogMs = 0;
+            if (now - lastWsSkipLogMs >= 120000UL) {
+                lastWsSkipLogMs = now;
+                Serial_println(F("[Candles] Skip REST: WS candles up-to-date"));
+            }
+            return; // WS candles up-to-date, skip REST
+        }
+    }
+#endif
+    // Tijdens WS handshake: geen extra REST connecties
+#if WS_ENABLED && WS_LIB_AVAILABLE
+    extern bool wsConnecting;
+    extern unsigned long wsConnectStartMs;
+    if (wsConnecting && (millis() - wsConnectStartMs) < 15000UL) {
+        return;
+    }
+#endif
     
     static unsigned long last1mFetchMs = 0;
     static unsigned long last5mFetchMs = 0;
@@ -5605,10 +6116,34 @@ void fetchPrice()
     unsigned long fetchStart = millis();
     float fetched = prices[0]; // Start met huidige waarde als fallback
     bool ok = false;
+    bool usedWs = false;
 
+    // WS voorkeur: als er een recente WS prijs is, gebruik die en skip REST
+#if WS_ENABLED && WS_LIB_AVAILABLE
+    if (wsConnecting && (millis() - wsConnectStartMs) < 15000UL) {
+        // Tijdens handshake: vermijd REST connects
+        return;
+    }
+    if (wsConnected && wsLastPriceMs == 0 && (millis() - wsConnectedMs) < 10000UL) {
+        // Net verbonden maar nog geen WS prijs: kort wachten om REST conflicts te voorkomen
+        return;
+    }
+    if (wsConnected && wsLastPrice > 0.0f && (millis() - wsLastPriceMs) < 30000UL) {
+        fetched = wsLastPrice;
+        usedWs = true;
+    }
+#endif
+
+    bool httpSuccess = false;
+    unsigned long fetchTime = 0;
+    if (!usedWs) {
     // Fase 4.1.7: Gebruik hoog-niveau fetchBitvavoPrice() method
-    bool httpSuccess = apiClient.fetchBitvavoPrice(bitvavoSymbol, fetched);
-    unsigned long fetchTime = millis() - fetchStart;
+        httpSuccess = apiClient.fetchBitvavoPrice(bitvavoSymbol, fetched);
+        fetchTime = millis() - fetchStart;
+    } else {
+        httpSuccess = true;
+        fetchTime = millis() - fetchStart;
+    }
     
     if (!httpSuccess) {
         // Leeg response - kan komen door timeout of netwerkproblemen
@@ -5618,8 +6153,9 @@ void fetchPrice()
         // Gebruik laatste bekende prijs als fallback (al ingesteld als fetched = prices[0])
     } else {
         // Succesvol opgehaald (alleen loggen bij langzame calls > 1200ms)
+        fetched = roundToEuro(fetched);
         #if !DEBUG_BUTTON_ONLY
-        if (fetchTime > 1200) {
+        if (!usedWs && fetchTime > 1200) {
             Serial.printf(F("[API] OK -> %s %.2f (tijd: %lu ms) - langzaam\n"), bitvavoSymbol, fetched, fetchTime);
         }
         #endif
@@ -5636,7 +6172,7 @@ void fetchPrice()
         // Fase 4.1: Gebruik geconsolideerde mutex timeout handling
         // Fase 4.2: Gebruik geconsolideerde mutex pattern helper
         static uint32_t mutexTimeoutCount = 0;
-        if (safeMutexTake(dataMutex, apiMutexTimeout, "apiTask fetchPrice"))
+        if (safeMutexTake(dataMutex, apiMutexTimeout, usedWs ? "apiTask fetchPrice (ws)" : "apiTask fetchPrice"))
         {
             // Fase 4.2: Geconsolideerde mutex timeout counter reset
             resetMutexTimeoutCounter(mutexTimeoutCount);
@@ -5875,9 +6411,29 @@ void fetchPrice()
             }
             #endif
             
+            // Zet flag voor nieuwe data (voor grafiek update)
+            newPriceDataAvailable = true;
+            
+            // Kopieer waarden voor gebruik BUITEN mutex
+            float fetchedLocal = fetched;
+            float ret1mLocal = ret_1m;
+            float ret5mLocal = ret_5m;
+            float ret30mLocal = ret_30m;
+            float manualAnchorLocal = anchorActive ? anchorPrice : 0.0f;
+            
+            // Auto anchor timing flags (buiten mutex uitvoeren)
+            static unsigned long lastAutoAnchorCheckMs = 0;
+            static bool firstAutoAnchorUpdateDone = false;
+            unsigned long nowMs = millis();
+            bool doAutoAnchorForce = (!firstAutoAnchorUpdateDone && nowMs >= 5000);
+            bool doAutoAnchorPeriodic = (firstAutoAnchorUpdateDone && (nowMs - lastAutoAnchorCheckMs) >= (5UL * 60UL * 1000UL));
+            
+            safeMutexGive(dataMutex, "fetchPrice");  // MUTEX EERST VRIJGEVEN!
+            ok = true;
+            
             // Check thresholds and send notifications if needed (met ret_5m voor extra filtering)
             // Fase 6.1.11: Gebruik AlertEngine module i.p.v. globale functie
-            alertEngine.checkAndNotify(ret_1m, ret_5m, ret_30m);
+            alertEngine.checkAndNotify(ret1mLocal, ret5mLocal, ret30mLocal);
             
             // Check anchor take profit / max loss alerts
             // Fase 6.2.7: Gebruik AnchorSystem module i.p.v. globale functie
@@ -5885,38 +6441,29 @@ void fetchPrice()
             
             // Check 2-hour notifications (breakout, breakdown, compression, mean reversion, anchor context)
             // Wordt aangeroepen na elke price update
-            // Functie checkt zelf of anchorPrice > 0 voor anchor context notificaties
-            float manualAnchor = anchorActive ? anchorPrice : 0.0f;
-            AlertEngine::check2HNotifications(prices[0], manualAnchor);
-            
-            // Touchscreen anchor set functionaliteit verwijderd - gebruik nu fysieke knop
+            AlertEngine::check2HNotifications(fetchedLocal, manualAnchorLocal);
             
             // Publiceer waarden naar MQTT
-            publishMqttValues(fetched, ret_1m, ret_5m, ret_30m);
-            
-            // Zet flag voor nieuwe data (voor grafiek update)
-            newPriceDataAvailable = true;
-            
-            safeMutexGive(dataMutex, "fetchPrice");  // MUTEX EERST VRIJGEVEN!
-            ok = true;
+            publishMqttValues(fetchedLocal, ret1mLocal, ret5mLocal, ret30mLocal);
             
             // Periodieke auto anchor update (elke 5 minuten checken)
-            // BELANGRIJK: Dit moet BUITEN de mutex gebeuren om deadlocks te voorkomen!
-            static unsigned long lastAutoAnchorCheckMs = 0;
-            static bool firstAutoAnchorUpdateDone = false;
-            unsigned long nowMs = millis();
-            
-            // Eerste update: wacht 5 seconden na boot om race conditions te voorkomen
-            if (!firstAutoAnchorUpdateDone && nowMs >= 5000) {
+            if (doAutoAnchorForce) {
                 Serial.println("[API Task] Eerste auto anchor update (na 5s delay, buiten mutex)...");
                 bool result = AlertEngine::maybeUpdateAutoAnchor(true);  // Force update na warm-start
                 Serial.printf("[API Task] Auto anchor update result: %s\n", result ? "SUCCESS" : "FAILED");
                 firstAutoAnchorUpdateDone = true;
                 lastAutoAnchorCheckMs = nowMs;
-            } else if (firstAutoAnchorUpdateDone && (nowMs - lastAutoAnchorCheckMs) >= (5UL * 60UL * 1000UL)) {
-                // Periodieke updates: elke 5 minuten
+            } else if (doAutoAnchorPeriodic) {
                 AlertEngine::maybeUpdateAutoAnchor(false);  // Non-force update
                 lastAutoAnchorCheckMs = nowMs;
+            }
+            
+            // WS-triggered auto anchor update (candle rollover)
+            static unsigned long lastWsAutoAnchorMs = 0;
+            if (wsAutoAnchorTrigger && (nowMs - lastWsAutoAnchorMs) >= 60000UL) {
+                AlertEngine::maybeUpdateAutoAnchor(false);
+                wsAutoAnchorTrigger = false;
+                lastWsAutoAnchorMs = nowMs;
             }
         } else {
             // Fase 4.1: Geconsolideerde mutex timeout handling
@@ -6698,6 +7245,24 @@ void setup()
     // Alloceer dynamische arrays voor CYD zonder PSRAM (moet voor initialisatie)
     allocateDynamicArrays();
     
+    // Allocate Bitvavo streaming buffer on heap (fallback naar static)
+    if (bitvavoStreamBuffer == bitvavoStreamBufferFallback) {
+        void* buf = nullptr;
+        if (hasPSRAM()) {
+            buf = heap_caps_malloc(BITVAVO_STREAM_BUFFER_HEAP_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        }
+        if (buf == nullptr) {
+            buf = heap_caps_malloc(BITVAVO_STREAM_BUFFER_HEAP_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        }
+        if (buf != nullptr) {
+            bitvavoStreamBuffer = reinterpret_cast<char*>(buf);
+            bitvavoStreamBufferSize = BITVAVO_STREAM_BUFFER_HEAP_SIZE;
+            Serial.printf("[Memory] Bitvavo stream buffer heap: %u bytes\n", (unsigned)bitvavoStreamBufferSize);
+        } else {
+            Serial.printf("[Memory] Bitvavo stream buffer fallback: %u bytes\n", (unsigned)bitvavoStreamBufferSize);
+        }
+    }
+    
     // Initialize source tracking arrays (default: all LIVE, wordt overschreven door warm-start)
     for (uint8_t i = 0; i < SECONDS_PER_MINUTE; i++) {
         secondPricesSource[i] = SOURCE_LIVE;
@@ -6744,11 +7309,11 @@ void setup()
         
         // Bereken requested counts (voor logging)
         bool psramAvailable = hasPSRAM();
-        uint16_t req1mCandles = calculate1mCandles();
+        uint16_t req1mCandles = warmStartSkip1m ? 0 : calculate1mCandles();
         uint16_t max5m = psramAvailable ? 24 : 12;
         uint16_t max30m = psramAvailable ? 12 : 6;
         uint16_t max2h = psramAvailable ? 8 : 4;
-        uint16_t req5mCandles = clampUint16(warmStart5mCandles, 2, max5m);
+        uint16_t req5mCandles = warmStartSkip5m ? 0 : clampUint16(warmStart5mCandles, 2, max5m);
         uint16_t req30mCandles = clampUint16(warmStart30mCandles, 2, max30m);
         uint16_t req2hCandles = clampUint16(warmStart2hCandles, 2, max2h);
         
@@ -6757,6 +7322,8 @@ void setup()
                        ret_2h, ret_30m, hasRet2h, hasRet30m,
                        req1mCandles, req5mCandles, req30mCandles, req2hCandles);
     }
+    
+    // WS init wordt uitgesteld tot na de eerste succesvolle API-prijs
     
     Serial_println("Setup done");
     fetchPrice();
@@ -7164,6 +7731,7 @@ void apiTask(void *parameter)
     static unsigned long lastHeapLog = 0;
     const unsigned long HEAP_LOG_INTERVAL_MS = 60000;  // 60 seconden
     
+    static bool wsInitAttempted = false;
     for (;;)
     {
         uint32_t t0 = millis();
@@ -7178,6 +7746,12 @@ void apiTask(void *parameter)
         if (WiFi.status() == WL_CONNECTED) {
             // Voer 1 API call uit
             fetchPrice();
+
+            // WS init pas na eerste succesvolle API-prijs (en warm-start klaar)
+            if (!wsInitAttempted && lastApiMs > 0) {
+                maybeInitWebSocketAfterWarmStart();
+                wsInitAttempted = true;
+            }
             updateLatestKlineMetricsIfNeeded();
             
             // C1: Verwerk pending anchor setting (network-safe: gebeurt in apiTask waar HTTPS calls al zijn)
@@ -7313,20 +7887,14 @@ void uiTask(void *parameter)
         const TickType_t mutexTimeout = pdMS_TO_TICKS(50); // CYD/ESP32-S3: korte timeout zodat API task voorrang krijgt
         #endif
         
-        static uint32_t uiMutexTimeoutCount = 0;
-        if (safeMutexTake(dataMutex, mutexTimeout, "uiTask updateUI"))
-        {
-            // Fase 4.2: Geconsolideerde mutex timeout counter reset
-            resetMutexTimeoutCounter(uiMutexTimeoutCount);
-            
+        // UI mag niet lang in een mutex zitten (LVGL kan blocken).
+        // We checken alleen kort of er geen writer actief is, en updaten daarna zonder lock.
+        if (dataMutex == nullptr || xSemaphoreTake(dataMutex, 0) == pdTRUE) {
+            if (dataMutex != nullptr) {
+                xSemaphoreGive(dataMutex);
+            }
             // Fase 8.8.1: Gebruik module versie (parallel - oude functie blijft bestaan)
             uiController.updateUI();
-            safeMutexGive(dataMutex, "uiTask updateUI");
-        }
-        else
-        {
-            // Fase 4.1: Geconsolideerde mutex timeout handling (UI task: elke 20e, reset bij 100)
-            handleMutexTimeout(uiMutexTimeoutCount, "UI Task", nullptr, 20, 100);
         }
         
         // Meet CPU usage: bereken tijd die deze task gebruikt
@@ -7406,9 +7974,9 @@ void loop()
     // MQTT loop (moet regelmatig worden aangeroepen)
     if (mqttConnected) {
         if (!mqttClient.loop()) {
-            // Verbinding verloren, probeer reconnect
+            // Verbinding verloren, probeer reconnect met backoff
             mqttConnected = false;
-            lastMqttReconnectAttempt = 0;
+            lastMqttReconnectAttempt = millis(); // voorkom immediate reconnect storm
             // mqttReconnectAttemptCount wordt NIET gereset, zodat exponential backoff blijft werken
         } else {
             // Process queued messages when connected
@@ -7433,6 +8001,12 @@ void loop()
             connectMQTT();
         }
     }
+
+#if WS_ENABLED && WS_LIB_AVAILABLE
+    if (wsInitialized && wsClientPtr != nullptr) {
+        wsClientPtr->loop();
+    }
+#endif
     
     // Beheer WiFi reconnect indien nodig
     // Geoptimaliseerd: betere reconnect logica met retry counter en non-blocking timeout

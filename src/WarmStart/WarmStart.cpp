@@ -144,16 +144,20 @@ void WarmStartWrapper::logResult(WarmStartMode mode, const WarmStartStats& stats
     
     // Geoptimaliseerd: gebruik helper functie i.p.v. gedupliceerde code
     // 1m: candles loaded (voor buffer)
-    m_logger->print(F("  1m: "));
-    m_logger->print(stats.loaded1m);
-    m_logger->print(F(" candles loaded ("));
-    m_logger->print(stats.warmStartOk1m ? F("OK") : F("FAIL"));
-    m_logger->println(F(")"));
+    if (req1m == 0) {
+        m_logger->println(F("  1m: SKIPPED"));
+    } else {
+        m_logger->print(F("  1m: "));
+        m_logger->print(stats.loaded1m);
+        m_logger->print(F(" candles loaded ("));
+        m_logger->print(stats.warmStartOk1m ? F("OK") : F("FAIL"));
+        m_logger->println(F(")"));
+    }
     
     // 5m/30m/2h: closes used (voor returns)
-    logTimeframeStatus("5m", stats.loaded5m, stats.warmStartOk5m && stats.loaded5m >= 2);
-    logTimeframeStatus("30m", stats.loaded30m, stats.warmStartOk30m && stats.loaded30m >= 2 && hasRet30m);
-    logTimeframeStatus("2h", stats.loaded2h, stats.warmStartOk2h && stats.loaded2h >= 2 && hasRet2h);
+    logTimeframeStatus("5m", req5m, stats.loaded5m, stats.warmStartOk5m && stats.loaded5m >= 2);
+    logTimeframeStatus("30m", req30m, stats.loaded30m, stats.warmStartOk30m && stats.loaded30m >= 2 && hasRet30m);
+    logTimeframeStatus("2h", req2h, stats.loaded2h, stats.warmStartOk2h && stats.loaded2h >= 2 && hasRet2h);
     
     m_logger->print(F("[WarmStart] Warm-up progress: "));
     m_logger->print(stats.warmUpProgress);
@@ -182,11 +186,15 @@ const char* WarmStartWrapper::statusToString(WarmStartStatus status) const {
 }
 
 // Helper: Log timeframe status (geoptimaliseerd: elimineert code duplicatie)
-void WarmStartWrapper::logTimeframeStatus(const char* label, uint16_t loaded, bool ok, bool hasRet) const {
+void WarmStartWrapper::logTimeframeStatus(const char* label, uint16_t requested, uint16_t loaded, bool ok, bool hasRet) const {
     if (!m_logger) return;
     
     m_logger->print(F("  "));
     m_logger->print(label);
+    if (requested == 0) {
+        m_logger->println(F(": SKIPPED"));
+        return;
+    }
     m_logger->print(F(": "));
     m_logger->print(loaded);
     m_logger->print(F(" candles fetched, 2 closes used ("));

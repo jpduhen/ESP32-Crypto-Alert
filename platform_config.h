@@ -4,9 +4,9 @@
 
 //#define PLATFORM_CYD24
 //#define PLATFORM_CYD28_1USB  // 1USB variant: geen kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
-#define PLATFORM_CYD28_2USB  // 2USB variant: met kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
+//#define PLATFORM_CYD28_2USB  // 2USB variant: met kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
 //#define PLATFORM_TTGO
-//#define PLATFORM_ESP32S3_SUPERMINI
+#define PLATFORM_ESP32S3_SUPERMINI
 //#define PLATFORM_ESP32S3_GEEK
 
 // Automatisch PLATFORM_CYD28 definiëren als een CYD28 variant is gekozen
@@ -18,14 +18,19 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 4
-#define VERSION_MINOR 40
-#define VERSION_STRING "4.40"
+#define VERSION_MINOR 44
+#define VERSION_STRING "4.44"
 #endif
 
 // --- Debug Configuration ---
 // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
 #ifndef DEBUG_BUTTON_ONLY
 #define DEBUG_BUTTON_ONLY 0
+#endif
+
+// --- WebSocket Configuration (stap-voor-stap migratie) ---
+#ifndef WS_ENABLED
+#define WS_ENABLED 1  // 0 = uit, 1 = aan (later inschakelen)
 #endif
 
 // Zet op 1 om uitgebreide debug logging toe te voegen voor berekeningen verificatie

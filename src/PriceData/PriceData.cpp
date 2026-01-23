@@ -94,7 +94,12 @@ float PriceData::calculateReturn1Minute(float* averagePrices) {
     
     // Geconsolideerde check: check if we have enough data
     if (!arrayFilled && currentIndex < positionsAgo) {
-        updateAveragePrice(0.0f);
+        if (averagePrices != nullptr && averagePriceIndex < 3 && averagePriceIndex == 1 && currentIndex > 0) {
+            averagePrices[1] = calculateAverage(this->getSecondPrices(), SECONDS_PER_MINUTE,
+                                                this->getSecondArrayFilled(), this->getSecondIndex());
+        } else {
+            updateAveragePrice(0.0f);
+        }
         if (logIntervalMs > 0) {
             static uint32_t lastLogTime = 0;
             uint32_t now = millis();

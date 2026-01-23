@@ -85,7 +85,7 @@ private:
     const char* statusToString(WarmStartStatus status) const;
     
     // Helper: Log timeframe status (geoptimaliseerd: elimineert code duplicatie)
-    void logTimeframeStatus(const char* label, uint16_t loaded, bool ok, bool hasRet = false) const;
+    void logTimeframeStatus(const char* label, uint16_t requested, uint16_t loaded, bool ok, bool hasRet = false) const;
     
     // Helper: Get setting value with default (geoptimaliseerd: elimineert code duplicatie)
     // Template moet inline in header staan
