@@ -94,6 +94,12 @@ extern bool hasPSRAM();
 #ifndef WARM_START_2H_CANDLES_DEFAULT
 #define WARM_START_2H_CANDLES_DEFAULT 6
 #endif
+#ifndef WARM_START_SKIP_1M_DEFAULT
+#define WARM_START_SKIP_1M_DEFAULT true
+#endif
+#ifndef WARM_START_SKIP_5M_DEFAULT
+#define WARM_START_SKIP_5M_DEFAULT true
+#endif
 #ifndef AUTO_VOLATILITY_ENABLED_DEFAULT
 #define AUTO_VOLATILITY_ENABLED_DEFAULT false
 #endif
@@ -161,6 +167,8 @@ const char* SettingsStore::PREF_KEY_WS1M_EXTRA = "ws1mExtra";
 const char* SettingsStore::PREF_KEY_WS5M = "ws5m";
 const char* SettingsStore::PREF_KEY_WS30M = "ws30m";
 const char* SettingsStore::PREF_KEY_WS2H = "ws2h";
+const char* SettingsStore::PREF_KEY_WS_SKIP_1M = "wsSkip1m";
+const char* SettingsStore::PREF_KEY_WS_SKIP_5M = "wsSkip5m";
 const char* SettingsStore::PREF_KEY_AUTO_VOL = "autoVol";
 const char* SettingsStore::PREF_KEY_AUTO_VOL_WIN = "autoVolWin";
 const char* SettingsStore::PREF_KEY_AUTO_VOL_BASE = "autoVolBase";
@@ -342,6 +350,8 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     warmStart5mCandles = WARM_START_5M_CANDLES_DEFAULT;
     warmStart30mCandles = WARM_START_30M_CANDLES_DEFAULT;
     warmStart2hCandles = WARM_START_2H_CANDLES_DEFAULT;
+    warmStartSkip1m = WARM_START_SKIP_1M_DEFAULT;
+    warmStartSkip5m = WARM_START_SKIP_5M_DEFAULT;
     
     // Auto-Volatility defaults
     autoVolatilityEnabled = AUTO_VOLATILITY_ENABLED_DEFAULT;
@@ -476,6 +486,8 @@ CryptoMonitorSettings SettingsStore::load() {
     settings.warmStart5mCandles = prefs.getUChar(PREF_KEY_WS5M, WARM_START_5M_CANDLES_DEFAULT);
     settings.warmStart30mCandles = prefs.getUChar(PREF_KEY_WS30M, WARM_START_30M_CANDLES_DEFAULT);
     settings.warmStart2hCandles = prefs.getUChar(PREF_KEY_WS2H, WARM_START_2H_CANDLES_DEFAULT);
+    settings.warmStartSkip1m = prefs.getBool(PREF_KEY_WS_SKIP_1M, WARM_START_SKIP_1M_DEFAULT);
+    settings.warmStartSkip5m = prefs.getBool(PREF_KEY_WS_SKIP_5M, WARM_START_SKIP_5M_DEFAULT);
     
     // Load Auto-Volatility Mode settings
     settings.autoVolatilityEnabled = prefs.getBool(PREF_KEY_AUTO_VOL, AUTO_VOLATILITY_ENABLED_DEFAULT);
@@ -647,6 +659,8 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     prefs.putUChar(PREF_KEY_WS5M, settings.warmStart5mCandles);
     prefs.putUChar(PREF_KEY_WS30M, settings.warmStart30mCandles);
     prefs.putUChar(PREF_KEY_WS2H, settings.warmStart2hCandles);
+    prefs.putBool(PREF_KEY_WS_SKIP_1M, settings.warmStartSkip1m);
+    prefs.putBool(PREF_KEY_WS_SKIP_5M, settings.warmStartSkip5m);
     
     // Save Auto-Volatility Mode settings
     prefs.putBool(PREF_KEY_AUTO_VOL, settings.autoVolatilityEnabled);

@@ -1,6 +1,7 @@
 #include "WebServer.h"
 #include <WebServer.h>
 #include <WiFi.h>
+#include <WiFiManager.h>
 #include <PubSubClient.h>
 #include <ESP.h>  // Voor ESP.restart()
 #include <Arduino_GFX_Library.h>  // Voor Arduino_GFX type
@@ -15,7 +16,6 @@ extern WebServer server;  // Globale WebServer instance (gedefinieerd in .ino)
 extern TrendDetector trendDetector;
 extern VolatilityTracker volatilityTracker;
 extern AnchorSystem anchorSystem;
-extern Arduino_GFX* gfx;  // Display object voor rotatie aanpassing
 extern VolumeRangeStatus lastVolumeRange1m;  // Voor volume trend in WebUI
 
 // Externe variabelen en functies die nodig zijn voor web server
@@ -56,6 +56,8 @@ extern uint8_t warmStart1mExtraCandles;
 extern uint8_t warmStart5mCandles;
 extern uint8_t warmStart30mCandles;
 extern uint8_t warmStart2hCandles;
+extern bool warmStartSkip1m;
+extern bool warmStartSkip5m;
 extern bool autoVolatilityEnabled;
 extern uint8_t autoVolatilityWindowMinutes;
 extern float autoVolatilityBaseline1mStdPct;
@@ -82,6 +84,8 @@ extern bool isValidPrice(float price);
 extern bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const char* caller);
 extern void safeMutexGive(SemaphoreHandle_t mutex, const char* caller);
 extern bool queueAnchorSetting(float value, bool useCurrentPrice);
+extern void requestDisplayRotation(uint8_t rotation);
+extern void requestMqttReconnect();
 
 // Serial_printf en Serial_println zijn macro's, geen functies
 // Definieer ze hier als macro's (zonder DEBUG_BUTTON_ONLY check, altijd aan)
@@ -161,6 +165,8 @@ void WebServerModule::setupWebServer() {
     Serial.println("[WebServer] Route '/anchor/set' geregistreerd");
     server->on("/ntfy/reset", HTTP_POST, [this]() { this->handleNtfyReset(); });
     Serial.println(F("[WebServer] Route '/ntfy/reset' geregistreerd"));
+    server->on("/wifi/reset", HTTP_POST, [this]() { this->handleWifiReset(); });
+    Serial.println(F("[WebServer] Route '/wifi/reset' geregistreerd"));
     server->on("/status", HTTP_GET, [this]() { this->handleStatus(); });  // WEB-PERF-3: Status endpoint
     Serial.println(F("[WebServer] Route '/status' geregistreerd"));
     server->onNotFound([this]() { this->handleNotFound(); }); // 404 handler
@@ -649,6 +655,8 @@ void WebServerModule::renderSettingsHTML() {
     sendSectionDesc(getText("Binance historische data voor snelle initialisatie", "Binance historical data for fast initialization"));
     
     sendCheckboxRow(getText("Warm-Start Ingeschakeld", "Warm-Start Enabled"), "warmStart", warmStartEnabled);
+    sendCheckboxRow(getText("Warm-Start 1m overslaan", "Skip Warm-Start 1m"), "wsSkip1m", warmStartSkip1m);
+    sendCheckboxRow(getText("Warm-Start 5m overslaan", "Skip Warm-Start 5m"), "wsSkip5m", warmStartSkip5m);
     
     if (warmStartEnabled) {
         snprintf(valueBuf, sizeof(valueBuf), "%u", warmStart1mExtraCandles);
@@ -709,6 +717,19 @@ void WebServerModule::renderSettingsHTML() {
     
     sendSectionFooter();
     
+    // WiFi reset sectie (gevaarlijke actie)
+    const char* wifiResetTitle = getText("WiFi reset", "WiFi reset");
+    snprintf(tmpBuf, sizeof(tmpBuf), "<span style='color:#e74c3c;'>%s</span>", wifiResetTitle);
+    sendSectionHeader(tmpBuf, "wifiReset", false);
+    sendSectionDesc(getText("Wist WiFi-instellingen en herstart het device", "Clears WiFi settings and reboots the device"));
+    server->sendContent(F("<button type='button' id='wifiResetBtn' style='width:100%;background:#e74c3c;color:#fff;padding:12px 24px;border:none;border-radius:4px;cursor:pointer;font-size:16px;font-weight:bold;'>"));
+    server->sendContent(getText("WiFi reset (wis credentials)", "WiFi reset (clear credentials)"));
+    server->sendContent(F("</button>"));
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='info'>%s</div>",
+             getText("Na reset verschijnt het configuratieportal weer", "After reset, the configuration portal will appear"));
+    server->sendContent(tmpBuf);
+    sendSectionFooter();
+    
     // Submit button
     snprintf(tmpBuf, sizeof(tmpBuf), "<button type='submit'>%s</button>", 
              getText("Opslaan", "Save"));
@@ -755,12 +776,7 @@ void WebServerModule::handleSave() {
         int rotVal = atoi(rotStr.c_str());
         if (rotVal == 0 || rotVal == 2) {
             displayRotation = static_cast<uint8_t>(rotVal);
-            // Wis scherm eerst om residu te voorkomen
-            gfx->fillScreen(RGB565_BLACK);
-            // Pas rotatie direct toe
-            gfx->setRotation(rotVal);
-            // Wis scherm opnieuw na rotatie
-            gfx->fillScreen(RGB565_BLACK);
+            requestDisplayRotation(displayRotation);
         }
     }
     
@@ -1091,6 +1107,8 @@ void WebServerModule::handleSave() {
     
     // Warm-Start settings - geoptimaliseerd: gebruik helper functie
     warmStartEnabled = server->hasArg("warmStart");
+    warmStartSkip1m = server->hasArg("wsSkip1m");
+    warmStartSkip5m = server->hasArg("wsSkip5m");
     if (parseIntArg("ws1mExtra", intVal, 0, 100)) {
         warmStart1mExtraCandles = static_cast<uint8_t>(intVal);
     }
@@ -1122,12 +1140,7 @@ void WebServerModule::handleSave() {
     saveSettings();
     
     // Herconnect MQTT als instellingen zijn gewijzigd
-    if (mqttConnected) {
-        mqttClient.disconnect();
-        mqttConnected = false;
-        lastMqttReconnectAttempt = 0;
-        mqttReconnectAttemptCount = 0; // Reset counter bij disconnect
-    }
+    requestMqttReconnect();
     
     // Chunked HTML output (geen String in heap)
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -1442,6 +1455,26 @@ void WebServerModule::handleNtfyReset() {
     server->send(200, "text/plain", "OK");
 }
 
+void WebServerModule::handleWifiReset() {
+    if (server == nullptr) return;
+    
+    Serial_println(F("[Web] WiFi reset aangevraagd"));
+    
+    // Wis WiFi credentials via WiFiManager
+    {
+        WiFiManager wm;
+        wm.resetSettings();
+    }
+    
+    // Extra zekerheid: disconnect + WiFi uit
+    WiFi.disconnect(true, true);
+    WiFi.mode(WIFI_OFF);
+    
+    server->send(200, "text/plain", "OK");
+    delay(200);
+    ESP.restart();
+}
+
 // WEB-PERF-3: Cache invalidation helper
 void WebServerModule::invalidatePageCache() {
     sPageCacheValid = false;
@@ -1614,6 +1647,19 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(F("xhr.send();"));
     server->sendContent(F("return false;"));
     server->sendContent(F("}"));
+    server->sendContent(F("function resetWifiBtn(e){"));
+    server->sendContent(F("if(e){e.preventDefault();e.stopPropagation();}"));
+    server->sendContent(F("if(!confirm('WiFi reset? Dit wist credentials en herstart het device.')){return false;}"));
+    server->sendContent(F("var xhr=new XMLHttpRequest();"));
+    server->sendContent(F("xhr.open('POST','/wifi/reset',true);"));
+    server->sendContent(F("xhr.onreadystatechange=function(){"));
+    server->sendContent(F("if(xhr.readyState==4){"));
+    server->sendContent(F("if(xhr.status==200){alert('WiFi reset uitgevoerd. Device herstart.');}"));
+    server->sendContent(F("else{alert('Fout bij WiFi reset');}"));
+    server->sendContent(F("}};"));
+    server->sendContent(F("xhr.send();"));
+    server->sendContent(F("return false;"));
+    server->sendContent(F("}"));
     server->sendContent(F("window.addEventListener('DOMContentLoaded',function(){"));
     // Fix: converteer komma's naar punten in number inputs (locale fix)
     server->sendContent(F("var numberInputs=document.querySelectorAll('input[type=\"number\"]');"));
@@ -1661,6 +1707,10 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(F("var ntfyResetBtn=document.getElementById('ntfyResetBtn');"));
     server->sendContent(F("if(ntfyResetBtn){"));
     server->sendContent(F("ntfyResetBtn.addEventListener('click',resetNtfyBtn);"));
+    server->sendContent(F("}"));
+    server->sendContent(F("var wifiResetBtn=document.getElementById('wifiResetBtn');"));
+    server->sendContent(F("if(wifiResetBtn){"));
+    server->sendContent(F("wifiResetBtn.addEventListener('click',resetWifiBtn);"));
     server->sendContent(F("}"));
     
     // WEB-PERF-3: Live status updates via /status endpoint

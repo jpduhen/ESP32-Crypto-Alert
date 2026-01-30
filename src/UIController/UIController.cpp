@@ -790,6 +790,7 @@ void UIController::createFooter() {
     lv_obj_align(ipLabel, LV_ALIGN_BOTTOM_LEFT, 0, -2);
     
     chartVersionLabel = lv_label_create(lv_scr_act());
+    ::chartVersionLabel = chartVersionLabel;  // Sync globale pointer voor updateFooter()
     lv_obj_set_style_text_font(chartVersionLabel, FONT_SIZE_FOOTER, 0);
     lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
     lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
@@ -814,6 +815,7 @@ void UIController::createFooter() {
     lv_obj_align(ipLabel, LV_ALIGN_BOTTOM_LEFT, 0, -2);
     
     chartVersionLabel = lv_label_create(lv_scr_act());
+    ::chartVersionLabel = chartVersionLabel;  // Sync globale pointer voor updateFooter()
     lv_obj_set_style_text_font(chartVersionLabel, FONT_SIZE_FOOTER, 0);
     lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
     lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);

@@ -9,6 +9,7 @@
 #include "platform_config.h"
 
 #include <WiFi.h>                   // Included with Espressif ESP32 Dev Module
+#include <WiFiClientSecure.h>       // TLS client for HTTPS (NTFY)
 #include <HTTPClient.h>             // Included with Espressif ESP32 Dev Module
 #include <WiFiManager.h>            // Install "WiFiManager" with the Library Manager
 #include <WebServer.h>              // Included with Espressif ESP32 Dev Module
@@ -645,6 +646,9 @@ WarmStartStats warmStartStats = {0, 0, 0, 0, false, false, false, false, WS_MODE
 // Fase 9.1.4: static verwijderd zodat WebServerModule deze variabele kan gebruiken
 uint8_t language = DEFAULT_LANGUAGE;  // 0 = Nederlands, 1 = English
 uint8_t displayRotation = 0;  // Display rotatie: 0 = normaal, 2 = 180 graden gedraaid
+volatile bool pendingDisplayRotationApply = false;
+volatile uint8_t pendingDisplayRotationValue = 0;
+volatile bool pendingMqttReconnect = false;
 
 // Forward declarations (moet vroeg in het bestand staan)
 static bool enqueueMqttMessage(const char* topic, const char* payload, bool retained);
@@ -655,6 +659,8 @@ void webTask(void *parameter);
 void priceRepeatTask(void *parameter); // Aparte task voor periodieke prijs herhaling
 void wifiConnectionAndFetchPrice();
 void setDisplayBrigthness();
+void requestDisplayRotation(uint8_t rotation);
+void requestMqttReconnect();
 
 // Settings structs voor betere organisatie
 // NOTE: AlertThresholds en NotificationCooldowns zijn nu gedefinieerd in SettingsStore.h
@@ -1450,6 +1456,11 @@ static uint16_t calculate1mCandles()
     uint16_t baseCandles = autoVolatilityWindowMinutes + warmStart1mExtraCandles;
     bool psramAvailable = hasPSRAM();
     uint16_t maxCandles = psramAvailable ? 150 : 80;  // Met PSRAM: 150, zonder: 80
+    #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
+        if (psramAvailable) {
+            maxCandles = 240;  // S3 + PSRAM: hogere warm-start limiet
+        }
+    #endif
     return clampUint16(baseCandles, 30, maxCandles);
 }
 
@@ -1505,6 +1516,13 @@ static WarmStartMode performWarmStart()
     uint16_t max5m = psramAvailable ? 24 : 12;  // Met PSRAM: 24, zonder: 12
     uint16_t max30m = psramAvailable ? 12 : 6;  // Met PSRAM: 12, zonder: 6
     uint16_t max2h = psramAvailable ? 8 : 4;  // Met PSRAM: 8, zonder: 4
+    #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
+        if (psramAvailable) {
+            max5m = 60;
+            max30m = 24;
+            max2h = 12;
+        }
+    #endif
     uint16_t req5mCandles = warmStartSkip5m ? 0 : clampUint16(warmStart5mCandles, 2, max5m);
     uint16_t req30mCandles = clampUint16(warmStart30mCandles, 2, max30m);
     uint16_t req2hCandles = clampUint16(warmStart2hCandles, 2, max2h);
@@ -1609,8 +1627,15 @@ static WarmStartMode performWarmStart()
     }
 
     // 4. Haal 1d candles op voor lange termijn trend (regressie over 7 dagen)
+    #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
+    float temp1dPrices[30];
+    unsigned long temp1dTimes[30];
+    const uint8_t max1dCandles = 30;
+    #else
     float temp1dPrices[8];
     unsigned long temp1dTimes[8];
+    const uint8_t max1dCandles = 8;
+    #endif
     int count1d = 0;
     const int maxRetries1d = 3;
     for (int retry = 0; retry < maxRetries1d; retry++) {
@@ -1621,7 +1646,7 @@ static WarmStartMode performWarmStart()
             lv_timer_handler();
         }
         lv_timer_handler();
-        count1d = fetchBitvavoCandles(bitvavoSymbol, "1d", 8, temp1dPrices, temp1dTimes, 8);
+        count1d = fetchBitvavoCandles(bitvavoSymbol, "1d", max1dCandles, temp1dPrices, temp1dTimes, max1dCandles);
         lv_timer_handler();
         if (count1d >= 2) {
             break;
@@ -2067,6 +2092,21 @@ void updateWarmStartStatus()
 static bool sendNtfyNotification(const char *title, const char *message, const char *colorTag = nullptr)
 {
     unsigned long nowMs = millis();
+    // Debug: netwerkstatus voor NTFY (rate-limited, 1x per 60s)
+    static unsigned long lastNtfyNetLogMs = 0;
+    if (nowMs - lastNtfyNetLogMs >= 60000UL) {
+        lastNtfyNetLogMs = nowMs;
+        IPAddress ntfyIp;
+        bool resolved = WiFi.hostByName("ntfy.sh", ntfyIp);
+        IPAddress dnsIp = WiFi.dnsIP();
+        IPAddress gwIp = WiFi.gatewayIP();
+        Serial_printf(F("[Notify][Net] RSSI=%d dBm, DNS=%u.%u.%u.%u, GW=%u.%u.%u.%u, ntfy.sh=%u.%u.%u.%u (resolved=%d)\n"),
+                      WiFi.RSSI(),
+                      dnsIp[0], dnsIp[1], dnsIp[2], dnsIp[3],
+                      gwIp[0], gwIp[1], gwIp[2], gwIp[3],
+                      ntfyIp[0], ntfyIp[1], ntfyIp[2], ntfyIp[3],
+                      resolved ? 1 : 0);
+    }
     if (ntfyNextAllowedMs != 0 && nowMs < ntfyNextAllowedMs) {
         // Rate-limit bij eerdere failures (voorkomt spam + netwerkdruk)
         static unsigned long lastBackoffLogMs = 0;
@@ -2127,7 +2167,9 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
         bool attemptOk = false;
         bool shouldRetry = false;
         int lastCode = 0;
-    HTTPClient http;
+        HTTPClient http;
+        WiFiClientSecure ntfyClient;
+        ntfyClient.setInsecure();  // NTFY: voorkom TLS problemen door tijd/CA
     
     // S2: do-while(0) patroon voor consistente cleanup
     do {
@@ -2136,7 +2178,7 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
             http.setTimeout(HTTP_READ_TIMEOUT_MS);
         http.setReuse(false);
     
-        if (!http.begin(url)) {
+        if (!http.begin(ntfyClient, url)) {
                 if (attempt == MAX_RETRIES) {
         Serial_println(F("[Notify] Ntfy HTTP begin gefaald"));
                 }
@@ -2212,7 +2254,8 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
                 attemptOk = true;
             ok = true;
         } else {
-        Serial_printf(F("[Notify] Ntfy fout bij versturen (code: %d)\n"), code);
+        String err = HTTPClient().errorToString(code);
+        Serial_printf(F("[Notify] Ntfy fout bij versturen (code: %d, err: %s)\n"), code, err.c_str());
                 shouldRetry = (code == HTTPC_ERROR_CONNECTION_REFUSED ||
                                code == HTTPC_ERROR_CONNECTION_LOST ||
                                code == HTTPC_ERROR_READ_TIMEOUT ||
@@ -2278,8 +2321,16 @@ static void maybeInitWebSocketAfterWarmStart()
 #else
     const uint32_t freeHeap = ESP.getFreeHeap();
     const uint32_t largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    if (freeHeap < 20000 || largestBlock < 2000) {
-        Serial_printf(F("[WS] Skip init: low heap (free=%u, largest=%u)\n"), freeHeap, largestBlock);
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        const uint32_t wsMinFreeHeap = 14000;
+        const uint32_t wsMinLargestBlock = 1200;
+    #else
+        const uint32_t wsMinFreeHeap = 20000;
+        const uint32_t wsMinLargestBlock = 2000;
+    #endif
+    if (freeHeap < wsMinFreeHeap || largestBlock < wsMinLargestBlock) {
+        Serial_printf(F("[WS] Skip init: low heap (free=%u, largest=%u, minFree=%u, minLargest=%u)\n"),
+                      freeHeap, largestBlock, wsMinFreeHeap, wsMinLargestBlock);
         return;
     }
     if (wsClientPtr == nullptr) {
@@ -2622,6 +2673,47 @@ void safeStrncpy(char *dest, const char *src, size_t destSize)
     if (destSize == 0) return;
     strncpy(dest, src, destSize - 1);
     dest[destSize - 1] = '\0';
+}
+
+// Deferred actions from other tasks (thread-safe flags)
+void requestDisplayRotation(uint8_t rotation)
+{
+    pendingDisplayRotationValue = rotation;
+    pendingDisplayRotationApply = true;
+}
+
+void requestMqttReconnect()
+{
+    pendingMqttReconnect = true;
+}
+
+static void applyPendingDisplayRotation()
+{
+    if (!pendingDisplayRotationApply) {
+        return;
+    }
+    pendingDisplayRotationApply = false;
+    if (gfx == nullptr) {
+        return;
+    }
+    // Wis scherm voor/na rotatie om residu te voorkomen
+    gfx->fillScreen(RGB565_BLACK);
+    gfx->setRotation(pendingDisplayRotationValue);
+    gfx->fillScreen(RGB565_BLACK);
+}
+
+static void applyPendingMqttReconnect()
+{
+    if (!pendingMqttReconnect) {
+        return;
+    }
+    pendingMqttReconnect = false;
+    if (mqttConnected) {
+        mqttClient.disconnect();
+        mqttConnected = false;
+        lastMqttReconnectAttempt = 0;
+        mqttReconnectAttemptCount = 0; // Reset counter bij disconnect
+    }
 }
 
 // Deadlock detection: Track mutex hold times
@@ -3101,6 +3193,8 @@ static void loadSettings()
     warmStart5mCandles = settings.warmStart5mCandles;
     warmStart30mCandles = settings.warmStart30mCandles;
     warmStart2hCandles = settings.warmStart2hCandles;
+    warmStartSkip1m = settings.warmStartSkip1m;
+    warmStartSkip5m = settings.warmStartSkip5m;
     
     // Copy Auto-Volatility Mode settings
     autoVolatilityEnabled = settings.autoVolatilityEnabled;
@@ -3167,6 +3261,8 @@ void saveSettings()
     settings.warmStart5mCandles = warmStart5mCandles;
     settings.warmStart30mCandles = warmStart30mCandles;
     settings.warmStart2hCandles = warmStart2hCandles;
+    settings.warmStartSkip1m = warmStartSkip1m;
+    settings.warmStartSkip5m = warmStartSkip5m;
     
     // Copy Auto-Volatility Mode settings
     settings.autoVolatilityEnabled = autoVolatilityEnabled;
@@ -3580,18 +3676,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                         settingChanged = true;
                     }
                 } else {
-                    // displayRotation - speciale logica (saveSettings call + direct toepassen)
+                    // displayRotation - speciale logica (saveSettings call + deferred apply)
                     snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/displayRotation/set", prefixBuffer);
                     if (strcmp(topicBuffer, topicBufferFull) == 0) {
                         uint8_t newRotation = atoi(msgBuffer);
                         if (newRotation == 0 || newRotation == 2) {
                             displayRotation = newRotation;
-                            // Wis scherm eerst om residu te voorkomen
-                            gfx->fillScreen(RGB565_BLACK);
-                            // Pas rotatie direct toe
-                            gfx->setRotation(newRotation);
-                            // Wis scherm opnieuw na rotatie
-                            gfx->fillScreen(RGB565_BLACK);
+                            requestDisplayRotation(newRotation);
                             saveSettings(); // Save displayRotation to Preferences
                             snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/displayRotation", prefixBuffer);
                             snprintf(valueBuffer, sizeof(valueBuffer), "%u", displayRotation);
@@ -7165,7 +7256,7 @@ static void startFreeRTOSTasks()
     
     // FreeRTOS Tasks voor multi-core processing
     // ESP32-S3 heeft mogelijk meer stack ruimte nodig
-    #if defined(PLATFORM_ESP32S3_SUPERMINI)
+    #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     const uint32_t apiTaskStack = 10240;  // ESP32-S3: meer stack voor API task
     const uint32_t uiTaskStack = 10240;   // ESP32-S3: meer stack voor UI task
     const uint32_t webTaskStack = 6144;   // ESP32-S3: meer stack voor web task
@@ -7188,7 +7279,7 @@ static void startFreeRTOSTasks()
 
     // Core 1: Periodieke prijs herhaling (elke 2 seconden) - onafhankelijk van API calls
     // Stack size moet groot genoeg zijn voor mutex calls en Serial.printf
-    #if defined(PLATFORM_ESP32S3_SUPERMINI)
+    #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     const uint32_t priceRepeatTaskStack = 4096; // ESP32-S3: meer stack
     #else
     const uint32_t priceRepeatTaskStack = 3072; // ESP32: voldoende stack voor mutex en debug logging
@@ -7298,6 +7389,8 @@ void setup()
     currentSettings.warmStart5mCandles = warmStart5mCandles;
     currentSettings.warmStart30mCandles = warmStart30mCandles;
     currentSettings.warmStart2hCandles = warmStart2hCandles;
+    currentSettings.warmStartSkip1m = warmStartSkip1m;
+    currentSettings.warmStartSkip5m = warmStartSkip5m;
     warmWrap.bindSettings(&currentSettings);
     warmWrap.bindLogger(&Serial);
     
@@ -7313,6 +7406,13 @@ void setup()
         uint16_t max5m = psramAvailable ? 24 : 12;
         uint16_t max30m = psramAvailable ? 12 : 6;
         uint16_t max2h = psramAvailable ? 8 : 4;
+        #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
+            if (psramAvailable) {
+                max5m = 60;
+                max30m = 24;
+                max2h = 12;
+            }
+        #endif
         uint16_t req5mCandles = warmStartSkip5m ? 0 : clampUint16(warmStart5mCandles, 2, max5m);
         uint16_t req30mCandles = clampUint16(warmStart30mCandles, 2, max30m);
         uint16_t req2hCandles = clampUint16(warmStart2hCandles, 2, max2h);
@@ -7444,7 +7544,7 @@ static bool setupWiFiConnection()
     wm.setEnableConfigPortal(false);
     wm.setWiFiAutoReconnect(false);
     
-    String apSSID = wm.getConfigPortalSSID();
+    String apSSID = "CryptoAlert";
     String apPassword = "";
     
     lv_label_set_text(wifiLabel, getText("Zoeken naar WiFi...", "Searching for WiFi..."));
@@ -7863,6 +7963,9 @@ void uiTask(void *parameter)
         // Meet CPU usage: start tijd
         unsigned long taskStartTime = millis();
         
+        // Apply deferred display rotation on UI core
+        applyPendingDisplayRotation();
+        
         // Roep LVGL task handler regelmatig aan (elke 5ms) om IDLE task tijd te geven
         // CYD 2.4 work-around: gebruik lv_refr_now() in plaats van lv_task_handler()
         // lv_task_handler() crasht op deze display, dus gebruiken we directe rendering
@@ -7971,6 +8074,9 @@ void loop()
     // Geef tijd aan andere tasks
     vTaskDelay(pdMS_TO_TICKS(10));
     
+    // Deferred MQTT reconnect (thread-safe)
+    applyPendingMqttReconnect();
+    
     // MQTT loop (moet regelmatig worden aangeroepen)
     if (mqttConnected) {
         if (!mqttClient.loop()) {
@@ -8004,7 +8110,9 @@ void loop()
 
 #if WS_ENABLED && WS_LIB_AVAILABLE
     if (wsInitialized && wsClientPtr != nullptr) {
-        wsClientPtr->loop();
+        if (WiFi.status() == WL_CONNECTED) {
+            wsClientPtr->loop();
+        }
     }
 #endif
     

@@ -688,7 +688,8 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         // Threshold check: ret_1m >= effectiveSpike1mThreshold EN ret_5m >= spike5mThreshold
         // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
             bool spikeDetected = sameDirection;
-            bool volumeRangeOk1m = (volumeRange1m.valid && volumeRange1m.volumeOk && volumeRange1m.rangeOk);
+            // Als volume/range data niet beschikbaar is, onderdruk alerts niet
+            bool volumeRangeOk1m = (!volumeRange1m.valid) || (volumeRange1m.volumeOk && volumeRange1m.rangeOk);
         
             // Update 1m event state voor Smart Confluence Mode (alleen bij volume/range confirmatie)
             if (spikeDetected && volumeRangeOk1m) {
@@ -802,7 +803,8 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         // Note: move5mThreshold is de filter threshold, niet de alert threshold
         // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
             bool moveDetected = sameDirection;
-            bool volumeRangeOk5m = (volumeRange5m.valid && volumeRange5m.volumeOk && volumeRange5m.rangeOk);
+            // Als volume/range data niet beschikbaar is, onderdruk alerts niet
+            bool volumeRangeOk5m = (!volumeRange5m.valid) || (volumeRange5m.volumeOk && volumeRange5m.rangeOk);
         
         // Debug logging alleen bij move detectie
         if (moveDetected) {
@@ -879,7 +881,8 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         } else {
         // Threshold check: ret_5m >= effectiveMove5mThreshold
             bool move5mDetected = true;
-            bool volumeRangeOk5m = (volumeRange5m.valid && volumeRange5m.volumeOk && volumeRange5m.rangeOk);
+            // Als volume/range data niet beschikbaar is, onderdruk alerts niet
+            bool volumeRangeOk5m = (!volumeRange5m.valid) || (volumeRange5m.volumeOk && volumeRange5m.rangeOk);
         
             // Update 5m event state voor Smart Confluence Mode (alleen bij volume/range confirmatie)
             if (volumeRangeOk5m) {

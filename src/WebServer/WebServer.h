@@ -30,6 +30,7 @@ public:
     void handleNotFound();
     void handleAnchorSet();
     void handleNtfyReset();
+    void handleWifiReset();
     void handleStatus();  // WEB-PERF-3: JSON status endpoint
     
     // Handler voor webTask (blijft in .ino, maar kan module method aanroepen)

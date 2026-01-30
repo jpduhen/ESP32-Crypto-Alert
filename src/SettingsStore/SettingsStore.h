@@ -166,6 +166,8 @@ struct CryptoMonitorSettings {
     uint8_t warmStart5mCandles;
     uint8_t warmStart30mCandles;
     uint8_t warmStart2hCandles;
+    bool warmStartSkip1m;
+    bool warmStartSkip5m;
     
     // Auto-Volatility Mode settings
     bool autoVolatilityEnabled;
@@ -240,6 +242,8 @@ private:
     static const char* PREF_KEY_WS5M;
     static const char* PREF_KEY_WS30M;
     static const char* PREF_KEY_WS2H;
+    static const char* PREF_KEY_WS_SKIP_1M;
+    static const char* PREF_KEY_WS_SKIP_5M;
     static const char* PREF_KEY_AUTO_VOL;
     static const char* PREF_KEY_AUTO_VOL_WIN;
     static const char* PREF_KEY_AUTO_VOL_BASE;
