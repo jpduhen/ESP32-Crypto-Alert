@@ -171,4 +171,4 @@ By combining these alerts with your own analysis, you have a powerful tool to no
 
 ---
 
-*Go to [Chapter 6: Understanding Core Concepts](06-Core-Concepts.md) | [Chapter 8: Integration with External Systems](08-External-Systems-Integration.md)*
+*Go to [Chapter 6: Understanding Core Concepts](06-Core-Concepts.md) | [Chapter 8: Web UI Settings](08-WebUI-Settings.md)*

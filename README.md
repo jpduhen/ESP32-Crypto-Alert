@@ -46,14 +46,14 @@ The complete English user guide is split into separate chapters for better reada
 7. [Chapter 7: Alert Types and Examples](docs/07-Alert-Types-and-Examples.md)  
    All alert types with sample messages and charts
 
-8. [Chapter 8: Integration with External Systems](docs/08-External-Systems-Integration.md)  
+8. [Chapter 8: Web UI Settings](docs/08-WebUI-Settings.md)  
+   Explanation of all Web UI components and their effects
+
+9. [Chapter 9: Integration with External Systems](docs/09-External-Systems-Integration.md)  
    MQTT, Home Assistant dashboards, and automations
 
-9. [Chapter 9: Advanced Usage and Customization](docs/09-Advanced-Usage-and-Customization.md)  
-   Modifying code, custom thresholds, OTA updates, and more
-
-10. [Chapter 10: Web UI Settings](docs/10-WebUI-Settings.md)  
-    Explanation of all Web UI components and their effects
+10. [Chapter 10: Advanced Usage and Customization](docs/10-Advanced-Usage-and-Customization.md)  
+    Modifying code, custom thresholds, OTA updates, and more
 
 ## Quick Start
 1. Choose a compatible board (e.g., Cheap Yellow Display).

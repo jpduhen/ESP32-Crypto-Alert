@@ -44,14 +44,14 @@ De volledige Nederlandstalige handleiding is onderverdeeld in aparte hoofdstukke
 7. [Hoofdstuk 7: Alert Types en Voorbeelden](docs/07-Alert-Types-en-Voorbeelden.md)  
    Alle alert-types met voorbeeldberichten en charts
 
-8. [Hoofdstuk 8: Integratie met Externe Systemen](docs/08-Integratie-Externe-Systemen.md)  
+8. [Hoofdstuk 8: WebUI-instellingen](docs/08-WebUI-Instellingen.md)  
+   Uitleg van alle WebUI-onderdelen en hun effect
+
+9. [Hoofdstuk 9: Integratie met Externe Systemen](docs/09-Integratie-Externe-Systemen.md)  
    MQTT, Home Assistant dashboards en automations
 
-9. [Hoofdstuk 9: Geavanceerd Gebruik en Aanpassingen](docs/09-Geavanceerd-Gebruik-en-Aanpassingen.md)  
-   Code wijzigen, custom thresholds, OTA en meer
-
-10. [Hoofdstuk 10: WebUI-instellingen](docs/10-WebUI-Instellingen.md)  
-    Uitleg van alle WebUI-onderdelen en hun effect
+10. [Hoofdstuk 10: Geavanceerd Gebruik en Aanpassingen](docs/10-Geavanceerd-Gebruik-en-Aanpassingen.md)  
+    Code wijzigen, custom thresholds, OTA en meer
 
 ## 🚀 Quick Start
 1. Kies een compatibel board (bijv. Cheap Yellow Display).

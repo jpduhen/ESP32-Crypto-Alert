@@ -1,4 +1,4 @@
-## Hoofdstuk 10: WebUI-instellingen (uitleg per onderdeel)
+## Hoofdstuk 8: WebUI-instellingen (uitleg per onderdeel)
 
 Deze pagina legt elk onderdeel van de WebUI uit in gewone taal. Je ziet wat een instelling doet, waarom je hem zou aanpassen en welk effect het heeft op de meldingen en het gedrag van het systeem.
 Wijzigingen worden opgeslagen in het device en worden actief na **Opslaan**, tenzij anders vermeld.
@@ -147,3 +147,7 @@ Vult de buffers met historische data bij het opstarten, zodat signalen sneller b
 
 - **Opslaan**: Bewaart alles in NVS en past wijzigingen toe.
   - Effect: Sommige wijzigingen (zoals markt) kunnen een herstart triggeren.
+
+---
+
+*Ga naar [Hoofdstuk 7: Alert Types en Voorbeelden](07-Alert-Types-en-Voorbeelden.md) | [Hoofdstuk 9: Integratie met Externe Systemen](09-Integratie-Externe-Systemen.md)*

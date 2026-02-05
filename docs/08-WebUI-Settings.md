@@ -1,4 +1,4 @@
-## Chapter 10: Web UI settings (explained)
+## Chapter 8: Web UI settings (explained)
 
 This page explains every Web UI component in plain language. You will see what each setting does, why you might change it, and how it affects alerts and behavior.
 Changes are saved on the device and applied after **Save**, unless noted otherwise.
@@ -146,3 +146,7 @@ Pre-fills buffers with historical data so alerts are reliable sooner.
 
 - **Save**: Stores everything in NVS and applies immediately.
   - Effect: Some changes (like market) can trigger a reboot.
+
+---
+
+*Go to [Chapter 7: Alert Types and Examples](07-Alert-Types-and-Examples.md) | [Chapter 9: Integration with External Systems](09-External-Systems-Integration.md)*

@@ -1,6 +1,6 @@
-# Chapter 8: Integration with External Systems
+# Chapter 9: Integration with External Systems
 
-## 8.1 Overview
+## 9.1 Overview
 ESP32-Crypto-Alert is designed to work not only standalone but also to integrate seamlessly with other systems. You can forward alerts and price data to notification apps, smart home platforms, or your own scripts.
 
 The main integrations are:
@@ -14,16 +14,16 @@ This chapter focuses primarily on **MQTT** and **Home Assistant**, the most powe
 ![Integration overview](img/integration-overview.jpg)  
 *Overview of possible integrations: NTFY, MQTT, and local display.*
 
-## 8.2 NTFY.sh (Recap and Example)
+## 9.2 NTFY.sh (Recap and Example)
 NTFY.sh sends direct push notifications to the official iOS/Android app. Configuration is done in the web interface (see Chapter 5).
 
 ![NTFY notification example](img/ntfy-alert-example.jpg)  
 *Example of an ESP32-Crypto-Alert notification in the NTFY app.*
 
-## 8.3 MQTT Integration
+## 9.3 MQTT Integration
 The device continuously publishes price data and alerts via MQTT topics. This enables integration with virtually any platform that supports MQTT.
 
-### 8.3.1 MQTT Configuration in the Web Interface
+### 9.3.1 MQTT Configuration in the Web Interface
 Fill in the following fields in the web interface:
 - **Broker URL/IP** – e.g., the IP address of your Home Assistant or Mosquitto broker
 - **Port** – default 1883
@@ -34,7 +34,7 @@ The MQTT topic prefix is derived automatically from your NTFY topic and is uniqu
 ![MQTT settings web](img/web-mqtt-config.jpg)  
 *MQTT section in the web interface.*
 
-### 8.3.2 Published MQTT Topics
+### 9.3.2 Published MQTT Topics
 The device publishes JSON values under `<prefix>/values/*` and configuration under `<prefix>/config/*`.
 
 **Examples (values):**
@@ -60,7 +60,7 @@ When using Home Assistant, **MQTT Discovery** is published automatically so sens
 ![MQTT topics example](img/mqtt-topics.jpg)  
 *Example of MQTT topics in a broker client (e.g., MQTT Explorer).*
 
-### 8.3.3 Integration with Home Assistant
+### 9.3.3 Integration with Home Assistant
 Home Assistant natively supports MQTT and can automatically discover sensors (MQTT Discovery is enabled by default).
 
 **Manual sensor configuration (via UI or YAML):**
@@ -78,7 +78,7 @@ mqtt:
       value_template: "{{ value_json | round(2) }}"
 ```
 
-### 8.3.4 Home Assistant Dashboard Examples
+### 9.3.4 Home Assistant Dashboard Examples
 With the available sensors, you can build beautiful Lovelace dashboards.
 
 ![Home Assistant crypto dashboard 1](img/ha-dashboard-1.jpg)  
@@ -87,7 +87,7 @@ With the available sensors, you can build beautiful Lovelace dashboards.
 ![Home Assistant crypto dashboard 2](img/ha-dashboard-2.jpg)  
 *Advanced dashboard with history graph, trend indicator, and alerts.*
 
-### 8.3.5 Automation Examples
+### 9.3.5 Automation Examples
 Some ideas for Home Assistant automations:
 - Flash lights on a **BREAKOUT** or **SPIKE**.
 - Play a TTS message on a Google Nest speaker on a **Trend Change**.
@@ -96,7 +96,7 @@ Some ideas for Home Assistant automations:
 ![Home Assistant automation example](img/ha-automation-example.jpg)  
 *Example of an automation that activates a light on a breakout alert.*
 
-## 8.4 Other Integration Options
+## 9.4 Other Integration Options
 - **Node-RED**: Subscribe to the topics and build complex flows.
 - **OpenHAB / Domoticz**: MQTT support available.
 - **Custom scripts**: Use an MQTT client (Python, Node.js) for custom logic.
@@ -105,4 +105,4 @@ With these integrations, your ESP32-Crypto-Alert becomes a full-fledged part of 
 
 ---
 
-*Go to [Chapter 7: Alert Types and Examples](07-Alert-Types-and-Examples.md) | [Chapter 9: Advanced Usage and Customization](09-Advanced-Usage-and-Customization.md)*
+*Go to [Chapter 8: Web UI Settings](08-WebUI-Settings.md) | [Chapter 10: Advanced Usage and Customization](10-Advanced-Usage-and-Customization.md)*

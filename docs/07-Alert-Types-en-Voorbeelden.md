@@ -171,4 +171,4 @@ Door deze alerts te combineren met je eigen analyse, heb je een krachtig hulpmid
 
 ---
 
-*Ga naar [Hoofdstuk 6: Begrip van Kernconcepten](06-Kernconcepten.md) | [Hoofdstuk 8: Integratie met Externe Systemen](08-Integratie-Externe-Systemen.md)*
+*Ga naar [Hoofdstuk 6: Begrip van Kernconcepten](06-Kernconcepten.md) | [Hoofdstuk 8: WebUI-instellingen](08-WebUI-Instellingen.md)*
