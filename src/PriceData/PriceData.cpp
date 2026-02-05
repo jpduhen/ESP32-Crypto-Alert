@@ -60,6 +60,7 @@ extern uint32_t getLastWrittenIndex(uint32_t currentIndex, uint32_t bufferSize);
 extern bool areValidPrices(float price1, float price2);
 // Forward declaration updated: calculateAverage heeft nu currentIndex parameter
 extern float calculateAverage(float *array, uint8_t size, bool filled, uint8_t currentIndex);
+extern uint32_t getLastWrittenIndex(uint32_t currentIndex, uint32_t arraySize);
 
 // Forward declaration voor macro (moet in .ino blijven)
 #ifndef VALUES_FOR_1MIN_RETURN
@@ -72,94 +73,66 @@ extern float calculateAverage(float *array, uint8_t size, bool filled, uint8_t c
 #endif
 
 float PriceData::calculateReturn1Minute(float* averagePrices) {
-    // Fase 4.2.8: Implementeer calculateReturn1Minute() logica direct in PriceData
-    // Gebaseerd op calculateReturnGeneric() maar specifiek voor 1-minuut return
-    // Geoptimaliseerd: geconsolideerde checks, helper voor averagePrices updates
-    
     const float* priceArray = this->getSecondPrices();
     uint16_t arraySize = SECONDS_PER_MINUTE;
     uint16_t currentIndex = this->getSecondIndex();
     bool arrayFilled = this->getSecondArrayFilled();
-    uint16_t positionsAgo = VALUES_FOR_1MIN_RETURN;
-    const char* logPrefix = "[Ret1m]";
-    uint32_t logIntervalMs = 10000;
     uint8_t averagePriceIndex = 1;
     
-    // Helper: Update averagePrices array (geconsolideerd om duplicatie te elimineren)
-    auto updateAveragePrice = [&](float value) {
+    uint16_t count = arrayFilled ? arraySize : currentIndex;
+    if (count < 2) {
         if (averagePrices != nullptr && averagePriceIndex < 3) {
-            averagePrices[averagePriceIndex] = value;
-        }
-    };
-    
-    // Geconsolideerde check: check if we have enough data
-    if (!arrayFilled && currentIndex < positionsAgo) {
-        if (averagePrices != nullptr && averagePriceIndex < 3 && averagePriceIndex == 1 && currentIndex > 0) {
-            averagePrices[1] = calculateAverage(this->getSecondPrices(), SECONDS_PER_MINUTE,
-                                                this->getSecondArrayFilled(), this->getSecondIndex());
-        } else {
-            updateAveragePrice(0.0f);
-        }
-        if (logIntervalMs > 0) {
-            static uint32_t lastLogTime = 0;
-            uint32_t now = millis();
-            if (now - lastLogTime > logIntervalMs) {
-                Serial_printf("%s Wachten op data: index=%u (nodig: %u)\n", logPrefix, currentIndex, positionsAgo);
-                lastLogTime = now;
-            }
+            averagePrices[averagePriceIndex] = 0.0f;
         }
         return 0.0f;
     }
     
-    // Get current price (geconsolideerde logica)
-    float priceNow;
-    if (arrayFilled) {
-        uint16_t lastWrittenIdx = getLastWrittenIndex(currentIndex, arraySize);
-        priceNow = priceArray[lastWrittenIdx];
-    } else {
-        // Geconsolideerde check: early return als currentIndex == 0
-        if (currentIndex == 0) {
-            return 0.0f;
-        }
-        priceNow = priceArray[currentIndex - 1];
+    // Bereken gemiddelde prijs voor weergave
+    if (averagePrices != nullptr && averagePriceIndex < 3) {
+        averagePrices[averagePriceIndex] = calculateAverage(this->getSecondPrices(), arraySize, arrayFilled, currentIndex);
     }
     
-    // Get price X positions ago (geconsolideerde logica)
-    float priceXAgo;
-    if (arrayFilled) {
-        int32_t idxXAgo = getRingBufferIndexAgo(currentIndex, positionsAgo, arraySize);
-        if (idxXAgo < 0) {
-            Serial_printf("%s FATAL: idxXAgo invalid, currentIndex=%u\n", logPrefix, currentIndex);
-            return 0.0f;
+    // Lineaire regressie over de laatste minuut
+    float sumX = 0.0f;
+    float sumY = 0.0f;
+    float sumXY = 0.0f;
+    float sumX2 = 0.0f;
+    uint16_t validPoints = 0;
+    
+    float stepSeconds = 60.0f / (float)SECONDS_PER_MINUTE;
+    uint16_t lastWrittenIdx = arrayFilled ? getLastWrittenIndex(currentIndex, arraySize) : (currentIndex > 0 ? (currentIndex - 1) : 0);
+    uint16_t startIdx = arrayFilled ? ((lastWrittenIdx + arraySize - (count - 1)) % arraySize) : 0;
+    
+    for (uint16_t i = 0; i < count; i++) {
+        uint16_t idx = arrayFilled ? ((startIdx + i) % arraySize) : i;
+        float price = priceArray[idx];
+        if (price <= 0.0f) {
+            continue;
         }
-        priceXAgo = priceArray[idxXAgo];
-    } else {
-        // Geconsolideerde check: early return als niet genoeg data
-        if (currentIndex < positionsAgo) {
-            return 0.0f;
-        }
-        priceXAgo = priceArray[currentIndex - positionsAgo];
+        float x = (float)i * stepSeconds; // tijd in seconden
+        sumX += x;
+        sumY += price;
+        sumXY += x * price;
+        sumX2 += x * x;
+        validPoints++;
     }
     
-    // Validate prices
-    if (!areValidPrices(priceNow, priceXAgo)) {
-        updateAveragePrice(0.0f);
-        Serial_printf("%s ERROR: priceNow=%.2f, priceXAgo=%.2f - invalid!\n", logPrefix, priceNow, priceXAgo);
+    if (validPoints < 2) {
         return 0.0f;
     }
     
-    // Calculate average for display (if requested)
-    if (averagePrices != nullptr && averagePriceIndex < 3 && averagePriceIndex == 1) {
-        // For 1m: use calculateAverage helper
-        // FIX: Geef secondIndex door voor correcte ring buffer iteratie
-        // Note: calculateAverage is extern gedefinieerd in UNIFIED-LVGL9-Crypto_Monitor.ino
-        extern float calculateAverage(float *array, uint8_t size, bool filled, uint8_t currentIndex);
-        averagePrices[1] = calculateAverage(this->getSecondPrices(), SECONDS_PER_MINUTE, this->getSecondArrayFilled(), this->getSecondIndex());
+    float denom = ((float)validPoints * sumX2) - (sumX * sumX);
+    if (fabsf(denom) < 1e-6f) {
+        return 0.0f;
     }
-    
-    // Return percentage: (now - X ago) / X ago * 100
-    float ret1m = ((priceNow - priceXAgo) / priceXAgo) * 100.0f;
-    return ret1m;
+    float slope = (((float)validPoints * sumXY) - (sumX * sumY)) / denom; // prijs per seconde
+    float avgPrice = sumY / (float)validPoints;
+    if (avgPrice <= 0.0f) {
+        return 0.0f;
+    }
+    float slopePerMinute = slope * 60.0f;
+    float pctPerMinute = (slopePerMinute / avgPrice) * 100.0f;
+    return pctPerMinute;
 }
 
 

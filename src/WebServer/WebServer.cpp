@@ -51,6 +51,15 @@ extern float uptrendTakeProfitMultiplier;
 extern float downtrendMaxLossMultiplier;
 extern float downtrendTakeProfitMultiplier;
 extern bool smartConfluenceEnabled;
+extern bool nightModeEnabled;
+extern uint8_t nightModeStartHour;
+extern uint8_t nightModeEndHour;
+extern float nightSpike5mThreshold;
+extern float nightMove5mAlertThreshold;
+extern float nightMove30mThreshold;
+extern uint16_t nightCooldown5mSec;
+extern float nightAutoVolMinMultiplier;
+extern float nightAutoVolMaxMultiplier;
 extern bool warmStartEnabled;
 extern uint8_t warmStart1mExtraCandles;
 extern uint8_t warmStart5mCandles;
@@ -603,6 +612,49 @@ void WebServerModule::renderSettingsHTML() {
     
     sendCheckboxRow(getText("Smart Confluence Mode", "Smart Confluence Mode"), "smartConf", smartConfluenceEnabled);
     
+    sendCheckboxRow(getText("Nachtstand actief", "Night mode enabled"), 
+                   "nightMode", nightModeEnabled);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%u", nightModeStartHour);
+    sendInputRow(getText("Nachtstand start (uur)", "Night mode start (hour)"), "nightStartHour", "number", 
+                 valueBuf, getText("0-23, starttijd voor nachtfilter", "0-23, start time for night filter"), 
+                 0, 23, 1);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%u", nightModeEndHour);
+    sendInputRow(getText("Nachtstand einde (uur)", "Night mode end (hour)"), "nightEndHour", "number", 
+                 valueBuf, getText("0-23, eindtijd voor nachtfilter", "0-23, end time for night filter"), 
+                 0, 23, 1);
+
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", nightSpike5mThreshold);
+    sendInputRow(getText("Nacht: 5m Spike Filter", "Night: 5m Spike Filter"), "nightSpike5m", "number", 
+                 valueBuf, getText("Min 5m return voor 1m spike confirmatie", "Min 5m return for 1m spike confirmation"), 
+                 0.01f, 10.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", nightMove5mAlertThreshold);
+    sendInputRow(getText("Nacht: 5m Move Threshold", "Night: 5m Move Threshold"), "nightMove5m", "number", 
+                 valueBuf, getText("Min 5m return voor move alert (nacht)", "Min 5m return for move alert (night)"), 
+                 0.01f, 10.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", nightMove30mThreshold);
+    sendInputRow(getText("Nacht: 30m Move Threshold", "Night: 30m Move Threshold"), "nightMove30m", "number", 
+                 valueBuf, getText("Min 30m return voor move alert (nacht)", "Min 30m return for move alert (night)"), 
+                 0.01f, 20.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%u", nightCooldown5mSec);
+    sendInputRow(getText("Nacht: 5m Cooldown (sec)", "Night: 5m Cooldown (sec)"), "nightCd5m", "number", 
+                 valueBuf, getText("Cooldown tussen 5m alerts tijdens nacht", "Cooldown between 5m alerts at night"), 
+                 60, 7200, 10);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", nightAutoVolMinMultiplier);
+    sendInputRow(getText("Nacht: Auto-Vol Min", "Night: Auto-Vol Min"), "nightAvMin", "number", 
+                 valueBuf, getText("Minimum volatility multiplier (nacht)", "Minimum volatility multiplier (night)"), 
+                 0.1f, 3.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", nightAutoVolMaxMultiplier);
+    sendInputRow(getText("Nacht: Auto-Vol Max", "Night: Auto-Vol Max"), "nightAvMax", "number", 
+                 valueBuf, getText("Maximum volatility multiplier (nacht)", "Maximum volatility multiplier (night)"), 
+                 0.1f, 5.0f, 0.01f);
+    
     sendCheckboxRow(getText("Auto-Volatility Mode", "Auto-Volatility Mode"), "autoVol", autoVolatilityEnabled);
     
     if (autoVolatilityEnabled) {
@@ -1104,6 +1156,33 @@ void WebServerModule::handleSave() {
     
     // Smart Confluence Mode settings
     smartConfluenceEnabled = server->hasArg("smartConf");
+    
+    // Nachtstand settings
+    nightModeEnabled = server->hasArg("nightMode");
+    if (parseIntArg("nightStartHour", intVal, 0, 23)) {
+        nightModeStartHour = static_cast<uint8_t>(intVal);
+    }
+    if (parseIntArg("nightEndHour", intVal, 0, 23)) {
+        nightModeEndHour = static_cast<uint8_t>(intVal);
+    }
+    if (parseFloatArg("nightSpike5m", floatVal, 0.01f, 10.0f)) {
+        nightSpike5mThreshold = floatVal;
+    }
+    if (parseFloatArg("nightMove5m", floatVal, 0.01f, 10.0f)) {
+        nightMove5mAlertThreshold = floatVal;
+    }
+    if (parseFloatArg("nightMove30m", floatVal, 0.01f, 20.0f)) {
+        nightMove30mThreshold = floatVal;
+    }
+    if (parseIntArg("nightCd5m", intVal, 60, 7200)) {
+        nightCooldown5mSec = static_cast<uint16_t>(intVal);
+    }
+    if (parseFloatArg("nightAvMin", floatVal, 0.1f, 3.0f)) {
+        nightAutoVolMinMultiplier = floatVal;
+    }
+    if (parseFloatArg("nightAvMax", floatVal, 0.1f, 5.0f)) {
+        nightAutoVolMaxMultiplier = floatVal;
+    }
     
     // Warm-Start settings - geoptimaliseerd: gebruik helper functie
     warmStartEnabled = server->hasArg("warmStart");

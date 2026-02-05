@@ -37,6 +37,18 @@ extern bool isValidPrice(float price);  // Voor price validatie
 void getFormattedTimestamp(char* buffer, size_t bufferSize);  // Fase 6.1.4: Voor formatNotificationMessage
 void getFormattedTimestampForNotification(char* buffer, size_t bufferSize);  // Nieuwe functie voor notificaties met slash formaat
 extern bool smartConfluenceEnabled;  // Fase 6.1.9: Voor checkAndSendConfluenceAlert
+extern bool nightModeEnabled;
+extern uint8_t nightModeStartHour;
+extern uint8_t nightModeEndHour;
+extern bool autoVolatilityEnabled;
+extern float autoVolatilityMinMultiplier;
+extern float autoVolatilityMaxMultiplier;
+extern float nightSpike5mThreshold;
+extern float nightMove5mAlertThreshold;
+extern float nightMove30mThreshold;
+extern uint16_t nightCooldown5mSec;
+extern float nightAutoVolMinMultiplier;
+extern float nightAutoVolMaxMultiplier;
 void safeStrncpy(char *dest, const char *src, size_t destSize);  // FASE X.5: Voor coalescing
 extern KlineMetrics lastKline1m;
 extern KlineMetrics lastKline5m;
@@ -74,6 +86,7 @@ extern NotificationCooldowns notificationCooldowns;
 #define VOLUME_EVENT_COOLDOWN_MS 120000UL
 #define VOLUME_EMA_WINDOW_1M 20
 #define VOLUME_EMA_WINDOW_5M 20
+// Nachtstand thresholds (instelbaar)
 
 // Forward declaration voor Serial_printf macro
 #ifndef Serial_printf
@@ -397,6 +410,37 @@ static inline bool trendSupportsDirection(EventDirection direction)
     return false;
 }
 
+// Helper: Check if night window is active (23:00-07:00)
+static inline bool isNightModeWindowActive()
+{
+    tm timeinfo;
+    if (!getLocalTime(&timeinfo)) {
+        return false;
+    }
+    int hour = timeinfo.tm_hour;
+    uint8_t startHour = nightModeStartHour;
+    uint8_t endHour = nightModeEndHour;
+    if (startHour > 23) startHour = 23;
+    if (endHour > 23) endHour = 23;
+    if (startHour == endHour) {
+        return true;  // 24h actief
+    }
+    if (startHour < endHour) {
+        return (hour >= startHour && hour < endHour);
+    }
+    return (hour >= startHour || hour < endHour);
+}
+
+// Helper: Nachtstand filter voor 5m alerts (richting-match met 30m)
+static inline bool nightModeAllows5mMove(float ret5m, float ret30m)
+{
+    if (!nightModeEnabled) return true;
+    if (!isNightModeWindowActive()) return true;
+    if (ret5m > 0.0f) return (ret30m >= 0.0f);
+    if (ret5m < 0.0f) return (ret30m <= 0.0f);
+    return true;
+}
+
 // Check for confluence and send combined alert if found
 // Fase 6.1.9: Verplaatst naar AlertEngine (parallel implementatie)
 // Geoptimaliseerd: early returns, minder checks
@@ -638,6 +682,23 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         return;
     }
     
+    // Nachtstand overrides (alleen thresholds, geen algoritme)
+    bool nightActive = nightModeEnabled && isNightModeWindowActive();
+    float spike5mThreshold = nightActive ? nightSpike5mThreshold : alertThresholds.spike5m;
+    float baseMove5mAlert = nightActive ? nightMove5mAlertThreshold : alertThresholds.move5mAlert;
+    float baseMove30m = nightActive ? nightMove30mThreshold : alertThresholds.move30m;
+    uint32_t cooldown5mMs = nightActive ? (static_cast<uint32_t>(nightCooldown5mSec) * 1000UL) : notificationCooldowns.cooldown5MinMs;
+    
+    // Nachtstand: forceer auto-volatility + min/max
+    bool autoVolEnabledOriginal = autoVolatilityEnabled;
+    float autoVolMinOriginal = autoVolatilityMinMultiplier;
+    float autoVolMaxOriginal = autoVolatilityMaxMultiplier;
+    if (nightActive) {
+        autoVolatilityEnabled = true;
+        autoVolatilityMinMultiplier = nightAutoVolMinMultiplier;
+        autoVolatilityMaxMultiplier = nightAutoVolMaxMultiplier;
+    }
+    
     // Update volatility window met nieuwe 1m return (Auto-Volatility Mode)
     if (ret_1m != 0.0f) {
         volatilityTracker.updateVolatilityWindow(ret_1m);
@@ -647,8 +708,15 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
     // Fase 6.1.10: Gebruik struct velden direct i.p.v. #define macros
     EffectiveThresholds effThresh = volatilityTracker.calculateEffectiveThresholds(
         alertThresholds.spike1m, 
-        alertThresholds.move5mAlert, 
-        alertThresholds.move30m);
+        baseMove5mAlert, 
+        baseMove30m);
+    
+    // Restore auto-volatility globals als nachtstand overrides actief waren
+    if (nightActive) {
+        autoVolatilityEnabled = autoVolEnabledOriginal;
+        autoVolatilityMinMultiplier = autoVolMinOriginal;
+        autoVolatilityMaxMultiplier = autoVolMaxOriginal;
+    }
     
     // Log volatility status (voor debug) - alleen als DEBUG_BUTTON_ONLY niet actief is
     #if !DEBUG_BUTTON_ONLY
@@ -679,7 +747,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         float absRet5m = cachedAbsRet5m;
         
         // Early return: check thresholds eerst (sneller)
-        if (absRet1m < effThresh.spike1m || absRet5m < alertThresholds.spike5m) {
+        if (absRet1m < effThresh.spike1m || absRet5m < spike5mThreshold) {
             // Thresholds niet gehaald, skip rest
         } else {
         // Check of beide in dezelfde richting zijn (beide positief of beide negatief)
@@ -921,6 +989,10 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             #if !DEBUG_BUTTON_ONLY
                             Serial_printf(F("[Notify] 5m move onderdrukt (volume-event cooldown)\n"));
                             #endif
+                } else if (!nightModeAllows5mMove(ret_5m, ret_30m)) {
+                            #if !DEBUG_BUTTON_ONLY
+                            Serial_printf(F("[Notify] 5m move onderdrukt (nachtstand, 30m richting mismatch)\n"));
+                            #endif
                 } else {
                             // Bereken min en max uit fiveMinutePrices buffer (geoptimaliseerde versie)
                             float minVal, maxVal;
@@ -953,7 +1025,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             snprintf(titleBuffer, sizeof(titleBuffer), "%s 5m %s", bitvavoSymbol, getText("Move", "Move"));
                     
                     // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
-                    if (checkAlertConditions(now, lastNotification5Min, notificationCooldowns.cooldown5MinMs, 
+                    if (checkAlertConditions(now, lastNotification5Min, cooldown5mMs, 
                                              alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR, "5m move")) {
                                 bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
                                 if (sent) {

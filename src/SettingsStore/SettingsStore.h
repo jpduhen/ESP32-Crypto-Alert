@@ -159,6 +159,17 @@ struct CryptoMonitorSettings {
     
     // Smart Confluence Mode
     bool smartConfluenceEnabled;
+
+    // Nachtstand (filter 5m alerts in nachtwindow)
+    bool nightModeEnabled;
+    uint8_t nightModeStartHour;
+    uint8_t nightModeEndHour;
+    float nightSpike5mThreshold;
+    float nightMove5mAlertThreshold;
+    float nightMove30mThreshold;
+    uint16_t nightCooldown5mSec;
+    float nightAutoVolMinMultiplier;
+    float nightAutoVolMaxMultiplier;
     
     // Warm-Start settings
     bool warmStartEnabled;
@@ -237,6 +248,15 @@ private:
     static const char* PREF_KEY_DOWN_ML_MULT;
     static const char* PREF_KEY_DOWN_TP_MULT;
     static const char* PREF_KEY_SMART_CONF;
+    static const char* PREF_KEY_NIGHT_MODE;
+    static const char* PREF_KEY_NIGHT_START_HOUR;
+    static const char* PREF_KEY_NIGHT_END_HOUR;
+    static const char* PREF_KEY_NIGHT_SPIKE5M;
+    static const char* PREF_KEY_NIGHT_MOVE5M;
+    static const char* PREF_KEY_NIGHT_MOVE30M;
+    static const char* PREF_KEY_NIGHT_CD5M;
+    static const char* PREF_KEY_NIGHT_AV_MIN;
+    static const char* PREF_KEY_NIGHT_AV_MAX;
     static const char* PREF_KEY_WARM_START;
     static const char* PREF_KEY_WS1M_EXTRA;
     static const char* PREF_KEY_WS5M;

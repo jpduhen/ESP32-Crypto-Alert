@@ -128,6 +128,13 @@ extern lv_obj_t *ramLabel;
 extern TrendDetector trendDetector;
 extern bool hasRet2h;
 extern bool hasRet30m;
+extern bool hasRet1d;
+extern bool hasRet7d;
+extern bool warmStart1dValid;
+extern bool warmStart7dValid;
+extern bool warmStart1dUsingFallback;
+extern bool warmStart2hUsingFallback;
+extern bool warmStart7dUsingFallback;
 extern bool hasRet2hWarm;
 extern bool hasRet30mWarm;
 extern bool hasRet2hLive;
@@ -135,6 +142,10 @@ extern bool hasRet30mLive;
 extern uint8_t language;
 extern bool minuteArrayFilled;
 extern uint8_t minuteIndex;
+extern float lastFetchedPrice;
+extern float *hourlyAverages;
+extern bool hourArrayFilled;
+extern uint16_t hourIndex;
 extern uint8_t calcLivePctMinuteAverages(uint16_t windowMinutes);
 extern const char* getText(const char* nlText, const char* enText);
 // MINUTES_FOR_30MIN_CALC is een #define, niet een variabele
@@ -181,9 +192,13 @@ extern uint8_t secondIndex;
 extern float averagePrices[];
 extern void findMinMaxInSecondPrices(float &minVal, float &maxVal);
 extern void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
 extern void findMinMaxInLast2Hours(float &minVal, float &maxVal);
 #endif
+extern bool computeStatsLast24Hours(float &avgVal, float &minVal, float &maxVal);
+extern bool computeStatsLast2Hours(float &avgVal, float &minVal, float &maxVal);
+extern bool computeStatsLast7Days(float &avgVal, float &minVal, float &maxVal);
+extern bool computeStatsLast2Hours(float &avgVal, float &minVal, float &maxVal);
 extern lv_obj_t *price1MinMaxLabel;
 extern lv_obj_t *price1MinMinLabel;
 extern lv_obj_t *price1MinDiffLabel;
@@ -193,6 +208,12 @@ extern lv_obj_t *price30MinDiffLabel;
 extern lv_obj_t *price2HMaxLabel;
 extern lv_obj_t *price2HMinLabel;
 extern lv_obj_t *price2HDiffLabel;
+extern lv_obj_t *price1DMaxLabel;
+extern lv_obj_t *price1DMinLabel;
+extern lv_obj_t *price1DDiffLabel;
+extern lv_obj_t *price7DMaxLabel;
+extern lv_obj_t *price7DMinLabel;
+extern lv_obj_t *price7DDiffLabel;
 extern char priceTitleBuffer[SYMBOL_COUNT][40];  // Verkleind van 48 naar 40 bytes
 extern char price1MinMaxLabelBuffer[18];
 extern char price1MinMinLabelBuffer[18];
@@ -201,6 +222,12 @@ extern char price30MinMaxLabelBuffer[18];
 extern char price2HMaxLabelBuffer[20];
 extern char price2HMinLabelBuffer[20];
 extern char price2HDiffLabelBuffer[20];
+extern char price1DMaxLabelBuffer[20];
+extern char price1DMinLabelBuffer[20];
+extern char price1DDiffLabelBuffer[20];
+extern char price7DMaxLabelBuffer[20];
+extern char price7DMinLabelBuffer[20];
+extern char price7DDiffLabelBuffer[20];
 extern char price30MinMinLabelBuffer[20];
 extern char price30MinDiffLabelBuffer[32];
 extern float lastPrice1MinMaxValue;
@@ -212,6 +239,12 @@ extern float lastPrice30MinDiffValue;
 extern float lastPrice2HMaxValue;
 extern float lastPrice2HMinValue;
 extern float lastPrice2HDiffValue;
+extern float lastPrice1DMaxValue;
+extern float lastPrice1DMinValue;
+extern float lastPrice1DDiffValue;
+extern float lastPrice7DMaxValue;
+extern float lastPrice7DMinValue;
+extern float lastPrice7DDiffValue;
 extern char lastPriceTitleText[SYMBOL_COUNT][32];  // Verkleind van 48 naar 32 bytes
 extern char priceLblBufferArray[SYMBOL_COUNT][24];
 extern float lastPriceLblValueArray[SYMBOL_COUNT];
@@ -359,7 +392,11 @@ void UIController::createChart() {
     ::chart = chart;  // Fase 8.4.3: Synchroniseer met globale pointer voor backward compatibility
     lv_chart_set_point_count(chart, POINTS_TO_CHART);
     lv_obj_set_size(chart, CHART_WIDTH, CHART_HEIGHT);
+    #if defined(PLATFORM_ESP32S3_4848S040)
+    lv_obj_align(chart, LV_ALIGN_TOP_LEFT, 0, CHART_ALIGN_Y);
+    #else
     lv_obj_align(chart, LV_ALIGN_TOP_MID, 0, CHART_ALIGN_Y);
+    #endif
     lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
     disableScroll(chart);
     
@@ -425,7 +462,7 @@ void UIController::createChart() {
     lv_label_set_text(longTermTrendLabel, "--");
     
     // Platform-specifieke layout voor chart title
-    #if !defined(PLATFORM_TTGO) && !defined(PLATFORM_ESP32S3_SUPERMINI) && !defined(PLATFORM_ESP32S3_GEEK)
+    #if !defined(PLATFORM_TTGO) && !defined(PLATFORM_ESP32S3_SUPERMINI) && !defined(PLATFORM_ESP32S3_GEEK) && !defined(PLATFORM_ESP32S3_4848S040)
     chartTitle = lv_label_create(lv_scr_act());
     ::chartTitle = chartTitle;  // Fase 8.4.3: Synchroniseer met globale pointer
     lv_obj_set_style_text_font(chartTitle, &lv_font_montserrat_16, 0);
@@ -455,9 +492,7 @@ void UIController::createHeaderLabels() {
     lv_obj_set_style_text_font(chartBeginLettersLabel, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(chartBeginLettersLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
     lv_obj_set_style_text_align(chartBeginLettersLabel, LV_TEXT_ALIGN_LEFT, 0);
-    char deviceIdBuffer[16];
-    getDeviceIdFromTopic(ntfyTopic, deviceIdBuffer, sizeof(deviceIdBuffer));
-    lv_label_set_text(chartBeginLettersLabel, deviceIdBuffer);
+    lv_label_set_text(chartBeginLettersLabel, ntfyTopic);
     lv_obj_set_pos(chartBeginLettersLabel, 0, 2);
     
     chartTimeLabel = lv_label_create(lv_scr_act());
@@ -484,9 +519,7 @@ void UIController::createHeaderLabels() {
     lv_obj_set_style_text_font(chartBeginLettersLabel, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(chartBeginLettersLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
     lv_obj_set_style_text_align(chartBeginLettersLabel, LV_TEXT_ALIGN_LEFT, 0);
-    char deviceIdBuffer[16];
-    getDeviceIdFromTopic(ntfyTopic, deviceIdBuffer, sizeof(deviceIdBuffer));
-    lv_label_set_text(chartBeginLettersLabel, deviceIdBuffer);
+    lv_label_set_text(chartBeginLettersLabel, ntfyTopic);
     lv_obj_set_pos(chartBeginLettersLabel, 0, 2);
     
     chartTimeLabel = lv_label_create(lv_scr_act());
@@ -497,6 +530,71 @@ void UIController::createHeaderLabels() {
     lv_label_set_text(chartTimeLabel, "--:--:--");
     lv_obj_set_width(chartTimeLabel, 240);
     lv_obj_set_pos(chartTimeLabel, 0, 4);
+    #elif defined(PLATFORM_ESP32S3_4848S040)
+    chartDateLabel = lv_label_create(lv_scr_act());
+    ::chartDateLabel = chartDateLabel;  // Fase 8.4.3: Synchroniseer
+    lv_obj_set_style_text_font(chartDateLabel, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(chartDateLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_align(chartDateLabel, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_text(chartDateLabel, "-- -- --");
+    lv_obj_set_width(chartDateLabel, 240);
+    lv_obj_set_pos(chartDateLabel, 240, 0);
+    
+    chartBeginLettersLabel = lv_label_create(lv_scr_act());
+    ::chartBeginLettersLabel = chartBeginLettersLabel;  // Fase 8.4.3: Synchroniseer
+    lv_obj_set_style_text_font(chartBeginLettersLabel, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(chartBeginLettersLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_align(chartBeginLettersLabel, LV_TEXT_ALIGN_LEFT, 0);
+    lv_label_set_text(chartBeginLettersLabel, ntfyTopic);
+    lv_obj_set_width(chartBeginLettersLabel, 240);
+    lv_label_set_long_mode(chartBeginLettersLabel, LV_LABEL_LONG_CLIP);
+    lv_obj_set_pos(chartBeginLettersLabel, 0, 2);
+    
+    chartTimeLabel = lv_label_create(lv_scr_act());
+    ::chartTimeLabel = chartTimeLabel;  // Fase 8.4.3: Synchroniseer
+    lv_obj_set_style_text_font(chartTimeLabel, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(chartTimeLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_align(chartTimeLabel, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_text(chartTimeLabel, "--:--:--");
+    lv_obj_set_width(chartTimeLabel, 240);
+    lv_obj_set_pos(chartTimeLabel, 240, 16);
+    #elif defined(PLATFORM_ESP32S3_4848S040)
+    // 4848S040: footer in twee kolommen (links info, rechts versie)
+    lblFooterLine1 = lv_label_create(lv_scr_act());
+    ::lblFooterLine1 = lblFooterLine1;  // Fase 8.4.3: Synchroniseer
+    lv_obj_set_style_text_font(lblFooterLine1, FONT_SIZE_FOOTER, 0);
+    lv_obj_set_style_text_color(lblFooterLine1, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_align(lblFooterLine1, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_width(lblFooterLine1, 240);
+    lv_obj_set_pos(lblFooterLine1, 0, LV_VER_RES - 36);
+    lv_label_set_text(lblFooterLine1, "--dBm");
+    
+    ramLabel = lv_label_create(lv_scr_act());
+    ::ramLabel = ramLabel;  // Fase 8.4.3: Synchroniseer
+    lv_obj_set_style_text_font(ramLabel, FONT_SIZE_FOOTER, 0);
+    lv_obj_set_style_text_color(ramLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_align(ramLabel, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_width(ramLabel, 240);
+    lv_obj_set_pos(ramLabel, 240, LV_VER_RES - 36);
+    lv_label_set_text(ramLabel, "--kB");
+    
+    lblFooterLine2 = lv_label_create(lv_scr_act());
+    ::lblFooterLine2 = lblFooterLine2;  // Fase 8.4.3: Synchroniseer
+    lv_obj_set_style_text_font(lblFooterLine2, FONT_SIZE_FOOTER, 0);
+    lv_obj_set_style_text_color(lblFooterLine2, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_align(lblFooterLine2, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_width(lblFooterLine2, 240);
+    lv_obj_set_pos(lblFooterLine2, 0, LV_VER_RES - 18);
+    lv_label_set_text(lblFooterLine2, "--.--.--.--");
+    
+    chartVersionLabel = lv_label_create(lv_scr_act());
+    ::chartVersionLabel = chartVersionLabel;  // Fase 8.4.3: Synchroniseer
+    lv_obj_set_style_text_font(chartVersionLabel, FONT_SIZE_FOOTER, 0);
+    lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_width(chartVersionLabel, 240);
+    lv_obj_set_pos(chartVersionLabel, 240, LV_VER_RES - 18);
+    lv_label_set_text(chartVersionLabel, VERSION_STRING);
     #else
     // CYD: Ruimere layout met datum/tijd op verschillende posities
     chartDateLabel = lv_label_create(lv_scr_act());
@@ -525,7 +623,11 @@ void UIController::createPriceBoxes() {
     {
         priceBox[i] = lv_obj_create(lv_scr_act());
         ::priceBox[i] = priceBox[i];  // Fase 8.4.3: Synchroniseer met globale pointer
+        #if defined(PLATFORM_ESP32S3_4848S040)
+        lv_obj_set_size(priceBox[i], 240, LV_SIZE_CONTENT);
+        #else
         lv_obj_set_size(priceBox[i], LV_PCT(100), LV_SIZE_CONTENT);
+        #endif
 
         if (i == 0) {
             lv_obj_align(priceBox[i], LV_ALIGN_TOP_LEFT, 0, PRICE_BOX_Y_START);
@@ -595,6 +697,14 @@ void UIController::createPriceBoxes() {
             lv_obj_set_style_text_align(anchorMinLabel, LV_TEXT_ALIGN_RIGHT, 0);
             lv_obj_align(anchorMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
             lv_label_set_text(anchorMinLabel, "");
+            
+            // Forceer refresh van anchor-labels na UI rebuild
+            lastAnchorMaxValue = -1.0f;
+            lastAnchorValue = -1.0f;
+            lastAnchorMinValue = -1.0f;
+            anchorMaxLabelBuffer[0] = '\0';
+            anchorLabelBuffer[0] = '\0';
+            anchorMinLabelBuffer[0] = '\0';
         }
         #else
         if (i == 0) {
@@ -630,6 +740,14 @@ void UIController::createPriceBoxes() {
             lv_obj_set_style_text_align(anchorMinLabel, LV_TEXT_ALIGN_RIGHT, 0);
             lv_obj_align(anchorMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
             lv_label_set_text(anchorMinLabel, "");
+            
+            // Forceer refresh van anchor-labels na UI rebuild
+            lastAnchorMaxValue = -1.0f;
+            lastAnchorValue = -1.0f;
+            lastAnchorMinValue = -1.0f;
+            anchorMaxLabelBuffer[0] = '\0';
+            anchorLabelBuffer[0] = '\0';
+            anchorMinLabelBuffer[0] = '\0';
         }
         #endif
         
@@ -692,7 +810,7 @@ void UIController::createPriceBoxes() {
         }
         
         // Min/Max/Diff labels voor 2h blok (index 3) - alleen voor CYD platforms
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
         if (i == 3)
         {
             // Initialiseer buffers
@@ -723,6 +841,77 @@ void UIController::createPriceBoxes() {
             lv_obj_set_style_text_align(price2HMinLabel, LV_TEXT_ALIGN_RIGHT, 0);
             lv_label_set_text(price2HMinLabel, price2HMinLabelBuffer);
             lv_obj_align(price2HMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
+        }
+        #endif
+        
+        // Min/Max/Diff labels voor 1d blok (index 4) - alleen voor 4848S040
+        #if defined(PLATFORM_ESP32S3_4848S040)
+        if (i == 4)
+        {
+            lastPrice1DMaxValue = -1.0f;
+            lastPrice1DMinValue = -1.0f;
+            lastPrice1DDiffValue = -1.0f;
+            strcpy(price1DMaxLabelBuffer, "--");
+            strcpy(price1DDiffLabelBuffer, "--");
+            strcpy(price1DMinLabelBuffer, "--");
+            
+            price1DMaxLabel = lv_label_create(priceBox[i]);
+            ::price1DMaxLabel = price1DMaxLabel;
+            lv_obj_set_style_text_font(price1DMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price1DMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
+            lv_obj_set_style_text_align(price1DMaxLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price1DMaxLabel, price1DMaxLabelBuffer);
+            lv_obj_align(price1DMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14);
+            
+            price1DDiffLabel = lv_label_create(priceBox[i]);
+            ::price1DDiffLabel = price1DDiffLabel;
+            lv_obj_set_style_text_font(price1DDiffLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price1DDiffLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_text_align(price1DDiffLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price1DDiffLabel, price1DDiffLabelBuffer);
+            lv_obj_align(price1DDiffLabel, LV_ALIGN_RIGHT_MID, 0, 0);
+            
+            price1DMinLabel = lv_label_create(priceBox[i]);
+            ::price1DMinLabel = price1DMinLabel;
+            lv_obj_set_style_text_font(price1DMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price1DMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
+            lv_obj_set_style_text_align(price1DMinLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price1DMinLabel, price1DMinLabelBuffer);
+            lv_obj_align(price1DMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
+        }
+
+        if (i == 5)
+        {
+            lastPrice7DMaxValue = -1.0f;
+            lastPrice7DMinValue = -1.0f;
+            lastPrice7DDiffValue = -1.0f;
+            strcpy(price7DMaxLabelBuffer, "--");
+            strcpy(price7DDiffLabelBuffer, "--");
+            strcpy(price7DMinLabelBuffer, "--");
+            
+            price7DMaxLabel = lv_label_create(priceBox[i]);
+            ::price7DMaxLabel = price7DMaxLabel;
+            lv_obj_set_style_text_font(price7DMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price7DMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
+            lv_obj_set_style_text_align(price7DMaxLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price7DMaxLabel, price7DMaxLabelBuffer);
+            lv_obj_align(price7DMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14);
+            
+            price7DDiffLabel = lv_label_create(priceBox[i]);
+            ::price7DDiffLabel = price7DDiffLabel;
+            lv_obj_set_style_text_font(price7DDiffLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price7DDiffLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_text_align(price7DDiffLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price7DDiffLabel, price7DDiffLabelBuffer);
+            lv_obj_align(price7DDiffLabel, LV_ALIGN_RIGHT_MID, 0, 0);
+            
+            price7DMinLabel = lv_label_create(priceBox[i]);
+            ::price7DMinLabel = price7DMinLabel;
+            lv_obj_set_style_text_font(price7DMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price7DMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
+            lv_obj_set_style_text_align(price7DMinLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price7DMinLabel, price7DMinLabelBuffer);
+            lv_obj_align(price7DMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
         }
         #endif
     }
@@ -931,6 +1120,12 @@ static void resetUiPointers() {
     ::price2HMaxLabel = nullptr;
     ::price2HDiffLabel = nullptr;
     ::price2HMinLabel = nullptr;
+    ::price1DMaxLabel = nullptr;
+    ::price1DDiffLabel = nullptr;
+    ::price1DMinLabel = nullptr;
+    ::price7DMaxLabel = nullptr;
+    ::price7DDiffLabel = nullptr;
+    ::price7DMinLabel = nullptr;
     ::ipLabel = nullptr;
     ::chartVersionLabel = nullptr;
     ::lblFooterLine1 = nullptr;
@@ -1494,19 +1689,41 @@ void UIController::updateAveragePriceCard(uint8_t index)
 {
     // Fase 8.6.2: Gebruik globale pointers (synchroniseert met module pointers)
     float pct = prices[index];
+    float currentPrice = (lastFetchedPrice > 0.0f) ? lastFetchedPrice : prices[0];
+    auto applyLiveMinMax = [&](float &minVal, float &maxVal) {
+        if (currentPrice > 0.0f) {
+            if (minVal <= 0.0f || currentPrice < minVal) minVal = currentPrice;
+            if (maxVal <= 0.0f || currentPrice > maxVal) maxVal = currentPrice;
+        }
+    };
     // 1m heeft 30 samples nodig bij 2000ms interval
     bool hasData1m = (index == 1) ? (secondArrayFilled || secondIndex >= 30) : true;
     // Voor 30m box: gebruik hasRet30m (inclusief warm-start) OF 30+ minuten live data
     bool hasData30m = (index == 2) ? (hasRet30m || (minuteArrayFilled || minuteIndex >= 30)) : true;
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
     // Voor 2h box: gebruik warm-start data OF live data (minuteIndex >= 2 voor minimal, >= 120 voor volledig)
     bool hasData2h = (index == 3) ? (hasRet2h || (minuteArrayFilled || minuteIndex >= 120)) : true;
     bool hasData2hMinimal = (index == 3) ? (hasRet2h || (minuteArrayFilled || minuteIndex >= 2)) : true;  // Warm-start OF minimaal 2 minuten live data
-    bool hasData = (index == 1) ? hasData1m : ((index == 2) ? hasData30m : ((index == 3) ? hasData2hMinimal : true));
+    #if defined(PLATFORM_ESP32S3_4848S040)
+    bool hasData1dMinimal = (index == 4)
+        ? (warmStart1dValid || hasRet1d || (hourlyAverages != nullptr && (hourArrayFilled || hourIndex >= 2)))
+        : true;
+    bool hasData7dMinimal = (index == 5)
+        ? (warmStart7dValid || hasRet7d || (hourlyAverages != nullptr && (hourArrayFilled || hourIndex >= 2)))
+        : true;
+    #endif
+    bool hasData = (index == 1) ? hasData1m :
+                   (index == 2) ? hasData30m :
+                   (index == 3) ? hasData2hMinimal :
+                   #if defined(PLATFORM_ESP32S3_4848S040)
+                   (index == 4) ? hasData1dMinimal :
+                   (index == 5) ? hasData7dMinimal :
+                   #endif
+                   true;
     
     // Debug voor 2h box: alleen loggen wanneer waarde verandert
     if (index == 3) {
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
         #if !DEBUG_BUTTON_ONLY
         static float lastLoggedPct2h = -999.0f;
         static bool lastLoggedHasData2h = false;
@@ -1521,6 +1738,25 @@ void UIController::updateAveragePriceCard(uint8_t index)
         #endif
         #endif
     }
+    #if defined(PLATFORM_ESP32S3_4848S040)
+    // Debug voor 1d/7d box: alleen loggen wanneer data-status verandert
+    if (index == 4 || index == 5) {
+        static bool lastHasData1d = false;
+        static bool lastHasData7d = false;
+        bool curHasData1d = (index == 4) ? hasData1dMinimal : lastHasData1d;
+        bool curHasData7d = (index == 5) ? hasData7dMinimal : lastHasData7d;
+        if (index == 4 && curHasData1d != lastHasData1d) {
+            Serial.printf("[UI] 1d box: hasData=%d, hasRet1d=%d, wsValid=%d, hourIdx=%u\n",
+                          curHasData1d ? 1 : 0, hasRet1d ? 1 : 0, warmStart1dValid ? 1 : 0, hourIndex);
+            lastHasData1d = curHasData1d;
+        }
+        if (index == 5 && curHasData7d != lastHasData7d) {
+            Serial.printf("[UI] 7d box: hasData=%d, hasRet7d=%d, wsValid=%d, hourIdx=%u\n",
+                          curHasData7d ? 1 : 0, hasRet7d ? 1 : 0, warmStart7dValid ? 1 : 0, hourIndex);
+            lastHasData7d = curHasData7d;
+        }
+    }
+    #endif
     #else
     bool hasData = (index == 1) ? hasData1m : ((index == 2) ? hasData30m : true);
     #endif
@@ -1528,14 +1764,19 @@ void UIController::updateAveragePriceCard(uint8_t index)
     if (!hasData) {
         pct = 0.0f;
     }
+
     
     if (::priceTitle[index] != nullptr) {
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
         // Voor 2h box: toon percentage als er minimaal 2 minuten data zijn (hasData2hMinimal)
         // Voor 30m box: toon percentage als er data is (hasRet30m of 30+ minuten)
         // Voor 1m box: toon alleen als pct != 0.0f
-        bool shouldShowPct = (index == 3) ? (hasData2hMinimal) : 
-                             (index == 2) ? (hasData30m) : 
+        bool shouldShowPct = (index == 3) ? (hasData2hMinimal) :
+                             #if defined(PLATFORM_ESP32S3_4848S040)
+                             (index == 4) ? (hasData1dMinimal) :
+                             (index == 5) ? (hasData7dMinimal) :
+                             #endif
+                             (index == 2) ? (hasData30m) :
                              (hasData1m);
         if (shouldShowPct) {  // Voor 2h en 30m box: toon percentage altijd als er data is (ook als 0.00%)
         #else
@@ -1545,11 +1786,29 @@ void UIController::updateAveragePriceCard(uint8_t index)
         #endif
             // Format nieuwe tekst
             char newText[32];  // Verkleind van 48 naar 32 bytes (max: "30 min  +12.34%" = ~20 chars)
-            if (pct == 0.0f && (index == 3 || index == 2)) {
-                // Voor 2h en 30m box: toon 0.00% als de return 0 is
-                snprintf(newText, sizeof(newText), "%s  0.00%%", symbols[index]);
+            const char* label = symbols[index];
+            #if defined(PLATFORM_ESP32S3_4848S040)
+            char labelBuf[8];
+            if (index == 4 && warmStart1dUsingFallback) {
+                snprintf(labelBuf, sizeof(labelBuf), "1d WS");
+                label = labelBuf;
+            } else if (index == 3 && warmStart2hUsingFallback) {
+                snprintf(labelBuf, sizeof(labelBuf), "2h WS");
+                label = labelBuf;
+            } else if (index == 5 && warmStart7dUsingFallback) {
+                snprintf(labelBuf, sizeof(labelBuf), "7d WS");
+                label = labelBuf;
+            }
+            #endif
+            if (pct == 0.0f && (index == 3 || index == 2
+                #if defined(PLATFORM_ESP32S3_4848S040)
+                || index == 4 || index == 5
+                #endif
+                )) {
+                // Voor 2h/30m/1d box: toon 0.00% als de return 0 is
+                snprintf(newText, sizeof(newText), "%s  0.00%%", label);
             } else {
-                snprintf(newText, sizeof(newText), "%s  %c%.2f%%", symbols[index], pct >= 0 ? '+' : '-', fabsf(pct));
+                snprintf(newText, sizeof(newText), "%s  %c%.2f%%", label, pct >= 0 ? '+' : '-', fabsf(pct));
             }
             // Update alleen als tekst veranderd is
             if (strcmp(lastPriceTitleText[index], newText) != 0) {
@@ -1575,6 +1834,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
     {
         float minVal, maxVal;
         findMinMaxInSecondPrices(minVal, maxVal);
+        applyLiveMinMax(minVal, maxVal);
         
         float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
         // Geoptimaliseerd: gebruik helper functie i.p.v. gedupliceerde code
@@ -1588,6 +1848,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
     {
         float minVal, maxVal;
         findMinMaxInLast30Minutes(minVal, maxVal);
+        applyLiveMinMax(minVal, maxVal);
         
         float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
         // Geoptimaliseerd: gebruik helper functie i.p.v. gedupliceerde code
@@ -1597,18 +1858,68 @@ void UIController::updateAveragePriceCard(uint8_t index)
                               lastPrice30MinMaxValue, lastPrice30MinMinValue, lastPrice30MinDiffValue);
     }
     
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
     if (index == 3 && ::price2HMaxLabel != nullptr && ::price2HMinLabel != nullptr && ::price2HDiffLabel != nullptr)
     {
-        float minVal, maxVal;
+        float minVal = 0.0f;
+        float maxVal = 0.0f;
+        float avg2h = 0.0f;
+        #if defined(PLATFORM_ESP32S3_4848S040)
+        bool ok = computeStatsLast2Hours(avg2h, minVal, maxVal);
+        if (ok) {
+            averagePrices[3] = avg2h;
+        }
+        #else
+        bool ok = true;
         findMinMaxInLast2Hours(minVal, maxVal);
-        
-        float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
-        // Geoptimaliseerd: gebruik helper functie i.p.v. gedupliceerde code
-        updateMinMaxDiffLabels(::price2HMaxLabel, ::price2HMinLabel, ::price2HDiffLabel,
-                              price2HMaxLabelBuffer, price2HMinLabelBuffer, price2HDiffLabelBuffer,
-                              maxVal, minVal, diff,
-                              lastPrice2HMaxValue, lastPrice2HMinValue, lastPrice2HDiffValue);
+        #endif
+        if (ok) {
+            applyLiveMinMax(minVal, maxVal);
+            float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
+            // Geoptimaliseerd: gebruik helper functie i.p.v. gedupliceerde code
+            updateMinMaxDiffLabels(::price2HMaxLabel, ::price2HMinLabel, ::price2HDiffLabel,
+                                  price2HMaxLabelBuffer, price2HMinLabelBuffer, price2HDiffLabelBuffer,
+                                  maxVal, minVal, diff,
+                                  lastPrice2HMaxValue, lastPrice2HMinValue, lastPrice2HDiffValue);
+        }
+    }
+    #endif
+
+    #if defined(PLATFORM_ESP32S3_4848S040)
+    if (index == 4 && ::price1DMaxLabel != nullptr && ::price1DMinLabel != nullptr && ::price1DDiffLabel != nullptr)
+    {
+        float avg1d = 0.0f;
+        float minVal = 0.0f;
+        float maxVal = 0.0f;
+        bool ok = computeStatsLast24Hours(avg1d, minVal, maxVal);
+        if (ok) {
+            averagePrices[4] = avg1d;
+            applyLiveMinMax(minVal, maxVal);
+            float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
+            updateMinMaxDiffLabels(::price1DMaxLabel, ::price1DMinLabel, ::price1DDiffLabel,
+                                  price1DMaxLabelBuffer, price1DMinLabelBuffer, price1DDiffLabelBuffer,
+                                  maxVal, minVal, diff,
+                                  lastPrice1DMaxValue, lastPrice1DMinValue, lastPrice1DDiffValue);
+        }
+    }
+    #endif
+
+    #if defined(PLATFORM_ESP32S3_4848S040)
+    if (index == 5 && ::price7DMaxLabel != nullptr && ::price7DMinLabel != nullptr && ::price7DDiffLabel != nullptr)
+    {
+        float avg7d = 0.0f;
+        float minVal = 0.0f;
+        float maxVal = 0.0f;
+        bool ok = computeStatsLast7Days(avg7d, minVal, maxVal);
+        if (ok) {
+            averagePrices[5] = avg7d;
+            applyLiveMinMax(minVal, maxVal);
+            float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
+            updateMinMaxDiffLabels(::price7DMaxLabel, ::price7DMinLabel, ::price7DDiffLabel,
+                                  price7DMaxLabelBuffer, price7DMinLabelBuffer, price7DDiffLabelBuffer,
+                                  maxVal, minVal, diff,
+                                  lastPrice7DMaxValue, lastPrice7DMinValue, lastPrice7DDiffValue);
+        }
     }
     #endif
     
@@ -1622,7 +1933,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
             
             // FASE 7.2: UI Average label update verificatie logging
             #if DEBUG_CALCULATIONS
-            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : "2h");
+            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : ((index == 4) ? "1d" : "7d")));
             Serial.printf(F("[UI][Average] %s label set to '--' (no data)\n"), timeframe);
             #endif
         }
@@ -1637,7 +1948,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
             
             // FASE 7.2: UI Average label update verificatie logging
             #if DEBUG_CALCULATIONS
-            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : "2h");
+            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : ((index == 4) ? "1d" : "7d")));
             Serial.printf(F("[UI][Average] %s label updated: %.0f\n"), timeframe, averagePrices[index]);
             #endif
         }
@@ -1653,7 +1964,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
             
             // FASE 7.2: UI Average label update verificatie logging
             #if DEBUG_CALCULATIONS
-            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : "2h");
+            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : ((index == 4) ? "1d" : "7d")));
             Serial.printf(F("[UI][Average] %s label set to '--' (no data)\n"), timeframe);
             #endif
         }
@@ -1670,16 +1981,27 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
     }
     
     // Fase 8.6.3: Gebruik globale pointers (synchroniseert met module pointers)
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-    // Voor 2h box: gebruik warm-start data OF minimaal 2 minuten live data (net als voor return berekening) of buffer vol
-    bool hasDataForColor = (index == 1) ? secondArrayFilled : ((index == 2) ? (minuteArrayFilled || minuteIndex >= 30) : (hasRet2h || (minuteArrayFilled || minuteIndex >= 2)));
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
+    // Voor 2h/1d box: gebruik warm-start data OF minimaal 2 minuten live data (2h) of ret_1d (1d)
+    bool hasDataForColor = (index == 1) ? secondArrayFilled :
+                           (index == 2) ? (minuteArrayFilled || minuteIndex >= 30) :
+                           (index == 3) ? (hasRet2h || (minuteArrayFilled || minuteIndex >= 2)) :
+                           #if defined(PLATFORM_ESP32S3_4848S040)
+                           (index == 4) ? hasRet1d :
+                           (index == 5) ? hasRet7d :
+                           #endif
+                           false;
     #else
     bool hasDataForColor = (index == 1) ? secondArrayFilled : (minuteArrayFilled || minuteIndex >= 30);
     #endif
     
     // Voor 2h box: toon kleur ook als pct 0.0f is maar er wel data is
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-    bool shouldShowColor = (index == 3) ? (hasDataForColor) : (hasDataForColor && pct != 0.0f);
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
+    bool shouldShowColor = (index == 3
+        #if defined(PLATFORM_ESP32S3_4848S040)
+        || index == 4 || index == 5
+        #endif
+        ) ? (hasDataForColor) : (hasDataForColor && pct != 0.0f);
     #else
     bool shouldShowColor = hasDataForColor && pct != 0.0f;
     #endif
@@ -1751,9 +2073,13 @@ void UIController::updateChartSection(int32_t currentPrice, bool hasNewPriceData
     // Update chart begin letters label (TTGO displays)
     #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     if (::chartBeginLettersLabel != nullptr) {
+        #if defined(PLATFORM_ESP32S3_4848S040)
+        lv_label_set_text(::chartBeginLettersLabel, ntfyTopic);
+        #else
         char deviceIdBuffer[16];
         getDeviceIdFromTopic(ntfyTopic, deviceIdBuffer, sizeof(deviceIdBuffer));
         lv_label_set_text(::chartBeginLettersLabel, deviceIdBuffer);
+        #endif
     }
     #endif
 }

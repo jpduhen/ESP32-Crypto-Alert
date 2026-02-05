@@ -79,6 +79,33 @@ extern bool hasPSRAM();
 #ifndef SMART_CONFLUENCE_ENABLED_DEFAULT
 #define SMART_CONFLUENCE_ENABLED_DEFAULT false
 #endif
+#ifndef NIGHT_MODE_ENABLED_DEFAULT
+#define NIGHT_MODE_ENABLED_DEFAULT true
+#endif
+#ifndef NIGHT_MODE_START_HOUR_DEFAULT
+#define NIGHT_MODE_START_HOUR_DEFAULT 23
+#endif
+#ifndef NIGHT_MODE_END_HOUR_DEFAULT
+#define NIGHT_MODE_END_HOUR_DEFAULT 7
+#endif
+#ifndef NIGHT_MODE_SPIKE5M_THRESHOLD_DEFAULT
+#define NIGHT_MODE_SPIKE5M_THRESHOLD_DEFAULT 0.60f
+#endif
+#ifndef NIGHT_MODE_MOVE5M_ALERT_THRESHOLD_DEFAULT
+#define NIGHT_MODE_MOVE5M_ALERT_THRESHOLD_DEFAULT 0.55f
+#endif
+#ifndef NIGHT_MODE_MOVE30M_THRESHOLD_DEFAULT
+#define NIGHT_MODE_MOVE30M_THRESHOLD_DEFAULT 0.45f
+#endif
+#ifndef NIGHT_MODE_COOLDOWN_5M_SEC_DEFAULT
+#define NIGHT_MODE_COOLDOWN_5M_SEC_DEFAULT 900
+#endif
+#ifndef NIGHT_MODE_AUTO_VOL_MIN_MULTIPLIER_DEFAULT
+#define NIGHT_MODE_AUTO_VOL_MIN_MULTIPLIER_DEFAULT 0.90f
+#endif
+#ifndef NIGHT_MODE_AUTO_VOL_MAX_MULTIPLIER_DEFAULT
+#define NIGHT_MODE_AUTO_VOL_MAX_MULTIPLIER_DEFAULT 1.80f
+#endif
 #ifndef WARM_START_ENABLED_DEFAULT
 #define WARM_START_ENABLED_DEFAULT true
 #endif
@@ -162,6 +189,15 @@ const char* SettingsStore::PREF_KEY_UP_TP_MULT = "upTPMult";
 const char* SettingsStore::PREF_KEY_DOWN_ML_MULT = "downMLMult";
 const char* SettingsStore::PREF_KEY_DOWN_TP_MULT = "downTPMult";
 const char* SettingsStore::PREF_KEY_SMART_CONF = "smartConf";
+const char* SettingsStore::PREF_KEY_NIGHT_MODE = "nightMode";
+const char* SettingsStore::PREF_KEY_NIGHT_START_HOUR = "nightStartHour";
+const char* SettingsStore::PREF_KEY_NIGHT_END_HOUR = "nightEndHour";
+const char* SettingsStore::PREF_KEY_NIGHT_SPIKE5M = "nightSpike5m";
+const char* SettingsStore::PREF_KEY_NIGHT_MOVE5M = "nightMove5m";
+const char* SettingsStore::PREF_KEY_NIGHT_MOVE30M = "nightMove30m";
+const char* SettingsStore::PREF_KEY_NIGHT_CD5M = "nightCd5m";
+const char* SettingsStore::PREF_KEY_NIGHT_AV_MIN = "nightAvMin";
+const char* SettingsStore::PREF_KEY_NIGHT_AV_MAX = "nightAvMax";
 const char* SettingsStore::PREF_KEY_WARM_START = "warmStart";
 const char* SettingsStore::PREF_KEY_WS1M_EXTRA = "ws1mExtra";
 const char* SettingsStore::PREF_KEY_WS5M = "ws5m";
@@ -344,6 +380,23 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     // Smart Confluence defaults
     smartConfluenceEnabled = SMART_CONFLUENCE_ENABLED_DEFAULT;
     
+    // Nachtstand defaults
+    nightModeEnabled = NIGHT_MODE_ENABLED_DEFAULT;
+    nightModeStartHour = NIGHT_MODE_START_HOUR_DEFAULT;
+    nightModeEndHour = NIGHT_MODE_END_HOUR_DEFAULT;
+    nightSpike5mThreshold = NIGHT_MODE_SPIKE5M_THRESHOLD_DEFAULT;
+    nightMove5mAlertThreshold = NIGHT_MODE_MOVE5M_ALERT_THRESHOLD_DEFAULT;
+    nightMove30mThreshold = NIGHT_MODE_MOVE30M_THRESHOLD_DEFAULT;
+    nightCooldown5mSec = NIGHT_MODE_COOLDOWN_5M_SEC_DEFAULT;
+    nightAutoVolMinMultiplier = NIGHT_MODE_AUTO_VOL_MIN_MULTIPLIER_DEFAULT;
+    nightAutoVolMaxMultiplier = NIGHT_MODE_AUTO_VOL_MAX_MULTIPLIER_DEFAULT;
+    nightSpike5mThreshold = NIGHT_MODE_SPIKE5M_THRESHOLD_DEFAULT;
+    nightMove5mAlertThreshold = NIGHT_MODE_MOVE5M_ALERT_THRESHOLD_DEFAULT;
+    nightMove30mThreshold = NIGHT_MODE_MOVE30M_THRESHOLD_DEFAULT;
+    nightCooldown5mSec = NIGHT_MODE_COOLDOWN_5M_SEC_DEFAULT;
+    nightAutoVolMinMultiplier = NIGHT_MODE_AUTO_VOL_MIN_MULTIPLIER_DEFAULT;
+    nightAutoVolMaxMultiplier = NIGHT_MODE_AUTO_VOL_MAX_MULTIPLIER_DEFAULT;
+    
     // Warm-Start defaults
     warmStartEnabled = WARM_START_ENABLED_DEFAULT;
     warmStart1mExtraCandles = WARM_START_1M_EXTRA_CANDLES_DEFAULT;
@@ -479,6 +532,19 @@ CryptoMonitorSettings SettingsStore::load() {
     
     // Load Smart Confluence Mode
     settings.smartConfluenceEnabled = prefs.getBool(PREF_KEY_SMART_CONF, SMART_CONFLUENCE_ENABLED_DEFAULT);
+
+    // Load Nachtstand
+    settings.nightModeEnabled = prefs.getBool(PREF_KEY_NIGHT_MODE, NIGHT_MODE_ENABLED_DEFAULT);
+    settings.nightModeStartHour = prefs.getUChar(PREF_KEY_NIGHT_START_HOUR, NIGHT_MODE_START_HOUR_DEFAULT);
+    settings.nightModeEndHour = prefs.getUChar(PREF_KEY_NIGHT_END_HOUR, NIGHT_MODE_END_HOUR_DEFAULT);
+    if (settings.nightModeStartHour > 23) settings.nightModeStartHour = NIGHT_MODE_START_HOUR_DEFAULT;
+    if (settings.nightModeEndHour > 23) settings.nightModeEndHour = NIGHT_MODE_END_HOUR_DEFAULT;
+    settings.nightSpike5mThreshold = prefs.getFloat(PREF_KEY_NIGHT_SPIKE5M, NIGHT_MODE_SPIKE5M_THRESHOLD_DEFAULT);
+    settings.nightMove5mAlertThreshold = prefs.getFloat(PREF_KEY_NIGHT_MOVE5M, NIGHT_MODE_MOVE5M_ALERT_THRESHOLD_DEFAULT);
+    settings.nightMove30mThreshold = prefs.getFloat(PREF_KEY_NIGHT_MOVE30M, NIGHT_MODE_MOVE30M_THRESHOLD_DEFAULT);
+    settings.nightCooldown5mSec = prefs.getUShort(PREF_KEY_NIGHT_CD5M, NIGHT_MODE_COOLDOWN_5M_SEC_DEFAULT);
+    settings.nightAutoVolMinMultiplier = prefs.getFloat(PREF_KEY_NIGHT_AV_MIN, NIGHT_MODE_AUTO_VOL_MIN_MULTIPLIER_DEFAULT);
+    settings.nightAutoVolMaxMultiplier = prefs.getFloat(PREF_KEY_NIGHT_AV_MAX, NIGHT_MODE_AUTO_VOL_MAX_MULTIPLIER_DEFAULT);
     
     // Load Warm-Start settings
     settings.warmStartEnabled = prefs.getBool(PREF_KEY_WARM_START, WARM_START_ENABLED_DEFAULT);
@@ -652,6 +718,17 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     
     // Save Smart Confluence Mode
     prefs.putBool(PREF_KEY_SMART_CONF, settings.smartConfluenceEnabled);
+    
+    // Save Nachtstand
+    prefs.putBool(PREF_KEY_NIGHT_MODE, settings.nightModeEnabled);
+    prefs.putUChar(PREF_KEY_NIGHT_START_HOUR, settings.nightModeStartHour);
+    prefs.putUChar(PREF_KEY_NIGHT_END_HOUR, settings.nightModeEndHour);
+    prefs.putFloat(PREF_KEY_NIGHT_SPIKE5M, settings.nightSpike5mThreshold);
+    prefs.putFloat(PREF_KEY_NIGHT_MOVE5M, settings.nightMove5mAlertThreshold);
+    prefs.putFloat(PREF_KEY_NIGHT_MOVE30M, settings.nightMove30mThreshold);
+    prefs.putUShort(PREF_KEY_NIGHT_CD5M, settings.nightCooldown5mSec);
+    prefs.putFloat(PREF_KEY_NIGHT_AV_MIN, settings.nightAutoVolMinMultiplier);
+    prefs.putFloat(PREF_KEY_NIGHT_AV_MAX, settings.nightAutoVolMaxMultiplier);
     
     // Save Warm-Start settings
     prefs.putBool(PREF_KEY_WARM_START, settings.warmStartEnabled);

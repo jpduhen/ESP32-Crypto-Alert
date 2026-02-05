@@ -8,6 +8,7 @@
 //#define PLATFORM_TTGO
 //#define PLATFORM_ESP32S3_SUPERMINI
 #define PLATFORM_ESP32S3_GEEK
+//#define PLATFORM_ESP32S3_4848S040
 
 // Automatisch PLATFORM_CYD28 definiëren als een CYD28 variant is gekozen
 #if defined(PLATFORM_CYD28_1USB) || defined(PLATFORM_CYD28_2USB)
@@ -17,9 +18,9 @@
 // --- Version Configuration ---
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
-#define VERSION_MAJOR 4
-#define VERSION_MINOR 46
-#define VERSION_STRING "4.46"
+#define VERSION_MAJOR 5
+#define VERSION_MINOR 2
+#define VERSION_STRING "5.02"
 #endif
 
 // --- Debug Configuration ---
@@ -102,7 +103,7 @@
     #define SYMBOL_1MIN_LABEL "1 min"
     #define SYMBOL_30MIN_LABEL "30 min"
     #define SYMBOL_2H_LABEL "2h"
-    #define CHART_WIDTH 240
+    #define CHART_WIDTH 480
     #define CHART_HEIGHT 72  // Verkleind van 80 naar 72 (8px kleiner)
     #define CHART_ALIGN_Y 24
     #define PRICE_BOX_Y_START 99  // Aangepast: 24 (chart top) + 72 (chart height) + 3 (spacing) = 99
@@ -174,6 +175,7 @@
     #define CHART_WIDTH 240
     #define CHART_HEIGHT 60
     #define CHART_ALIGN_Y 26
+    #define HEADER_WIDTH 480
     #define PRICE_BOX_Y_START 85
     #define FONT_SIZE_TITLE_BTCEUR &lv_font_montserrat_14
     #define FONT_SIZE_TITLE_OTHER &lv_font_montserrat_12
@@ -219,8 +221,42 @@
     #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_10
     #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
     #define SYMBOL_COUNT 3  // GEEK: BTCEUR, 1m, 30m
+#elif defined(PLATFORM_ESP32S3_4848S040)
+    #if !defined(UICONTROLLER_INCLUDE) && !defined(MODULE_INCLUDE)
+    #include "PINS_ESP32S3_4848S040_ST7701_480.h"
+    #endif
+    #define MQTT_TOPIC_PREFIX "esp32s3_4848s040_crypto"
+    #define DEVICE_NAME "ESP32-S3 4848S040 Crypto Monitor"
+    #define DEVICE_MODEL "ESP32-S3 4848S040"
+    #define HAS_TOUCHSCREEN false
+    #define HAS_PHYSICAL_BUTTON false
+    #define SYMBOL_1MIN_LABEL "1m"
+    #define SYMBOL_30MIN_LABEL "30m"
+    #define SYMBOL_2H_LABEL "2h"
+    #define SYMBOL_1D_LABEL "1d"
+    #define SYMBOL_7D_LABEL "7d"
+    #define CHART_WIDTH 240
+    #define CHART_HEIGHT 60
+    #define CHART_ALIGN_Y 26
+    #define PRICE_BOX_Y_START 85
+    #define FONT_SIZE_TITLE_BTCEUR &lv_font_montserrat_14
+    #define FONT_SIZE_TITLE_OTHER &lv_font_montserrat_12
+    #define FONT_SIZE_PRICE_BTCEUR &lv_font_montserrat_12
+    #define FONT_SIZE_PRICE_OTHER &lv_font_montserrat_12
+    #define FONT_SIZE_ANCHOR &lv_font_montserrat_10
+    #define FONT_SIZE_TREND_VOLATILITY &lv_font_montserrat_12
+    #define FONT_SIZE_FOOTER &lv_font_montserrat_12
+    #define FONT_SIZE_IP_PREFIX &lv_font_montserrat_14
+    #define FONT_SIZE_IP &lv_font_montserrat_12
+    #define FONT_SIZE_CHART_DATE_TIME &lv_font_montserrat_10
+    #define FONT_SIZE_CHART_VERSION &lv_font_montserrat_10
+    #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_10
+    #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
+    #define SYMBOL_COUNT 6  // 4848S040: BTCEUR, 1m, 30m, 2h, 1d, 7d
+    #define LVGL_SCREEN_WIDTH 480
+    #define LVGL_SCREEN_HEIGHT 480
 #else
-    #error "Please define PLATFORM_TTGO, PLATFORM_CYD24, PLATFORM_CYD28, PLATFORM_ESP32S3_SUPERMINI or PLATFORM_ESP32S3_GEEK in platform_config.h"
+    #error "Please define PLATFORM_TTGO, PLATFORM_CYD24, PLATFORM_CYD28, PLATFORM_ESP32S3_SUPERMINI, PLATFORM_ESP32S3_GEEK or PLATFORM_ESP32S3_4848S040 in platform_config.h"
 #endif
 
 // Fallback: als SYMBOL_COUNT nog niet gedefinieerd is, gebruik default 3

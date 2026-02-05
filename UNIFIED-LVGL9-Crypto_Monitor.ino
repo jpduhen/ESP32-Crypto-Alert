@@ -173,6 +173,15 @@
 
 // --- Smart Confluence Mode Configuration ---
 #define SMART_CONFLUENCE_ENABLED_DEFAULT false  // Default: uitgeschakeld
+#define NIGHT_MODE_ENABLED_DEFAULT true  // Default: nachtstand aan (23:00-07:00)
+#define NIGHT_MODE_START_HOUR_DEFAULT 23
+#define NIGHT_MODE_END_HOUR_DEFAULT 7
+#define NIGHT_MODE_SPIKE5M_THRESHOLD_DEFAULT 0.60f
+#define NIGHT_MODE_MOVE5M_ALERT_THRESHOLD_DEFAULT 0.55f
+#define NIGHT_MODE_MOVE30M_THRESHOLD_DEFAULT 0.45f
+#define NIGHT_MODE_COOLDOWN_5M_SEC_DEFAULT 900
+#define NIGHT_MODE_AUTO_VOL_MIN_MULTIPLIER_DEFAULT 0.90f
+#define NIGHT_MODE_AUTO_VOL_MAX_MULTIPLIER_DEFAULT 1.80f
 #define CONFLUENCE_TIME_WINDOW_MS 300000UL     // 5 minuten tijdshorizon voor confluence (1m en 5m events moeten binnen ±5 minuten liggen)
 
 // --- Warm-Start Configuration ---
@@ -290,7 +299,10 @@ SemaphoreHandle_t gNetMutex = NULL;
 
 // Symbols array - eerste element wordt dynamisch ingesteld via bitvavoSymbol
 // Fase 8: UI data - gebruikt door UIController module
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+#if defined(PLATFORM_ESP32S3_4848S040)
+char symbol0[16] = "BTC-EUR";
+extern const char *const symbols[SYMBOL_COUNT] = {symbol0, SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL, SYMBOL_1D_LABEL, SYMBOL_7D_LABEL};
+#elif defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
 char symbol0[16] = "BTC-EUR";
 extern const char *const symbols[SYMBOL_COUNT] = {symbol0, SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL};
 #else
@@ -367,6 +379,26 @@ bool hasRet30m = false;  // hasRet30mWarm || hasRet30mLive
 bool hasRet4h = false;  // hasRet4hWarm || hasRet4hLive
 bool hasRet1d = false;  // hasRet1dWarm (1d alleen via warm-start, geen live berekening)
 bool hasRet7d = false;  // hasRet7dWarm (warm-start) of live hourly buffer
+// Warm-start 1d stats voor vroege UI weergave (tot hourly buffer gevuld is)
+bool warmStart1dValid = false;
+float warmStart1dMin = 0.0f;
+float warmStart1dMax = 0.0f;
+float warmStart1dAvg = 0.0f;
+bool warmStart1dUsingFallback = false;
+bool warmStart2hValid = false;
+float warmStart2hMin = 0.0f;
+float warmStart2hMax = 0.0f;
+float warmStart2hAvg = 0.0f;
+bool warmStart2hUsingFallback = false;
+bool warmStart7dValid = false;
+float warmStart7dMin = 0.0f;
+float warmStart7dMax = 0.0f;
+float warmStart7dAvg = 0.0f;
+bool warmStart7dUsingFallback = false;
+
+// Warm-start buffers voor 7d (voorkomt grote stack-allocaties)
+static float warmStartTemp1h7dPrices[168];
+static unsigned long warmStartTemp1h7dTimes[168];
 // Fase 5.3.17: Globale variabelen voor backward compatibility - modules zijn source of truth
 // Deze variabelen worden gesynchroniseerd met TrendDetector module na elke update
 // TODO: In toekomstige fase kunnen deze verwijderd worden zodra alle code volledig gemigreerd is
@@ -390,6 +422,15 @@ unsigned long lastTrendChangeNotification = 0;  // Timestamp van laatste trend c
 // Smart Confluence Mode state
 // Fase 6.1: AlertEngine module gebruikt deze variabele (extern declaration in AlertEngine.cpp)
 bool smartConfluenceEnabled = SMART_CONFLUENCE_ENABLED_DEFAULT;
+bool nightModeEnabled = NIGHT_MODE_ENABLED_DEFAULT;
+uint8_t nightModeStartHour = NIGHT_MODE_START_HOUR_DEFAULT;
+uint8_t nightModeEndHour = NIGHT_MODE_END_HOUR_DEFAULT;
+float nightSpike5mThreshold = NIGHT_MODE_SPIKE5M_THRESHOLD_DEFAULT;
+float nightMove5mAlertThreshold = NIGHT_MODE_MOVE5M_ALERT_THRESHOLD_DEFAULT;
+float nightMove30mThreshold = NIGHT_MODE_MOVE30M_THRESHOLD_DEFAULT;
+uint16_t nightCooldown5mSec = NIGHT_MODE_COOLDOWN_5M_SEC_DEFAULT;
+float nightAutoVolMinMultiplier = NIGHT_MODE_AUTO_VOL_MIN_MULTIPLIER_DEFAULT;
+float nightAutoVolMaxMultiplier = NIGHT_MODE_AUTO_VOL_MAX_MULTIPLIER_DEFAULT;
 // Fase 6.1: AlertEngine module gebruikt deze variabelen (extern declarations in AlertEngine.cpp)
 LastOneMinuteEvent last1mEvent = {EVENT_NONE, 0, 0.0f, false};
 LastFiveMinuteEvent last5mEvent = {EVENT_NONE, 0, 0.0f, false};
@@ -472,6 +513,12 @@ lv_obj_t *price30MinDiffLabel; // Label voor verschil tussen max en min in 30 mi
 lv_obj_t *price2HMaxLabel = nullptr; // Label voor max waarde in 2h buffer (alleen CYD, nullptr voor andere platforms)
 lv_obj_t *price2HMinLabel = nullptr; // Label voor min waarde in 2h buffer (alleen CYD, nullptr voor andere platforms)
 lv_obj_t *price2HDiffLabel = nullptr; // Label voor verschil tussen max en min in 2h buffer (alleen CYD, nullptr voor andere platforms)
+lv_obj_t *price1DMaxLabel = nullptr; // Label voor max waarde in 1d buffer (4848S040)
+lv_obj_t *price1DMinLabel = nullptr; // Label voor min waarde in 1d buffer (4848S040)
+lv_obj_t *price1DDiffLabel = nullptr; // Label voor verschil tussen max en min in 1d buffer (4848S040)
+lv_obj_t *price7DMaxLabel = nullptr; // Label voor max waarde in 7d buffer (4848S040)
+lv_obj_t *price7DMinLabel = nullptr; // Label voor min waarde in 7d buffer (4848S040)
+lv_obj_t *price7DDiffLabel = nullptr; // Label voor verschil tussen max en min in 7d buffer (4848S040)
 lv_obj_t *anchorLabel; // Label voor anchor price info (rechts midden, met percentage verschil)
 lv_obj_t *anchorMaxLabel; // Label voor "Pak winst" (rechts, groen, boven)
 lv_obj_t *anchorMinLabel; // Label voor "Stop loss" (rechts, rood, onder)
@@ -533,6 +580,12 @@ char price30MinDiffLabelBuffer[20];  // Buffer voor 30m diff label (max: "12345.
 char price2HMaxLabelBuffer[20];  // Buffer voor 2h max label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
 char price2HMinLabelBuffer[20];  // Buffer voor 2h min label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
 char price2HDiffLabelBuffer[20];  // Buffer voor 2h diff label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
+char price1DMaxLabelBuffer[20];  // Buffer voor 1d max label
+char price1DMinLabelBuffer[20];  // Buffer voor 1d min label
+char price1DDiffLabelBuffer[20]; // Buffer voor 1d diff label
+char price7DMaxLabelBuffer[20];  // Buffer voor 7d max label
+char price7DMinLabelBuffer[20];  // Buffer voor 7d min label
+char price7DDiffLabelBuffer[20]; // Buffer voor 7d diff label
 
 // Cache laatste waarden (alleen updaten als veranderd)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
@@ -550,6 +603,12 @@ float lastPrice30MinDiffValue = -1.0f;  // Cache voor 30m diff
 float lastPrice2HMaxValue = -1.0f;  // Cache voor 2h max (alleen gebruikt voor CYD platforms)
 float lastPrice2HMinValue = -1.0f;  // Cache voor 2h min (alleen gebruikt voor CYD platforms)
 float lastPrice2HDiffValue = -1.0f;  // Cache voor 2h diff (alleen gebruikt voor CYD platforms)
+float lastPrice1DMaxValue = -1.0f;  // Cache voor 1d max (4848S040)
+float lastPrice1DMinValue = -1.0f;  // Cache voor 1d min (4848S040)
+float lastPrice1DDiffValue = -1.0f;  // Cache voor 1d diff (4848S040)
+float lastPrice7DMaxValue = -1.0f;  // Cache voor 7d max (4848S040)
+float lastPrice7DMinValue = -1.0f;  // Cache voor 7d min (4848S040)
+float lastPrice7DDiffValue = -1.0f;  // Cache voor 7d diff (4848S040)
 char lastPriceTitleText[SYMBOL_COUNT][32] = {""};  // Cache voor price titles (max: "30 min  +12.34%" = ~20 chars, verkleind van 48 naar 32 bytes)
 char priceLblBufferArray[SYMBOL_COUNT][24];  // Buffers voor average price labels (max: "12345.67" = ~8 chars)
 static char footerRssiBuffer[10];  // Buffer voor footer RSSI
@@ -649,6 +708,8 @@ uint8_t displayRotation = 0;  // Display rotatie: 0 = normaal, 2 = 180 graden ge
 volatile bool pendingDisplayRotationApply = false;
 volatile uint8_t pendingDisplayRotationValue = 0;
 volatile bool pendingMqttReconnect = false;
+volatile bool pendingIpPublish = false;
+char pendingIpBuffer[16] = "";
 
 // Forward declarations (moet vroeg in het bestand staan)
 static bool enqueueMqttMessage(const char* topic, const char* payload, bool retained);
@@ -884,7 +945,7 @@ static bool parseKlineEntry(const char* jsonStr, float* closePrice, unsigned lon
     }
     
     // Parse openTime (eerste veld)
-    unsigned long time = 0;
+    uint64_t time = 0;
     while (*ptr && *ptr != ',') {
         if (*ptr >= '0' && *ptr <= '9') {
             time = time * 10 + (*ptr - '0');
@@ -894,7 +955,10 @@ static bool parseKlineEntry(const char* jsonStr, float* closePrice, unsigned lon
     if (*ptr != ',') {
         return false;
     }
-    *openTime = time;
+    if (time > 2000000000ULL) {
+        time /= 1000ULL; // converteer ms -> s
+    }
+    *openTime = (unsigned long)time;
     ptr++; // Skip comma
     
     
@@ -1131,13 +1195,16 @@ int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit
                     
                     if (fieldIdx == 0) {
                         // openTime
-                        unsigned long time = 0;
+                        uint64_t time = 0;
                         for (int i = 0; fieldBuf[i] != '\0'; i++) {
                             if (fieldBuf[i] >= '0' && fieldBuf[i] <= '9') {
                                 time = time * 10 + (fieldBuf[i] - '0');
                             }
                         }
-                        openTime = time;
+                        if (time > 2000000000ULL) {
+                            time /= 1000ULL; // converteer ms -> s
+                        }
+                        openTime = (unsigned long)time;
                     } else if (fieldIdx == 2 || fieldIdx == 3 || fieldIdx == 4 || fieldIdx == 5) {
                         float value;
                         if (safeAtof(fieldBuf, value)) {
@@ -1464,6 +1531,107 @@ static uint16_t calculate1mCandles()
     return clampUint16(baseCandles, 30, maxCandles);
 }
 
+// Helper: lineaire regressie % over reeks (x = uur index, y = prijs)
+static bool computeRegressionPctFromSeries(const float* prices, int count, float stepHours, float totalHours, float &outPct)
+{
+    outPct = 0.0f;
+    if (prices == nullptr || count < 2 || stepHours <= 0.0f || totalHours <= 0.0f) {
+        return false;
+    }
+    float sumX = 0.0f;
+    float sumY = 0.0f;
+    float sumXY = 0.0f;
+    float sumX2 = 0.0f;
+    int validPoints = 0;
+    for (int i = 0; i < count; i++) {
+        float price = prices[i];
+        if (!isValidPrice(price)) {
+            continue;
+        }
+        float x = (float)i * stepHours;
+        sumX += x;
+        sumY += price;
+        sumXY += x * price;
+        sumX2 += x * x;
+        validPoints++;
+    }
+    if (validPoints < 2) {
+        return false;
+    }
+    float denom = (validPoints * sumX2 - sumX * sumX);
+    if (fabsf(denom) < 1e-6f) {
+        return false;
+    }
+    float slope = (validPoints * sumXY - sumX * sumY) / denom; // prijs per uur
+    float avgPrice = sumY / (float)validPoints;
+    if (avgPrice <= 0.0f) {
+        return false;
+    }
+    outPct = (slope * totalHours / avgPrice) * 100.0f;
+    return true;
+}
+
+// Helper: lineaire regressie % op basis van timestamps (x = uren sinds start)
+static bool computeRegressionPctFromSeriesWithTimes(const float* prices, const unsigned long* times, int count, float totalHours, float &outPct)
+{
+    outPct = 0.0f;
+    if (prices == nullptr || times == nullptr || count < 2) {
+        return false;
+    }
+    unsigned long minTime = 0xFFFFFFFFUL;
+    unsigned long maxTime = 0;
+    float sumX = 0.0f;
+    float sumY = 0.0f;
+    float sumXY = 0.0f;
+    float sumX2 = 0.0f;
+    int validPoints = 0;
+    for (int i = 0; i < count; i++) {
+        float price = prices[i];
+        unsigned long t = times[i];
+        if (!isValidPrice(price) || t == 0) {
+            continue;
+        }
+        if (t < minTime) minTime = t;
+        if (t > maxTime) maxTime = t;
+    }
+    if (minTime == 0xFFFFFFFFUL || maxTime <= minTime) {
+        return false;
+    }
+    for (int i = 0; i < count; i++) {
+        float price = prices[i];
+        unsigned long t = times[i];
+        if (!isValidPrice(price) || t == 0) {
+            continue;
+        }
+        float x = (float)(t - minTime) / 3600.0f; // uren sinds start
+        sumX += x;
+        sumY += price;
+        sumXY += x * price;
+        sumX2 += x * x;
+        validPoints++;
+    }
+    if (validPoints < 2) {
+        return false;
+    }
+    float denom = (validPoints * sumX2 - sumX * sumX);
+    if (fabsf(denom) < 1e-6f) {
+        return false;
+    }
+    float slope = (validPoints * sumXY - sumX * sumY) / denom; // prijs per uur
+    float avgPrice = sumY / (float)validPoints;
+    if (avgPrice <= 0.0f) {
+        return false;
+    }
+    if (totalHours <= 0.0f) {
+        totalHours = (float)(maxTime - minTime) / 3600.0f;
+        if (totalHours <= 0.0f) {
+            return false;
+        }
+    }
+    outPct = (slope * totalHours / avgPrice) * 100.0f;
+    return true;
+}
+
 // Forward declarations voor heap telemetry (nodig voor performWarmStart)
 static void logHeapTelemetry(const char* context);
 
@@ -1614,10 +1782,9 @@ static WarmStartMode performWarmStart()
     }
 
     if (count1w >= 2) {
-        float firstPrice = temp1wPrices[0];
-        float lastPrice = temp1wPrices[count1w - 1];
-        if (firstPrice > 0.0f && lastPrice > 0.0f) {
-            ret_7d = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
+        float spanHours = (float)(count1w - 1) * 168.0f;
+        float totalHours = (spanHours > 168.0f || spanHours <= 0.0f) ? 168.0f : spanHours;
+        if (computeRegressionPctFromSeries(temp1wPrices, count1w, 168.0f, totalHours, ret_7d)) {
             hasRet7dWarm = true;
         } else {
             hasRet7dWarm = false;
@@ -1670,20 +1837,17 @@ static WarmStartMode performWarmStart()
     }
 
     if (count1d >= 2) {
-        float firstPrice = temp1dPrices[count1d - 2];
-        float lastPrice = temp1dPrices[count1d - 1];
-        if (firstPrice > 0.0f && lastPrice > 0.0f) {
-            ret_1d = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
+        float spanHours = (float)(count1d - 1) * 24.0f;
+        float totalHours = (spanHours > 24.0f || spanHours <= 0.0f) ? 24.0f : spanHours;
+        if (computeRegressionPctFromSeriesWithTimes(temp1dPrices, temp1dTimes, count1d, totalHours, ret_1d)) {
             hasRet1dWarm = true;
             #if DEBUG_CALCULATIONS
-            Serial_printf(F("[WarmStart][1d] ret_1d=%.4f%%, firstPrice=%.2f, lastPrice=%.2f, hasRet1dWarm=%d\n"),
-                         ret_1d, firstPrice, lastPrice, hasRet1dWarm ? 1 : 0);
+            Serial_printf(F("[WarmStart][1d] ret_1d=%.4f%% (regressie)\n"), ret_1d);
             #endif
         } else {
             hasRet1dWarm = false;
             #if DEBUG_CALCULATIONS
-            Serial_printf(F("[WarmStart][1d] ERROR: Invalid prices: firstPrice=%.2f, lastPrice=%.2f\n"),
-                         firstPrice, lastPrice);
+            Serial_printf(F("[WarmStart][1d] ERROR: regressie mislukt\n"));
             #endif
         }
     } else {
@@ -1693,8 +1857,205 @@ static WarmStartMode performWarmStart()
         #endif
     }
 
-    // Warm-start 7d regressie op basis van 7 dagelijkse candles (oudste -> nieuwste)
-    if (count1d >= 7) {
+    // 4b. Haal 1h candles op voor echte 24h UI stats (min/max/avg + ret_1d)
+    float temp1hPrices[24];
+    unsigned long temp1hTimes[24];
+    int count1h = 0;
+    const int maxRetries1h = 2;
+    for (int retry = 0; retry < maxRetries1h; retry++) {
+        if (retry > 0) {
+            Serial_printf(F("[WarmStart] 1h retry %d/%d...\n"), retry, maxRetries1h - 1);
+            yield();
+            delay(400);
+            lv_timer_handler();
+        }
+        lv_timer_handler();
+        count1h = fetchBitvavoCandles(bitvavoSymbol, "1h", 24, temp1hPrices, temp1hTimes, 24);
+        lv_timer_handler();
+        if (count1h >= 2) {
+            break;
+        }
+    }
+
+    if (count1h >= 2) {
+        // Sorteer 1h candles op tijd (oudste -> nieuwste)
+        for (int i = 1; i < count1h; i++) {
+            unsigned long t = temp1hTimes[i];
+            float p = temp1hPrices[i];
+            int j = i - 1;
+            while (j >= 0 && temp1hTimes[j] > t) {
+                temp1hTimes[j + 1] = temp1hTimes[j];
+                temp1hPrices[j + 1] = temp1hPrices[j];
+                j--;
+            }
+            temp1hTimes[j + 1] = t;
+            temp1hPrices[j + 1] = p;
+        }
+        float sum1h = 0.0f;
+        float min1h = 0.0f;
+        float max1h = 0.0f;
+        bool firstValid1h = false;
+        for (int i = 0; i < count1h; i++) {
+            float price = temp1hPrices[i];
+            if (!isValidPrice(price)) {
+                continue;
+            }
+            if (!firstValid1h) {
+                min1h = price;
+                max1h = price;
+                firstValid1h = true;
+            } else {
+                if (price < min1h) min1h = price;
+                if (price > max1h) max1h = price;
+            }
+            sum1h += price;
+        }
+        if (firstValid1h) {
+            warmStart1dMin = min1h;
+            warmStart1dMax = max1h;
+            warmStart1dAvg = sum1h / (float)count1h;
+            warmStart1dValid = true;
+        } else {
+            warmStart1dValid = false;
+        }
+        // Ret_1d: regressie over 24 uur (1h candles)
+        float spanHours1d = (count1h > 1) ? (float)(count1h - 1) * 1.0f : 0.0f;
+        float totalHours1d = (spanHours1d > 24.0f || spanHours1d <= 0.0f) ? 24.0f : spanHours1d;
+        if (computeRegressionPctFromSeriesWithTimes(temp1hPrices, temp1hTimes, count1h, totalHours1d, ret_1d)) {
+            hasRet1dWarm = true;
+            Serial_printf(F("[WarmStart][1h] ret_1d=%.4f%% (regressie over 24h)\n"),
+                          ret_1d);
+        } else {
+            hasRet1dWarm = false;
+        }
+        Serial_printf(F("[WarmStart][1h] count=%d, valid=%d, min=%.2f, max=%.2f, avg=%.2f\n"),
+                      count1h, warmStart1dValid ? 1 : 0, warmStart1dMin, warmStart1dMax, warmStart1dAvg);
+    } else {
+        Serial_printf(F("[WarmStart] 1h fetch onvoldoende candles (%d)\n"), count1h);
+    }
+
+    #if defined(PLATFORM_ESP32S3_4848S040)
+    // 4c. Haal 1h candles op voor 7d UI stats (min/max/avg + ret_7d)
+    float *temp1h7dPrices = warmStartTemp1h7dPrices;
+    unsigned long *temp1h7dTimes = warmStartTemp1h7dTimes;
+    int count1h7d = 0;
+    const int maxRetries1h7d = 2;
+    for (int retry = 0; retry < maxRetries1h7d; retry++) {
+        if (retry > 0) {
+            Serial_printf(F("[WarmStart] 1h(7d) retry %d/%d...\n"), retry, maxRetries1h7d - 1);
+            yield();
+            delay(500);
+            lv_timer_handler();
+        }
+        lv_timer_handler();
+        count1h7d = fetchBitvavoCandles(bitvavoSymbol, "1h", 168, temp1h7dPrices, temp1h7dTimes, 168);
+        lv_timer_handler();
+        if (count1h7d >= 2) {
+            break;
+        }
+    }
+
+    if (count1h7d >= 2) {
+        // Sorteer 1h candles op tijd (oudste -> nieuwste)
+        for (int i = 1; i < count1h7d; i++) {
+            unsigned long t = temp1h7dTimes[i];
+            float p = temp1h7dPrices[i];
+            int j = i - 1;
+            while (j >= 0 && temp1h7dTimes[j] > t) {
+                temp1h7dTimes[j + 1] = temp1h7dTimes[j];
+                temp1h7dPrices[j + 1] = temp1h7dPrices[j];
+                j--;
+            }
+            temp1h7dTimes[j + 1] = t;
+            temp1h7dPrices[j + 1] = p;
+        }
+        float sum7d = 0.0f;
+        int validCount7d = 0;
+        float min7d = 0.0f;
+        float max7d = 0.0f;
+        bool firstValid7d = false;
+        for (int i = 0; i < count1h7d; i++) {
+            float price = temp1h7dPrices[i];
+            if (!isValidPrice(price)) {
+                continue;
+            }
+            validCount7d++;
+            if (!firstValid7d) {
+                min7d = price;
+                max7d = price;
+                firstValid7d = true;
+            } else {
+                if (price < min7d) min7d = price;
+                if (price > max7d) max7d = price;
+            }
+            sum7d += price;
+        }
+        if (firstValid7d && validCount7d > 0) {
+            warmStart7dMin = min7d;
+            warmStart7dMax = max7d;
+            warmStart7dAvg = sum7d / (float)validCount7d;
+            warmStart7dValid = true;
+        } else {
+            warmStart7dValid = false;
+        }
+        float spanHours7d = (count1h7d > 1) ? (float)(count1h7d - 1) * 1.0f : 0.0f;
+        float totalHours7d = (spanHours7d > 168.0f || spanHours7d <= 0.0f) ? 168.0f : spanHours7d;
+        if (computeRegressionPctFromSeriesWithTimes(temp1h7dPrices, temp1h7dTimes, count1h7d, totalHours7d, ret_7d)) {
+            hasRet7dWarm = true;
+            Serial_printf(F("[WarmStart][1h7d] ret_7d=%.4f%% (regressie over 7d)\n"),
+                          ret_7d);
+        } else {
+            hasRet7dWarm = false;
+        }
+        Serial_printf(F("[WarmStart][1h7d] count=%d, valid=%d, min=%.2f, max=%.2f, avg=%.2f\n"),
+                      count1h7d, warmStart7dValid ? 1 : 0, warmStart7dMin, warmStart7dMax, warmStart7dAvg);
+
+        // Fallback: als 1d stats niet beschikbaar zijn, gebruik laatste 24 uur uit 1h7d data
+        if (!warmStart1dValid && count1h7d >= 2) {
+            int take = (count1h7d > 24) ? 24 : count1h7d;
+            int start = count1h7d - take;
+            float sum1d = 0.0f;
+            int valid1d = 0;
+            float min1d = 0.0f;
+            float max1d = 0.0f;
+            bool firstValid1d = false;
+            for (int i = start; i < count1h7d; i++) {
+                float price = temp1h7dPrices[i];
+                if (!isValidPrice(price)) {
+                    continue;
+                }
+                if (!firstValid1d) {
+                    min1d = price;
+                    max1d = price;
+                    firstValid1d = true;
+                } else {
+                    if (price < min1d) min1d = price;
+                    if (price > max1d) max1d = price;
+                }
+                sum1d += price;
+                valid1d++;
+            }
+            if (firstValid1d && valid1d > 0) {
+                warmStart1dMin = min1d;
+                warmStart1dMax = max1d;
+                warmStart1dAvg = sum1d / (float)valid1d;
+                warmStart1dValid = true;
+                float spanHours1d = (take > 1) ? (float)(take - 1) * 1.0f : 0.0f;
+                float totalHours1d = (spanHours1d > 24.0f || spanHours1d <= 0.0f) ? 24.0f : spanHours1d;
+                if (!hasRet1dWarm &&
+                    computeRegressionPctFromSeries(&temp1h7dPrices[start], take, 1.0f, totalHours1d, ret_1d)) {
+                    hasRet1dWarm = true;
+                }
+            }
+        }
+    } else {
+        warmStart7dValid = false;
+        Serial_printf(F("[WarmStart] 1h(7d) fetch onvoldoende candles (%d)\n"), count1h7d);
+    }
+    #endif
+
+    // Warm-start 7d regressie op basis van 7 dagelijkse candles (fallback, alleen als 1h7d niet beschikbaar is)
+    if (!hasRet7dWarm && !warmStart7dValid && count1d >= 7) {
         float sumX = 0.0f;
         float sumY = 0.0f;
         float sumXY = 0.0f;
@@ -1725,7 +2086,7 @@ static WarmStartMode performWarmStart()
                 ret_7d = (slopePerWeek / avgPrice) * 100.0f;
                 hasRet7dWarm = true;
                 #if DEBUG_CALCULATIONS
-                Serial_printf(F("[WarmStart][7d] REG ret_7d=%.4f%% (7d daily regression)\n"), ret_7d);
+                Serial_printf(F("[WarmStart][7d] ret_7d=%.4f%% (fallback regressie over 7d daily)\n"), ret_7d);
                 #endif
             }
         }
@@ -1751,10 +2112,9 @@ static WarmStartMode performWarmStart()
     }
     
     if (count4h >= 2) {
-        float firstPrice = temp4hPrices[0];
-        float lastPrice = temp4hPrices[count4h - 1];
-        if (firstPrice > 0.0f && lastPrice > 0.0f) {
-            ret_4h = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
+        float spanHours = (float)(count4h - 1) * 4.0f;
+        float totalHours = (spanHours > 4.0f || spanHours <= 0.0f) ? 4.0f : spanHours;
+        if (computeRegressionPctFromSeries(temp4hPrices, count4h, 4.0f, totalHours, ret_4h)) {
             hasRet4hWarm = true;
         } else {
             hasRet4hWarm = false;
@@ -1766,6 +2126,7 @@ static WarmStartMode performWarmStart()
     // 6. Vul 30m buffer via minuteAverages (returns-only: alleen laatste 2 closes nodig)
     // Retry-logica: probeer maximaal 3 keer als eerste poging faalt
     float temp30mPrices[2];
+    unsigned long temp30mTimes[2];
     int count30m = 0;
     const int maxRetries30m = 3;
     for (int retry = 0; retry < maxRetries30m; retry++) {
@@ -1776,7 +2137,7 @@ static WarmStartMode performWarmStart()
             lv_timer_handler();  // Update spinner animatie
         }
         lv_timer_handler();  // Update spinner animatie vóór fetch
-        count30m = fetchBitvavoCandles(bitvavoSymbol, "30m", req30mCandles, temp30mPrices, nullptr, 2);
+        count30m = fetchBitvavoCandles(bitvavoSymbol, "30m", req30mCandles, temp30mPrices, temp30mTimes, 2);
         lv_timer_handler();  // Update spinner animatie na fetch
         if (count30m >= 2) {
             break;  // Succes, stop retries
@@ -1784,11 +2145,22 @@ static WarmStartMode performWarmStart()
     }
     
     if (count30m >= 2) {
-        // Bereken ret_30m uit eerste en laatste 30m candle (gesloten candles)
-        float first30mPrice = temp30mPrices[0];
-        float last30mPrice = temp30mPrices[count30m - 1];
-        if (first30mPrice > 0.0f && last30mPrice > 0.0f) {
-            ret_30m = ((last30mPrice - first30mPrice) / first30mPrice) * 100.0f;
+        // Sorteer 30m candles op tijd (oudste -> nieuwste)
+        for (int i = 1; i < count30m; i++) {
+            unsigned long t = temp30mTimes[i];
+            float p = temp30mPrices[i];
+            int j = i - 1;
+            while (j >= 0 && temp30mTimes[j] > t) {
+                temp30mTimes[j + 1] = temp30mTimes[j];
+                temp30mPrices[j + 1] = temp30mPrices[j];
+                j--;
+            }
+            temp30mTimes[j + 1] = t;
+            temp30mPrices[j + 1] = p;
+        }
+        float spanHours = (float)(count30m - 1) * 0.5f;
+        float totalHours = (spanHours > 0.5f || spanHours <= 0.0f) ? 0.5f : spanHours;
+        if (computeRegressionPctFromSeriesWithTimes(temp30mPrices, temp30mTimes, count30m, totalHours, ret_30m)) {
             hasRet30mWarm = true;
         } else {
             hasRet30mWarm = false;
@@ -1824,9 +2196,11 @@ static WarmStartMode performWarmStart()
     
     // 7. Initieer 2h trend berekening
     // Retry-logica: probeer maximaal 3 keer als eerste poging faalt
-    float temp2hPrices[2];
+    float temp2hPrices[12];
+    unsigned long temp2hTimes[12];
     int count2h = 0;
     const int maxRetries2h = 3;
+    uint16_t req2hFetch = (req2hCandles > 12) ? 12 : req2hCandles;
     for (int retry = 0; retry < maxRetries2h; retry++) {
         if (retry > 0) {
             Serial_printf(F("[WarmStart] 2h retry %d/%d...\n"), retry, maxRetries2h - 1);
@@ -1835,7 +2209,7 @@ static WarmStartMode performWarmStart()
             lv_timer_handler();  // Update spinner animatie
         }
         lv_timer_handler();  // Update spinner animatie vóór fetch
-        count2h = fetchBitvavoCandles(bitvavoSymbol, "2h", req2hCandles, temp2hPrices, nullptr, 2);
+        count2h = fetchBitvavoCandles(bitvavoSymbol, "2h", req2hFetch, temp2hPrices, temp2hTimes, 12);
         lv_timer_handler();  // Update spinner animatie na fetch
         if (count2h >= 2) {
             break;  // Succes, stop retries
@@ -1843,11 +2217,53 @@ static WarmStartMode performWarmStart()
     }
     
     if (count2h >= 2) {
-        // Bereken ret_2h uit eerste en laatste candle (gesloten candles)
-        float firstPrice = temp2hPrices[0];
-        float lastPrice = temp2hPrices[count2h - 1];
-        if (firstPrice > 0.0f && lastPrice > 0.0f) {
-            ret_2h = ((lastPrice - firstPrice) / firstPrice) * 100.0f;
+        // Sorteer 2h candles op tijd (oudste -> nieuwste)
+        for (int i = 1; i < count2h; i++) {
+            unsigned long t = temp2hTimes[i];
+            float p = temp2hPrices[i];
+            int j = i - 1;
+            while (j >= 0 && temp2hTimes[j] > t) {
+                temp2hTimes[j + 1] = temp2hTimes[j];
+                temp2hPrices[j + 1] = temp2hPrices[j];
+                j--;
+            }
+            temp2hTimes[j + 1] = t;
+            temp2hPrices[j + 1] = p;
+        }
+        // Bereken 2h min/max/avg voor UI (warm-start fallback)
+        float sum2h = 0.0f;
+        float min2h = 0.0f;
+        float max2h = 0.0f;
+        bool firstValid2h = false;
+        int valid2h = 0;
+        for (int i = 0; i < count2h; i++) {
+            float price = temp2hPrices[i];
+            if (!isValidPrice(price)) {
+                continue;
+            }
+            valid2h++;
+            if (!firstValid2h) {
+                min2h = price;
+                max2h = price;
+                firstValid2h = true;
+            } else {
+                if (price < min2h) min2h = price;
+                if (price > max2h) max2h = price;
+            }
+            sum2h += price;
+        }
+        if (firstValid2h) {
+            warmStart2hMin = min2h;
+            warmStart2hMax = max2h;
+            warmStart2hAvg = sum2h / (float)valid2h;
+            warmStart2hValid = true;
+            averagePrices[3] = warmStart2hAvg;
+        } else {
+            warmStart2hValid = false;
+        }
+        float spanHours = (float)(count2h - 1) * 2.0f;
+        float totalHours = (spanHours > 2.0f || spanHours <= 0.0f) ? 2.0f : spanHours;
+        if (computeRegressionPctFromSeriesWithTimes(temp2hPrices, temp2hTimes, count2h, totalHours, ret_2h)) {
             hasRet2hWarm = true;
             warmStartStats.loaded2h = count2h;
             warmStartStats.warmStartOk2h = true;
@@ -1858,6 +2274,7 @@ static WarmStartMode performWarmStart()
     } else {
         warmStartStats.warmStartOk2h = false;
         hasRet2hWarm = false;
+        warmStart2hValid = false;
         if (count2h < 0) {
             Serial_printf(F("[WarmStart] 2h fetch gefaald na %d pogingen (error: %d)\n"), maxRetries2h, count2h);
         } else if (count2h == 0) {
@@ -1882,10 +2299,19 @@ static WarmStartMode performWarmStart()
     #endif
     
     // Initialiseer prices array met warm-start waarden (voor directe UI weergave)
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
     if (hasRet2h) {
         prices[3] = ret_2h;  // Zet 2h return direct na warm-start
     }
+    #if defined(PLATFORM_ESP32S3_4848S040)
+    if (hasRet1d) {
+        prices[4] = ret_1d;  // Zet 1d return direct na warm-start
+    }
+    if (hasRet7d) {
+        prices[5] = ret_7d;  // Zet 7d return direct na warm-start
+    }
+    #endif
+    #endif
     
     // Bereken 2h gemiddelde na warm-start (voor UI weergave)
     if (hasRet2h && (minuteArrayFilled || minuteIndex > 0)) {
@@ -1915,7 +2341,6 @@ static WarmStartMode performWarmStart()
             }
         }
     }
-    #endif
     if (hasRet30m) {
         prices[2] = ret_30m;  // Zet 30m return direct na warm-start
     }
@@ -2855,7 +3280,9 @@ void netMutexUnlock(const char* taskName)
 void findMinMaxInSecondPrices(float &minVal, float &maxVal);
 void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
 #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-void findMinMaxInLast2Hours(float &minVal, float &maxVal);  // Alleen voor CYD platforms
+#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
+void findMinMaxInLast2Hours(float &minVal, float &maxVal);  // CYD + 4848S040
+#endif
 #endif
 TwoHMetrics computeTwoHMetrics();  // Compute 2-hour metrics uniformly from existing state
 static void checkHeapTelemetry();
@@ -3186,6 +3613,15 @@ static void loadSettings()
     
     // Copy Smart Confluence Mode settings
     smartConfluenceEnabled = settings.smartConfluenceEnabled;
+    nightModeEnabled = settings.nightModeEnabled;
+    nightModeStartHour = settings.nightModeStartHour;
+    nightModeEndHour = settings.nightModeEndHour;
+    nightSpike5mThreshold = settings.nightSpike5mThreshold;
+    nightMove5mAlertThreshold = settings.nightMove5mAlertThreshold;
+    nightMove30mThreshold = settings.nightMove30mThreshold;
+    nightCooldown5mSec = settings.nightCooldown5mSec;
+    nightAutoVolMinMultiplier = settings.nightAutoVolMinMultiplier;
+    nightAutoVolMaxMultiplier = settings.nightAutoVolMaxMultiplier;
     
     // Copy Warm-Start settings
     warmStartEnabled = settings.warmStartEnabled;
@@ -3254,6 +3690,15 @@ void saveSettings()
     
     // Copy Smart Confluence Mode settings
     settings.smartConfluenceEnabled = smartConfluenceEnabled;
+    settings.nightModeEnabled = nightModeEnabled;
+    settings.nightModeStartHour = nightModeStartHour;
+    settings.nightModeEndHour = nightModeEndHour;
+    settings.nightSpike5mThreshold = nightSpike5mThreshold;
+    settings.nightMove5mAlertThreshold = nightMove5mAlertThreshold;
+    settings.nightMove30mThreshold = nightMove30mThreshold;
+    settings.nightCooldown5mSec = nightCooldown5mSec;
+    settings.nightAutoVolMinMultiplier = nightAutoVolMinMultiplier;
+    settings.nightAutoVolMaxMultiplier = nightAutoVolMaxMultiplier;
     
     // Copy Warm-Start settings
     settings.warmStartEnabled = warmStartEnabled;
@@ -3441,6 +3886,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         {"/config/move30m/set", true, 0.01f, 20.0f, &alertThresholds.move30m, "/config/move30m"},
         {"/config/move5m/set", true, 0.01f, 10.0f, &alertThresholds.move5m, "/config/move5m"},
         {"/config/move5mAlert/set", true, 0.01f, 10.0f, &alertThresholds.move5mAlert, "/config/move5mAlert"},
+        {"/config/nightSpike5m/set", true, 0.01f, 10.0f, &nightSpike5mThreshold, "/config/nightSpike5m"},
+        {"/config/nightMove5m/set", true, 0.01f, 10.0f, &nightMove5mAlertThreshold, "/config/nightMove5m"},
+        {"/config/nightMove30m/set", true, 0.01f, 20.0f, &nightMove30mThreshold, "/config/nightMove30m"},
         {"/config/anchorTakeProfit/set", true, 0.1f, 100.0f, &anchorTakeProfit, "/config/anchorTakeProfit"},
         {"/config/anchorMaxLoss/set", true, -100.0f, -0.1f, &anchorMaxLoss, "/config/anchorMaxLoss"},
         {"/config/trendThreshold/set", true, 0.1f, 10.0f, &trendThreshold, "/config/trendThreshold"},
@@ -3464,7 +3912,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         // Auto-Volatility settings
         {"/config/autoVolBase/set", true, 0.01f, 1.0f, &autoVolatilityBaseline1mStdPct, "/config/autoVolBase"},
         {"/config/autoVolMin/set", true, 0.1f, 1.0f, &autoVolatilityMinMultiplier, "/config/autoVolMin"},
-        {"/config/autoVolMax/set", true, 1.0f, 3.0f, &autoVolatilityMaxMultiplier, "/config/autoVolMax"}
+        {"/config/autoVolMax/set", true, 1.0f, 3.0f, &autoVolatilityMaxMultiplier, "/config/autoVolMax"},
+        {"/config/nightAvMin/set", true, 0.1f, 3.0f, &nightAutoVolMinMultiplier, "/config/nightAvMin"},
+        {"/config/nightAvMax/set", true, 0.1f, 5.0f, &nightAutoVolMaxMultiplier, "/config/nightAvMax"}
     };
     
     static const struct {
@@ -3499,7 +3949,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         {"/config/ws1mExtra/set", &warmStart1mExtraCandles, 0, 100, "/config/ws1mExtra"},
         {"/config/ws5m/set", &warmStart5mCandles, 2, 200, "/config/ws5m"},
         {"/config/ws30m/set", &warmStart30mCandles, 2, 200, "/config/ws30m"},
-        {"/config/ws2h/set", &warmStart2hCandles, 2, 200, "/config/ws2h"}
+        {"/config/ws2h/set", &warmStart2hCandles, 2, 200, "/config/ws2h"},
+        {"/config/nightStartHour/set", &nightModeStartHour, 0, 23, "/config/nightStartHour"},
+        {"/config/nightEndHour/set", &nightModeEndHour, 0, 23, "/config/nightEndHour"}
     };
     
     // Boolean settings (switch entities)
@@ -3510,6 +3962,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     } boolSettings[] = {
         {"/config/trendAdapt/set", &trendAdaptiveAnchorsEnabled, "/config/trendAdapt"},
         {"/config/smartConf/set", &smartConfluenceEnabled, "/config/smartConf"},
+        {"/config/nightMode/set", &nightModeEnabled, "/config/nightMode"},
         {"/config/autoVol/set", &autoVolatilityEnabled, "/config/autoVol"},
         {"/config/warmStart/set", &warmStartEnabled, "/config/warmStart"}
     };
@@ -3602,6 +4055,24 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                 handled = true;
             } else {
                 Serial_printf(F("[MQTT] Invalid 2hSecCoalesce value (range: 10-600 seconds): %s\n"), msgBuffer);
+            }
+        }
+    }
+    
+    // Nacht: 5m cooldown in seconden (aparte setting)
+    if (!handled) {
+        snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/nightCd5m/set", prefixBuffer);
+        if (strcmp(topicBuffer, topicBufferFull) == 0) {
+            int seconds = atoi(msgBuffer);
+            if (seconds >= 60 && seconds <= 7200) {
+                nightCooldown5mSec = static_cast<uint16_t>(seconds);
+                snprintf(topicBufferFull, sizeof(topicBufferFull), "%s/config/nightCd5m", prefixBuffer);
+                snprintf(valueBuffer, sizeof(valueBuffer), "%u", nightCooldown5mSec);
+                mqttClient.publish(topicBufferFull, valueBuffer, true);
+                settingChanged = true;
+                handled = true;
+            } else {
+                Serial_printf(F("[MQTT] Invalid nightCd5m value (range: 60-7200 seconds): %s\n"), msgBuffer);
             }
         }
     }
@@ -3948,6 +4419,14 @@ void publishMqttSettings() {
     publishMqttUint("cooldown5min", notificationCooldown5MinMs / 1000);
     publishMqttUint("language", language);
     publishMqttUint("displayRotation", displayRotation);
+    publishMqttUint("nightStartHour", nightModeStartHour);
+    publishMqttUint("nightEndHour", nightModeEndHour);
+    publishMqttFloat("nightSpike5m", nightSpike5mThreshold);
+    publishMqttFloat("nightMove5m", nightMove5mAlertThreshold);
+    publishMqttFloat("nightMove30m", nightMove30mThreshold);
+    publishMqttUint("nightCd5m", nightCooldown5mSec);
+    publishMqttFloat("nightAvMin", nightAutoVolMinMultiplier);
+    publishMqttFloat("nightAvMax", nightAutoVolMaxMultiplier);
     
     // 2-hour alert cooldowns (in seconds)
     publishMqttUint("2hBreakCD", alert2HThresholds.breakCooldownMs / 1000);
@@ -3979,6 +4458,9 @@ void publishMqttSettings() {
     enqueueMqttMessage(topicBuffer, valueBuffer, true);
     snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/smartConf", mqttPrefix);
     snprintf(valueBuffer, sizeof(valueBuffer), "%s", smartConfluenceEnabled ? "ON" : "OFF");
+    enqueueMqttMessage(topicBuffer, valueBuffer, true);
+    snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/nightMode", mqttPrefix);
+    snprintf(valueBuffer, sizeof(valueBuffer), "%s", nightModeEnabled ? "ON" : "OFF");
     enqueueMqttMessage(topicBuffer, valueBuffer, true);
     snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/autoVol", mqttPrefix);
     snprintf(valueBuffer, sizeof(valueBuffer), "%s", autoVolatilityEnabled ? "ON" : "OFF");
@@ -4445,6 +4927,11 @@ void publishMqttDiscovery() {
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/switch/%s_nightMode/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Night Mode\",\"unique_id\":\"%s_nightMode\",\"state_topic\":\"%s/config/nightMode\",\"command_topic\":\"%s/config/nightMode/set\",\"icon\":\"mdi:weather-night\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/switch/%s_autoVol/config", deviceId);
     snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Auto-Volatility Mode\",\"unique_id\":\"%s_autoVol\",\"state_topic\":\"%s/config/autoVol\",\"command_topic\":\"%s/config/autoVol/set\",\"icon\":\"mdi:chart-timeline-variant-shimmer\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
@@ -4496,6 +4983,46 @@ void publishMqttDiscovery() {
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_nightStartHour/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Night Start Hour\",\"unique_id\":\"%s_nightStartHour\",\"state_topic\":\"%s/config/nightStartHour\",\"command_topic\":\"%s/config/nightStartHour/set\",\"min\":0,\"max\":23,\"step\":1,\"unit_of_measurement\":\"h\",\"icon\":\"mdi:clock-start\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_nightEndHour/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Night End Hour\",\"unique_id\":\"%s_nightEndHour\",\"state_topic\":\"%s/config/nightEndHour\",\"command_topic\":\"%s/config/nightEndHour/set\",\"min\":0,\"max\":23,\"step\":1,\"unit_of_measurement\":\"h\",\"icon\":\"mdi:clock-end\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_nightSpike5m/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Night 5m Spike Filter\",\"unique_id\":\"%s_nightSpike5m\",\"state_topic\":\"%s/config/nightSpike5m\",\"command_topic\":\"%s/config/nightSpike5m/set\",\"min\":0.01,\"max\":10.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:filter\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_nightMove5m/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Night 5m Move Threshold\",\"unique_id\":\"%s_nightMove5m\",\"state_topic\":\"%s/config/nightMove5m\",\"command_topic\":\"%s/config/nightMove5m/set\",\"min\":0.01,\"max\":10.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:trending-up\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_nightMove30m/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Night 30m Move Threshold\",\"unique_id\":\"%s_nightMove30m\",\"state_topic\":\"%s/config/nightMove30m\",\"command_topic\":\"%s/config/nightMove30m/set\",\"min\":0.01,\"max\":20.0,\"step\":0.01,\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:trending-up\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_nightCd5m/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Night 5m Cooldown\",\"unique_id\":\"%s_nightCd5m\",\"state_topic\":\"%s/config/nightCd5m\",\"command_topic\":\"%s/config/nightCd5m/set\",\"min\":60,\"max\":7200,\"step\":10,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_nightAvMin/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Night Auto-Vol Min\",\"unique_id\":\"%s_nightAvMin\",\"state_topic\":\"%s/config/nightAvMin\",\"command_topic\":\"%s/config/nightAvMin/set\",\"min\":0.1,\"max\":3.0,\"step\":0.01,\"icon\":\"mdi:chart-timeline-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
+    snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_nightAvMax/config", deviceId);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"Night Auto-Vol Max\",\"unique_id\":\"%s_nightAvMax\",\"state_topic\":\"%s/config/nightAvMax\",\"command_topic\":\"%s/config/nightAvMax/set\",\"min\":0.1,\"max\":5.0,\"step\":0.01,\"icon\":\"mdi:chart-timeline-variant\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    mqttClient.publish(topicBuffer, payloadBuffer, true);
+    delay(50);
+    
     Serial_println("[MQTT] Discovery messages published");
 }
 
@@ -4535,6 +5062,12 @@ void connectMQTT() {
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/move30m/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/move5m/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/nightSpike5m/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/nightMove5m/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/nightMove30m/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/cooldown1min/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
@@ -4605,6 +5138,8 @@ void connectMQTT() {
         mqttClient.subscribe(topicBuffer);
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/smartConf/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/nightMode/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/autoVol/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/autoVolWin/set", mqttPrefix);
@@ -4614,6 +5149,10 @@ void connectMQTT() {
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/autoVolMin/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/autoVolMax/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/nightAvMin/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/nightAvMax/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
         
         // Subscribe to warm-start settings
@@ -4626,6 +5165,12 @@ void connectMQTT() {
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/ws30m/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
         snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/ws2h/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/nightStartHour/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/nightEndHour/set", mqttPrefix);
+        mqttClient.subscribe(topicBuffer);
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/config/nightCd5m/set", mqttPrefix);
         mqttClient.subscribe(topicBuffer);
         
         // Subscribe to cooldown5min (was missing)
@@ -5043,16 +5588,22 @@ float calculateReturn1Minute()
 // Fase 9.1.4: static verwijderd zodat WebServerModule deze functie kan aanroepen
 float calculateReturn5Minutes()
 {
-    return calculateReturnGeneric(
-        priceData.getFiveMinutePrices(),
-        SECONDS_PER_5MINUTES,
-        priceData.getFiveMinuteIndex(),
-        priceData.getFiveMinuteArrayFilled(),
-        VALUES_FOR_5MIN_RETURN,
-        "[Ret5m]",
-        30000,  // Log every 30 seconds
-        255     // Don't update averagePrices
-    );
+    const float* prices = priceData.getFiveMinutePrices();
+    uint16_t arraySize = SECONDS_PER_5MINUTES;
+    uint16_t index = priceData.getFiveMinuteIndex();
+    bool filled = priceData.getFiveMinuteArrayFilled();
+    uint16_t count = filled ? arraySize : index;
+    if (count < 2) {
+        return 0.0f;
+    }
+    float stepHours = (5.0f / 60.0f) / (float)SECONDS_PER_5MINUTES;
+    float spanHours = (count > 1) ? (float)(count - 1) * stepHours : 0.0f;
+    float totalHours = (spanHours > (5.0f / 60.0f) || spanHours <= 0.0f) ? (5.0f / 60.0f) : spanHours;
+    float ret5m = 0.0f;
+    if (computeRegressionPctFromSeries(prices, count, stepHours, totalHours, ret5m)) {
+        return ret5m;
+    }
+    return 0.0f;
 }
 
 // Calculate 30-minute return: price now vs 30 minutes ago (using minute averages)
@@ -5060,113 +5611,7 @@ float calculateReturn5Minutes()
 // Fase 9.1.4: static verwijderd zodat WebServerModule deze functie kan aanroepen
 float calculateReturn30Minutes()
 {
-    // Need at least 30 minutes of history
-    bool arrayFilled = priceData.getMinuteArrayFilled();
-    uint8_t index = priceData.getMinuteIndex();
-    // Fase 5.1: Geconsolideerde berekening
-    uint8_t availableMinutes = calculateAvailableElements(arrayFilled, index, MINUTES_FOR_30MIN_CALC);
-    if (availableMinutes < 30)
-    {
-        static uint32_t lastLogTime = 0;
-        uint32_t now = millis();
-        if (now - lastLogTime > 60000) {
-            Serial_printf("[Ret30m] Wachten op data: minuteIndex=%u (nodig: 30, available=%u)\n", 
-                         index, availableMinutes);
-            lastLogTime = now;
-        }
-        averagePrices[2] = 0.0f;
-        return 0.0f;
-    }
-    
-    // Fase 4.2.9: Gebruik PriceData getters (parallel, arrays blijven globaal)
-    // Calculate average of last 30 minutes for display (specific to 30m calculation)
-    float* averages = priceData.getMinuteAverages();
-    bool minuteArrayFilled = arrayFilled;
-    uint8_t minuteIndex = index;
-    
-    // Fase 5.2: Geconsolideerde loop voor ring buffer iteratie
-    float last30Sum = 0.0f;
-    uint16_t last30Count = 0;
-    accumulateValidPricesFromRingBuffer(
-        averages,
-        minuteArrayFilled,
-        minuteIndex,
-        MINUTES_FOR_30MIN_CALC,
-        1,  // Start vanaf 1 positie terug (nieuwste)
-        30, // 30 minuten
-        last30Sum,
-        last30Count
-    );
-    if (last30Count > 0)
-    {
-        averagePrices[2] = last30Sum / last30Count;
-    }
-    else
-    {
-        averagePrices[2] = 0.0f;
-    }
-    
-    // Calculate return: use average of last 30 minutes vs average of previous 30 minutes (if available)
-    if (availableMinutes >= 60) {
-        float prev30Sum = 0.0f;
-        uint16_t prev30Count = 0;
-        accumulateValidPricesFromRingBuffer(
-            averages,
-            minuteArrayFilled,
-            minuteIndex,
-            MINUTES_FOR_30MIN_CALC,
-            31, // Start vanaf 31 posities terug (30 minuten vóór de laatste 30)
-            30,
-            prev30Sum,
-            prev30Count
-        );
-
-        if (prev30Count > 0) {
-            float prev30Avg = prev30Sum / prev30Count;
-            if (areValidPrices(averagePrices[2], prev30Avg) && prev30Avg > 0.0f) {
-                float ret30m = calculatePercentageReturn(averagePrices[2], prev30Avg);
-                #if DEBUG_CALCULATIONS
-                Serial_printf(F("[Ret30m] >=60m: last30Avg=%.2f, prev30Avg=%.2f, ret=%.4f%%\n"),
-                             averagePrices[2], prev30Avg, ret30m);
-                #endif
-                return ret30m;
-            }
-        }
-    }
-
-    // Fallback: gebruik laatste minuut gemiddelde vs gemiddelde van laatste 30 minuten
-    // Fase 6.1: Geconsolideerde validatie
-    // Gebruik laatste minuut gemiddelde in plaats van huidige prijs voor consistentie
-    uint8_t lastMinuteIdx;
-    if (!minuteArrayFilled) {
-        if (minuteIndex == 0) {
-        return 0.0f;
-    }
-        lastMinuteIdx = minuteIndex - 1;
-    } else {
-        lastMinuteIdx = getLastWrittenIndex(minuteIndex, MINUTES_FOR_30MIN_CALC);
-    }
-    float priceNow = averages[lastMinuteIdx];  // Laatste minuut gemiddelde
-    float price30mAgo = averagePrices[2];  // Gemiddelde van laatste 30 minuten
-    
-    // Fase 6.1: Gebruik geconsolideerde validatie helper
-    if (!areValidPrices(priceNow, price30mAgo) || price30mAgo <= 0.0f) {
-        #if DEBUG_CALCULATIONS
-        Serial_printf(F("[Ret30m] <60m: Invalid prices: priceNow=%.2f, price30mAgo=%.2f\n"),
-                     priceNow, price30mAgo);
-        #endif
-        return 0.0f;
-    }
-    
-    // Fase 5.1: Geconsolideerde percentage berekening
-    float ret30m = calculatePercentageReturn(priceNow, price30mAgo);
-    
-    #if DEBUG_CALCULATIONS
-    Serial_printf(F("[Ret30m] <60m: priceNow=%.2f (lastMinAvg), price30mAgo=%.2f (avg30m), ret=%.4f%%\n"),
-                 priceNow, price30mAgo, ret30m);
-    #endif
-    
-    return ret30m;
+    return calculateLinearTrend30Minutes();
 }
 
 // OUDE METHODE - behouden voor referentie, maar niet meer gebruikt
@@ -5284,7 +5729,7 @@ static float calculate1MinutePct()
 }
 
 // Bereken lineaire regressie (trend) over de laatste 30 minuten
-// Retourneert de helling (slope) als percentage per uur
+// Retourneert de helling (slope) als percentage per 30 minuten
 // Positieve waarde = stijgende trend, negatieve waarde = dalende trend
 static float calculateLinearTrend30Minutes()
 {
@@ -5334,7 +5779,8 @@ static float calculateLinearTrend30Minutes()
         float price = minuteAverages[idx];
         if (price > 0.0f)
         {
-            float x = (float)i; // Tijd index (0 tot 29, waarbij 0 = oudste, 29 = nieuwste)
+            // Loop gaat van nieuwste -> oudste, dus keer om voor juiste richting
+            float x = (float)(30 - 1 - i); // 0 = oudste, 29 = nieuwste
             float y = price;
             
             sumX += x;
@@ -5369,12 +5815,12 @@ static float calculateLinearTrend30Minutes()
     float slope = ((n * sumXY) - (sumX * sumY)) / denominator;
     
     // Slope is nu de prijsverandering per minuut
-    // Omzetten naar percentage per uur: (slope * 60) / gemiddelde_prijs * 100
+    // Omzetten naar percentage per 30 minuten: (slope * 30) / gemiddelde_prijs * 100
     if (last30Avg > 0.0f)
     {
-        float slopePerHour = slope * 60.0f; // Prijsverandering per uur
-        float pctPerHour = (slopePerHour / last30Avg) * 100.0f;
-        return pctPerHour;
+        float slopePer30m = slope * 30.0f; // Prijsverandering per 30 minuten
+        float pctPer30m = (slopePer30m / last30Avg) * 100.0f;
+        return pctPer30m;
     }
     
     return 0.0f;
@@ -5686,6 +6132,202 @@ static float calculateReturnFromHourly(uint16_t hoursBack)
     return calculatePercentageReturn(priceNow, priceAgo);
 }
 
+// Compute average/min/max over last 24 hours from hourly buffer
+// Returns true if at least 2 valid hourly samples are available
+bool computeStatsLast24Hours(float &avgVal, float &minVal, float &maxVal)
+{
+    avgVal = 0.0f;
+    minVal = 0.0f;
+    maxVal = 0.0f;
+    warmStart1dUsingFallback = false;
+    if (hourlyAverages == nullptr) {
+        if (warmStart1dValid) {
+            avgVal = warmStart1dAvg;
+            minVal = warmStart1dMin;
+            maxVal = warmStart1dMax;
+            warmStart1dUsingFallback = true;
+            return true;
+        }
+        return false;
+    }
+    uint16_t availableHours = calculateAvailableElements(hourArrayFilled, hourIndex, HOURS_FOR_7D);
+    if (availableHours < 24) {
+        if (warmStart1dValid) {
+            avgVal = warmStart1dAvg;
+            minVal = warmStart1dMin;
+            maxVal = warmStart1dMax;
+            warmStart1dUsingFallback = true;
+            return true;
+        }
+        if (availableHours < 2) {
+            return false;
+        }
+    }
+    uint16_t count = (availableHours < 24) ? availableHours : 24;
+    uint16_t lastHourIdx = getLastWrittenIndex(hourIndex, HOURS_FOR_7D);
+    bool firstValid = false;
+    float sum = 0.0f;
+    uint16_t validCount = 0;
+    for (uint16_t i = 0; i < count; i++) {
+        int32_t idx = (int32_t)lastHourIdx - (int32_t)i;
+        if (idx < 0) idx += HOURS_FOR_7D;
+        float price = hourlyAverages[idx];
+        if (!isValidPrice(price)) {
+            continue;
+        }
+        if (!firstValid) {
+            minVal = price;
+            maxVal = price;
+            firstValid = true;
+        } else {
+            if (price < minVal) minVal = price;
+            if (price > maxVal) maxVal = price;
+        }
+        sum += price;
+        validCount++;
+    }
+    if (!firstValid || validCount == 0) {
+        if (warmStart1dValid) {
+            avgVal = warmStart1dAvg;
+            minVal = warmStart1dMin;
+            maxVal = warmStart1dMax;
+            warmStart1dUsingFallback = true;
+            return true;
+        }
+        return false;
+    }
+    avgVal = sum / (float)validCount;
+    return true;
+}
+
+// Compute average/min/max over last 2 hours from minute buffer, fallback to warm-start
+bool computeStatsLast2Hours(float &avgVal, float &minVal, float &maxVal)
+{
+    avgVal = 0.0f;
+    minVal = 0.0f;
+    maxVal = 0.0f;
+    warmStart2hUsingFallback = false;
+    // Als live 2h nog niet betrouwbaar is, gebruik warm-start stats
+    if (!hasRet2hLive && warmStart2hValid) {
+        avgVal = warmStart2hAvg;
+        minVal = warmStart2hMin;
+        maxVal = warmStart2hMax;
+        warmStart2hUsingFallback = true;
+        return true;
+    }
+    uint8_t availableMinutes = minuteArrayFilled ? MINUTES_FOR_30MIN_CALC : minuteIndex;
+    if (availableMinutes < 2) {
+        if (warmStart2hValid) {
+            avgVal = warmStart2hAvg;
+            minVal = warmStart2hMin;
+            maxVal = warmStart2hMax;
+            warmStart2hUsingFallback = true;
+            return true;
+        }
+        return false;
+    }
+    uint8_t count = (availableMinutes < 120) ? availableMinutes : 120;
+    bool firstValid = false;
+    float sum = 0.0f;
+    uint16_t validCount = 0;
+    for (uint8_t i = 1; i <= count; i++) {
+        uint8_t idx = (minuteIndex - i + MINUTES_FOR_30MIN_CALC) % MINUTES_FOR_30MIN_CALC;
+        float price = minuteAverages[idx];
+        if (!isValidPrice(price)) {
+            continue;
+        }
+        if (!firstValid) {
+            minVal = price;
+            maxVal = price;
+            firstValid = true;
+        } else {
+            if (price < minVal) minVal = price;
+            if (price > maxVal) maxVal = price;
+        }
+        sum += price;
+        validCount++;
+    }
+    if (!firstValid || validCount == 0) {
+        if (warmStart2hValid) {
+            avgVal = warmStart2hAvg;
+            minVal = warmStart2hMin;
+            maxVal = warmStart2hMax;
+            warmStart2hUsingFallback = true;
+            return true;
+        }
+        return false;
+    }
+    avgVal = sum / (float)validCount;
+    return true;
+}
+
+// Compute average/min/max over last 7 days from hourly buffer, fallback to warm-start
+bool computeStatsLast7Days(float &avgVal, float &minVal, float &maxVal)
+{
+    avgVal = 0.0f;
+    minVal = 0.0f;
+    maxVal = 0.0f;
+    warmStart7dUsingFallback = false;
+    if (hourlyAverages == nullptr) {
+        if (warmStart7dValid) {
+            avgVal = warmStart7dAvg;
+            minVal = warmStart7dMin;
+            maxVal = warmStart7dMax;
+            warmStart7dUsingFallback = true;
+            return true;
+        }
+        return false;
+    }
+    uint16_t availableHours = calculateAvailableElements(hourArrayFilled, hourIndex, HOURS_FOR_7D);
+    if (availableHours < 168) {
+        if (warmStart7dValid) {
+            avgVal = warmStart7dAvg;
+            minVal = warmStart7dMin;
+            maxVal = warmStart7dMax;
+            warmStart7dUsingFallback = true;
+            return true;
+        }
+        if (availableHours < 2) {
+            return false;
+        }
+    }
+    uint16_t count = (availableHours < 168) ? availableHours : 168;
+    uint16_t lastHourIdx = getLastWrittenIndex(hourIndex, HOURS_FOR_7D);
+    bool firstValid = false;
+    float sum = 0.0f;
+    uint16_t validCount = 0;
+    for (uint16_t i = 0; i < count; i++) {
+        int32_t idx = (int32_t)lastHourIdx - (int32_t)i;
+        if (idx < 0) idx += HOURS_FOR_7D;
+        float price = hourlyAverages[idx];
+        if (!isValidPrice(price)) {
+            continue;
+        }
+        if (!firstValid) {
+            minVal = price;
+            maxVal = price;
+            firstValid = true;
+        } else {
+            if (price < minVal) minVal = price;
+            if (price > maxVal) maxVal = price;
+        }
+        sum += price;
+        validCount++;
+    }
+    if (!firstValid || validCount == 0) {
+        if (warmStart7dValid) {
+            avgVal = warmStart7dAvg;
+            minVal = warmStart7dMin;
+            maxVal = warmStart7dMax;
+            warmStart7dUsingFallback = true;
+            return true;
+        }
+        return false;
+    }
+    avgVal = sum / (float)validCount;
+    return true;
+}
+
 // Calculate linear trend over last 24 hours (1 day) using linear regression
 // Returns slope as percentage per day
 // Positive value = rising trend, negative value = falling trend
@@ -5934,9 +6576,9 @@ void findMinMaxInLast30Minutes(float &minVal, float &maxVal)
     bool result = findMinMaxInArray(minuteAverages, MINUTES_FOR_30MIN_CALC, minuteIndex, minuteArrayFilled, 30, true, minVal, maxVal);
 }
 
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
 // Find min and max values in last 2 hours (120 minutes) of minuteAverages array
-// Alleen voor CYD platforms met 2h box
+// CYD + 4848S040 platforms met 2h box
 // Fase 2.1: Geoptimaliseerd: gebruikt generic findMinMaxInArray() helper
 void findMinMaxInLast2Hours(float &minVal, float &maxVal)
 {
@@ -5950,7 +6592,7 @@ TwoHMetrics computeTwoHMetrics()
 {
     TwoHMetrics metrics;
     
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
     // Gebruik bestaande 2h average (wordt berekend in calculateReturn2Hours())
     metrics.avg2h = averagePrices[3];
     // Gebruik bestaande findMinMaxInLast2Hours() functie voor CYD platforms
@@ -6083,6 +6725,67 @@ static void updateHourlyAverage()
     }
 }
 
+// Periodieke sanity check voor live minutenbuffer (voor 1m/5m/30m/2h)
+static void checkLiveMinuteBuffer()
+{
+    static unsigned long lastCheckMs = 0;
+    const unsigned long CHECK_INTERVAL_MS = 60000UL; // elke minuut
+    unsigned long now = millis();
+    if (now - lastCheckMs < CHECK_INTERVAL_MS) {
+        return;
+    }
+    lastCheckMs = now;
+
+    uint8_t availableMinutes = minuteArrayFilled ? MINUTES_FOR_30MIN_CALC : minuteIndex;
+    if (availableMinutes == 0) {
+        Serial_printf(F("[MinuteBuf] Geen data: minuteIndex=%u, filled=%d\n"),
+                      minuteIndex, minuteArrayFilled ? 1 : 0);
+        return;
+    }
+
+    uint8_t count = availableMinutes;
+    float minVal = 0.0f;
+    float maxVal = 0.0f;
+    float sum = 0.0f;
+    uint16_t valid = 0;
+    bool firstValid = false;
+    for (uint8_t i = 1; i <= count; i++) {
+        uint8_t idx = (minuteIndex - i + MINUTES_FOR_30MIN_CALC) % MINUTES_FOR_30MIN_CALC;
+        float price = minuteAverages[idx];
+        if (!isValidPrice(price)) {
+            continue;
+        }
+        if (!firstValid) {
+            minVal = price;
+            maxVal = price;
+            firstValid = true;
+        } else {
+            if (price < minVal) minVal = price;
+            if (price > maxVal) maxVal = price;
+        }
+        sum += price;
+        valid++;
+    }
+
+    if (!firstValid || valid == 0) {
+        Serial_printf(F("[MinuteBuf] Geen geldige prijzen: avail=%u, idx=%u\n"),
+                      availableMinutes, minuteIndex);
+        return;
+    }
+
+    float avg = sum / (float)valid;
+    uint8_t livePct30 = calcLivePctMinuteAverages(30);
+    uint8_t livePct120 = calcLivePctMinuteAverages(120);
+    Serial_printf(F("[MinuteBuf] idx=%u filled=%d avail=%u valid=%u min=%.2f max=%.2f avg=%.2f live30=%u%% live120=%u%%\n"),
+                  minuteIndex, minuteArrayFilled ? 1 : 0, availableMinutes, valid, minVal, maxVal, avg,
+                  livePct30, livePct120);
+
+    if (avg < minVal || avg > maxVal || maxVal < minVal) {
+        Serial_printf(F("[MinuteBuf] WARN: avg buiten range (min=%.2f max=%.2f avg=%.2f)\n"),
+                      minVal, maxVal, avg);
+    }
+}
+
 static void updateMinuteAverage()
 {
     // Fase 4.2.7: Gebruik PriceData getters (parallel, arrays blijven globaal)
@@ -6129,6 +6832,9 @@ static void updateMinuteAverage()
     
     // Update warm-start status na elke minuut update
     updateWarmStartStatus();
+
+    // Periodieke sanity check voor live minutenbuffer
+    checkLiveMinuteBuffer();
 }
 
 // ============================================================================
@@ -6324,7 +7030,7 @@ void fetchPrice()
                 // Genoeg data beschikbaar: herbereken met beschikbare data (kan mix zijn)
                 ret_30m = calculateReturn30Minutes();
                 #if DEBUG_CALCULATIONS
-                Serial_printf(F("[API][30m] Recalculated: ret_30m=%.4f%%, availableMinutes=%u, livePct=%u%%\n"),
+                Serial_printf(F("[API][30m] Recalculated (regressie): ret_30m=%.4f%%, availableMinutes=%u, livePct=%u%%\n"),
                              ret_30m, availableMinutes, livePct30);
                 #endif
             } else if (hasRet30mWarm) {
@@ -6345,7 +7051,7 @@ void fetchPrice()
                 // Genoeg data beschikbaar: herbereken met beschikbare data (kan mix zijn)
                 ret_2h = calculateReturn2Hours();
                 #if DEBUG_CALCULATIONS
-                Serial_printf(F("[API][2h] Recalculated: ret_2h=%.4f%%, availableMinutes=%u, livePct=%u%%\n"),
+                Serial_printf(F("[API][2h] Recalculated (regressie): ret_2h=%.4f%%, availableMinutes=%u, livePct=%u%%\n"),
                              ret_2h, availableMinutes, livePct120);
                 #endif
             } else if (hasRet2hWarm) {
@@ -6492,13 +7198,26 @@ void fetchPrice()
             }
             
             // 2h return voor CYD platforms (index 3)
-            #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+            #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
             // ret_2h wordt nu altijd berekend in calculateReturn2Hours(), ook als er minder dan 120 minuten zijn
             // Het berekent een return op basis van beschikbare data (minimaal 2 minuten nodig)
             if (hasRet2h) {
             prices[3] = ret_2h;
             } else {
                 prices[3] = 0.0f; // Reset naar 0 om aan te geven dat er nog geen data is
+            }
+            #endif
+            
+            #if defined(PLATFORM_ESP32S3_4848S040)
+            if (hasRet1d) {
+                prices[4] = ret_1d;
+            } else {
+                prices[4] = 0.0f;
+            }
+            if (hasRet7d) {
+                prices[5] = ret_7d;
+            } else {
+                prices[5] = 0.0f;
             }
             #endif
             
@@ -6817,12 +7536,27 @@ void checkButton() {
 
 
 // Setup helper functions - split setup() into logical sections
+static unsigned long bootStartMs = 0;
+static unsigned long lastBootLogMs = 0;
+
+static void logBootStage(const char* stage)
+{
+    unsigned long now = millis();
+    if (bootStartMs == 0) {
+        bootStartMs = now;
+    }
+    unsigned long sinceStart = now - bootStartMs;
+    unsigned long sinceLast = (lastBootLogMs == 0) ? sinceStart : (now - lastBootLogMs);
+    lastBootLogMs = now;
+    Serial_printf(F("[Boot] %s @%lu ms (+%lu)\n"), stage, sinceStart, sinceLast);
+}
+
 static void setupSerialAndDevice()
 {
     // ESP32-S3 fix: Serial moet als ALLER EERSTE worden geïnitialiseerd
-    #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
+    #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK) || defined(PLATFORM_ESP32S3_4848S040) || defined(ARDUINO_ESP32S3_DEV)
     Serial.begin(115200);
-    delay(500); // ESP32-S3 heeft tijd nodig voor Serial stabilisatie
+    delay(800); // ESP32-S3 heeft tijd nodig voor Serial stabilisatie
     Serial.println("\n\n=== ESP32-S3 Crypto Monitor Starting ===");
     Serial.flush(); // Force flush om te zorgen dat output wordt verzonden
     #else
@@ -6869,6 +7603,9 @@ static void setupSerialAndDevice()
     Serial_println("Arduino_GFX LVGL_Arduino_v9 example ");
     String LVGL_Arduino = String('V') + lv_version_major() + "." + lv_version_minor() + "." + lv_version_patch();
     Serial_println(LVGL_Arduino);
+    bootStartMs = millis();
+    lastBootLogMs = 0;
+    logBootStage("serial+device");
 }
 
 static void setupDisplay()
@@ -6890,6 +7627,8 @@ static void setupDisplay()
     // CYD24/CYD28: standaard false, behalve wanneer INVERT_COLORS flag is gezet
     #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     gfx->invertDisplay(false); // TTGO/ESP32-S3 T-Display/GEEK heeft geen inversie nodig (ST7789)
+    #elif defined(PLATFORM_ESP32S3_4848S040)
+    gfx->invertDisplay(false); // 4848S040: geen inversie (basisinstelling)
     #elif defined(PLATFORM_CYD24_INVERT_COLORS)
     gfx->invertDisplay(true); // CYD24: inverteer kleuren
     #elif defined(PLATFORM_CYD28_INVERT_COLORS)
@@ -6935,6 +7674,12 @@ static void setupLVGL()
 
     uint32_t screenWidth = gfx->width();
     uint32_t screenHeight = gfx->height();
+    #ifdef LVGL_SCREEN_WIDTH
+        screenWidth = LVGL_SCREEN_WIDTH;
+    #endif
+    #ifdef LVGL_SCREEN_HEIGHT
+        screenHeight = LVGL_SCREEN_HEIGHT;
+    #endif
     
     // Detecteer PSRAM beschikbaarheid
     bool psramAvailable = hasPSRAM();
@@ -7147,22 +7892,16 @@ static void setupWiFiEventHandlers()
                     IPAddress ip(info.got_ip.ip_info.ip.addr);
                     formatIPAddress(ip, ipBuffer, sizeof(ipBuffer));
                     Serial.printf("[WiFi] IP verkregen: %s\n", ipBuffer);
-                    
-                    // Publiceer IP-adres naar MQTT (als MQTT verbonden is)
-                    if (mqttConnected) {
-                        char topicBuffer[128];
-                        char mqttPrefixTemp[64];
-                        getMqttTopicPrefix(mqttPrefixTemp, sizeof(mqttPrefixTemp));
-                        snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/ip_address", mqttPrefixTemp);
-                        mqttClient.publish(topicBuffer, ipBuffer, false);
-                    }
+                    strncpy(pendingIpBuffer, ipBuffer, sizeof(pendingIpBuffer) - 1);
+                    pendingIpBuffer[sizeof(pendingIpBuffer) - 1] = '\0';
+                    pendingIpPublish = true;
                 }
                 wifiReconnectEnabled = false;
                 wifiInitialized = true;
                 reconnectAttemptCount = 0; // Reset reconnect counter bij succesvolle verbinding
                 // Start MQTT connectie na WiFi verbinding
                 if (!mqttConnected) {
-                    connectMQTT();
+                    requestMqttReconnect();
                 }
                 break;
             default:
@@ -7326,15 +8065,22 @@ void setup()
 {
     // Setup in logical sections for better readability and maintainability
     setupSerialAndDevice();
+    logBootStage("after serial+device");
     setupDisplay();
+    logBootStage("after display");
     // Fase 8: LVGL initialisatie via UIController module
     uiController.setupLVGL();
+    logBootStage("after lvgl");
     setupWatchdog();
+    logBootStage("after watchdog");
     setupWiFiEventHandlers();
+    logBootStage("after wifi events");
     setupMutex();  // Mutex moet vroeg aangemaakt worden, maar tasks starten later
+    logBootStage("after mutex");
     
     // Alloceer dynamische arrays voor CYD zonder PSRAM (moet voor initialisatie)
     allocateDynamicArrays();
+    logBootStage("after arrays");
     
     // Allocate Bitvavo streaming buffer on heap (fallback naar static)
     if (bitvavoStreamBuffer == bitvavoStreamBufferFallback) {
@@ -7378,6 +8124,7 @@ void setup()
     
     // WiFi connection and initial data fetch (maakt tijdelijk UI aan)
     wifiConnectionAndFetchPrice();
+    logBootStage("after wifi+initial price");
     
     // Fase 4.2.5: Synchroniseer PriceData state na warm-start (als warm-start is uitgevoerd)
     priceData.syncStateFromGlobals();
@@ -7422,15 +8169,18 @@ void setup()
                        ret_2h, ret_30m, hasRet2h, hasRet30m,
                        req1mCandles, req5mCandles, req30mCandles, req2hCandles);
     }
+    logBootStage("after warmstart");
     
     // WS init wordt uitgesteld tot na de eerste succesvolle API-prijs
     
     Serial_println("Setup done");
     fetchPrice();
+    logBootStage("after fetchPrice");
     
     // Build main UI (verwijdert WiFi UI en bouwt hoofd UI)
     // Fase 8.4.3: Gebruik module versie
     uiController.buildUI();
+    logBootStage("after buildUI");
     
     // Force LVGL to render immediately after UI creation
     // CYD 2.4 en CYD 2.8 (zonder PSRAM, single buffering): gebruik lv_refr_now() voor directe rendering
@@ -7447,6 +8197,7 @@ void setup()
         delay(DELAY_LVGL_RENDER_MS);
     }
     #endif
+    logBootStage("after first render");
     
     // Fase 7.2b: Minimale guard: controleer arrays vóór tasks starten
     // Warm-start is de enige schrijver tijdens setup (tasks bestaan nog niet)
@@ -7469,6 +8220,7 @@ void setup()
     // Start FreeRTOS tasks NA buildUI() en NA warm-start
     // Warm-start heeft exclusieve toegang tijdens setup (geen race conditions mogelijk)
     startFreeRTOSTasks();
+    logBootStage("after tasks");
 }
 
 // Toon verbindingsinfo (SSID en IP-adres) en "Opening Bitvavo Session" op het scherm
@@ -8076,6 +8828,16 @@ void loop()
     
     // Deferred MQTT reconnect (thread-safe)
     applyPendingMqttReconnect();
+
+    // Deferred IP publish (thread-safe, avoids arduino_events stack use)
+    if (pendingIpPublish && mqttConnected) {
+        char topicBuffer[128];
+        char mqttPrefixTemp[64];
+        getMqttTopicPrefix(mqttPrefixTemp, sizeof(mqttPrefixTemp));
+        snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/ip_address", mqttPrefixTemp);
+        mqttClient.publish(topicBuffer, pendingIpBuffer, false);
+        pendingIpPublish = false;
+    }
     
     // MQTT loop (moet regelmatig worden aangeroepen)
     if (mqttConnected) {
@@ -8173,6 +8935,12 @@ void loop()
 // Set the brightness of the display to GFX_BRIGHTNESS
 void setDisplayBrigthness()
 {
+    #if defined(PLATFORM_ESP32S3_4848S040)
+    // 4848S040: force backlight fully on (PWM kan dim uitvallen op GPIO38)
+    pinMode(GFX_BL, OUTPUT);
+    digitalWrite(GFX_BL, HIGH);
+    #else
     ledcAttachChannel(GFX_BL, 1000, 8, 1);
     ledcWrite(GFX_BL, SCREEN_BRIGHTNESS);
+    #endif
 }
