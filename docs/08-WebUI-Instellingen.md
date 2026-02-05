@@ -19,6 +19,12 @@ Wijzigingen worden opgeslagen in het device en worden actief na **Opslaan**, ten
   - Effect: Handig bij een nieuw device of als je een "schone" start wilt.
 - **Bitvavo Market**: De markt die je volgt, zoals `BTC-EUR`.
   - Effect: De data komt voortaan van deze markt; het device herstart om buffers schoon te maken.
+  - Voorbeelden (populaire Bitvavo‑markten):
+    `BTC-EUR`, `ETH-EUR`, `SOL-EUR`, `XRP-EUR`, `ADA-EUR`,
+    `DOGE-EUR`, `AVAX-EUR`, `LINK-EUR`, `MATIC-EUR`, `LTC-EUR`.
+  - USD‑varianten (als beschikbaar op Bitvavo):
+    `BTC-USD`, `ETH-USD`, `SOL-USD`, `XRP-USD`, `ADA-USD`,
+    `DOGE-USD`, `AVAX-USD`, `LINK-USD`, `MATIC-USD`, `LTC-USD`.
 - **Taal**: `0` voor Nederlands, `1` voor Engels.
   - Effect: UI-teksten en meldingen veranderen mee.
 - **Display Rotatie**: `0` normaal, `2` 180 graden gedraaid.
@@ -85,18 +91,31 @@ Deze groep stuurt de "grotere" 2h alerts zoals breakout/breakdown en mean touch.
 
 ## Auto Anchor
 
-Automatisch berekende anchor op basis van 4h/1d EMA.
+Automatisch berekende anchor op basis van 4h/1d EMA. Dit is bedoeld om een "slimme referentieprijs" te hebben die meebeweegt met de markt, zonder dat je handmatig steeds een nieuwe anchor hoeft te zetten.
 
 - **Anchor Bron**: `MANUAL`, `AUTO`, `AUTO_FALLBACK`, `OFF`.
-  - Effect: Kies handmatig of automatisch.
-- **Update Interval (min)**: Hoe vaak de auto-anchor mag bijwerken.
-- **Force Update Interval (min)**: Dwingt update na X minuten.
-- **4h Candles / 1d Candles**: Aantal candles voor de berekening.
-- **Min Update %**: Minimum wijziging voordat het systeem update.
-- **Trend Pivot %**: Wanneer trend zwaarder meeweegt.
-- **4h Base Weight / 4h Trend Boost**: Weegfactoren voor 4h.
-- **Laatste Auto Anchor**: Alleen weergave van de laatste waarde.
-- **Notificatie bij update**: Stuur een melding als auto-anchor wijzigt.
+  - **MANUAL**: Je zet de anchor zelf. Auto‑anchor doet niets.
+  - **AUTO**: De anchor wordt volledig automatisch berekend en bijgewerkt.
+  - **AUTO_FALLBACK**: Auto‑anchor is actief, maar valt terug op de handmatige anchor als er (tijdelijk) te weinig data is.
+  - **OFF**: Anchor-logica wordt uitgeschakeld.
+- **Update Interval (min)**: Hoe vaak het systeem *mag* updaten.
+  - Lager = sneller meebewegen; hoger = stabieler, minder ruis.
+- **Force Update Interval (min)**: Maximaal aantal minuten voordat er sowieso een update komt.
+  - Handig als de markt lang zijwaarts beweegt en je toch af en toe een verse anchor wilt.
+- **4h Candles / 1d Candles**: Hoeveel candles er worden gebruikt voor de EMA‑berekening.
+  - Meer candles = gladdere, trager reagerende anchor.
+  - Minder candles = sneller, maar gevoeliger voor korte swings.
+- **Min Update %**: Minimale procentuele verandering voordat de anchor echt wijzigt.
+  - Voorkomt dat de anchor elke kleine tik volgt.
+- **Trend Pivot %**: Vanaf welk trendniveau de trend zwaarder meeweegt.
+  - Hoger = pas bij duidelijke trend extra bias.
+- **4h Base Weight / 4h Trend Boost**: Hoe zwaar 4h meetelt in de auto‑anchor.
+  - Base = standaard gewicht.
+  - Trend Boost = extra gewicht wanneer de trend sterk is.
+- **Laatste Auto Anchor**: Alleen weergave van de laatst berekende waarde.
+  - Handig om te zien of het systeem actief bijwerkt.
+- **Notificatie bij update**: Stuurt een melding als de anchor automatisch wijzigt.
+  - Fijn om op de hoogte te blijven van belangrijke verschuivingen.
 
 ## Slimme logica & filters
 
@@ -104,7 +123,10 @@ Automatisch berekende anchor op basis van 4h/1d EMA.
   - Effect: In UP-trend kan de winstzone groter worden, in DOWN-trend juist strakker.
   - **UP/DOWN Trend Multiplier**: Hoe sterk die aanpassing is.
 - **Smart Confluence Mode**: Extra filter dat meerdere signalen tegelijk vereist.
-  - Effect: Minder meldingen, maar vaak sterker signaal.
+  - Dit kijkt niet naar één enkel signaal, maar naar een combinatie van korte én iets langere bewegingen.
+  - Het systeem wil zien dat de 5‑minuten beweging klopt met de 30‑minuten richting én past binnen de bredere 2‑uur context.
+  - Zo voorkom je meldingen op korte tikken die direct weer terugvallen.
+  - Effect: Minder meldingen, maar de meldingen die je krijgt zijn meestal relevanter.
 - **Nachtstand actief**: Schakelt nachtfilters in.
   - **Nachtstand start/einde (uur)**: Tijdvenster waarin nachtlogica geldt.
   - **Nacht: 5m Spike Filter**: Strenger voor spikes in de nacht.
@@ -113,9 +135,11 @@ Automatisch berekende anchor op basis van 4h/1d EMA.
   - **Nacht: 5m Cooldown (sec)**: Langere rust tussen meldingen.
   - **Nacht: Auto-Vol Min/Max**: Strakkere band voor auto-vol.
 - **Auto-Volatility Mode**: Past drempels automatisch aan op volatiliteit.
-  - **Volatility Window (min)**: Hoe lang gemeten wordt.
-  - **Baseline σ (1m)**: Basis-standaarddeviatie voor 1m.
-  - **Min/Max Multiplier**: Hoe ver auto-vol mag opschalen.
+  - In rustige markten worden drempels iets lager, in drukke markten juist hoger.
+  - Zo krijg je minder ruis‑meldingen als de markt wild is, en mis je minder als hij stil is.
+  - **Volatility Window (min)**: De periode waarover het systeem kijkt om te bepalen hoe onrustig de markt is.
+  - **Baseline σ (1m)**: Het “normale” niveau waartegen de 1‑minuut bewegingen worden vergeleken.
+  - **Min/Max Multiplier**: De onder‑ en bovengrens voor hoe ver het systeem de drempels mag aanpassen.
 
 ## Cooldowns
 

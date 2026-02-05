@@ -19,6 +19,12 @@ Changes are saved on the device and applied after **Save**, unless noted otherwi
   - Effect: Useful for a new device or a clean start.
 - **Bitvavo Market**: The market/symbol, e.g. `BTC-EUR`.
   - Effect: Switches the data feed; triggers a reboot to reset buffers.
+  - Examples (popular Bitvavo markets):
+    `BTC-EUR`, `ETH-EUR`, `SOL-EUR`, `XRP-EUR`, `ADA-EUR`,
+    `DOGE-EUR`, `AVAX-EUR`, `LINK-EUR`, `MATIC-EUR`, `LTC-EUR`.
+  - USD variants (if available on Bitvavo):
+    `BTC-USD`, `ETH-USD`, `SOL-USD`, `XRP-USD`, `ADA-USD`,
+    `DOGE-USD`, `AVAX-USD`, `LINK-USD`, `MATIC-USD`, `LTC-USD`.
 - **Language**: `0` for Dutch, `1` for English.
   - Effect: UI and notification texts follow this setting.
 - **Display Rotation**: `0` normal, `2` rotated 180 degrees.
@@ -84,26 +90,42 @@ These settings control 2h breakouts, mean touch, compression, and trend events.
 
 ## Auto Anchor
 
-Automatic anchor based on 4h/1d EMA.
+Automatic anchor based on 4h/1d EMA. This gives you a "smart reference price" that moves with the market so you do not have to reset the anchor manually all the time.
 
 - **Anchor Source**: `MANUAL`, `AUTO`, `AUTO_FALLBACK`, `OFF`.
-  - Effect: Choose manual or automatic behavior.
-- **Update Interval (min)**: How often auto-anchor can update.
-- **Force Update Interval (min)**: Forces an update after X minutes.
-- **4h Candles / 1d Candles**: Candle count for EMA.
-- **Min Update %**: Minimum change before an update.
-- **Trend Pivot %**: Threshold for trend bias.
-- **4h Base Weight / 4h Trend Boost**: Weight factors for 4h.
-- **Last Auto Anchor**: Read-only last value.
-- **Notify on update**: Sends a notification on update.
+  - **MANUAL**: You set the anchor yourself. Auto-anchor does nothing.
+  - **AUTO**: The anchor is calculated and updated automatically.
+  - **AUTO_FALLBACK**: Auto-anchor is active, but falls back to the manual anchor if data is missing.
+  - **OFF**: Anchor logic is disabled.
+- **Update Interval (min)**: How often the system *may* update.
+  - Lower = more responsive; higher = more stable, less noise.
+- **Force Update Interval (min)**: Maximum time before an update is forced.
+  - Useful if the market is flat but you still want a fresh anchor occasionally.
+- **4h Candles / 1d Candles**: How many candles are used for EMA.
+  - More candles = smoother, slower anchor.
+  - Fewer candles = faster, but more sensitive.
+- **Min Update %**: Minimum percent change required before updating.
+  - Prevents the anchor from following every tiny move.
+- **Trend Pivot %**: The level where trend influence becomes stronger.
+  - Higher = trend bias only when the trend is clear.
+- **4h Base Weight / 4h Trend Boost**: How much weight the 4h EMA gets.
+  - Base = normal weight.
+  - Trend Boost = extra weight when the trend is strong.
+- **Last Auto Anchor**: Read-only last calculated value.
+  - Helps you confirm the system is updating.
+- **Notify on update**: Sends a notification when the anchor changes.
+  - Useful to stay aware of bigger shifts.
 
 ## Smart Logic & Filters
 
 - **Trend-Adaptive Anchors**: Adjusts TP/ML based on trend.
   - Effect: In UP trend, profit zone can be wider; in DOWN, tighter.
   - **UP/DOWN Trend Multiplier**: How strong the adjustment is.
-- **Smart Confluence Mode**: Extra filter requiring multiple signals.
-  - Effect: Fewer alerts, often stronger signals.
+- **Smart Confluence Mode**: Extra filter that needs multiple signals to agree.
+  - It does not rely on a single short signal, but checks whether a short move fits the broader move and context.
+  - In practice, the 5‑minute move should align with the 30‑minute direction and make sense in the 2‑hour picture.
+  - This prevents alerts on tiny, short-lived spikes.
+  - Effect: Fewer alerts, but usually more meaningful ones.
 - **Night mode enabled**: Activates night filters.
   - **Night mode start/end (hour)**: Time window for night logic.
   - **Night: 5m Spike Filter**: Stricter spike filter at night.
@@ -112,9 +134,11 @@ Automatic anchor based on 4h/1d EMA.
   - **Night: 5m Cooldown (sec)**: Longer rest between alerts.
   - **Night: Auto-Vol Min/Max**: Tighter auto-vol range.
 - **Auto-Volatility Mode**: Auto-adjusts thresholds to volatility.
-  - **Volatility Window (min)**: Measurement window.
-  - **Baseline σ (1m)**: Baseline stddev for 1m returns.
-  - **Min/Max Multiplier**: Limits for auto-vol scaling.
+  - In calmer markets the thresholds go a bit lower, in busy markets they go higher.
+  - This reduces noisy alerts when the market is wild, and helps you catch moves when it is quiet.
+  - **Volatility Window (min)**: The time period used to judge how “busy” the market is.
+  - **Baseline σ (1m)**: The “normal” level used as a reference for 1‑minute moves.
+  - **Min/Max Multiplier**: The lower and upper limits for how far thresholds are allowed to move.
 
 ## Cooldowns
 
