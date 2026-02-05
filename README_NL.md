@@ -21,6 +21,8 @@ Geen constante notificaties, maar alleen relevante signalen zoals spikes, breako
 
 De volledige Nederlandstalige handleiding is onderverdeeld in aparte hoofdstukken voor betere leesbaarheid:
 
+[Release notes](RELEASE_NOTES.md)
+
 1. [Hoofdstuk 1: Inleiding](docs/01-Inleiding.md)  
    Overzicht, doelgroep en unieke features
 

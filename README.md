@@ -23,6 +23,8 @@ No constant notifications — only meaningful signals like spikes, breakouts, co
 
 The complete English user guide is split into separate chapters for better readability:
 
+[Release notes](RELEASE_NOTES.md)
+
 1. [Chapter 1: Introduction](docs/01-Introduction.md)  
    Project overview, target audience, and unique features
 
