@@ -28,47 +28,54 @@ Fill in the following fields in the web interface:
 - **Broker URL/IP** – e.g., the IP address of your Home Assistant or Mosquitto broker
 - **Port** – default 1883
 - **Username** and **password** – if authentication is required
-- **Base topic** – default `cryptoalert` (customizable)
+
+The MQTT topic prefix is derived automatically from your NTFY topic and is unique per device.
 
 ![MQTT settings web](img/web-mqtt-config.jpg)  
 *MQTT section in the web interface.*
 
 ### 8.3.2 Published MQTT Topics
-The device sends periodically (every few seconds) and on alerts the following topics (under the chosen base topic):
+The device publishes JSON values under `<prefix>/values/*` and configuration under `<prefix>/config/*`.
 
-- `cryptoalert/price` → current price (JSON or plain)
-- `cryptoalert/change_pct` → percentage change compared to previous update
-- `cryptoalert/alert` → full text of the latest alert
-- `cryptoalert/trend` → current 2h trend (up/down/sideways)
-- `cryptoalert/volatility` → classification (low/normal/high)
-- `cryptoalert/status` → connection status and last update time
+**Examples (values):**
+- `<prefix>/values/price`
+- `<prefix>/values/return_1m`
+- `<prefix>/values/return_5m`
+- `<prefix>/values/return_30m`
+- `<prefix>/values/return_2h`
+- `<prefix>/values/return_1d`
+- `<prefix>/values/return_7d`
+- `<prefix>/values/trend_2h`
+- `<prefix>/values/trend_1d`
+- `<prefix>/values/trend_7d`
 
 **Configuration topics** (read/write):
-- `cryptoalert/config/displayRotation` → display rotation (0 or 2)
-- `cryptoalert/config/displayRotation/set` → set display rotation
-- `cryptoalert/config/displayInversion` → display color inversion (ON/OFF)
-- `cryptoalert/config/displayInversion/set` → set display color inversion
+- `<prefix>/config/displayRotation` and `<prefix>/config/displayRotation/set`
+- `<prefix>/config/move5m` and `<prefix>/config/move5m/set`
+- `<prefix>/config/nightMode` and `<prefix>/config/nightMode/set`
+- `<prefix>/config/nightStartHour` / `<prefix>/config/nightEndHour`
+
+When using Home Assistant, **MQTT Discovery** is published automatically so sensors and settings appear on their own.
 
 ![MQTT topics example](img/mqtt-topics.jpg)  
 *Example of MQTT topics in a broker client (e.g., MQTT Explorer).*
 
 ### 8.3.3 Integration with Home Assistant
-Home Assistant natively supports MQTT and can automatically discover sensors (MQTT Discovery, if enabled in the code).
+Home Assistant natively supports MQTT and can automatically discover sensors (MQTT Discovery is enabled by default).
 
 **Manual sensor configuration (via UI or YAML):**
 
 ```yaml
 mqtt:
   sensor:
-    - name: "Crypto Alert Price"
-      state_topic: "cryptoalert/price"
+    - name: "Crypto Price"
+      state_topic: "<prefix>/values/price"
       unit_of_measurement: "€"
       value_template: "{{ value_json.price | round(2) }}"
-    - name: "Crypto Alert Latest Alert"
-      state_topic: "cryptoalert/alert"
-    - name: "Crypto Alert Change %"
-      state_topic: "cryptoalert/change_pct"
+    - name: "Return 1m"
+      state_topic: "<prefix>/values/return_1m"
       unit_of_measurement: "%"
+      value_template: "{{ value_json | round(2) }}"
 ```
 
 ### 8.3.4 Home Assistant Dashboard Examples

@@ -5,7 +5,7 @@ ESP32-Crypto-Alert provides a range of advanced features to monitor cryptocurren
 
 Key features:
 - Real-time price monitoring of a selected Bitvavo market (e.g., BTC-EUR).
-- Multi-timeframe analysis across 1m, 5m, 30m, and 2h.
+- Multi-timeframe analysis across 1m, 5m, 30m, 2h, 1d, and 7d.
 - Contextual alert generation based on price changes, trend, volatility, and **anchor price**.
 - Free notifications to your phone via NTFY.sh, plus local web interface, display, and MQTT.
 - Fully configurable via web UI and MQTT (no recompilation required).
@@ -14,9 +14,10 @@ Key features:
 ## 2.2 Multi-Timeframe Analysis
 The system analyzes price action across multiple timeframes simultaneously to filter out noise:
 
-- **1m and 5m**: Detect fast spikes.
-- **30m**: Confirms momentum.
+- **1m and 5m**: Detect fast spikes and short moves.
+- **30m**: Confirms direction and filters micro-noise.
 - **2h**: Provides broader context (trend, range, volatility).
+- **1d and 7d**: Context for long-term trend (labels/indicators).
 
 ![Multi-timeframe analysis example 1](img/multi-timeframe-1.jpg)  
 *Example of multi-timeframe analysis: higher timeframe shows the trend, lower timeframes indicate entry signals.*
@@ -36,7 +37,6 @@ The **anchor price** is your personal reference price (e.g., entry price). The s
 ### Short-Term Alerts (1m / 5m / 30m)
 - **Spike**: Sudden price movement.
 - **Move**: Confirmed directional shift.
-- **Momentum**: Sustained directional strength.
 
 ### 2-Hour Contextual Alerts
 - **Breakout / Breakdown**: Price breaks out of the 2h range.  
@@ -58,10 +58,7 @@ The **anchor price** is your personal reference price (e.g., entry price). The s
 - Cooldown periods per timeframe.
 - Confluence Mode: alerts only when multiple conditions align.
 - Auto-Volatility Mode: thresholds adjust automatically.
-- **Presets**:
-  - Conservative: few, high-quality alerts.
-  - Balanced (default): good balance.
-  - Aggressive: more alerts for active trading.
+- Night mode with time window and extra filters to reduce noise.
 
 ## 2.6 Integrations and Output
 - NTFY.sh for mobile push notifications.

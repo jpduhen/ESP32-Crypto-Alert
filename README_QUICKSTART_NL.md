@@ -19,7 +19,8 @@
    - Bitvavo market (bijv. BTC-EUR, ETH-EUR)
    - NTFY topic (waar alerts worden verstuurd)
    - Anchor prijs (jouw referentieniveau)
-   - Alert drempels (gevoeligheid)
+   - Alert drempels en cooldowns
+   - Nachtstand (optioneel tijdvenster en filters)
 6. **Sla instellingen op**
 7. **Begin alerts te ontvangen!**
 
@@ -32,26 +33,15 @@
 - **Activeer eerst maar een paar alerts** om het gedrag te begrijpen
 - **Observeer een dag** voordat je instellingen aanscherpt of versoepelt
 - **Gebruik cooldowns** om alert spam te voorkomen
+- **PSRAM**: Uitschakelen op CYD/TTGO; alleen inschakelen op boards met PSRAM
 
 ---
 
 ## Aanbevolen eerste setup
 
-### Conservatief (weinig alerts)
-- Hogere drempels (2-3% voor spikes)
-- Langere cooldowns (5-10 minuten)
-- Confluence modus aan
-- Focus alleen op 2h alerts
-
-### Gebalanceerd (standaard)
-- Gebruik standaard drempels
-- Gemengde tijdschalen
-- Goede signaal/ruis verhouding
-
-### Agressief (veel alerts)
-- Lagere drempels (0,5-1% voor spikes)
-- Korte cooldowns (1-2 minuten)
-- Alle tijdschalen ingeschakeld
+- Gebruik de standaard drempels en cooldowns
+- Zet nachtstand aan als je ’s nachts minder meldingen wilt
+- Pas alleen aan na minimaal 1 dag observatie
 
 ---
 
@@ -75,6 +65,9 @@
 
 **2h alerts** = Structurele veranderingen  
 → "Marktregime verschuift"
+
+**1d/7d trend labels** = Langetermijncontext  
+→ "Grotere trendrichting"
 
 **Meerdere alerts samen** = Meestal significant  
 → "Let op, er gebeurt iets groots"

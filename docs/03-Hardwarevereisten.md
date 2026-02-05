@@ -7,16 +7,16 @@ Het project ondersteunt zowel **kant-en-klare boards met display** als **custom 
 
 **Minimale eisen:**
 - ESP32-module (dual-core, WiFi/BLE)
-- Minimaal 4 MB Flash (voor OTA en web-interface)
+- Minimaal 4 MB Flash (voor web-interface en basisfunctie; OTA is optioneel)
 - Stabiele 5V-voeding (via USB of adapter)
-- WiFi-verbinding voor Binance-data en notificaties
+- WiFi-verbinding voor Bitvavo-data en notificaties
 
 Een display is sterk aanbevolen, maar niet verplicht (headless gebruik met alleen notificaties is mogelijk).
 
 ## 3.2 Aanbevolen Kant-en-Klare Boards
 
-### 3.2.1 ESP32-2432S028R "Cheap Yellow Display" (CYD)
-De meest gebruikte en goedkoopste optie (€10-15). 2.8" resistive touchscreen (ILI9341), SD-kaartslot en veel GPIO.
+### 3.2.1 ESP32-2432S02xx "Cheap Yellow Display" (CYD)
+De meest gebruikte en goedkoopste optie (€10-15). Er zijn 2.4" en 2.8" varianten (CYD24/CYD28) met resistive touchscreen, SD-kaartslot en veel GPIO.
 
 ![Cheap Yellow Display voorkant](img/cyd-front.webp)  
 *Voorkant van de ESP32-2432S028R "Cheap Yellow Display".*
@@ -36,6 +36,9 @@ Compact board met ESP32-S3, 1.14" IPS LCD (ST7789, 240×135), 16MB Flash, 2MB PS
 ![Waveshare ESP32-S3-GEEK](img/waveshare-s3-geek.jpg)  
 *Waveshare ESP32-S3-GEEK – uitstekende prestaties en veel interfaces.*
 
+### 3.2.4 ESP32-4848S040C_i (4.0" 480×480)
+ESP32-S3 board met 4.0" rond display (ST7701, 480×480). Deze variant is toegevoegd voor een groter scherm met hoge resolutie.
+
 ## 3.3 Custom Builds
 Bij gebruik van een generieke ESP32 (bijv. DevKit) kun je een los TFT-display aansluiten via SPI.
 
@@ -49,15 +52,17 @@ Bij gebruik van een generieke ESP32 (bijv. DevKit) kun je een los TFT-display aa
 - **Voeding**: USB-kabel (min. 1A). Voor permanent gebruik een 5V/2A adapter.
 - **Behuizing**: Veel 3D-printbare cases beschikbaar op Thingiverse/Printables.
 - **Optioneel**: MicroSD-kaart (voor logging), externe antenne voor betere WiFi.
+- **PSRAM**: Alleen inschakelen op boards die het echt hebben (CYD-varianten hebben doorgaans géén PSRAM).
 
 ## 3.5 Compatibiliteitsoverzicht
 
-| Board/Model                  | Display Type          | Resolutie     | Touch         | Direct Ondersteund | Opmerkingen                          |
-|------------------------------|-----------------------|---------------|---------------|---------------------|--------------------------------------|
-| ESP32-2432S028R (CYD)        | 2.8" ILI9341         | 320×240      | Resistive    | Ja                 | Beste prijs/kwaliteit                |
-| LilyGO TTGO T-Display        | 1.14" ST7789         | 240×135     | Nee          | Ja                 | Compact                              |
-| Waveshare ESP32-S3-GEEK      | 1.14" IPS ST7789     | 240×135      | Nee          | Ja (goed compatibel)| Krachtig, TF-slot                    |
-| Generieke ESP32 + TFT        | Variabel             | Variabel     | Optioneel    | Ja (custom config) | Flexibel, meer werk                  |
+| Board/Model                  | Display Type          | Resolutie                   | Touch         | Direct Ondersteund | Opmerkingen                          |
+|------------------------------|-----------------------|-----------------------------|---------------|---------------------|--------------------------------------|
+| ESP32-2432S02xx (CYD24/28)   | 2.4" / 2.8" TFT       | Variantafhankelijk           | Resistive    | Ja                 | Beste prijs/kwaliteit                |
+| ESP32-4848S040C_i            | 4.0" rond ST7701     | 480×480                     | Afhankelijk  | Ja                 | Groot, hoge resolutie                |
+| LilyGO TTGO T-Display        | 1.14" ST7789         | 240×135                     | Nee          | Ja                 | Compact                              |
+| Waveshare ESP32-S3-GEEK      | 1.14" IPS ST7789     | 240×135                     | Nee          | Ja (goed compatibel)| Krachtig, TF-slot                    |
+| Generieke ESP32 + TFT        | Variabel             | Variabel                     | Optioneel    | Ja (custom config) | Flexibel, meer werk                  |
 
 ---
 

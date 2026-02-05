@@ -1,9 +1,9 @@
 # Chapter 1: Introduction
 
 ## 1.1 Project Overview
-ESP32-Crypto-Alert is a standalone device based on the ESP32 microcontroller, designed to monitor cryptocurrency prices in real-time and generate contextual alerts. It fetches live price data from Binance and analyzes price movements across multiple timeframes (1 minute, 5 minutes, 30 minutes, and 2 hours). Instead of constant notifications, it focuses on relevant changes such as spikes, momentum shifts, or structural breaks.
+ESP32-Crypto-Alert is a standalone device based on the ESP32 microcontroller, designed to monitor cryptocurrency prices in real-time and generate contextual alerts. It fetches live price data from Bitvavo and analyzes price movements across multiple timeframes (1 minute, 5 minutes, 30 minutes, 2 hours, 1 day, and 7 days). Instead of constant notifications, it focuses on relevant changes such as spikes, momentum shifts, or structural breaks.
 
-The device operates completely locally, with no dependency on external servers or cloud services. Alerts are displayed on a built-in screen, sent via NTFY.sh, accessible through a web interface, and optionally forwarded via MQTT to Home Assistant.
+The device operates locally with external services for data and notifications: price data via Bitvavo and alerts via NTFY.sh. Alerts are displayed on a built-in screen, accessible through a web interface, and optionally forwarded via MQTT to Home Assistant.
 
 ![Cheap Yellow Display front](img/cyd-front.webp)  
 *ESP32-2432S028R "Cheap Yellow Display" – a popular choice for this project.*
@@ -31,14 +31,15 @@ Examples:
 ## 1.3 Unique Features
 - **Anchor Price Concept**: User-defined reference price to contextualize profit/loss.
 - **Multi-Timeframe Analysis**: Combines short- and long-term movements to filter noise.
-- **Adjustable Sensitivity**: Presets (Conservative, Balanced, Aggressive) and custom thresholds.
+- **Night Mode**: Optional night window with additional filters to reduce noise.
 - **Fully Local Configuration**: Via web UI – no recompilation required.
+- **Integrations**: NTFY.sh and optional MQTT (e.g., Home Assistant).
 - **Broad Hardware Support**: Various ESP32 boards with TFT displays.
 
 ## 1.4 Warnings and Disclaimer
 - This project provides **no financial advice**.
 - Cryptocurrency markets are volatile; use at your own risk.
-- Ensure a stable WiFi connection (data is sourced from the Binance API).
+- Ensure a stable WiFi connection (data is sourced from the Bitvavo API).
 
 ## 1.5 Next Steps
 In the following chapters, we will dive deeper into the features, hardware, installation, and configuration.

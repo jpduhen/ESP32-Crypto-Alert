@@ -60,11 +60,11 @@ Check in Device Manager (Windows) whether the COM port appears when you connect 
    - Upload Speed: 921600 (lower to 115200 if issues occur)
    - Flash Mode: QIO
    - Partition Scheme: "Default 4MB with spiffs" or "Huge APP"
-   - PSRAM: **Enabled** (for S3 boards and boards with PSRAM)
+   - PSRAM: **Disabled** for CYD24/CYD28 and TTGO, **Enabled** for S3 boards with PSRAM
 
 6. **Board-specific define**:
-   - At the top of the code are lines like `#define CYD_2432S028R` or `#define LILYGO_TDISPLAY_S3`.
-   - Set the correct one to `1` and the others to `0`.
+   - In `platform_config.h` select the right board (`PLATFORM_CYD24`, `PLATFORM_CYD28`, `PLATFORM_TTGO`, `PLATFORM_ESP32S3_GEEK`, `PLATFORM_ESP32S3_SUPERMINI`, `PLATFORM_ESP32S3_4848S040`).
+   - Keep exactly one platform enabled.
 
 ![Code defines](img/code-defines.jpg)  
 *Example of board defines at the top of the sketch.*

@@ -5,18 +5,19 @@ ESP32-Crypto-Alert biedt een reeks geavanceerde functies om cryptocurrency-prijz
 
 Belangrijkste functies:
 - Realtime prijsmonitoring van een gekozen Bitvavo-market (bijv. BTC-EUR).
-- Multi-timeframe analyse over 1m, 5m, 30m en 2h.
+- Multi-timeframe analyse over 1m, 5m, 30m, 2h, 1d en 7d.
 - Contextuele alert-generatie gebaseerd op prijsveranderingen, trend, volatiliteit en **anchor price**.
-- Notificaties (gratis) op je telefoon via NTFY.sh, lokale web-interface, display en MQTT.
+- Notificaties via NTFY.sh, lokale web-interface, display en MQTT.
 - Volledig configureerbaar via web-UI en MQTT (geen hercompilatie nodig).
 - Warm-start: historische data ophalen bij opstarten.
 
 ## 2.2 Multi-Timeframe Analyse
 Het systeem analyseert prijsactie op meerdere timeframes tegelijk om ruis te filteren:
 
-- **1m en 5m**: Detecteren snelle spikes.
-- **30m**: Bevestigt momentum.
+- **1m en 5m**: Detecteren snelle spikes en korte moves.
+- **30m**: Bevestigt richting en filtert micro-ruis.
 - **2h**: Biedt bredere context (trend, range, volatiliteit).
+- **1d en 7d**: Context voor langetermijntrend (weergave/labeling).
 
 ![Multi-timeframe analyse voorbeeld 1](img/multi-timeframe-1.png)  
 *Voorbeeld van multi-timeframe analyse: hogere timeframe toont trend, lagere timeframes entry-signalen.*
@@ -36,7 +37,6 @@ De **anchor price** is jouw referentieprijs (bijv. instapprijs). Het systeem beo
 ### Korte-termijn Alerts (1m / 5m / 30m)
 - **Spike**: Plotselinge beweging.
 - **Move**: Bevestigde directionele shift.
-- **Momentum**: Aanhoudende kracht.
 
 ### 2-Uur Contextuele Alerts
 - **Breakout / Breakdown**: Prijs breekt uit de 2h-range.  
@@ -58,10 +58,7 @@ De **anchor price** is jouw referentieprijs (bijv. instapprijs). Het systeem beo
 - Cooldown-periodes per timeframe.
 - Confluence Mode: alerts alleen bij meerdere bevestigingen.
 - Auto-Volatility Mode: thresholds passen zich aan.
-- **Presets**:
-  - Conservative: weinig, hoge kwaliteit alerts.
-  - Balanced (standaard): goede balans.
-  - Aggressive: meer alerts voor actieve trading.
+- Nachtstand met tijdvenster en extra filters om ruis te beperken.
 
 ## 2.6 Integraties en Uitvoer
 - NTFY.sh voor mobiele push.

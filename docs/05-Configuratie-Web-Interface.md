@@ -1,14 +1,14 @@
 # Hoofdstuk 5: Configuratie via de Web Interface
 
 ## 5.1 Overzicht
-Na de installatie en eerste WiFi-setup configureer je het ESP32-Crypto-Alert-apparaat volledig via een lokale **web-interface**. Deze draait rechtstreeks op de ESP32 (AsyncWebServer) en is toegankelijk via elk apparaat in hetzelfde netwerk. Geen hercompilatie of opnieuw flashen nodig — alle instellingen worden permanent opgeslagen in het flash-geheugen.
+Na de installatie en eerste WiFi-setup configureer je het ESP32-Crypto-Alert-apparaat volledig via een lokale **web-interface**. Deze draait rechtstreeks op de ESP32 (WebServer) en is toegankelijk via elk apparaat in hetzelfde netwerk. Geen hercompilatie of opnieuw flashen nodig — alle instellingen worden permanent opgeslagen in het flash-geheugen.
 
 Standaard zijn al redelijk geoptimaliseerde waarden ingesteld, maar experimenteer gerust!
 
 De web-interface biedt:
-- Basisinstellingen (pair, anchor price, notificaties)
-- Geavanceerde alert-parameters en presets
-- Realtime monitoring van prijs, status en logs
+- Basisinstellingen (market, anchor, notificaties)
+- Geavanceerde alert-parameters (thresholds, cooldowns, filters)
+- Realtime monitoring van prijs en status
 - MQTT-configuratie voor Home Assistant
 
 ![Web interface dashboard](img/web-dashboard.jpg)  
@@ -38,9 +38,8 @@ Bij openen zie je een overzichtelijk dashboard met:
 
 ## 5.4 Basisconfiguratie
 
-### 5.4.1 Trading Pair Kiezen
-Selecteer een Binance spot-pair, bijv. `BTCEUR`, `ETHUSDT`, `SOLBTC`.  
-Alle pairs die Binance ondersteunt werken.
+### 5.4.1 Market Kiezen
+Selecteer een Bitvavo market, bijv. `BTC-EUR` of `ETH-EUR`.
 
 ![Pair selectie](img/web-pair-selection.jpg)  
 *Dropdown met trading pairs.*
@@ -54,9 +53,6 @@ Alle pairs die Binance ondersteunt werken.
 
 ### 5.4.3 Display Instellingen
 - **Display Rotatie**: Draai het display 180 graden (0 = normaal, 2 = gedraaid)
-- **Display Kleurinversie**: Keer de display kleuren om (handig voor verschillende CYD board varianten)
-  - Aan = inversie ingeschakeld
-  - Uit = geen inversie (standaard voor CYD 2.8 met 1 USB-C poort)
 
 ### 5.4.4 NTFY.sh Notificaties
 1. Maak een gratis topic aan op https://ntfy.sh (bijv. `mijn-crypto-alerts`).
@@ -71,20 +67,20 @@ Alle pairs die Binance ondersteunt werken.
 
 ## 5.5 Geavanceerde Instellingen
 
-- **Preset kiezen**: Conservative, Balanced (standaard) of Aggressive.
-- **Custom thresholds**: Pas percentages aan voor spike, breakout, compression, etc.
+- **Custom thresholds**: Pas percentages aan voor spike, move en 2h‑alerts.
 - **Cooldowns**: Minimale tijd tussen alerts per timeframe.
 - **Confluence Mode**: Alleen alerts bij meerdere bevestigingen.
 - **Auto-Volatility Mode**: Thresholds automatisch aanpassen aan marktcondities.
+- **Nachtstand**: Tijdvenster en extra filters (incl. 5m/30m bevestiging en cooldown).
 - **MQTT**: Broker IP, poort, user/password voor Home Assistant integratie.
 
 ![Geavanceerde instellingen](img/web-advanced-settings.jpg)  
 *Geavanceerde sectie met presets en custom opties.*
 
 ## 5.6 Opslaan en Testen
-- Klik op **Save** onderaan elke sectie.
-- Het apparaat herstart kort en past de instellingen direct toe.
-- Test door te wachten op marktbewegingen of gebruik de debug-optie (indien beschikbaar).
+- Klik op **Opslaan** onderaan de pagina.
+- Het apparaat past de instellingen direct toe (zonder volledige herstart).
+- Test door te wachten op marktbewegingen of via Home Assistant/MQTT.
 
 ## 5.7 Tips
 - De interface is mobiel-vriendelijk — configureer gerust vanaf je telefoon.

@@ -1,9 +1,9 @@
 # Hoofdstuk 6: Begrip van Kernconcepten
 
 ## 6.1 Inleiding
-Dit hoofdstuk legt de belangrijkste technische en trading-concepten uit die ten grondslag liggen aan de alert-logica van ESP32-Crypto-Alert. Een goed begrip hiervan helpt je om alerts correct te interpreteren, de presets te kiezen die bij jouw stijl passen en eventueel zelf thresholds aan te passen.
+Dit hoofdstuk legt de belangrijkste technische en trading-concepten uit die ten grondslag liggen aan de alert-logica van ESP32-Crypto-Alert. Een goed begrip hiervan helpt je om alerts correct te interpreteren en thresholds/filters goed af te stemmen op je stijl.
 
-Alle berekeningen gebeuren lokaal op de ESP32 met kandledata van Binance over vier timeframes: 1 minuut, 5 minuten, 30 minuten en 2 uur.
+Alle berekeningen gebeuren lokaal op de ESP32 met kandledata van Bitvavo over meerdere timeframes: 1 minuut, 5 minuten, 30 minuten en 2 uur (plus 1d en 7d als contextlabels).
 
 ![Multi-timeframe overzicht](img/multi-timeframe-overview.jpg)  
 *Overzicht van de vier gebruikte timeframes en hun rol in de analyse.*
@@ -12,8 +12,9 @@ Alle berekeningen gebeuren lokaal op de ESP32 met kandledata van Binance over vi
 Het systeem combineert informatie van meerdere timeframes om ruis te verminderen en alleen bevestigde bewegingen te signaleren.
 
 - **1 minuut & 5 minuten**: Detecteren snelle, korte-termijn spikes en moves.
-- **30 minuten**: Bevestigt momentum (aanhoudende directionele kracht).
+- **30 minuten**: Bevestigt richting en filtert micro-ruis.
 - **2 uur**: Levert de bredere marktcontext (trendrichting, range, volatiliteit).
+- **1 dag & 7 dagen**: Context voor de langetermijntrend (weergave/labels).
 
 Door alleen alerts te geven wanneer meerdere timeframes overeenstemmen (confluence), vermijd je valse signalen in zijwaartse of choppy markten.
 
@@ -58,11 +59,10 @@ Belangrijke structurele alerts op dit niveau:
 - **Anchor Outside Range**: De anchor ligt niet meer binnen de huidige 2h-range → waarschuwing voor verhoogd risico.
 
 ## 6.5 Korte-Termijn Alerts
-Deze alerts (Spike, Move, Momentum) worden alleen verstuurd als ze passen binnen de 2h-context:
+Deze alerts (Spike, Move) worden alleen verstuurd als ze passen binnen de 2h-context:
 
 - **Spike**: Snelle prijsverandering op 1m/5m.
 - **Move**: Bevestigde directionele shift op 5m/30m.
-- **Momentum**: Aanhoudende kracht op 30m.
 
 ![Korte-termijn spike](img/short-term-spike.jpg)  
 *Voorbeeld van een spike die een alert triggert binnen een uptrend.*

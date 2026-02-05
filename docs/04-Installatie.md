@@ -60,11 +60,11 @@ Controleer in Apparaatbeheer (Windows) of de COM-poort verschijnt wanneer je het
    - Upload Speed: 921600 (verlaag naar 115200 bij problemen)
    - Flash Mode: QIO
    - Partition Scheme: "Default 4MB with spiffs" of "Huge APP"
-   - PSRAM: **Enabled** (voor S3-boards en boards met PSRAM)
+   - PSRAM: **Disabled** voor CYD24/CYD28 en TTGO, **Enabled** voor S3-boards met PSRAM
 
 6. **Board-specifieke define**:
-   - Bovenaan de code staan regels zoals `#define CYD_2432S028R` of `#define LILYGO_TDISPLAY_S3`.
-   - Zet de juiste op `1` en de anderen op `0`.
+   - In `platform_config.h` kies je het juiste board (`PLATFORM_CYD24`, `PLATFORM_CYD28`, `PLATFORM_TTGO`, `PLATFORM_ESP32S3_GEEK`, `PLATFORM_ESP32S3_SUPERMINI`, `PLATFORM_ESP32S3_4848S040`).
+   - Laat slechts één platform actief.
 
 ![Code defines](img/code-defines.jpg)  
 *Voorbeeld van board-defines bovenaan de sketch.*

@@ -19,7 +19,8 @@
    - Bitvavo market (e.g. BTC-EUR, ETH-EUR)
    - NTFY topic (where alerts are sent)
    - Anchor price (your reference level)
-   - Alert thresholds (sensitivity)
+   - Alert thresholds and cooldowns
+   - Night mode (optional time window and filters)
 6. **Save settings**
 7. **Start receiving alerts!**
 
@@ -32,26 +33,15 @@
 - **Enable only a few alerts** at first to understand behavior
 - **Observe for a day** before tightening or loosening settings
 - **Use cooldowns** to prevent alert spam
+- **PSRAM**: Disable on CYD/TTGO; enable only on boards that actually have PSRAM
 
 ---
 
 ## Recommended initial setup
 
-### Conservative (few alerts)
-- Higher thresholds (2-3% for spikes)
-- Longer cooldowns (5-10 minutes)
-- Enable confluence mode
-- Focus on 2h alerts only
-
-### Balanced (default)
-- Use default thresholds
-- Mixed timeframes
-- Good signal/noise ratio
-
-### Aggressive (many alerts)
-- Lower thresholds (0.5-1% for spikes)
-- Short cooldowns (1-2 minutes)
-- All timeframes enabled
+- Use default thresholds and cooldowns
+- Enable night mode if you want fewer alerts overnight
+- Only change settings after at least one day of observation
 
 ---
 
@@ -75,6 +65,9 @@
 
 **2h alerts** = Structural changes  
 → "Market regime is shifting"
+
+**1d/7d trend labels** = Long-term context  
+→ "Bigger trend direction"
 
 **Multiple alerts together** = Usually significant  
 → "Pay attention, something big is happening"

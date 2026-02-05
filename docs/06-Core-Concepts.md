@@ -1,9 +1,9 @@
 # Chapter 6: Understanding Core Concepts
 
 ## 6.1 Introduction
-This chapter explains the key technical and trading concepts that form the foundation of the ESP32-Crypto-Alert's alert logic. A solid understanding of these will help you interpret alerts correctly, choose the preset that matches your style, and potentially adjust thresholds yourself.
+This chapter explains the key technical and trading concepts that form the foundation of the ESP32-Crypto-Alert's alert logic. A solid understanding of these will help you interpret alerts correctly and tune thresholds/filters to your style.
 
-All calculations are performed locally on the ESP32 using candle data from Binance across four timeframes: 1 minute, 5 minutes, 30 minutes, and 2 hours.
+All calculations are performed locally on the ESP32 using candle data from Bitvavo across multiple timeframes: 1 minute, 5 minutes, 30 minutes, and 2 hours (plus 1d and 7d as context labels).
 
 ![Multi-timeframe overview](img/multi-timeframe-overview.jpg)  
 *Overview of the four timeframes used and their role in the analysis.*
@@ -12,8 +12,9 @@ All calculations are performed locally on the ESP32 using candle data from Binan
 The system combines information from multiple timeframes to reduce noise and signal only confirmed movements.
 
 - **1 minute & 5 minutes**: Detect fast, short-term spikes and moves.
-- **30 minutes**: Confirms momentum (sustained directional strength).
+- **30 minutes**: Confirms direction and filters micro-noise.
 - **2 hours**: Provides broader market context (trend direction, range, volatility).
+- **1 day & 7 days**: Context for long-term trend (labels/indicators).
 
 By issuing alerts only when multiple timeframes align (confluence), false signals are avoided in sideways or choppy markets.
 
@@ -58,11 +59,10 @@ Important structural alerts at this level:
 - **Anchor Outside Range**: The anchor is no longer within the current 2h range → warning of increased risk.
 
 ## 6.5 Short-Term Alerts
-These alerts (Spike, Move, Momentum) are only sent if they fit within the 2h context:
+These alerts (Spike, Move) are only sent if they fit within the 2h context:
 
 - **Spike**: Rapid price change on 1m/5m.
 - **Move**: Confirmed directional shift on 5m/30m.
-- **Momentum**: Sustained strength on 30m.
 
 ![Short-term spike](img/short-term-spike.jpg)  
 *Example of a spike triggering an alert within an uptrend.*

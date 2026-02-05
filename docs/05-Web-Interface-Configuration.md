@@ -1,14 +1,14 @@
 # Chapter 5: Configuration via the Web Interface
 
 ## 5.1 Overview
-After installation and the initial WiFi setup, you configure the ESP32-Crypto-Alert device entirely through a local **web interface**. This runs directly on the ESP32 (using AsyncWebServer) and is accessible from any device on the same network. No recompilation or reflashing is required — all settings are permanently saved in flash memory.
+After installation and the initial WiFi setup, you configure the ESP32-Crypto-Alert device entirely through a local **web interface**. This runs directly on the ESP32 (using WebServer) and is accessible from any device on the same network. No recompilation or reflashing is required — all settings are permanently saved in flash memory.
 
 Reasonably optimized default values are already set, but feel free to experiment!
 
 The web interface provides:
-- Basic settings (pair, anchor price, notifications)
-- Advanced alert parameters and presets
-- Real-time monitoring of price, status, and logs
+- Basic settings (market, anchor, notifications)
+- Advanced alert parameters (thresholds, cooldowns, filters)
+- Real-time monitoring of price and status
 - MQTT configuration for Home Assistant
 
 ![Web interface dashboard](img/web-dashboard.jpg)  
@@ -38,9 +38,8 @@ Upon opening, you’ll see a clear dashboard with:
 
 ## 5.4 Basic Configuration
 
-### 5.4.1 Selecting a Trading Pair
-Choose a Binance spot pair, e.g., `BTCEUR`, `ETHUSDT`, `SOLBTC`.  
-All pairs supported by Binance will work.
+### 5.4.1 Selecting a Market
+Choose a Bitvavo market, e.g., `BTC-EUR` or `ETH-EUR`.
 
 ![Pair selection](img/web-pair-selection.jpg)  
 *Dropdown with trading pairs.*
@@ -54,9 +53,6 @@ All pairs supported by Binance will work.
 
 ### 5.4.3 Display Settings
 - **Display Rotation**: Rotate the display 180 degrees (0 = normal, 2 = rotated)
-- **Display Color Inversion**: Invert display colors (useful for different CYD board variants)
-  - On = inversion enabled
-  - Off = no inversion (default for CYD 2.8 with 1 USB-C port)
 
 ### 5.4.4 NTFY.sh Notifications
 1. Create a free topic on https://ntfy.sh (e.g., `mijn-crypto-alerts`).
@@ -71,20 +67,20 @@ All pairs supported by Binance will work.
 
 ## 5.5 Advanced Settings
 
-- **Preset selection**: Conservative, Balanced (default), or Aggressive.
-- **Custom thresholds**: Adjust percentages for spike, breakout, compression, etc.
+- **Custom thresholds**: Adjust percentages for spike, move, and 2h alerts.
 - **Cooldowns**: Minimum time between alerts per timeframe.
 - **Confluence Mode**: Alerts only when multiple conditions align.
 - **Auto-Volatility Mode**: Thresholds automatically adapt to market conditions.
+- **Night Mode**: Time window and extra filters (including 5m/30m confirmation and cooldown).
 - **MQTT**: Broker IP, port, username/password for Home Assistant integration.
 
 ![Advanced settings](img/web-advanced-settings.jpg)  
 *Advanced section with presets and custom options.*
 
 ## 5.6 Saving and Testing
-- Click **Save** at the bottom of each section.
-- The device briefly restarts and applies the settings immediately.
-- Test by waiting for market movements or use the debug option (if available).
+- Click **Save** at the bottom of the page.
+- The device applies settings immediately (no full reboot).
+- Test by waiting for market movements or via Home Assistant/MQTT.
 
 ## 5.7 Tips
 - The interface is mobile-friendly — feel free to configure from your phone.

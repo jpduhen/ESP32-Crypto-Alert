@@ -3,17 +3,18 @@
 [![GitHub stars](https://img.shields.io/github/stars/jpduhen/ESP32-Crypto-Alert?style=social)](https://github.com/jpduhen/ESP32-Crypto-Alert/stargazers)
 [![GitHub license](https://img.shields.io/github/license/jpduhen/ESP32-Crypto-Alert)](https://github.com/jpduhen/ESP32-Crypto-Alert/blob/main/LICENSE)
 
-Een standalone ESP32-apparaat dat cryptocurrency-prijzen realtime monitort via Binance en **contextuele alerts** genereert op basis van multi-timeframe analyse.  
+Een standalone ESP32-apparaat dat cryptocurrency-prijzen realtime monitort via Bitvavo en **contextuele alerts** genereert op basis van multi-timeframe analyse.  
 Geen constante notificaties, maar alleen relevante signalen zoals spikes, breakouts, compression en trend changes – met slimme filters en jouw persoonlijke **anchor price** als referentie.
 
 ### Belangrijkste features
-- Multi-timeframe analyse (1m, 5m, 30m, 2h)
+- Multi-timeframe analyse (1m, 5m, 30m, 2h, 1d, 7d)
 - Contextuele alerts met anchor price en risicobeheer-zones
 - Notificaties via NTFY.sh (push naar telefoon)
 - Lokale web-interface voor configuratie en monitoring
 - MQTT-integratie (o.a. Home Assistant)
+- Nachtstand met tijdvenster en extra filters (instelbaar via WebUI/MQTT)
 - Ondersteuning voor populaire ESP32-boards met TFT-display
-- Display rotatie en kleurinversie instellingen
+- Display rotatie instellingen
 - Volledig configureerbaar zonder hercompilatie
 
 ## 📚 Gedetailleerde Handleiding
@@ -44,7 +45,7 @@ De volledige Nederlandstalige handleiding is onderverdeeld in aparte hoofdstukke
 8. [Hoofdstuk 8: Integratie met Externe Systemen](docs/08-Integratie-Externe-Systemen.md)  
    MQTT, Home Assistant dashboards en automations
 
-9. [Hoofdstuk 9: Geavanceerde Gebruik en Aanpassingen](docs/09-Geavanceerd-Gebruik-en-Aanpassingen.md)  
+9. [Hoofdstuk 9: Geavanceerd Gebruik en Aanpassingen](docs/09-Geavanceerd-Gebruik-en-Aanpassingen.md)  
    Code wijzigen, custom thresholds, OTA en meer
 
 10. [Hoofdstuk 10: Troubleshooting en FAQ](docs/10-Troubleshooting-FAQ.md)  

@@ -11,9 +11,8 @@ This chapter is intended for users who want to go beyond the standard web config
 ## 9.2 Installing and Updating Required Libraries
 The project uses external libraries that you must install via the Library Manager:
 
-- **TFT_eSPI** (Bodmer) – for display support
-- **ESPAsyncWebServer** + **AsyncTCP** – for the web interface
-- **ArduinoJson** – for JSON handling
+- **Arduino_GFX_Library** – for display support
+- **WebServer** (ESP32 core) – for the web interface
 - **PubSubClient** – for MQTT (if used)
 
 Go to **Sketch → Include Library → Manage Libraries** and search for the names.
@@ -21,47 +20,27 @@ Go to **Sketch → Include Library → Manage Libraries** and search for the nam
 ![Library manager](img/library-manager.jpg)  
 *Library Manager in Arduino IDE with TFT_eSPI installed.*
 
-## 9.3 Customizing Display Configuration (TFT_eSPI)
-For optimal performance and correct rendering, you need to configure TFT_eSPI for your board.
+## 9.3 Customizing Display Configuration (platform_config.h)
+For optimal performance and correct rendering, select the correct board in `platform_config.h`.
 
-1. After installation, locate the `TFT_eSPI` folder in your Arduino libraries directory.
-2. Open `User_Setup.h` or create a custom setup file.
-3. Select the correct driver (e.g., ILI9341 for CYD, ST7789 for TTGO/Waveshare) and pin mapping.
+1. Open `platform_config.h`.
+2. Enable exactly one platform define (e.g., `PLATFORM_CYD24` or `PLATFORM_ESP32S3_4848S040`).
+3. Recompile and flash the project.
 
-![TFT_eSPI User Setup](img/tft-espi-setup.jpg)  
-*Example of User_Setup.h with ILI9341 configuration for Cheap Yellow Display.*
-
-In the project code, activate the correct board using defines at the top:
-
-```cpp
-#define CYD_2432S028R      1  // For Cheap Yellow Display
-// #define LILYGO_TDISPLAY  0  // etc.
-```
-
-## 9.4 Custom Thresholds en Alert-Logica Wijzigen
-De meeste parameters staan als constante variabelen in de code en kunnen eenvoudig aangepast worden.
-
-Voorbeelden van veelgebruikte variabelen:
-
-```cpp
-const float SPIKE_THRESHOLD       = 1.8;   // % voor spike-alert
-const float BREAKOUT_PERCENT      = 2.5;   // % buiten 2h-range
-const int   COOLDOWN_SHORT_SEC    = 300;   // 5 minuten cooldown korte alerts
-const int   COOLDOWN_LONG_SEC     = 1800;  // 30 minuten cooldown 2h alerts
-```
-Pas deze aan naar jouw trading-stijl (lagere waarden = meer alerts).
-## 9.5 Toekomstige Aanpassingen
-Enkele toekomstige modificaties:
+## 9.4 Custom Thresholds and Alert Logic
+Most thresholds are configurable via the web UI and MQTT. Code changes are mainly useful if you want to add new logic or extra data.
+## 9.5 Future Adjustments
+Some potential modifications:
 - Meerdere trading pairs monitoren (bijv. automatisch switchen elke 10 minuten).
 - SD-kaart logging activeren (voor boards met SD-slot).
-- OTA (Over-The-Air) updates inschakelen voor draadloos flashen.
+- Enable OTA (Over-The-Air) updates for wireless flashing (optional).
 - Extra MQTT-topics toevoegen (bijv. raw kandledata).
 - Custom UI-elementen in de web-interface (bijv. grafiekje van 2h-range).
 
-### Risico-Management Uitbreiden
-- Dynamische take profit / max loss gebaseerd op volatiliteit.
-- Automatische anchor-reset bij bevestigde trend change.
-- Waarschuwingen bij extreme drawdown vanaf anchor.
+### Risk Management Extensions
+- Dynamic take profit / max loss based on volatility.
+- Automatic anchor reset after confirmed trend change.
+- Warnings for extreme drawdown from the anchor.
 
 ![OTA update voorbeeld](img/ota-update.jpg)  
 *OTA-update interface na activering in de code.*
