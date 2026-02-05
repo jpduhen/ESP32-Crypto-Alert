@@ -52,8 +52,8 @@ The complete English user guide is split into separate chapters for better reada
 9. [Chapter 9: Advanced Usage and Customization](docs/09-Advanced-Usage-and-Customization.md)  
    Modifying code, custom thresholds, OTA updates, and more
 
-10. [Chapter 10: Troubleshooting and FAQ](docs/10-Troubleshooting-FAQ.md)  
-    Common issues and solutions
+10. [Chapter 10: Web UI Settings](docs/10-WebUI-Settings.md)  
+    Explanation of all Web UI components and their effects
 
 ## Quick Start
 1. Choose a compatible board (e.g., Cheap Yellow Display).

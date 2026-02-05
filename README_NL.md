@@ -50,8 +50,8 @@ De volledige Nederlandstalige handleiding is onderverdeeld in aparte hoofdstukke
 9. [Hoofdstuk 9: Geavanceerd Gebruik en Aanpassingen](docs/09-Geavanceerd-Gebruik-en-Aanpassingen.md)  
    Code wijzigen, custom thresholds, OTA en meer
 
-10. [Hoofdstuk 10: Troubleshooting en FAQ](docs/10-Troubleshooting-FAQ.md)  
-    Veelvoorkomende problemen en oplossingen
+10. [Hoofdstuk 10: WebUI-instellingen](docs/10-WebUI-Instellingen.md)  
+    Uitleg van alle WebUI-onderdelen en hun effect
 
 ## 🚀 Quick Start
 1. Kies een compatibel board (bijv. Cheap Yellow Display).
