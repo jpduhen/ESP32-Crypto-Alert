@@ -264,6 +264,11 @@ void WebServerModule::renderSettingsHTML() {
     // Temporary buffer voor variabele waarden
     char tmpBuf[256];
     char valueBuf[64];
+    char quoteCurrency[8] = "EUR";
+    const char* dash = strchr(bitvavoSymbol, '-');
+    if (dash != nullptr && *(dash + 1) != '\0') {
+        safeStrncpy(quoteCurrency, dash + 1, sizeof(quoteCurrency));
+    }
     
     // Form start (voor anchor instellen)
     server->sendContent(F("<form method='POST' action='/save'>"));
@@ -309,8 +314,20 @@ void WebServerModule::renderSettingsHTML() {
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='ret1m'>--</span></div>",
              getText("1m Return", "1m Return"));
     server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='ret5m'>--</span></div>",
+             getText("5m Return", "5m Return"));
+    server->sendContent(tmpBuf);
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='ret30m'>--</span></div>",
              getText("30m Return", "30m Return"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='ret2h'>--</span></div>",
+             getText("2h Return", "2h Return"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='ret1d'>--</span></div>",
+             getText("1d Return", "1d Return"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='ret7d'>--</span></div>",
+             getText("7d Return", "7d Return"));
     server->sendContent(tmpBuf);
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='anchor'>--</span></div>",
              getText("Anchor", "Anchor"));
@@ -1795,15 +1812,21 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     // WEB-PERF-3: Live status updates via /status endpoint
     server->sendContent(F("function refreshStatus(){"));
     server->sendContent(F("fetch('/status').then(function(r){return r.json();}).then(function(d){"));
-    server->sendContent(F("var el=document.getElementById('curPrice');if(el)el.textContent=d.price>0?d.price.toFixed(2)+' EUR':'--';"));
+    snprintf(tmpBuf, sizeof(tmpBuf), "var quote='%s';", quoteCurrency);
+    server->sendContent(tmpBuf);
+    server->sendContent(F("var el=document.getElementById('curPrice');if(el)el.textContent=d.price>0?d.price.toFixed(2)+' '+quote:'--';"));
     server->sendContent(F("el=document.getElementById('trend2h');if(el)el.textContent=d.trend||'--';"));
     server->sendContent(F("el=document.getElementById('trend1d');if(el)el.textContent=d.trendMedium||'--';"));
     server->sendContent(F("el=document.getElementById('trend7d');if(el)el.textContent=d.trendLong||'--';"));
     server->sendContent(F("el=document.getElementById('volatility');if(el)el.textContent=d.volatility||'--';"));
     server->sendContent(F("el=document.getElementById('volume');if(el)el.textContent=d.volume||'--';"));
     server->sendContent(F("el=document.getElementById('ret1m');if(el)el.textContent=d.ret1m!=0?d.ret1m.toFixed(2)+'%':'--';"));
+    server->sendContent(F("el=document.getElementById('ret5m');if(el)el.textContent=d.ret5m!=0?d.ret5m.toFixed(2)+'%':'--';"));
     server->sendContent(F("el=document.getElementById('ret30m');if(el)el.textContent=d.ret30m!=0?d.ret30m.toFixed(2)+'%':'--';"));
-    server->sendContent(F("el=document.getElementById('anchor');if(el)el.textContent=d.anchor>0?d.anchor.toFixed(2)+' EUR':'--';"));
+    server->sendContent(F("el=document.getElementById('ret2h');if(el)el.textContent=d.ret2h!=0?d.ret2h.toFixed(2)+'%':'--';"));
+    server->sendContent(F("el=document.getElementById('ret1d');if(el)el.textContent=d.ret1d!=0?d.ret1d.toFixed(2)+'%':'--';"));
+    server->sendContent(F("el=document.getElementById('ret7d');if(el)el.textContent=d.ret7d!=0?d.ret7d.toFixed(2)+'%':'--';"));
+    server->sendContent(F("el=document.getElementById('anchor');if(el)el.textContent=d.anchor>0?d.anchor.toFixed(2)+' '+quote:'--';"));
     server->sendContent(F("el=document.getElementById('anchorDelta');if(el)el.textContent=d.anchorDeltaPct!=0?d.anchorDeltaPct.toFixed(2)+'%':'--';"));
     server->sendContent(F("el=document.getElementById('apiState');if(el){"));
     server->sendContent(F("if(d.apiFresh){el.textContent='';}else{"));

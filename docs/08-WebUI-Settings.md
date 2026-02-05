@@ -22,9 +22,9 @@ Changes are saved on the device and applied after **Save**, unless noted otherwi
   - Examples (popular Bitvavo markets):
     `BTC-EUR`, `ETH-EUR`, `SOL-EUR`, `XRP-EUR`, `ADA-EUR`,
     `DOGE-EUR`, `AVAX-EUR`, `LINK-EUR`, `MATIC-EUR`, `LTC-EUR`.
-  - USD variants (if available on Bitvavo):
-    `BTC-USD`, `ETH-USD`, `SOL-USD`, `XRP-USD`, `ADA-USD`,
-    `DOGE-USD`, `AVAX-USD`, `LINK-USD`, `MATIC-USD`, `LTC-USD`.
+  - USDC variants (USD on Bitvavo is USDC):
+    `BTC-USDC`, `ETH-USDC`, `SOL-USDC`, `XRP-USDC`, `ADA-USDC`,
+    `DOGE-USDC`, `AVAX-USDC`, `LINK-USDC`, `MATIC-USDC`, `LTC-USDC`.
 - **Language**: `0` for Dutch, `1` for English.
   - Effect: UI and notification texts follow this setting.
 - **Display Rotation**: `0` normal, `2` rotated 180 degrees.

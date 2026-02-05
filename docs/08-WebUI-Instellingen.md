@@ -22,9 +22,9 @@ Wijzigingen worden opgeslagen in het device en worden actief na **Opslaan**, ten
   - Voorbeelden (populaire Bitvavo‑markten):
     `BTC-EUR`, `ETH-EUR`, `SOL-EUR`, `XRP-EUR`, `ADA-EUR`,
     `DOGE-EUR`, `AVAX-EUR`, `LINK-EUR`, `MATIC-EUR`, `LTC-EUR`.
-  - USD‑varianten (als beschikbaar op Bitvavo):
-    `BTC-USD`, `ETH-USD`, `SOL-USD`, `XRP-USD`, `ADA-USD`,
-    `DOGE-USD`, `AVAX-USD`, `LINK-USD`, `MATIC-USD`, `LTC-USD`.
+  - USDC‑varianten (USD op Bitvavo is USDC):
+    `BTC-USDC`, `ETH-USDC`, `SOL-USDC`, `XRP-USDC`, `ADA-USDC`,
+    `DOGE-USDC`, `AVAX-USDC`, `LINK-USDC`, `MATIC-USDC`, `LTC-USDC`.
 - **Taal**: `0` voor Nederlands, `1` voor Engels.
   - Effect: UI-teksten en meldingen veranderen mee.
 - **Display Rotatie**: `0` normaal, `2` 180 graden gedraaid.
