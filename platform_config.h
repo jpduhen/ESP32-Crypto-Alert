@@ -103,7 +103,7 @@
     #define SYMBOL_1MIN_LABEL "1 min"
     #define SYMBOL_30MIN_LABEL "30 min"
     #define SYMBOL_2H_LABEL "2h"
-    #define CHART_WIDTH 480
+    #define CHART_WIDTH 240
     #define CHART_HEIGHT 72  // Verkleind van 80 naar 72 (8px kleiner)
     #define CHART_ALIGN_Y 24
     #define PRICE_BOX_Y_START 99  // Aangepast: 24 (chart top) + 72 (chart height) + 3 (spacing) = 99
