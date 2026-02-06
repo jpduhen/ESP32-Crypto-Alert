@@ -1627,6 +1627,13 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
     server->send(200, "text/html; charset=utf-8", "");
     
+    char tmpBuf[256];
+    char quoteCurrency[8] = "EUR";
+    const char* dash = strchr(bitvavoSymbol, '-');
+    if (dash != nullptr && *(dash + 1) != '\0') {
+        safeStrncpy(quoteCurrency, dash + 1, sizeof(quoteCurrency));
+    }
+    
     // HTML doctype en head (lang='en' om punt als decimaal scheidingsteken te forceren)
     server->sendContent(F("<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"));
     
