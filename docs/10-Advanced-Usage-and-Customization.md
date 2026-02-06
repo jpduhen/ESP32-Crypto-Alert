@@ -24,7 +24,7 @@ Go to **Sketch → Include Library → Manage Libraries** and search for the nam
 For optimal performance and correct rendering, select the correct board in `platform_config.h`.
 
 1. Open `platform_config.h`.
-2. Enable exactly one platform define (e.g., `PLATFORM_CYD24` or `PLATFORM_ESP32S3_4848S040`).
+2. Enable exactly one platform define (e.g., `PLATFORM_CYD24`, `PLATFORM_ESP32S3_4848S040`, or `PLATFORM_ESP32S3_LCDWIKI_28`).
 3. Recompile and flash the project.
 
 ## 10.4 Custom Thresholds and Alert Logic

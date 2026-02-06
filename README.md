@@ -70,6 +70,6 @@ This project provides **no financial advice**. Cryptocurrency markets are highly
 
 ---
 
-**Last guide update: January 2026**
+**Last guide update: February 6, 2026**
 
 Enjoy your ESP32-Crypto-Alert! 🚀

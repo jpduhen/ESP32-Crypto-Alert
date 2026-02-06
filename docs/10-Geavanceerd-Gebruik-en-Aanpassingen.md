@@ -24,7 +24,7 @@ Ga naar **Sketch → Include Library → Manage Libraries** en zoek op de namen.
 Voor optimale prestaties en juiste weergave kies je het juiste board in `platform_config.h`.
 
 1. Open `platform_config.h`.
-2. Zet één platform‑define aan (bijv. `PLATFORM_CYD24` of `PLATFORM_ESP32S3_4848S040`).
+2. Zet één platform‑define aan (bijv. `PLATFORM_CYD24`, `PLATFORM_ESP32S3_4848S040` of `PLATFORM_ESP32S3_LCDWIKI_28`).
 3. Hercompileer en flash het project.
 
 ## 10.4 Custom Thresholds en Alert-Logica Wijzigen

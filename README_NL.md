@@ -68,6 +68,6 @@ Dit project biedt **geen financieel advies**. Cryptocurrency-markten zijn volati
 
 ---
 
-**Laatste update handleiding: Januari 2026**
+**Laatste update handleiding: 6 februari 2026**
 
 Veel plezier met je ESP32-Crypto-Alert! 🚀

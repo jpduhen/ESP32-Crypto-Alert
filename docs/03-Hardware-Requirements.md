@@ -36,7 +36,11 @@ Compact board with ESP32-S3, 1.14" IPS LCD (ST7789, 240×135), 16MB Flash, 2MB P
 ![Waveshare ESP32-S3-GEEK](img/waveshare-s3-geek.jpg)  
 *Waveshare ESP32-S3-GEEK – excellent performance and many interfaces.*
 
-### 3.2.4 ESP32-4848S040C_i (4.0" 480×480)
+### 3.2.4 ESP32-S3 LCDWIKI 2.8" (240×320)
+ESP32-S3 board with a 2.8" TFT display (ILI9341, 240×320), capacitive touch, 16MB Flash, and 8MB PSRAM.  
+This variant combines S3 hardware with a CYD‑style screen layout. Color inversion is required.
+
+### 3.2.5 ESP32-4848S040C_i (4.0" 480×480)
 ESP32-S3 board with a 4.0" round display (ST7701, 480×480). Added for a larger, high-resolution screen.
 
 ## 3.3 Custom Builds
@@ -59,6 +63,7 @@ When using a generic ESP32 (e.g., DevKit), you can connect a separate TFT displa
 | Board/Model                  | Display Type          | Resolution                   | Touch         | Directly Supported | Notes                                |
 |------------------------------|-----------------------|-----------------------------|---------------|---------------------|--------------------------------------|
 | ESP32-2432S02xx (CYD24/28)   | 2.4" / 2.8" TFT       | Variant-dependent            | Resistive    | Yes                | Best price/quality                   |
+| ESP32-S3 LCDWIKI 2.8         | 2.8" ILI9341          | 240×320                     | Capacitive  | Yes                | S3 + PSRAM, color inversion needed   |
 | ESP32-4848S040C_i            | 4.0" round ST7701     | 480×480                     | Depends      | Yes                | Large, high resolution               |
 | LilyGO TTGO T-Display        | 1.14" ST7789         | 240×135                     | No           | Yes                | Compact                              |
 | Waveshare ESP32-S3-GEEK      | 1.14" IPS ST7789     | 240×135                     | No           | Yes (well compatible)| Powerful, TF slot                    |
