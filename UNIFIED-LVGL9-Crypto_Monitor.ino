@@ -3647,6 +3647,7 @@ void saveSettings()
     safeStrncpy(settings.ntfyTopic, ntfyTopic, sizeof(settings.ntfyTopic));
     safeStrncpy(settings.bitvavoSymbol, bitvavoSymbol, sizeof(settings.bitvavoSymbol));
     settings.language = language;
+    settings.displayRotation = displayRotation;
     
     // Copy alert thresholds
     settings.alertThresholds = alertThresholds;
