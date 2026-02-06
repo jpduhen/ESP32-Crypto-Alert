@@ -6371,19 +6371,19 @@ static float calculateLinearTrend1Day()
     }
     
     // Loop through last hoursToUse hours
-    // Start from the last written position (newest) and work backwards
-    for (uint16_t i = 0; i < hoursToUse; i++)
+    // Gebruik altijd de volgorde: oudste -> nieuwste
+    for (uint16_t k = 0; k < hoursToUse; k++)
     {
         uint16_t idx;
         if (!hourArrayFilled)
         {
-            if (i >= hourIndex) break;  // Not enough data
-            idx = hourIndex - 1 - i;  // Start at last hour and work backwards
-    }
-    else
-    {
-            // Ring buffer mode: use helper, starting from lastHourIdx
-            int32_t idx_temp = getRingBufferIndexAgo(lastHourIdx, i, HOURS_FOR_7D);
+            if (hourIndex < hoursToUse) break;
+            idx = (hourIndex - hoursToUse) + k;
+        }
+        else
+        {
+            uint16_t positionsAgo = (hoursToUse - 1 - k);
+            int32_t idx_temp = getRingBufferIndexAgo(lastHourIdx, positionsAgo, HOURS_FOR_7D);
             if (idx_temp < 0) break;
             idx = (uint16_t)idx_temp;
         }
@@ -6391,9 +6391,7 @@ static float calculateLinearTrend1Day()
         float price = hourlyAverages[idx];
         if (isValidPrice(price))
         {
-            // Time index should increase from oldest -> newest.
-            // Loop iterates newest -> oldest, so reverse index for correct slope sign.
-            float x = (float)(hoursToUse - 1 - i);  // 0 = oldest, hoursToUse-1 = newest
+            float x = (float)k;  // 0 = oudste, hoursToUse-1 = nieuwste
             float y = price;
             
             sumX += x;
@@ -6480,19 +6478,19 @@ static float calculateLinearTrend7Days()
     }
     
     // Loop through last hoursToUse hours
-    // Start from the last written position (newest) and work backwards
-    for (uint16_t i = 0; i < hoursToUse; i++)
+    // Gebruik altijd de volgorde: oudste -> nieuwste
+    for (uint16_t k = 0; k < hoursToUse; k++)
     {
         uint16_t idx;
         if (!hourArrayFilled)
         {
-            if (i >= hourIndex) break;  // Not enough data
-            idx = hourIndex - 1 - i;  // Start at last hour and work backwards
-    }
-    else
-    {
-            // Ring buffer mode: use helper, starting from lastHourIdx
-            int32_t idx_temp = getRingBufferIndexAgo(lastHourIdx, i, HOURS_FOR_7D);
+            if (hourIndex < hoursToUse) break;
+            idx = (hourIndex - hoursToUse) + k;
+        }
+        else
+        {
+            uint16_t positionsAgo = (hoursToUse - 1 - k);
+            int32_t idx_temp = getRingBufferIndexAgo(lastHourIdx, positionsAgo, HOURS_FOR_7D);
             if (idx_temp < 0) break;
             idx = (uint16_t)idx_temp;
         }
@@ -6500,9 +6498,7 @@ static float calculateLinearTrend7Days()
         float price = hourlyAverages[idx];
         if (isValidPrice(price))
         {
-            // Time index should increase from oldest -> newest.
-            // Loop iterates newest -> oldest, so reverse index for correct slope sign.
-            float x = (float)(hoursToUse - 1 - i);  // 0 = oldest, hoursToUse-1 = newest
+            float x = (float)k;  // 0 = oudste, hoursToUse-1 = nieuwste
             float y = price;
             
             sumX += x;
