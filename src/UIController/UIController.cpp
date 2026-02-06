@@ -192,7 +192,7 @@ extern uint8_t secondIndex;
 extern float averagePrices[];
 extern void findMinMaxInSecondPrices(float &minVal, float &maxVal);
 extern void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
+#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_4848S040)
 extern void findMinMaxInLast2Hours(float &minVal, float &maxVal);
 #endif
 extern bool computeStatsLast24Hours(float &avgVal, float &minVal, float &maxVal);
@@ -810,7 +810,7 @@ void UIController::createPriceBoxes() {
         }
         
         // Min/Max/Diff labels voor 2h blok (index 3) - alleen voor CYD platforms
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
+        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_4848S040)
         if (i == 3)
         {
             // Initialiseer buffers
@@ -1700,7 +1700,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
     bool hasData1m = (index == 1) ? (secondArrayFilled || secondIndex >= 30) : true;
     // Voor 30m box: gebruik hasRet30m (inclusief warm-start) OF 30+ minuten live data
     bool hasData30m = (index == 2) ? (hasRet30m || (minuteArrayFilled || minuteIndex >= 30)) : true;
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_4848S040)
     // Voor 2h box: gebruik warm-start data OF live data (minuteIndex >= 2 voor minimal, >= 120 voor volledig)
     bool hasData2h = (index == 3) ? (hasRet2h || (minuteArrayFilled || minuteIndex >= 120)) : true;
     bool hasData2hMinimal = (index == 3) ? (hasRet2h || (minuteArrayFilled || minuteIndex >= 2)) : true;  // Warm-start OF minimaal 2 minuten live data
@@ -1723,7 +1723,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
     
     // Debug voor 2h box: alleen loggen wanneer waarde verandert
     if (index == 3) {
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
+        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_4848S040)
         #if !DEBUG_BUTTON_ONLY
         static float lastLoggedPct2h = -999.0f;
         static bool lastLoggedHasData2h = false;
@@ -1858,7 +1858,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
                               lastPrice30MinMaxValue, lastPrice30MinMinValue, lastPrice30MinDiffValue);
     }
     
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_4848S040)
     if (index == 3 && ::price2HMaxLabel != nullptr && ::price2HMinLabel != nullptr && ::price2HDiffLabel != nullptr)
     {
         float minVal = 0.0f;
@@ -1981,7 +1981,7 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
     }
     
     // Fase 8.6.3: Gebruik globale pointers (synchroniseert met module pointers)
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_4848S040)
     // Voor 2h/1d box: gebruik warm-start data OF minimaal 2 minuten live data (2h) of ret_1d (1d)
     bool hasDataForColor = (index == 1) ? secondArrayFilled :
                            (index == 2) ? (minuteArrayFilled || minuteIndex >= 30) :
@@ -1996,7 +1996,7 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
     #endif
     
     // Voor 2h box: toon kleur ook als pct 0.0f is maar er wel data is
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_4848S040)
     bool shouldShowColor = (index == 3
         #if defined(PLATFORM_ESP32S3_4848S040)
         || index == 4 || index == 5

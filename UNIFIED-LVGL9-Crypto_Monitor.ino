@@ -302,7 +302,7 @@ SemaphoreHandle_t gNetMutex = NULL;
 #if defined(PLATFORM_ESP32S3_4848S040)
 char symbol0[16] = "BTC-EUR";
 extern const char *const symbols[SYMBOL_COUNT] = {symbol0, SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL, SYMBOL_1D_LABEL, SYMBOL_7D_LABEL};
-#elif defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+#elif defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28)
 char symbol0[16] = "BTC-EUR";
 extern const char *const symbols[SYMBOL_COUNT] = {symbol0, SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL};
 #else
@@ -489,6 +489,11 @@ static unsigned long wsLastCandleLogMs = 0;
 #if WS_ENABLED && WS_LIB_AVAILABLE
 static WebSocketsClient* wsClientPtr = nullptr;
 #endif
+static bool wsPending = false;
+static size_t wsPendingLen = 0;
+static char wsPendingBuf[360];
+
+static void processWsTextMessage(const char* wsBuf, size_t length);
 
 
 // Fase 8: UI state - gebruikt door UIController module
@@ -1764,6 +1769,7 @@ static WarmStartMode performWarmStart()
     
     // 3. Haal 1w candles op voor lange termijn trend (fallback)
     float temp1wPrices[2];
+    unsigned long temp1wTimes[2];
     int count1w = 0;
     const int maxRetries1w = 3;
     for (int retry = 0; retry < maxRetries1w; retry++) {
@@ -1774,7 +1780,7 @@ static WarmStartMode performWarmStart()
             lv_timer_handler();
         }
         lv_timer_handler();
-        count1w = fetchBitvavoCandles(bitvavoSymbol, "1W", 2, temp1wPrices, nullptr, 2);  // Bitvavo gebruikt "1W" (hoofdletter W)
+        count1w = fetchBitvavoCandles(bitvavoSymbol, "1W", 2, temp1wPrices, temp1wTimes, 2);  // Bitvavo gebruikt "1W" (hoofdletter W)
         lv_timer_handler();
         if (count1w >= 2) {
             break;
@@ -1784,7 +1790,7 @@ static WarmStartMode performWarmStart()
     if (count1w >= 2) {
         float spanHours = (float)(count1w - 1) * 168.0f;
         float totalHours = (spanHours > 168.0f || spanHours <= 0.0f) ? 168.0f : spanHours;
-        if (computeRegressionPctFromSeries(temp1wPrices, count1w, 168.0f, totalHours, ret_7d)) {
+        if (computeRegressionPctFromSeriesWithTimes(temp1wPrices, temp1wTimes, count1w, totalHours, ret_7d)) {
             hasRet7dWarm = true;
         } else {
             hasRet7dWarm = false;
@@ -2054,41 +2060,18 @@ static WarmStartMode performWarmStart()
     }
     #endif
 
-    // Warm-start 7d regressie op basis van 7 dagelijkse candles (fallback, alleen als 1h7d niet beschikbaar is)
-    if (!hasRet7dWarm && !warmStart7dValid && count1d >= 7) {
-        float sumX = 0.0f;
-        float sumY = 0.0f;
-        float sumXY = 0.0f;
-        float sumX2 = 0.0f;
-        float avgSum = 0.0f;
-        uint8_t validPoints = 0;
-        // Gebruik de laatste 7 candles
-        const int startIdx = count1d - 7;
-        for (int i = 0; i < 7; i++) {
-            float price = temp1dPrices[startIdx + i];
-            if (price > 0.0f) {
-                float x = (float)i; // 0 = oudste, 6 = nieuwste
-                sumX += x;
-                sumY += price;
-                sumXY += x * price;
-                sumX2 += x * x;
-                avgSum += price;
-                validPoints++;
-            }
-        }
-        if (validPoints >= 2) {
-            float avgPrice = avgSum / (float)validPoints;
-            float n = (float)validPoints;
-            float denominator = (n * sumX2) - (sumX * sumX);
-            if (fabsf(denominator) > 0.0001f && avgPrice > 0.0f) {
-                float slope = ((n * sumXY) - (sumX * sumY)) / denominator; // prijs per dag
-                float slopePerWeek = slope * 7.0f;
-                ret_7d = (slopePerWeek / avgPrice) * 100.0f;
-                hasRet7dWarm = true;
-                #if DEBUG_CALCULATIONS
-                Serial_printf(F("[WarmStart][7d] ret_7d=%.4f%% (fallback regressie over 7d daily)\n"), ret_7d);
-                #endif
-            }
+    // Warm-start 7d regressie op basis van 7 dagelijkse candles (betrouwbaarder dan 1W)
+    if (count1d >= 7) {
+        const int startIdx = count1d - 7;  // laatste 7 candles (oudste -> nieuwste)
+        const float stepHours = 24.0f;
+        const float totalHours = 168.0f;
+        float ret7dDaily = 0.0f;
+        if (computeRegressionPctFromSeries(&temp1dPrices[startIdx], 7, stepHours, totalHours, ret7dDaily)) {
+            ret_7d = ret7dDaily;
+            hasRet7dWarm = true;
+            #if DEBUG_CALCULATIONS
+            Serial_printf(F("[WarmStart][7d] ret_7d=%.4f%% (regressie over 7d daily)\n"), ret_7d);
+            #endif
         }
     }
     
@@ -2798,203 +2781,11 @@ static void maybeInitWebSocketAfterWarmStart()
             case WStype_TEXT: {
                 wsMsgCount++;
                 if (payload != nullptr && length > 0) {
-                    // Maak tijdelijke null-terminated buffer voor parsing
-                    char wsBuf[360];
-                    size_t wsCopyLen = (length < (sizeof(wsBuf) - 1)) ? length : (sizeof(wsBuf) - 1);
-                    memcpy(wsBuf, payload, wsCopyLen);
-                    wsBuf[wsCopyLen] = '\0';
-
-                    // Candle updates (WS) -> update lastKline1m/5m voor volume UI
-                    if (strstr(wsBuf, "\"event\":\"candle\"") != nullptr) {
-                        const char* keyInterval = "\"interval\":\"";
-                        const char* keyMarket = "\"market\":\"";
-                        const char* keyCandle = "\"candle\":[";
-                        const char* posInterval = strstr(wsBuf, keyInterval);
-                        const char* posMarket = strstr(wsBuf, keyMarket);
-                        const char* posCandle = strstr(wsBuf, keyCandle);
-                        if (posInterval && posMarket && posCandle) {
-                            char intervalBuf[4] = {0};
-                            char marketBuf[16] = {0};
-                            posInterval += strlen(keyInterval);
-                            posMarket += strlen(keyMarket);
-                            size_t i = 0;
-                            while (i < sizeof(intervalBuf) - 1 && posInterval[i] && posInterval[i] != '"') {
-                                intervalBuf[i] = posInterval[i];
-                                i++;
-                            }
-                            intervalBuf[i] = '\0';
-                            i = 0;
-                            while (i < sizeof(marketBuf) - 1 && posMarket[i] && posMarket[i] != '"') {
-                                marketBuf[i] = posMarket[i];
-                                i++;
-                            }
-                            marketBuf[i] = '\0';
-
-                            // Parse candle array: [timestamp, open, high, low, close, volume]
-                            posCandle += strlen(keyCandle);
-                            char fieldBuf[20];
-                            uint64_t openTimeMs = 0;
-                            unsigned long openTime = 0;
-                            float open = 0.0f, high = 0.0f, low = 0.0f, close = 0.0f, volume = 0.0f;
-                            bool ok = true;
-                            for (uint8_t f = 0; f < 6; f++) {
-                                // Skip whitespace/quotes/brackets
-                                while (*posCandle == ' ' || *posCandle == '"' || *posCandle == '[') {
-                                    posCandle++;
-                                }
-                                size_t idx = 0;
-                                while (*posCandle && *posCandle != '"' && *posCandle != ',' && *posCandle != ']'
-                                       && idx < sizeof(fieldBuf) - 1) {
-                                    fieldBuf[idx++] = *posCandle++;
-                                }
-                                fieldBuf[idx] = '\0';
-                                while (*posCandle && *posCandle != ',' && *posCandle != ']') posCandle++;
-                                while (*posCandle == ',' || *posCandle == ']' || *posCandle == ' ' || *posCandle == '[') {
-                                    posCandle++;
-                                }
-                                if (idx == 0) { ok = false; break; }
-                                if (f == 0) {
-                                    openTimeMs = strtoull(fieldBuf, nullptr, 10);
-                                } else if (f == 1) {
-                                    ok = safeAtof(fieldBuf, open);
-                                } else if (f == 2) {
-                                    ok = safeAtof(fieldBuf, high);
-                                } else if (f == 3) {
-                                    ok = safeAtof(fieldBuf, low);
-                                } else if (f == 4) {
-                                    ok = safeAtof(fieldBuf, close);
-                                } else if (f == 5) {
-                                    ok = safeAtof(fieldBuf, volume);
-                                }
-                                if (!ok) break;
-                            }
-
-                            if (ok && strcmp(marketBuf, bitvavoSymbol) == 0) {
-                                if (openTimeMs > 0) {
-                                    openTime = (unsigned long)(openTimeMs / 1000ULL);
-                                } else {
-                                    openTime = 0;
-                                }
-                                KlineMetrics kline;
-                                kline.openTime = openTime;
-                                if (high <= 0.0f) high = close;
-                                if (low <= 0.0f) low = close;
-                                if (high < low) {
-                                    float tmp = high;
-                                    high = low;
-                                    low = tmp;
-                                }
-                                kline.high = high;
-                                kline.low = low;
-                                kline.close = close;
-                                kline.volume = volume;
-                                kline.valid = (openTime > 0 && close > 0.0f);
-                                if (strcmp(intervalBuf, "1m") == 0) {
-                                    lastKline1m = kline;
-                                    wsLastCandle1mMs = millis();
-                                } else if (strcmp(intervalBuf, "5m") == 0) {
-                                    lastKline5m = kline;
-                                    wsLastCandle5mMs = millis();
-                                } else if (strcmp(intervalBuf, "4h") == 0) {
-                                    wsLastCandle4hMs = millis();
-                                } else if (strcmp(intervalBuf, "1d") == 0) {
-                                    wsLastCandle1dMs = millis();
-                                }
-
-                                // Rate-limited log om WS candle flow te verifiëren
-                                unsigned long nowMs = millis();
-                                if (nowMs - wsLastCandleLogMs >= 60000UL) {
-                                    wsLastCandleLogMs = nowMs;
-                                    Serial_printf(F("[WS][Candle] %s close=%.2f vol=%.4f\n"),
-                                                 intervalBuf, close, volume);
-                                }
-
-                                // Update EMA voor auto-anchor op basis van WS candles (4h/1d)
-                                extern Alert2HThresholds alert2HThresholds;
-                                if (strcmp(intervalBuf, "4h") == 0) {
-                                    uint8_t n = alert2HThresholds.autoAnchor4hCandles;
-                                    if (!wsEma4hInit || wsEma4hN != n) {
-                                        wsEma4h.begin(n);
-                                        wsEma4hInit = true;
-                                        wsEma4hN = n;
-                                    }
-                                    if (wsCandle4h.has && openTime != wsCandle4h.openTime) {
-                                        wsEma4h.push(wsCandle4h.lastClose);
-                                        wsAnchorEma4hValid = wsEma4h.isValid();
-                                        wsAnchorEma4hLive = wsEma4h.ema;
-                                        wsAutoAnchorTrigger = true;
-                                    }
-                                    wsCandle4h.openTime = openTime;
-                                    wsCandle4h.lastClose = close;
-                                    wsCandle4h.has = true;
-                                    if (wsEma4h.isValid()) {
-                                        wsAnchorEma4hLive = (wsEma4h.alpha * close) + ((1.0f - wsEma4h.alpha) * wsEma4h.ema);
-                                        wsAnchorEma4hValid = true;
-                                    }
-                                } else if (strcmp(intervalBuf, "1d") == 0) {
-                                    uint8_t n = alert2HThresholds.autoAnchor1dCandles;
-                                    if (!wsEma1dInit || wsEma1dN != n) {
-                                        wsEma1d.begin(n);
-                                        wsEma1dInit = true;
-                                        wsEma1dN = n;
-                                    }
-                                    if (wsCandle1d.has && openTime != wsCandle1d.openTime) {
-                                        wsEma1d.push(wsCandle1d.lastClose);
-                                        wsAnchorEma1dValid = wsEma1d.isValid();
-                                        wsAnchorEma1dLive = wsEma1d.ema;
-                                        wsAutoAnchorTrigger = true;
-                                    }
-                                    wsCandle1d.openTime = openTime;
-                                    wsCandle1d.lastClose = close;
-                                    wsCandle1d.has = true;
-                                    if (wsEma1d.isValid()) {
-                                        wsAnchorEma1dLive = (wsEma1d.alpha * close) + ((1.0f - wsEma1d.alpha) * wsEma1d.ema);
-                                        wsAnchorEma1dValid = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    const char* keyBid = "\"bestBid\":\"";
-                    const char* keyAsk = "\"bestAsk\":\"";
-                    char* pos = strstr(wsBuf, keyBid);
-                    if (pos == nullptr) {
-                        pos = strstr(wsBuf, keyAsk);
-                        if (pos != nullptr) {
-                            pos += strlen(keyAsk);
-                        }
-                    } else {
-                        pos += strlen(keyBid);
-                    }
-                    if (pos != nullptr) {
-                        char valBuf[16];
-                        size_t idx = 0;
-                        while (idx < sizeof(valBuf) - 1 && pos[idx] != '\0' && pos[idx] != '"') {
-                            valBuf[idx] = pos[idx];
-                            idx++;
-                        }
-                        valBuf[idx] = '\0';
-                        float parsed = 0.0f;
-                        if (safeAtof(valBuf, parsed) && parsed > 0.0f) {
-                            wsLastPrice = roundToEuro(parsed);
-                            wsLastPriceMs = millis();
-                        }
-                    }
-                }
-                unsigned long now = millis();
-                if (now - wsLastLogMs >= 5000) {
-                    wsLastLogMs = now;
-                    char snippet[96];
-                    size_t copyLen = (length < (sizeof(snippet) - 1)) ? length : (sizeof(snippet) - 1);
-                    if (payload != nullptr && copyLen > 0) {
-                        memcpy(snippet, payload, copyLen);
-                        snippet[copyLen] = '\0';
-                    } else {
-                        snippet[0] = '\0';
-                    }
-                    Serial_printf(F("[WS] Msgs=%lu price=%.2f sample=%s\n"),
-                                 (unsigned long)wsMsgCount, wsLastPrice, snippet);
+                    size_t copyLen = (length < (sizeof(wsPendingBuf) - 1)) ? length : (sizeof(wsPendingBuf) - 1);
+                    memcpy(wsPendingBuf, payload, copyLen);
+                    wsPendingBuf[copyLen] = '\0';
+                    wsPendingLen = copyLen;
+                    wsPending = true;
                 }
                 break;
             }
@@ -3011,6 +2802,202 @@ static void maybeInitWebSocketAfterWarmStart()
     logHeap("WS_INIT_POST");
 #endif
 #endif
+}
+
+static void processWsTextMessage(const char* wsBuf, size_t length)
+{
+    if (wsBuf == nullptr || length == 0) {
+        return;
+    }
+
+    // Candle updates (WS) -> update lastKline1m/5m voor volume UI
+    if (strstr(wsBuf, "\"event\":\"candle\"") != nullptr) {
+        const char* keyInterval = "\"interval\":\"";
+        const char* keyMarket = "\"market\":\"";
+        const char* keyCandle = "\"candle\":[";
+        const char* posInterval = strstr(wsBuf, keyInterval);
+        const char* posMarket = strstr(wsBuf, keyMarket);
+        const char* posCandle = strstr(wsBuf, keyCandle);
+        if (posInterval && posMarket && posCandle) {
+            char intervalBuf[4] = {0};
+            char marketBuf[16] = {0};
+            posInterval += strlen(keyInterval);
+            posMarket += strlen(keyMarket);
+            size_t i = 0;
+            while (i < sizeof(intervalBuf) - 1 && posInterval[i] && posInterval[i] != '"') {
+                intervalBuf[i] = posInterval[i];
+                i++;
+            }
+            intervalBuf[i] = '\0';
+            i = 0;
+            while (i < sizeof(marketBuf) - 1 && posMarket[i] && posMarket[i] != '"') {
+                marketBuf[i] = posMarket[i];
+                i++;
+            }
+            marketBuf[i] = '\0';
+
+            // Parse candle array: [timestamp, open, high, low, close, volume]
+            posCandle += strlen(keyCandle);
+            char fieldBuf[20];
+            uint64_t openTimeMs = 0;
+            unsigned long openTime = 0;
+            float open = 0.0f, high = 0.0f, low = 0.0f, close = 0.0f, volume = 0.0f;
+            bool ok = true;
+            for (uint8_t f = 0; f < 6; f++) {
+                // Skip whitespace/quotes/brackets
+                while (*posCandle == ' ' || *posCandle == '"' || *posCandle == '[') {
+                    posCandle++;
+                }
+                size_t idx = 0;
+                while (*posCandle && *posCandle != '"' && *posCandle != ',' && *posCandle != ']'
+                       && idx < sizeof(fieldBuf) - 1) {
+                    fieldBuf[idx++] = *posCandle++;
+                }
+                fieldBuf[idx] = '\0';
+                while (*posCandle && *posCandle != ',' && *posCandle != ']') posCandle++;
+                while (*posCandle == ',' || *posCandle == ']' || *posCandle == ' ' || *posCandle == '[') {
+                    posCandle++;
+                }
+                if (idx == 0) { ok = false; break; }
+                if (f == 0) {
+                    openTimeMs = strtoull(fieldBuf, nullptr, 10);
+                } else if (f == 1) {
+                    ok = safeAtof(fieldBuf, open);
+                } else if (f == 2) {
+                    ok = safeAtof(fieldBuf, high);
+                } else if (f == 3) {
+                    ok = safeAtof(fieldBuf, low);
+                } else if (f == 4) {
+                    ok = safeAtof(fieldBuf, close);
+                } else if (f == 5) {
+                    ok = safeAtof(fieldBuf, volume);
+                }
+                if (!ok) break;
+            }
+
+            if (ok && strcmp(marketBuf, bitvavoSymbol) == 0) {
+                if (openTimeMs > 0) {
+                    openTime = (unsigned long)(openTimeMs / 1000ULL);
+                } else {
+                    openTime = 0;
+                }
+                KlineMetrics kline;
+                kline.openTime = openTime;
+                if (high <= 0.0f) high = close;
+                if (low <= 0.0f) low = close;
+                if (high < low) {
+                    float tmp = high;
+                    high = low;
+                    low = tmp;
+                }
+                kline.high = high;
+                kline.low = low;
+                kline.close = close;
+                kline.volume = volume;
+                kline.valid = (openTime > 0 && close > 0.0f);
+                if (strcmp(intervalBuf, "1m") == 0) {
+                    lastKline1m = kline;
+                    wsLastCandle1mMs = millis();
+                } else if (strcmp(intervalBuf, "5m") == 0) {
+                    lastKline5m = kline;
+                    wsLastCandle5mMs = millis();
+                } else if (strcmp(intervalBuf, "4h") == 0) {
+                    wsLastCandle4hMs = millis();
+                } else if (strcmp(intervalBuf, "1d") == 0) {
+                    wsLastCandle1dMs = millis();
+                }
+
+                // Rate-limited log om WS candle flow te verifiëren
+                unsigned long nowMs = millis();
+                if (nowMs - wsLastCandleLogMs >= 60000UL) {
+                    wsLastCandleLogMs = nowMs;
+                    Serial_printf(F("[WS][Candle] %s close=%.2f vol=%.4f\n"),
+                                 intervalBuf, close, volume);
+                }
+
+                // Update EMA voor auto-anchor op basis van WS candles (4h/1d)
+                extern Alert2HThresholds alert2HThresholds;
+                if (strcmp(intervalBuf, "4h") == 0) {
+                    uint8_t n = alert2HThresholds.autoAnchor4hCandles;
+                    if (!wsEma4hInit || wsEma4hN != n) {
+                        wsEma4h.begin(n);
+                        wsEma4hInit = true;
+                        wsEma4hN = n;
+                    }
+                    if (wsCandle4h.has && openTime != wsCandle4h.openTime) {
+                        wsEma4h.push(wsCandle4h.lastClose);
+                        wsAnchorEma4hValid = wsEma4h.isValid();
+                        wsAnchorEma4hLive = wsEma4h.ema;
+                        wsAutoAnchorTrigger = true;
+                    }
+                    wsCandle4h.openTime = openTime;
+                    wsCandle4h.lastClose = close;
+                    wsCandle4h.has = true;
+                    if (wsEma4h.isValid()) {
+                        wsAnchorEma4hLive = (wsEma4h.alpha * close) + ((1.0f - wsEma4h.alpha) * wsEma4h.ema);
+                        wsAnchorEma4hValid = true;
+                    }
+                } else if (strcmp(intervalBuf, "1d") == 0) {
+                    uint8_t n = alert2HThresholds.autoAnchor1dCandles;
+                    if (!wsEma1dInit || wsEma1dN != n) {
+                        wsEma1d.begin(n);
+                        wsEma1dInit = true;
+                        wsEma1dN = n;
+                    }
+                    if (wsCandle1d.has && openTime != wsCandle1d.openTime) {
+                        wsEma1d.push(wsCandle1d.lastClose);
+                        wsAnchorEma1dValid = wsEma1d.isValid();
+                        wsAnchorEma1dLive = wsEma1d.ema;
+                        wsAutoAnchorTrigger = true;
+                    }
+                    wsCandle1d.openTime = openTime;
+                    wsCandle1d.lastClose = close;
+                    wsCandle1d.has = true;
+                    if (wsEma1d.isValid()) {
+                        wsAnchorEma1dLive = (wsEma1d.alpha * close) + ((1.0f - wsEma1d.alpha) * wsEma1d.ema);
+                        wsAnchorEma1dValid = true;
+                    }
+                }
+            }
+        }
+    }
+
+    const char* keyBid = "\"bestBid\":\"";
+    const char* keyAsk = "\"bestAsk\":\"";
+    char* pos = strstr(wsBuf, keyBid);
+    if (pos == nullptr) {
+        pos = strstr(wsBuf, keyAsk);
+        if (pos != nullptr) {
+            pos += strlen(keyAsk);
+        }
+    } else {
+        pos += strlen(keyBid);
+    }
+    if (pos != nullptr) {
+        char valBuf[16];
+        size_t idx = 0;
+        while (idx < sizeof(valBuf) - 1 && pos[idx] != '\0' && pos[idx] != '"') {
+            valBuf[idx] = pos[idx];
+            idx++;
+        }
+        valBuf[idx] = '\0';
+        float parsed = 0.0f;
+        if (safeAtof(valBuf, parsed) && parsed > 0.0f) {
+            wsLastPrice = roundToEuro(parsed);
+            wsLastPriceMs = millis();
+        }
+    }
+
+    unsigned long now = millis();
+    if (now - wsLastLogMs >= 5000) {
+        wsLastLogMs = now;
+        char snippet[96];
+        size_t copyLen = (length < (sizeof(snippet) - 1)) ? length : (sizeof(snippet) - 1);
+        memcpy(snippet, wsBuf, copyLen);
+        snippet[copyLen] = '\0';
+        Serial_printf(F("[WS] Msgs=%lu price=%.2f sample=%s\n"),
+                     (unsigned long)wsMsgCount, wsLastPrice, snippet);
+    }
 }
 
 // ============================================================================
@@ -6572,7 +6559,7 @@ void findMinMaxInLast30Minutes(float &minVal, float &maxVal)
     bool result = findMinMaxInArray(minuteAverages, MINUTES_FOR_30MIN_CALC, minuteIndex, minuteArrayFilled, 30, true, minVal, maxVal);
 }
 
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
+#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_4848S040)
 // Find min and max values in last 2 hours (120 minutes) of minuteAverages array
 // CYD + 4848S040 platforms met 2h box
 // Fase 2.1: Geoptimaliseerd: gebruikt generic findMinMaxInArray() helper
@@ -7586,7 +7573,7 @@ static void setupSerialAndDevice()
     loadSettings();
     // ESP32-S3 fix: DEV_DEVICE_INIT() overslaan - backlight wordt later ingesteld via setDisplayBrigthness() met PWM
     // Dit voorkomt conflict tussen digitalWrite en ledcAttachChannel
-    #if !defined(PLATFORM_ESP32S3_SUPERMINI)
+    #if !defined(PLATFORM_ESP32S3_SUPERMINI) && !defined(PLATFORM_ESP32S3_LCDWIKI_28)
     DEV_DEVICE_INIT();
     #endif
     
@@ -7619,12 +7606,14 @@ static void setupDisplay()
     // Alleen 0 en 2 zijn geldig voor 180 graden rotatie
     uint8_t rotation = (displayRotation == 2) ? 2 : 0;
     gfx->setRotation(rotation);
-    // TTGO/ESP32-S3: altijd false (ST7789 heeft geen inversie nodig)
+    // TTGO/ESP32-S3: standaard geen inversie
     // CYD24/CYD28: standaard false, behalve wanneer INVERT_COLORS flag is gezet
     #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     gfx->invertDisplay(false); // TTGO/ESP32-S3 T-Display/GEEK heeft geen inversie nodig (ST7789)
     #elif defined(PLATFORM_ESP32S3_4848S040)
     gfx->invertDisplay(false); // 4848S040: geen inversie (basisinstelling)
+    #elif defined(PLATFORM_LCDWIKI28_INVERT_COLORS)
+    gfx->invertDisplay(true); // LCDWIKI 2.8: kleurinversie nodig
     #elif defined(PLATFORM_CYD24_INVERT_COLORS)
     gfx->invertDisplay(true); // CYD24: inverteer kleuren
     #elif defined(PLATFORM_CYD28_INVERT_COLORS)
@@ -7637,7 +7626,7 @@ static void setupDisplay()
     // ESP32-S3 fix: Backlight moet opnieuw worden ingesteld na display initialisatie
     // DEV_DEVICE_INIT() wordt eerder aangeroepen, maar ledc kan conflicteren
     // GEEK gebruikt digitalWrite (geen PWM), dus alleen voor SUPERMINI
-    #if defined(PLATFORM_ESP32S3_SUPERMINI)
+    #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_LCDWIKI_28)
     // Zet backlight eerst uit, dan weer aan met PWM
     digitalWrite(GFX_BL, LOW);
     delay(10);
@@ -8870,6 +8859,10 @@ void loop()
     if (wsInitialized && wsClientPtr != nullptr) {
         if (WiFi.status() == WL_CONNECTED) {
             wsClientPtr->loop();
+            if (wsPending) {
+                wsPending = false;
+                processWsTextMessage(wsPendingBuf, wsPendingLen);
+            }
         }
     }
 #endif
