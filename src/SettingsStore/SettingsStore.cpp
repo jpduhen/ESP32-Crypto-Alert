@@ -491,7 +491,13 @@ CryptoMonitorSettings SettingsStore::load() {
     settings.language = prefs.getUChar(PREF_KEY_LANGUAGE, DEFAULT_LANGUAGE);
     
     // Load display rotation
-    settings.displayRotation = prefs.getUChar(PREF_KEY_DISPLAY_ROTATION, 0);
+    uint8_t rotation = prefs.getUChar(PREF_KEY_DISPLAY_ROTATION, 0);
+    // Backward compat: oudere builds konden het als UInt opslaan
+    if (rotation != 0 && rotation != 2) {
+        uint32_t legacyRotation = prefs.getUInt(PREF_KEY_DISPLAY_ROTATION, 0);
+        rotation = (legacyRotation == 2) ? 2 : 0;
+    }
+    settings.displayRotation = rotation;
     
     // Load alert thresholds
     settings.alertThresholds.threshold1MinUp = prefs.getFloat(PREF_KEY_TH1_UP, THRESHOLD_1MIN_UP_DEFAULT);

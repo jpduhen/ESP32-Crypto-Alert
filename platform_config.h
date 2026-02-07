@@ -7,8 +7,8 @@
 //#define PLATFORM_CYD28_2USB  // 2USB variant: met kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
 //#define PLATFORM_TTGO
 //#define PLATFORM_ESP32S3_SUPERMINI
-//#define PLATFORM_ESP32S3_GEEK
-#define PLATFORM_ESP32S3_LCDWIKI_28
+#define PLATFORM_ESP32S3_GEEK
+//#define PLATFORM_ESP32S3_LCDWIKI_28
 //#define PLATFORM_ESP32S3_4848S040
 
 // Automatisch PLATFORM_CYD28 definiëren als een CYD28 variant is gekozen
@@ -20,8 +20,8 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 5
-#define VERSION_MINOR 5
-#define VERSION_STRING "5.05"
+#define VERSION_MINOR 7
+#define VERSION_STRING "5.07"
 #endif
 
 // --- Debug Configuration ---

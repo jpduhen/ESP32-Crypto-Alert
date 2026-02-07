@@ -61,10 +61,14 @@ Arduino_DataBus *bus = new Arduino_ESP32SPI(TFT_DC, TFT_CS, TFT_SCLK, TFT_MOSI, 
 // Create display instance (ST7789)
 // Rotation 0 = portrait, true = IPS
 // ST7789 voor GEEK: 135x240, col offset 52, row offset 40 (vergelijkbaar met TTGO)
+// Pas COL_OFFSET_2 aan om ruis aan rechterkant bij rotatie 2 weg te werken
+#ifndef GEEK_COL_OFFSET_2
+#define GEEK_COL_OFFSET_2 53
+#endif
 Arduino_GFX *gfx = new Arduino_ST7789(bus, TFT_RST, 0 /* rotation */, true /* IPS */, 
                                        135 /* width */, 240 /* height */, 
                                        52 /* col offset 1 */, 40 /* row offset 1 */, 
-                                       52 /* col offset 2 */, 40 /* row offset 2 */);
+                                       GEEK_COL_OFFSET_2 /* col offset 2 */, 40 /* row offset 2 */);
 
 // Device initialization function
 // Sets up backlight pin

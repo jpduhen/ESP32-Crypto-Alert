@@ -230,6 +230,7 @@ extern char price7DMinLabelBuffer[20];
 extern char price7DDiffLabelBuffer[20];
 extern char price30MinMinLabelBuffer[20];
 extern char price30MinDiffLabelBuffer[32];
+extern char bitvavoSymbol[16];
 extern float lastPrice1MinMaxValue;
 extern float lastPrice1MinMinValue;
 extern float lastPrice1MinDiffValue;
@@ -385,6 +386,128 @@ void UIController::my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint
     lv_disp_flush_ready(disp);
 }
 
+static bool isUsdcQuoteSymbol(const char* symbol)
+{
+    if (symbol == nullptr) {
+        return false;
+    }
+    const char* suffix = "-USDC";
+    size_t len = strlen(symbol);
+    size_t suffixLen = strlen(suffix);
+    if (len < suffixLen) {
+        return false;
+    }
+    return strcmp(symbol + (len - suffixLen), suffix) == 0;
+}
+
+static lv_color_t getChartSeriesColor()
+{
+    return isUsdcQuoteSymbol(bitvavoSymbol)
+        ? lv_palette_main(LV_PALETTE_GREEN)
+        : lv_palette_main(LV_PALETTE_BLUE);
+}
+
+static bool isEthBaseSymbol(const char* symbol)
+{
+    if (symbol == nullptr) {
+        return false;
+    }
+    const char* dash = strchr(symbol, '-');
+    if (dash == nullptr) {
+        return false;
+    }
+    size_t baseLen = dash - symbol;
+    return baseLen == 3 && strncmp(symbol, "ETH", 3) == 0;
+}
+
+static lv_color_t getChartSeriesLineColor()
+{
+    return isEthBaseSymbol(bitvavoSymbol)
+        ? lv_palette_main(LV_PALETTE_PURPLE)
+        : getChartSeriesColor();
+}
+
+static const char* getQuoteHexColor()
+{
+    return isUsdcQuoteSymbol(bitvavoSymbol) ? "4CAF50" : "2196F3";
+}
+
+static const char* getBaseHexColor()
+{
+    if (isEthBaseSymbol(bitvavoSymbol)) {
+        return "9C27B0"; // lila/paars voor ETH
+    }
+    return "FF8C00"; // oranje voor BTC (default)
+}
+
+static void setBtcTitleLabel()
+{
+    if (priceTitle[0] == nullptr) {
+        return;
+    }
+    lv_label_set_recolor(priceTitle[0], true);
+    const char* symbol = bitvavoSymbol;
+    const char* dash = (symbol != nullptr) ? strchr(symbol, '-') : nullptr;
+    char base[8] = {0};
+    char quote[8] = {0};
+    if (dash != nullptr) {
+        size_t baseLen = dash - symbol;
+        if (baseLen >= sizeof(base)) baseLen = sizeof(base) - 1;
+        strncpy(base, symbol, baseLen);
+        base[baseLen] = '\0';
+        safeStrncpy(quote, dash + 1, sizeof(quote));
+    } else if (symbol != nullptr) {
+        safeStrncpy(base, symbol, sizeof(base));
+    }
+    const char* quoteHex = getQuoteHexColor();
+    const char* baseHex = getBaseHexColor();
+    char titleBuf[32];
+    if (quote[0] != '\0') {
+        snprintf(titleBuf, sizeof(titleBuf), "#%s %s#-#%s %s#", baseHex, base, quoteHex, quote);
+    } else {
+        snprintf(titleBuf, sizeof(titleBuf), "#%s %s#", baseHex, base);
+    }
+    lv_label_set_text(priceTitle[0], titleBuf);
+}
+
+static void applyChartHeaderFooterColors(lv_color_t color)
+{
+    if (chartTitle != nullptr) {
+        lv_obj_set_style_text_color(chartTitle, color, 0);
+    }
+    if (chartDateLabel != nullptr) {
+        lv_obj_set_style_text_color(chartDateLabel, color, 0);
+    }
+    if (chartTimeLabel != nullptr) {
+        lv_obj_set_style_text_color(chartTimeLabel, color, 0);
+    }
+    if (chartBeginLettersLabel != nullptr) {
+        lv_obj_set_style_text_color(chartBeginLettersLabel, color, 0);
+    }
+    if (chartVersionLabel != nullptr) {
+        lv_obj_set_style_text_color(chartVersionLabel, color, 0);
+    }
+    if (lblFooterLine1 != nullptr) {
+        lv_obj_set_style_text_color(lblFooterLine1, color, 0);
+    }
+    if (lblFooterLine2 != nullptr) {
+        lv_obj_set_style_text_color(lblFooterLine2, color, 0);
+    }
+    if (ramLabel != nullptr) {
+        lv_obj_set_style_text_color(ramLabel, color, 0);
+    }
+    if (ipLabel != nullptr) {
+        lv_obj_set_style_text_color(ipLabel, color, 0);
+    }
+}
+
+static void applyBtcEurBoxColors(lv_color_t color)
+{
+    if (priceLbl[0] != nullptr) {
+        lv_obj_set_style_text_color(priceLbl[0], color, 0);
+    }
+}
+
 // Fase 8.3.1: createChart() verplaatst naar UIController module (parallel implementatie)
 void UIController::createChart() {
     // Chart - gebruik platform-specifieke afmetingen
@@ -405,8 +528,8 @@ void UIController::createChart() {
     minRange = p - PRICE_RANGE;
     lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, minRange, maxRange);
 
-    // Maak één blauwe serie aan voor alle punten
-    dataSeries = lv_chart_add_series(chart, lv_palette_main(LV_PALETTE_BLUE), LV_CHART_AXIS_PRIMARY_Y);
+    // Maak één serie aan voor alle punten (kleur afhankelijk van quote currency)
+    dataSeries = lv_chart_add_series(chart, getChartSeriesLineColor(), LV_CHART_AXIS_PRIMARY_Y);
     ::dataSeries = dataSeries;  // Fase 8.4.3: Synchroniseer met globale pointer
 
     // Trend/volatiliteit labels in de chart, links uitgelijnd binnen de chart
@@ -650,9 +773,16 @@ void UIController::createPriceBoxes() {
         } else {
             lv_obj_set_style_text_font(priceTitle[i], FONT_SIZE_TITLE_OTHER, 0);
         }
-        lv_obj_set_style_text_color(priceTitle[i], lv_color_white(), 0);
+        if (i == 0) {
+            lv_obj_set_style_text_color(priceTitle[i], lv_color_white(), 0);
+        } else {
+            lv_obj_set_style_text_color(priceTitle[i], lv_color_white(), 0);
+        }
         lv_label_set_text(priceTitle[i], symbols[i]);
         lv_obj_align(priceTitle[i], LV_ALIGN_TOP_LEFT, 0, 0);
+        if (i == 0) {
+            setBtcTitleLabel();
+        }
         
         // Live price - platform-specifieke layout
         priceLbl[i] = lv_label_create(priceBox[i]);
@@ -666,7 +796,7 @@ void UIController::createPriceBoxes() {
         #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
         if (i == 0) {
             lv_obj_set_style_text_align(priceLbl[i], LV_TEXT_ALIGN_LEFT, 0);
-            lv_obj_set_style_text_color(priceLbl[i], lv_palette_main(LV_PALETTE_BLUE), 0);
+            lv_obj_set_style_text_color(priceLbl[i], getChartSeriesColor(), 0);
             lv_obj_align_to(priceLbl[i], priceTitle[i], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
         } else {
             lv_obj_align_to(priceLbl[i], priceTitle[i], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
@@ -709,7 +839,7 @@ void UIController::createPriceBoxes() {
         #else
         if (i == 0) {
             lv_obj_set_style_text_align(priceLbl[i], LV_TEXT_ALIGN_LEFT, 0);
-            lv_obj_set_style_text_color(priceLbl[i], lv_palette_main(LV_PALETTE_BLUE), 0);
+            lv_obj_set_style_text_color(priceLbl[i], getChartSeriesColor(), 0);
             lv_obj_align_to(priceLbl[i], priceTitle[i], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
         } else {
             lv_obj_align_to(priceLbl[i], priceTitle[i], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
@@ -1157,6 +1287,8 @@ void UIController::buildUI() {
     createHeaderLabels();
     createPriceBoxes();
     createFooter();
+    applyChartHeaderFooterColors(getChartSeriesColor());
+    applyBtcEurBoxColors(getChartSeriesColor());
 }
 
 // Fase 8.5.2: updateTrendLabel() naar Module
@@ -1494,6 +1626,7 @@ void UIController::updateBTCEURCard(bool hasNewData)
     if (::priceTitle[0] != nullptr) {
         // Gebruik dynamisch symbol i.p.v. hardcoded "BTCEUR"
         lv_label_set_text(::priceTitle[0], ::symbols[0]);
+        setBtcTitleLabel();
     }
     
     // Update price label alleen als waarde veranderd is (cache check)
@@ -1503,9 +1636,9 @@ void UIController::updateBTCEURCard(bool hasNewData)
         lastPriceLblValue = prices[0];
     }
     
-    // Bitcoin waarde linksonderin altijd blauw
+    // Bitcoin waarde linksonderin volgt quote kleur (EUR blauw, USDC groen)
     if (::priceLbl[0] != nullptr) {
-            lv_obj_set_style_text_color(::priceLbl[0], lv_palette_main(LV_PALETTE_BLUE), 0);
+            lv_obj_set_style_text_color(::priceLbl[0], getChartSeriesColor(), 0);
     }
     float activeAnchorPrice = AlertEngine::getActiveAnchorPrice(anchorPrice);
     bool anchorDisplayActive = activeAnchorPrice > 0.0f;
@@ -2031,6 +2164,18 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
 // Helper functie om chart section bij te werken
 void UIController::updateChartSection(int32_t currentPrice, bool hasNewPriceData)
 {
+    // Update chart kleur als quote currency is gewijzigd
+    static bool lastUsdcQuote = false;
+    bool isUsdcQuote = isUsdcQuoteSymbol(bitvavoSymbol);
+    if (isUsdcQuote != lastUsdcQuote) {
+        lv_chart_set_series_color(::chart, ::dataSeries, getChartSeriesLineColor());
+        applyChartHeaderFooterColors(getChartSeriesColor());
+        applyBtcEurBoxColors(getChartSeriesColor());
+        setBtcTitleLabel();
+        lv_obj_invalidate(::chart);
+        lastUsdcQuote = isUsdcQuote;
+    }
+
     // Fase 8.7.1: Gebruik globale pointers (synchroniseert met module pointers)
     // Voeg een punt toe aan de grafiek als er geldige data is
     if (prices[symbolIndexToChart] > 0.0f) {
