@@ -63,12 +63,7 @@ static Alert2HState gAlert2H;
 void findMinMaxInSecondPrices(float &minVal, float &maxVal);
 void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
 void logVolatilityStatus(const EffectiveThresholds& eff);
-// Fase 6.1.10: fiveMinutePrices kan pointer zijn (CYD/TTGO) of array (andere platforms)
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
 extern float *fiveMinutePrices;
-#else
-extern float fiveMinutePrices[];
-#endif
 
 // Fase 6.1.10: Thresholds zijn #define macros die verwijzen naar struct velden
 // We gebruiken de structs direct i.p.v. de macro namen

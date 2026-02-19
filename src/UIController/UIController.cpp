@@ -747,7 +747,7 @@ void UIController::createPriceBoxes() {
         priceBox[i] = lv_obj_create(lv_scr_act());
         ::priceBox[i] = priceBox[i];  // Fase 8.4.3: Synchroniseer met globale pointer
         #if defined(PLATFORM_ESP32S3_4848S040)
-        lv_obj_set_size(priceBox[i], 240, LV_SIZE_CONTENT);
+        lv_obj_set_size(priceBox[i], 240, 62);
         #else
         lv_obj_set_size(priceBox[i], LV_PCT(100), LV_SIZE_CONTENT);
         #endif
@@ -756,11 +756,19 @@ void UIController::createPriceBoxes() {
             lv_obj_align(priceBox[i], LV_ALIGN_TOP_LEFT, 0, PRICE_BOX_Y_START);
         }
         else {
+            #if defined(PLATFORM_ESP32S3_4848S040)
+            lv_obj_align_to(priceBox[i], priceBox[i - 1], LV_ALIGN_OUT_BOTTOM_LEFT, 0, -2);
+            #else
             lv_obj_align_to(priceBox[i], priceBox[i - 1], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 3);
+            #endif
         }
 
     lv_obj_set_style_radius(priceBox[i], 6, 0);
+    #if defined(PLATFORM_ESP32S3_4848S040)
+    lv_obj_set_style_pad_all(priceBox[i], 5, 0);
+    #else
     lv_obj_set_style_pad_all(priceBox[i], 4, 0);
+    #endif
     lv_obj_set_style_border_width(priceBox[i], 1, 0);
     lv_obj_set_style_border_color(priceBox[i], lv_palette_main(LV_PALETTE_GREY), 0);
     disableScroll(priceBox[i]);
@@ -2392,9 +2400,20 @@ void UIController::setupLVGL()
         bufLines = psramAvailable ? 30 : 2;
     #endif
     
+    // ESP32-S3 met PSRAM (2MB): gebruik volledige frame-buffer als het scherm klein genoeg is
+    #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
+    if (psramAvailable) {
+        const size_t fullFrameBytes = (size_t)screenWidth * screenHeight * sizeof(lv_color_t) * 2;  // double buffer
+        if (fullFrameBytes <= 400000u) {
+            bufLines = (uint8_t)screenHeight;
+        }
+    }
+    #endif
+    
     uint32_t bufSize = screenWidth * bufLines;
     uint8_t numBuffers = useDoubleBuffer ? 2 : 1;  // 1 of 2 buffers afhankelijk van useDoubleBuffer
     size_t bufSizeBytes = bufSize * sizeof(lv_color_t) * numBuffers;
+    bool useFullFrame = (bufLines >= screenHeight);
     
     const char* bufferLocation;
     uint32_t freeHeapBefore = ESP.getFreeHeap();
@@ -2448,8 +2467,8 @@ void UIController::setupLVGL()
         uint32_t freeHeapAfter = ESP.getFreeHeap();
         size_t largestFreeBlockAfter = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
         Serial.printf("[LVGL] Board: %s, Display: %ux%u pixels\n", boardName, screenWidth, screenHeight);
-        Serial.printf("[LVGL] PSRAM: %s, useDoubleBuffer: %s\n", 
-                     psramAvailable ? "yes" : "no", useDoubleBuffer ? "true" : "false");
+        Serial.printf("[LVGL] PSRAM: %s, useDoubleBuffer: %s, fullFrame: %s\n", 
+                     psramAvailable ? "yes" : "no", useDoubleBuffer ? "true" : "false", useFullFrame ? "yes" : "no");
         Serial.printf("[LVGL] Draw buffer: %u lines, %u pixels, %u bytes (%u buffer%s)\n", 
                      bufLines, bufSize, bufSizeBytes, numBuffers, numBuffers == 1 ? "" : "s");
         Serial.printf("[LVGL] Buffer locatie: %s\n", bufferLocation);
@@ -2462,18 +2481,15 @@ void UIController::setupLVGL()
     disp = lv_display_create(screenWidth, screenHeight);
     lv_display_set_flush_cb(disp, my_disp_flush);
     
-    // LVGL buffer setup: single of double buffering
-    // LVGL 9.0+ verwacht buffer size in BYTES, niet pixels
-    size_t bufSizePixels = bufSize;  // Aantal pixels in buffer
-    size_t bufSizeBytesPerBuffer = bufSizePixels * sizeof(lv_color_t);  // Bytes per buffer
+    // LVGL buffer setup: single of double buffering, full of partial frame
+    size_t bufSizePixels = bufSize;
+    size_t bufSizeBytesPerBuffer = bufSizePixels * sizeof(lv_color_t);
+    lv_display_render_mode_t renderMode = useFullFrame ? LV_DISPLAY_RENDER_MODE_FULL : LV_DISPLAY_RENDER_MODE_PARTIAL;
     
     if (useDoubleBuffer) {
-        // Double buffering: beide buffers in dezelfde allocatie
-        // bufSizeBytes is al berekend als bufSize * sizeof(lv_color_t) * 2
-        lv_display_set_buffers(disp, disp_draw_buf, NULL, bufSizeBytes, LV_DISPLAY_RENDER_MODE_PARTIAL);
+        lv_display_set_buffers(disp, disp_draw_buf, NULL, bufSizeBytes, renderMode);
     } else {
-        // Single buffering: alleen eerste buffer gebruiken (size in bytes)
-        lv_display_set_buffers(disp, disp_draw_buf, NULL, bufSizeBytesPerBuffer, LV_DISPLAY_RENDER_MODE_PARTIAL);
+        lv_display_set_buffers(disp, disp_draw_buf, NULL, bufSizeBytesPerBuffer, renderMode);
     }
 }
 

@@ -642,31 +642,17 @@ bool secondArrayFilled = false;
 bool newPriceDataAvailable = false;  // Flag om aan te geven of er nieuwe prijsdata is voor grafiek update
 
 // Array van 300 posities voor laatste 300 seconden (5 minuten) - voor ret_5m berekening
-// Voor CYD en TTGO zonder PSRAM: dynamisch alloceren om DRAM overflow te voorkomen
-// Fase 4.2.3: static verwijderd tijdelijk voor parallelle implementatie
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
-float *fiveMinutePrices = nullptr;  // Dynamisch gealloceerd voor CYD/TTGO zonder PSRAM
-DataSource *fiveMinutePricesSource = nullptr;  // Dynamisch gealloceerd
-#else
-float fiveMinutePrices[SECONDS_PER_5MINUTES];  // Statische arrays voor platforms met PSRAM (ESP32-S3 SuperMini, GEEK)
-DataSource fiveMinutePricesSource[SECONDS_PER_5MINUTES];  // Source tracking per sample
-#endif
+// Dynamisch gealloceerd: CYD/TTGO zonder PSRAM → INTERNAL; S3 e.d. met PSRAM → SPIRAM (bespaart DRAM)
+float *fiveMinutePrices = nullptr;
+DataSource *fiveMinutePricesSource = nullptr;
 uint16_t fiveMinuteIndex = 0;
 bool fiveMinuteArrayFilled = false;
 
 // Array van 120 posities voor laatste 120 minuten (2 uur)
 // Elke minuut wordt het gemiddelde van de 60 seconden opgeslagen
-// We hebben 60 posities nodig om het gemiddelde van laatste 30 minuten te vergelijken
-// met het gemiddelde van de 30 minuten daarvoor (maar we houden 120 voor buffer)
-// Voor CYD en TTGO zonder PSRAM: dynamisch alloceren om DRAM overflow te voorkomen
-// Fase 4.2.9: static verwijderd zodat PriceData getters deze kunnen gebruiken
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
-float *minuteAverages = nullptr;  // Dynamisch gealloceerd voor CYD/TTGO zonder PSRAM
-DataSource *minuteAveragesSource = nullptr;  // Dynamisch gealloceerd
-#else
-float minuteAverages[MINUTES_FOR_30MIN_CALC];  // Statische arrays voor platforms met PSRAM (ESP32-S3 SuperMini, GEEK)
-DataSource minuteAveragesSource[MINUTES_FOR_30MIN_CALC];  // Source tracking per sample
-#endif
+// Dynamisch gealloceerd: CYD/TTGO zonder PSRAM → INTERNAL; S3 e.d. met PSRAM → SPIRAM (bespaart DRAM)
+float *minuteAverages = nullptr;
+DataSource *minuteAveragesSource = nullptr;
 // Fase 4.2.9: static verwijderd zodat PriceData getters deze kunnen gebruiken
 uint8_t minuteIndex = 0;
 bool minuteArrayFilled = false;
@@ -7728,9 +7714,21 @@ static void setupLVGL()
         bufLines = psramAvailable ? 30 : 2;
     #endif
     
+    // ESP32-S3 met PSRAM (2MB): gebruik volledige frame-buffer als het scherm klein genoeg is
+    // Full frame = vloeiendere updates, één flush per frame, minder overhead. Past ruim in 2MB PSRAM.
+    #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
+    if (psramAvailable) {
+        const size_t fullFrameBytes = (size_t)screenWidth * screenHeight * sizeof(lv_color_t) * 2;  // double buffer
+        if (fullFrameBytes <= 400000u) {  // max ~400 KB voor full frame (ruim onder 2MB PSRAM)
+            bufLines = (uint8_t)screenHeight;
+        }
+    }
+    #endif
+    
     uint32_t bufSize = screenWidth * bufLines;
     uint8_t numBuffers = useDoubleBuffer ? 2 : 1;  // 1 of 2 buffers afhankelijk van useDoubleBuffer
     size_t bufSizeBytes = bufSize * sizeof(lv_color_t) * numBuffers;
+    bool useFullFrame = (bufLines >= screenHeight);
     
     const char* bufferLocation;
     uint32_t freeHeapBefore = ESP.getFreeHeap();
@@ -7800,18 +7798,18 @@ static void setupLVGL()
     disp = lv_display_create(screenWidth, screenHeight);
     lv_display_set_flush_cb(disp, my_disp_flush);
     
-    // LVGL buffer setup: single of double buffering
+    // LVGL buffer setup: single of double buffering, full of partial frame
     // LVGL 9.0+ verwacht buffer size in BYTES, niet pixels
     size_t bufSizePixels = bufSize;  // Aantal pixels in buffer
     size_t bufSizeBytesPerBuffer = bufSizePixels * sizeof(lv_color_t);  // Bytes per buffer
+    lv_display_render_mode_t renderMode = useFullFrame ? LV_DISPLAY_RENDER_MODE_FULL : LV_DISPLAY_RENDER_MODE_PARTIAL;
     
     if (useDoubleBuffer) {
         // Double buffering: beide buffers in dezelfde allocatie
-        // bufSizeBytes is al berekend als bufSize * sizeof(lv_color_t) * 2
-        lv_display_set_buffers(disp, disp_draw_buf, NULL, bufSizeBytes, LV_DISPLAY_RENDER_MODE_PARTIAL);
+        lv_display_set_buffers(disp, disp_draw_buf, NULL, bufSizeBytes, renderMode);
     } else {
         // Single buffering: alleen eerste buffer gebruiken (size in bytes)
-        lv_display_set_buffers(disp, disp_draw_buf, NULL, bufSizeBytesPerBuffer, LV_DISPLAY_RENDER_MODE_PARTIAL);
+        lv_display_set_buffers(disp, disp_draw_buf, NULL, bufSizeBytesPerBuffer, renderMode);
     }
 }
 
@@ -7913,29 +7911,24 @@ static void setupMutex()
     }
 }
 
-// Alloceer grote arrays dynamisch voor CYD en TTGO zonder PSRAM om DRAM overflow te voorkomen
+// Alloceer ringbuffer-arrays: op PSRAM-borden (S3 e.d.) in SPIRAM, anders in INTERNAL (CYD/TTGO)
 static void allocateDynamicArrays()
 {
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
-    // Voor CYD/TTGO zonder PSRAM: alloceer arrays dynamisch
-    if (!hasPSRAM()) {
-        // Alloceer fiveMinutePrices arrays
-        fiveMinutePrices = (float *)heap_caps_malloc(SECONDS_PER_5MINUTES * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
-        fiveMinutePricesSource = (DataSource *)heap_caps_malloc(SECONDS_PER_5MINUTES * sizeof(DataSource), MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
-        
-        // Alloceer minuteAverages arrays
-        minuteAverages = (float *)heap_caps_malloc(MINUTES_FOR_30MIN_CALC * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
-        minuteAveragesSource = (DataSource *)heap_caps_malloc(MINUTES_FOR_30MIN_CALC * sizeof(DataSource), MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
-        
+    if (fiveMinutePrices == nullptr) {
+        const uint32_t caps = hasPSRAM() ? (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : (MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        fiveMinutePrices = (float *)heap_caps_malloc(SECONDS_PER_5MINUTES * sizeof(float), caps);
+        fiveMinutePricesSource = (DataSource *)heap_caps_malloc(SECONDS_PER_5MINUTES * sizeof(DataSource), caps);
+        minuteAverages = (float *)heap_caps_malloc(MINUTES_FOR_30MIN_CALC * sizeof(float), caps);
+        minuteAveragesSource = (DataSource *)heap_caps_malloc(MINUTES_FOR_30MIN_CALC * sizeof(DataSource), caps);
+
         if (!fiveMinutePrices || !fiveMinutePricesSource || !minuteAverages || !minuteAveragesSource) {
-            Serial.println(F("[Memory] FATAL: Dynamische array allocatie gefaald!"));
+            Serial.println(F("[Memory] FATAL: Ringbuffer array allocatie gefaald!"));
             Serial.printf("[Memory] Free heap: %u bytes\n", ESP.getFreeHeap());
             while (true) {
                 /* no need to continue */
             }
         }
-        
-        // Initialiseer arrays naar 0
+
         for (uint16_t i = 0; i < SECONDS_PER_5MINUTES; i++) {
             fiveMinutePrices[i] = 0.0f;
             fiveMinutePricesSource[i] = SOURCE_LIVE;
@@ -7944,12 +7937,12 @@ static void allocateDynamicArrays()
             minuteAverages[i] = 0.0f;
             minuteAveragesSource[i] = SOURCE_LIVE;
         }
-        
-        Serial.printf("[Memory] Dynamische arrays gealloceerd: fiveMinutePrices=%u bytes, minuteAverages=%u bytes\n",
-                     SECONDS_PER_5MINUTES * sizeof(float) + SECONDS_PER_5MINUTES * sizeof(DataSource),
-                     MINUTES_FOR_30MIN_CALC * sizeof(float) + MINUTES_FOR_30MIN_CALC * sizeof(DataSource));
+
+        Serial.printf("[Memory] Ringbuffers: fiveMinutePrices=%u, minuteAverages=%u bytes (%s)\n",
+                     (unsigned)(SECONDS_PER_5MINUTES * sizeof(float) + SECONDS_PER_5MINUTES * sizeof(DataSource)),
+                     (unsigned)(MINUTES_FOR_30MIN_CALC * sizeof(float) + MINUTES_FOR_30MIN_CALC * sizeof(DataSource)),
+                     hasPSRAM() ? "PSRAM" : "DRAM");
     }
-    #endif
 
     if (hourlyAverages == nullptr) {
         if (hasPSRAM()) {

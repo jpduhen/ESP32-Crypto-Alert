@@ -192,9 +192,9 @@ Arduino_ESP32RGBPanel *rgbpanel = new Arduino_ESP32RGBPanel(
 #else
     B0_PIN /* B0 */, B1_PIN /* B1 */, B2_PIN /* B2 */, B3_PIN /* B3 */, B4_PIN /* B4 */,
 #endif
-    1 /* hsync_polarity */, 20 /* hsync_front_porch */, 10 /* hsync_pulse_width */, 60 /* hsync_back_porch */,
+    1 /* hsync_polarity */, 20 /* hsync_front_porch */, 20 /* hsync_pulse_width */, 80 /* hsync_back_porch */,
     1 /* vsync_polarity */, 16 /* vsync_front_porch */, 10 /* vsync_pulse_width */, 30 /* vsync_back_porch */,
-    0 /* pclk_active_neg */, 10000000UL /* prefer_speed */, RGB_PANEL_USE_BIG_ENDIAN);
+    0 /* pclk_active_neg */, 6000000UL /* prefer_speed */, RGB_PANEL_USE_BIG_ENDIAN);
 
 // Create display instance (ST7701)
 Arduino_GFX *gfx = new Arduino_RGB_Display(

@@ -32,17 +32,10 @@ enum DataSource {
 // State variabelen zijn nu in PriceData, arrays blijven globaal tot stap 4.2.6+
 extern float secondPrices[];
 extern DataSource secondPricesSource[];
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
 extern float *fiveMinutePrices;
 extern DataSource *fiveMinutePricesSource;
 extern float *minuteAverages;
 extern DataSource *minuteAveragesSource;
-#else
-extern float fiveMinutePrices[];  // Statische arrays voor platforms met PSRAM (ESP32-S3 SuperMini, GEEK)
-extern DataSource fiveMinutePricesSource[];
-extern float minuteAverages[];
-extern DataSource minuteAveragesSource[];
-#endif
 void updateWarmStartStatus();
 
 // PriceData class - beheert alle prijs data arrays en berekeningen
@@ -69,19 +62,11 @@ public:
     
     // Fase 4.2.9: Getters voor fiveMinutePrices arrays (parallel, arrays blijven globaal)
     float* getFiveMinutePrices() {
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
         extern float *fiveMinutePrices;
-        #else
-        extern float fiveMinutePrices[];
-        #endif
         return fiveMinutePrices;
     }
     DataSource* getFiveMinutePricesSource() {
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
         extern DataSource *fiveMinutePricesSource;
-        #else
-        extern DataSource fiveMinutePricesSource[];
-        #endif
         return fiveMinutePricesSource;
     }
     uint16_t getFiveMinuteIndex() const { return fiveMinuteIndex; }
@@ -89,19 +74,11 @@ public:
     
     // Fase 4.2.9: Getters voor minuteAverages arrays (parallel, arrays blijven globaal)
     float* getMinuteAverages() {
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
         extern float *minuteAverages;
-        #else
-        extern float minuteAverages[];
-        #endif
         return minuteAverages;
     }
     DataSource* getMinuteAveragesSource() {
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
         extern DataSource *minuteAveragesSource;
-        #else
-        extern DataSource minuteAveragesSource[];
-        #endif
         return minuteAveragesSource;
     }
     // Note: minuteIndex en minuteArrayFilled zijn nog globaal, worden later verplaatst
@@ -161,18 +138,13 @@ public:
             this->fiveMinuteArrayFilled = true;
         }
         
-        // Null pointer check voor dynamische arrays (CYD/TTGO platforms)
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
+        // Null pointer check (arrays zijn dynamisch gealloceerd op alle platforms)
         extern float *fiveMinutePrices;
         extern DataSource *fiveMinutePricesSource;
         if (fiveMinutePrices == nullptr || fiveMinutePricesSource == nullptr) {
             Serial.printf("[Array] ERROR: fiveMinutePrices arrays niet gealloceerd!\n");
             return; // Skip als arrays niet gealloceerd zijn
         }
-        #else
-        extern float fiveMinutePrices[];  // Statische arrays voor platforms met PSRAM (ESP32-S3 SuperMini, GEEK)
-        extern DataSource fiveMinutePricesSource[];
-        #endif
         
         fiveMinutePrices[this->fiveMinuteIndex] = price;
         fiveMinutePricesSource[this->fiveMinuteIndex] = SOURCE_LIVE;  // Mark as live data
@@ -220,27 +192,10 @@ private:
     float secondPrices[SECONDS_PER_MINUTE];
     DataSource secondPricesSource[SECONDS_PER_MINUTE];  // Source tracking per sample
     
-    // Array van 300 posities voor laatste 300 seconden (5 minuten)
-    // Voor CYD/TTGO zonder PSRAM: dynamisch alloceren om DRAM overflow te voorkomen
-    // ESP32-S3 SuperMini en GEEK hebben PSRAM, gebruiken statische arrays
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
-    float *fiveMinutePrices;  // Dynamisch gealloceerd voor CYD/TTGO zonder PSRAM
-    DataSource *fiveMinutePricesSource;  // Dynamisch gealloceerd
-    #else
-    float fiveMinutePrices[SECONDS_PER_5MINUTES];  // Statische arrays voor platforms met PSRAM (ESP32-S3 SuperMini, GEEK)
-    DataSource fiveMinutePricesSource[SECONDS_PER_5MINUTES];  // Source tracking per sample
-    #endif
-    
-    // Array van 120 posities voor laatste 120 minuten (2 uur)
-    // Voor CYD/TTGO zonder PSRAM: dynamisch alloceren om DRAM overflow te voorkomen
-    // ESP32-S3 SuperMini en GEEK hebben PSRAM, gebruiken statische arrays
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
-    float *minuteAverages;  // Dynamisch gealloceerd voor CYD/TTGO zonder PSRAM
-    DataSource *minuteAveragesSource;  // Dynamisch gealloceerd
-    #else
-    float minuteAverages[MINUTES_FOR_30MIN_CALC];  // Statische arrays voor platforms met PSRAM (ESP32-S3 SuperMini, GEEK)
-    DataSource minuteAveragesSource[MINUTES_FOR_30MIN_CALC];  // Source tracking per sample
-    #endif
+    // Array van 300 posities voor laatste 300 seconden (5 minuten) - dynamisch: DRAM of PSRAM
+    // float *fiveMinutePrices; DataSource *fiveMinutePricesSource; (globals)
+    // Array van 120 posities voor laatste 120 minuten - dynamisch: DRAM of PSRAM
+    // float *minuteAverages; DataSource *minuteAveragesSource; (globals)
     */
 };
 
