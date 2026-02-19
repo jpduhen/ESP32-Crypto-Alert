@@ -1789,6 +1789,25 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
     float w1d = 1.0f - w4h;
     float newAutoAnchor = w4h * ema4hValue + w1d * ema1dValue;
     
+    // Cap t.o.v. huidige koers: EMA's kunnen nafloeken (bijv. na daling), waardoor het anker
+    // ver boven de koers komt en onbruikbaar is. Max 2% boven en max 3% onder huidige prijs.
+    static const float AUTO_ANCHOR_MAX_ABOVE_CURRENT_PCT = 2.0f;
+    static const float AUTO_ANCHOR_MAX_BELOW_CURRENT_PCT = 3.0f;
+    float currentPrice = prices[0];
+    if (isValidPrice(currentPrice) && currentPrice > 0.0f) {
+        float maxAnchor = currentPrice * (1.0f + AUTO_ANCHOR_MAX_ABOVE_CURRENT_PCT / 100.0f);
+        float minAnchor = currentPrice * (1.0f - AUTO_ANCHOR_MAX_BELOW_CURRENT_PCT / 100.0f);
+        if (newAutoAnchor > maxAnchor) {
+            newAutoAnchor = maxAnchor;
+            Serial.printf("[ANCHOR][AUTO] Gecapped naar max %.0f (2%% boven koers %.0f)\n",
+                          roundToEuroNotif(newAutoAnchor), roundToEuroNotif(currentPrice));
+        } else if (newAutoAnchor < minAnchor) {
+            newAutoAnchor = minAnchor;
+            Serial.printf("[ANCHOR][AUTO] Gecapped naar min %.0f (3%% onder koers %.0f)\n",
+                          roundToEuroNotif(newAutoAnchor), roundToEuroNotif(currentPrice));
+        }
+    }
+    
     // Hysterese check
     float lastAutoAnchor = alert2HThresholds.autoAnchorLastValue;
     bool shouldCommit = force;

@@ -902,6 +902,8 @@ static unsigned long lastReconnectAttempt = 0;
 static bool wifiInitialized = false;
 static uint8_t reconnectAttemptCount = 0;
 static const uint8_t MAX_RECONNECT_ATTEMPTS = 5; // Max aantal reconnect pogingen voordat we exponential backoff starten
+static const uint8_t RECONNECT_ATTEMPTS_BEFORE_AP = 8; // Na zoveel mislukte reconnects: start CryptoAlert AP om WiFi opnieuw in te stellen
+static bool apStartedForReconnect = false; // Of de AP al is gestart na herhaaldelijk reconnect-falen
 
 // MQTT reconnect controle met exponential backoff
 // Fase 9.1.4: static verwijderd zodat WebServerModule deze variabele kan gebruiken
@@ -7883,6 +7885,10 @@ static void setupWiFiEventHandlers()
                 wifiReconnectEnabled = false;
                 wifiInitialized = true;
                 reconnectAttemptCount = 0; // Reset reconnect counter bij succesvolle verbinding
+                if (apStartedForReconnect) {
+                    WiFi.mode(WIFI_STA); // AP uitzetten na verbinding
+                    apStartedForReconnect = false;
+                }
                 // Start MQTT connectie na WiFi verbinding
                 if (!mqttConnected) {
                     requestMqttReconnect();
@@ -8900,14 +8906,23 @@ void loop()
                 Serial.println("[WiFi] Reconnect succesvol!");
                 wifiReconnectEnabled = false;
                 reconnectAttemptCount = 0; // Reset counter bij succes
+                if (apStartedForReconnect) {
+                    WiFi.mode(WIFI_STA); // AP uitzetten na succesvolle reconnect
+                    apStartedForReconnect = false;
+                }
                 // Probeer MQTT reconnect na WiFi reconnect
                 if (!mqttConnected) {
                     connectMQTT();
                 }
             } else {
                 Serial.printf("[WiFi] Reconnect timeout (poging %u)\n", reconnectAttemptCount);
-                // Als we te veel pogingen hebben gedaan, log een waarschuwing
-                if (reconnectAttemptCount >= MAX_RECONNECT_ATTEMPTS) {
+                // Na veel mislukte reconnects: start CryptoAlert AP zodat gebruiker WiFi opnieuw kan instellen
+                if (reconnectAttemptCount >= RECONNECT_ATTEMPTS_BEFORE_AP && !apStartedForReconnect) {
+                    apStartedForReconnect = true;
+                    WiFi.mode(WIFI_AP_STA);
+                    WiFi.softAP("CryptoAlert", "");
+                    Serial.println(F("[WiFi] CryptoAlert AP gestart (192.168.4.1) – verbind om WiFi opnieuw in te stellen"));
+                } else if (reconnectAttemptCount >= MAX_RECONNECT_ATTEMPTS) {
                     Serial.printf("[WiFi] WARN: %u reconnect pogingen mislukt, wacht langer tussen pogingen\n", reconnectAttemptCount);
                 }
             }
