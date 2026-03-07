@@ -55,6 +55,30 @@ The complete English user guide is split into separate chapters for better reada
 10. [Chapter 10: Advanced Usage and Customization](docs/10-Advanced-Usage-and-Customization.md)  
     Modifying code, custom thresholds, OTA updates, and more
 
+## Technical documentation (code & architecture)
+
+Explanation of how the *code* works (architecture, dataflow, alerts, UI, configuration). You can navigate from one document to the next using the links at the bottom of each page.
+
+| # | Document | Content |
+|---|----------|--------|
+| 0 | [00 Overview](docs/00_OVERVIEW_EN.md) | Purpose, top-level structure, concepts |
+| 1 | [01 Architecture](docs/01_ARCHITECTURE_EN.md) | Components, modules, state map, Mermaid |
+| 2 | [02 Dataflow](docs/02_DATAFLOW_EN.md) | Flowchart, ret_* unit, timeframes, UI thread-safety, WS |
+| 3 | [03 Alerting rules](docs/03_ALERTING_RULES_EN.md) | Thresholds, cooldowns, 2h throttling, night mode |
+| 4 | [04 UI and LVGL](docs/04_UI_AND_LVGL_EN.md) | UIController, LVGL, display, threading |
+| 5 | [05 Configuration](docs/05_CONFIGURATION_EN.md) | platform_config, lv_conf, NVS, SettingsStore |
+| 6 | [06 Operations](docs/06_OPERATIONS_EN.md) | Startup, error handling, OTA |
+| 7 | [07 Glossary](docs/07_GLOSSARY_EN.md) | Terms and abbreviations |
+| 8 | [08 FAQ](docs/08_FAQ_EN.md) | FAQ, open questions |
+
+**NotebookLM / Video overview**
+
+| Document | Content |
+|----------|--------|
+| [NLM Story Script](notebooklm/NLM_Story_Script_EN.md) | Video script (EN) 6–10 min |
+| [NLM Key Points](notebooklm/NLM_Key_Points_EN.md) | Key points (1 page) |
+| [NLM Examples](notebooklm/NLM_Examples_EN.md) | Examples: 1m spike and 2h secondary |
+
 ## Quick Start
 1. Choose a compatible board (e.g., Cheap Yellow Display).
 2. Follow [Chapter 4: Installation](docs/04-Installation.md).
