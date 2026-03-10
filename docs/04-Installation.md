@@ -59,7 +59,7 @@ Check in Device Manager (Windows) whether the COM port appears when you connect 
 5. **Important settings** (Tools menu):
    - Upload Speed: 921600 (lower to 115200 if issues occur)
    - Flash Mode: QIO
-   - Partition Scheme: "Default 4MB with spiffs" or "Huge APP"
+   - Partition Scheme: **CYD/TTGO/Super Mini:** "Huge APP". **S3-GEEK, LCDWIKI 2.8, 4848S040 (OTA):** "Minimal SPIFFS (1.9MB APP with OTA)" — required for web OTA updates (two app partitions needed).
    - PSRAM: **Disabled** for CYD24/CYD28 and TTGO, **Enabled** for S3 boards with PSRAM
 
 6. **Board-specific define**:

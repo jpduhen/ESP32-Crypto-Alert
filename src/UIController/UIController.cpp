@@ -82,6 +82,15 @@ extern const lv_font_t lv_font_montserrat_14;
 #define VOLUME_BADGE_THRESHOLD_PCT 50.0f
 #endif
 
+// LCDWIKI 2.8": contrastcompensatie bij kleurinversie (lichtere accenten = beter leesbaar)
+#if defined(PLATFORM_ESP32S3_LCDWIKI_28)
+#define UI_PALETTE_GREY()  lv_palette_lighten(LV_PALETTE_GREY, 2)
+#define UI_PALETTE_CYAN()  lv_palette_lighten(LV_PALETTE_CYAN, 1)
+#else
+#define UI_PALETTE_GREY()  lv_palette_main(LV_PALETTE_GREY)
+#define UI_PALETTE_CYAN()  lv_palette_main(LV_PALETTE_CYAN)
+#endif
+
 // Constants die gedefinieerd zijn in .ino (moeten beschikbaar zijn voor module)
 // Fase 8.3: createChart() dependencies
 #ifndef POINTS_TO_CHART
@@ -400,13 +409,6 @@ static bool isUsdcQuoteSymbol(const char* symbol)
     return strcmp(symbol + (len - suffixLen), suffix) == 0;
 }
 
-static lv_color_t getChartSeriesColor()
-{
-    return isUsdcQuoteSymbol(bitvavoSymbol)
-        ? lv_palette_main(LV_PALETTE_GREEN)
-        : lv_palette_main(LV_PALETTE_BLUE);
-}
-
 static bool isEthBaseSymbol(const char* symbol)
 {
     if (symbol == nullptr) {
@@ -418,6 +420,16 @@ static bool isEthBaseSymbol(const char* symbol)
     }
     size_t baseLen = dash - symbol;
     return baseLen == 3 && strncmp(symbol, "ETH", 3) == 0;
+}
+
+static lv_color_t getChartSeriesColor()
+{
+    if (isEthBaseSymbol(bitvavoSymbol)) {
+        return lv_palette_main(LV_PALETTE_PURPLE);
+    }
+    return isUsdcQuoteSymbol(bitvavoSymbol)
+        ? lv_palette_main(LV_PALETTE_GREEN)
+        : lv_palette_main(LV_PALETTE_BLUE);
 }
 
 static lv_color_t getChartSeriesLineColor()
@@ -506,6 +518,12 @@ static void applyBtcEurBoxColors(lv_color_t color)
     if (priceLbl[0] != nullptr) {
         lv_obj_set_style_text_color(priceLbl[0], color, 0);
     }
+#if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK) || defined(PLATFORM_ESP32S3_4848S040)
+    if (::priceBox[0] != nullptr) {
+        lv_obj_set_style_bg_color(::priceBox[0], lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(::priceBox[0], LV_OPA_COVER, 0);
+    }
+#endif
 }
 
 // Fase 8.3.1: createChart() verplaatst naar UIController module (parallel implementatie)
@@ -522,7 +540,11 @@ void UIController::createChart() {
     #endif
     lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
     disableScroll(chart);
-    
+    lv_obj_set_style_line_color(chart, lv_palette_darken(LV_PALETTE_GREY, 4), LV_PART_MAIN);
+#if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK) || defined(PLATFORM_ESP32S3_4848S040)
+    lv_obj_set_style_bg_color(chart, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(chart, LV_OPA_COVER, 0);
+#endif
     int32_t p = (int32_t)lroundf(openPrices[symbolIndexToChart] * 100.0f);
     maxRange = p + PRICE_RANGE;
     minRange = p - PRICE_RANGE;
@@ -536,7 +558,7 @@ void UIController::createChart() {
     trendLabel = lv_label_create(chart);
     ::trendLabel = trendLabel;  // Fase 8.4.3: Synchroniseer met globale pointer
     lv_obj_set_style_text_font(trendLabel, FONT_SIZE_TREND_VOLATILITY, 0);
-    lv_obj_set_style_text_color(trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_color(trendLabel, UI_PALETTE_GREY(), 0);
     lv_obj_set_style_text_align(trendLabel, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_align(trendLabel, LV_ALIGN_TOP_LEFT, -4, -6);
     lv_label_set_text(trendLabel, "--");
@@ -545,7 +567,7 @@ void UIController::createChart() {
     warmStartStatusLabel = lv_label_create(chart);
     ::warmStartStatusLabel = warmStartStatusLabel;  // Fase 8.4.3: Synchroniseer met globale pointer
     lv_obj_set_style_text_font(warmStartStatusLabel, FONT_SIZE_TREND_VOLATILITY, 0);
-    lv_obj_set_style_text_color(warmStartStatusLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_color(warmStartStatusLabel, UI_PALETTE_GREY(), 0);
     lv_obj_set_style_text_align(warmStartStatusLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_align(warmStartStatusLabel, LV_ALIGN_TOP_RIGHT, 4, -6);
     lv_label_set_text(warmStartStatusLabel, "--");
@@ -553,7 +575,7 @@ void UIController::createChart() {
     volumeConfirmLabel = lv_label_create(chart);
     ::volumeConfirmLabel = volumeConfirmLabel;  // Fase 8.4.3: Synchroniseer met globale pointer
     lv_obj_set_style_text_font(volumeConfirmLabel, FONT_SIZE_TREND_VOLATILITY, 0);
-    lv_obj_set_style_text_color(volumeConfirmLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_color(volumeConfirmLabel, UI_PALETTE_GREY(), 0);
     lv_obj_set_style_text_align(volumeConfirmLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_align(volumeConfirmLabel, LV_ALIGN_RIGHT_MID, 4, 0);
     lv_label_set_text(volumeConfirmLabel, "");
@@ -561,7 +583,7 @@ void UIController::createChart() {
     volatilityLabel = lv_label_create(chart);
     ::volatilityLabel = volatilityLabel;  // Fase 8.4.3: Synchroniseer met globale pointer
     lv_obj_set_style_text_font(volatilityLabel, FONT_SIZE_TREND_VOLATILITY, 0);
-    lv_obj_set_style_text_color(volatilityLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_color(volatilityLabel, UI_PALETTE_GREY(), 0);
     lv_obj_set_style_text_align(volatilityLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_align(volatilityLabel, LV_ALIGN_BOTTOM_RIGHT, 4, 6);
     lv_label_set_text(volatilityLabel, "--");
@@ -570,7 +592,7 @@ void UIController::createChart() {
     mediumTrendLabel = lv_label_create(chart);
     ::mediumTrendLabel = mediumTrendLabel;  // Fase 8.4.3: Synchroniseer met globale pointer
     lv_obj_set_style_text_font(mediumTrendLabel, FONT_SIZE_TREND_VOLATILITY, 0);
-    lv_obj_set_style_text_color(mediumTrendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_color(mediumTrendLabel, UI_PALETTE_GREY(), 0);
     lv_obj_set_style_text_align(mediumTrendLabel, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_align(mediumTrendLabel, LV_ALIGN_LEFT_MID, -4, 0);
     lv_label_set_text(mediumTrendLabel, "--");
@@ -579,7 +601,7 @@ void UIController::createChart() {
     longTermTrendLabel = lv_label_create(chart);
     ::longTermTrendLabel = longTermTrendLabel;  // Fase 8.4.3: Synchroniseer met globale pointer
     lv_obj_set_style_text_font(longTermTrendLabel, FONT_SIZE_TREND_VOLATILITY, 0);
-    lv_obj_set_style_text_color(longTermTrendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_color(longTermTrendLabel, UI_PALETTE_GREY(), 0);
     lv_obj_set_style_text_align(longTermTrendLabel, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_align(longTermTrendLabel, LV_ALIGN_BOTTOM_LEFT, -4, 6);
     lv_label_set_text(longTermTrendLabel, "--");
@@ -592,7 +614,7 @@ void UIController::createChart() {
     char deviceIdBuffer[16];
     getDeviceIdFromTopic(ntfyTopic, deviceIdBuffer, sizeof(deviceIdBuffer));
     lv_label_set_text(chartTitle, deviceIdBuffer);
-    lv_obj_set_style_text_color(chartTitle, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_color(chartTitle, UI_PALETTE_CYAN(), 0);
     lv_obj_align_to(chartTitle, chart, LV_ALIGN_OUT_TOP_LEFT, 0, -4);
     #endif
 }
@@ -604,7 +626,7 @@ void UIController::createHeaderLabels() {
     chartDateLabel = lv_label_create(lv_scr_act());
     ::chartDateLabel = chartDateLabel;  // Fase 8.4.3: Synchroniseer met globale pointer
     lv_obj_set_style_text_font(chartDateLabel, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(chartDateLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_color(chartDateLabel, UI_PALETTE_CYAN(), 0);
     lv_obj_set_style_text_align(chartDateLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(chartDateLabel, "-- -- --");
     lv_obj_set_width(chartDateLabel, CHART_WIDTH);
@@ -613,7 +635,7 @@ void UIController::createHeaderLabels() {
     chartBeginLettersLabel = lv_label_create(lv_scr_act());
     ::chartBeginLettersLabel = chartBeginLettersLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(chartBeginLettersLabel, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(chartBeginLettersLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_color(chartBeginLettersLabel, UI_PALETTE_CYAN(), 0);
     lv_obj_set_style_text_align(chartBeginLettersLabel, LV_TEXT_ALIGN_LEFT, 0);
     lv_label_set_text(chartBeginLettersLabel, ntfyTopic);
     lv_obj_set_pos(chartBeginLettersLabel, 0, 2);
@@ -621,7 +643,7 @@ void UIController::createHeaderLabels() {
     chartTimeLabel = lv_label_create(lv_scr_act());
     ::chartTimeLabel = chartTimeLabel;  // Fase 8.4.3: Synchroniseer met globale pointer
     lv_obj_set_style_text_font(chartTimeLabel, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(chartTimeLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_color(chartTimeLabel, UI_PALETTE_CYAN(), 0);
     lv_obj_set_style_text_align(chartTimeLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(chartTimeLabel, "--:--:--");
     lv_obj_set_width(chartTimeLabel, CHART_WIDTH);
@@ -631,7 +653,7 @@ void UIController::createHeaderLabels() {
     chartDateLabel = lv_label_create(lv_scr_act());
     ::chartDateLabel = chartDateLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(chartDateLabel, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(chartDateLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_color(chartDateLabel, UI_PALETTE_GREY(), 0);
     lv_obj_set_style_text_align(chartDateLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(chartDateLabel, "-- -- --");
     lv_obj_set_width(chartDateLabel, 180);
@@ -640,7 +662,7 @@ void UIController::createHeaderLabels() {
     chartBeginLettersLabel = lv_label_create(lv_scr_act());
     ::chartBeginLettersLabel = chartBeginLettersLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(chartBeginLettersLabel, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(chartBeginLettersLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_color(chartBeginLettersLabel, UI_PALETTE_CYAN(), 0);
     lv_obj_set_style_text_align(chartBeginLettersLabel, LV_TEXT_ALIGN_LEFT, 0);
     lv_label_set_text(chartBeginLettersLabel, ntfyTopic);
     lv_obj_set_pos(chartBeginLettersLabel, 0, 2);
@@ -648,7 +670,7 @@ void UIController::createHeaderLabels() {
     chartTimeLabel = lv_label_create(lv_scr_act());
     ::chartTimeLabel = chartTimeLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(chartTimeLabel, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(chartTimeLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_color(chartTimeLabel, UI_PALETTE_GREY(), 0);
     lv_obj_set_style_text_align(chartTimeLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(chartTimeLabel, "--:--:--");
     lv_obj_set_width(chartTimeLabel, 240);
@@ -657,7 +679,7 @@ void UIController::createHeaderLabels() {
     chartDateLabel = lv_label_create(lv_scr_act());
     ::chartDateLabel = chartDateLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(chartDateLabel, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(chartDateLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_color(chartDateLabel, UI_PALETTE_GREY(), 0);
     lv_obj_set_style_text_align(chartDateLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(chartDateLabel, "-- -- --");
     lv_obj_set_width(chartDateLabel, 240);
@@ -666,7 +688,7 @@ void UIController::createHeaderLabels() {
     chartBeginLettersLabel = lv_label_create(lv_scr_act());
     ::chartBeginLettersLabel = chartBeginLettersLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(chartBeginLettersLabel, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(chartBeginLettersLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_color(chartBeginLettersLabel, UI_PALETTE_CYAN(), 0);
     lv_obj_set_style_text_align(chartBeginLettersLabel, LV_TEXT_ALIGN_LEFT, 0);
     lv_label_set_text(chartBeginLettersLabel, ntfyTopic);
     lv_obj_set_width(chartBeginLettersLabel, 240);
@@ -676,7 +698,7 @@ void UIController::createHeaderLabels() {
     chartTimeLabel = lv_label_create(lv_scr_act());
     ::chartTimeLabel = chartTimeLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(chartTimeLabel, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(chartTimeLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_color(chartTimeLabel, UI_PALETTE_GREY(), 0);
     lv_obj_set_style_text_align(chartTimeLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(chartTimeLabel, "--:--:--");
     lv_obj_set_width(chartTimeLabel, 240);
@@ -686,7 +708,7 @@ void UIController::createHeaderLabels() {
     lblFooterLine1 = lv_label_create(lv_scr_act());
     ::lblFooterLine1 = lblFooterLine1;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(lblFooterLine1, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(lblFooterLine1, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_color(lblFooterLine1, UI_PALETTE_CYAN(), 0);
     lv_obj_set_style_text_align(lblFooterLine1, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_set_width(lblFooterLine1, 240);
     lv_obj_set_pos(lblFooterLine1, 0, LV_VER_RES - 36);
@@ -695,7 +717,7 @@ void UIController::createHeaderLabels() {
     ramLabel = lv_label_create(lv_scr_act());
     ::ramLabel = ramLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(ramLabel, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(ramLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_color(ramLabel, UI_PALETTE_CYAN(), 0);
     lv_obj_set_style_text_align(ramLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_width(ramLabel, 240);
     lv_obj_set_pos(ramLabel, 240, LV_VER_RES - 36);
@@ -704,7 +726,7 @@ void UIController::createHeaderLabels() {
     lblFooterLine2 = lv_label_create(lv_scr_act());
     ::lblFooterLine2 = lblFooterLine2;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(lblFooterLine2, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(lblFooterLine2, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_color(lblFooterLine2, UI_PALETTE_CYAN(), 0);
     lv_obj_set_style_text_align(lblFooterLine2, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_set_width(lblFooterLine2, 240);
     lv_obj_set_pos(lblFooterLine2, 0, LV_VER_RES - 18);
@@ -713,7 +735,7 @@ void UIController::createHeaderLabels() {
     chartVersionLabel = lv_label_create(lv_scr_act());
     ::chartVersionLabel = chartVersionLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(chartVersionLabel, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_color(chartVersionLabel, UI_PALETTE_CYAN(), 0);
     lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_width(chartVersionLabel, 240);
     lv_obj_set_pos(chartVersionLabel, 240, LV_VER_RES - 18);
@@ -723,7 +745,7 @@ void UIController::createHeaderLabels() {
     chartDateLabel = lv_label_create(lv_scr_act());
     ::chartDateLabel = chartDateLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(chartDateLabel, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(chartDateLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_color(chartDateLabel, UI_PALETTE_GREY(), 0);
     lv_obj_set_style_text_align(chartDateLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(chartDateLabel, "-- -- --");
     lv_obj_set_width(chartDateLabel, 180);
@@ -732,7 +754,7 @@ void UIController::createHeaderLabels() {
     chartTimeLabel = lv_label_create(lv_scr_act());
     ::chartTimeLabel = chartTimeLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(chartTimeLabel, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(chartTimeLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_color(chartTimeLabel, UI_PALETTE_GREY(), 0);
     lv_obj_set_style_text_align(chartTimeLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(chartTimeLabel, "--:--:--");
     lv_obj_set_width(chartTimeLabel, 240);
@@ -770,9 +792,14 @@ void UIController::createPriceBoxes() {
     lv_obj_set_style_pad_all(priceBox[i], 4, 0);
     #endif
     lv_obj_set_style_border_width(priceBox[i], 1, 0);
-    lv_obj_set_style_border_color(priceBox[i], lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_border_color(priceBox[i], UI_PALETTE_GREY(), 0);
     disableScroll(priceBox[i]);
-
+#if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK) || defined(PLATFORM_ESP32S3_4848S040)
+    if (i == 0) {
+        lv_obj_set_style_bg_color(priceBox[i], lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(priceBox[i], LV_OPA_COVER, 0);
+    }
+#endif
         // Symbol caption
         priceTitle[i] = lv_label_create(priceBox[i]);
         ::priceTitle[i] = priceTitle[i];  // Fase 8.4.3: Synchroniseer
@@ -823,7 +850,7 @@ void UIController::createPriceBoxes() {
             anchorLabel = lv_label_create(priceBox[i]);
             ::anchorLabel = anchorLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(anchorLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(anchorLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_text_color(anchorLabel, UI_PALETTE_GREY(), 0);
             lv_obj_set_style_text_align(anchorLabel, LV_TEXT_ALIGN_RIGHT, 0);
             lv_obj_align(anchorLabel, LV_ALIGN_RIGHT_MID, 0, 0);
             lv_label_set_text(anchorLabel, "");
@@ -858,7 +885,7 @@ void UIController::createPriceBoxes() {
             anchorLabel = lv_label_create(priceBox[i]);
             ::anchorLabel = anchorLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(anchorLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(anchorLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_text_color(anchorLabel, UI_PALETTE_GREY(), 0);
             lv_obj_set_style_text_align(anchorLabel, LV_TEXT_ALIGN_RIGHT, 0);
             lv_obj_align(anchorLabel, LV_ALIGN_RIGHT_MID, 0, 0);
             lv_label_set_text(anchorLabel, "");
@@ -905,7 +932,7 @@ void UIController::createPriceBoxes() {
             price1MinDiffLabel = lv_label_create(priceBox[i]);
             ::price1MinDiffLabel = price1MinDiffLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(price1MinDiffLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(price1MinDiffLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_text_color(price1MinDiffLabel, UI_PALETTE_GREY(), 0);
             lv_obj_set_style_text_align(price1MinDiffLabel, LV_TEXT_ALIGN_RIGHT, 0);
             lv_label_set_text(price1MinDiffLabel, "--");
             lv_obj_align(price1MinDiffLabel, LV_ALIGN_RIGHT_MID, 0, 0);
@@ -933,7 +960,7 @@ void UIController::createPriceBoxes() {
             price30MinDiffLabel = lv_label_create(priceBox[i]);
             ::price30MinDiffLabel = price30MinDiffLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(price30MinDiffLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(price30MinDiffLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_text_color(price30MinDiffLabel, UI_PALETTE_GREY(), 0);
             lv_obj_set_style_text_align(price30MinDiffLabel, LV_TEXT_ALIGN_RIGHT, 0);
             lv_label_set_text(price30MinDiffLabel, "--");
             lv_obj_align(price30MinDiffLabel, LV_ALIGN_RIGHT_MID, 0, 0);
@@ -967,7 +994,7 @@ void UIController::createPriceBoxes() {
             price2HDiffLabel = lv_label_create(priceBox[i]);
             ::price2HDiffLabel = price2HDiffLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(price2HDiffLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(price2HDiffLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_text_color(price2HDiffLabel, UI_PALETTE_GREY(), 0);
             lv_obj_set_style_text_align(price2HDiffLabel, LV_TEXT_ALIGN_RIGHT, 0);
             lv_label_set_text(price2HDiffLabel, price2HDiffLabelBuffer);
             lv_obj_align(price2HDiffLabel, LV_ALIGN_RIGHT_MID, 0, 0);
@@ -1004,7 +1031,7 @@ void UIController::createPriceBoxes() {
             price1DDiffLabel = lv_label_create(priceBox[i]);
             ::price1DDiffLabel = price1DDiffLabel;
             lv_obj_set_style_text_font(price1DDiffLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(price1DDiffLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_text_color(price1DDiffLabel, UI_PALETTE_GREY(), 0);
             lv_obj_set_style_text_align(price1DDiffLabel, LV_TEXT_ALIGN_RIGHT, 0);
             lv_label_set_text(price1DDiffLabel, price1DDiffLabelBuffer);
             lv_obj_align(price1DDiffLabel, LV_ALIGN_RIGHT_MID, 0, 0);
@@ -1038,7 +1065,7 @@ void UIController::createPriceBoxes() {
             price7DDiffLabel = lv_label_create(priceBox[i]);
             ::price7DDiffLabel = price7DDiffLabel;
             lv_obj_set_style_text_font(price7DDiffLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
-            lv_obj_set_style_text_color(price7DDiffLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_text_color(price7DDiffLabel, UI_PALETTE_GREY(), 0);
             lv_obj_set_style_text_align(price7DDiffLabel, LV_TEXT_ALIGN_RIGHT, 0);
             lv_label_set_text(price7DDiffLabel, price7DDiffLabelBuffer);
             lv_obj_align(price7DDiffLabel, LV_ALIGN_RIGHT_MID, 0, 0);
@@ -1112,14 +1139,14 @@ void UIController::createFooter() {
     ipLabel = lv_label_create(lv_scr_act());
     ::ipLabel = ipLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(ipLabel, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(ipLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_color(ipLabel, UI_PALETTE_CYAN(), 0);
     lv_obj_set_style_text_align(ipLabel, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_align(ipLabel, LV_ALIGN_BOTTOM_LEFT, 0, -2);
     
     chartVersionLabel = lv_label_create(lv_scr_act());
     ::chartVersionLabel = chartVersionLabel;  // Sync globale pointer voor updateFooter()
     lv_obj_set_style_text_font(chartVersionLabel, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_color(chartVersionLabel, UI_PALETTE_CYAN(), 0);
     lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(chartVersionLabel, VERSION_STRING);
     lv_obj_align(chartVersionLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
@@ -1137,14 +1164,14 @@ void UIController::createFooter() {
     ipLabel = lv_label_create(lv_scr_act());
     ::ipLabel = ipLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(ipLabel, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(ipLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_color(ipLabel, UI_PALETTE_CYAN(), 0);
     lv_obj_set_style_text_align(ipLabel, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_align(ipLabel, LV_ALIGN_BOTTOM_LEFT, 0, -2);
     
     chartVersionLabel = lv_label_create(lv_scr_act());
     ::chartVersionLabel = chartVersionLabel;  // Sync globale pointer voor updateFooter()
     lv_obj_set_style_text_font(chartVersionLabel, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_color(chartVersionLabel, UI_PALETTE_CYAN(), 0);
     lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(chartVersionLabel, VERSION_STRING);
     lv_obj_align(chartVersionLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
@@ -1171,7 +1198,7 @@ void UIController::createFooter() {
     lblFooterLine1 = lv_label_create(lv_scr_act());
     ::lblFooterLine1 = lblFooterLine1;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(lblFooterLine1, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(lblFooterLine1, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_color(lblFooterLine1, UI_PALETTE_CYAN(), 0);
     lv_obj_set_style_text_align(lblFooterLine1, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_align(lblFooterLine1, LV_ALIGN_BOTTOM_LEFT, 0, -18);
     lv_label_set_text(lblFooterLine1, "--dBm");
@@ -1179,7 +1206,7 @@ void UIController::createFooter() {
     ramLabel = lv_label_create(lv_scr_act());
     ::ramLabel = ramLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(ramLabel, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(ramLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_color(ramLabel, UI_PALETTE_CYAN(), 0);
     lv_obj_set_style_text_align(ramLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_align(ramLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -18);
     lv_label_set_text(ramLabel, "--kB");
@@ -1187,7 +1214,7 @@ void UIController::createFooter() {
     lblFooterLine2 = lv_label_create(lv_scr_act());
     ::lblFooterLine2 = lblFooterLine2;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(lblFooterLine2, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(lblFooterLine2, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_color(lblFooterLine2, UI_PALETTE_CYAN(), 0);
     lv_obj_set_style_text_align(lblFooterLine2, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_align(lblFooterLine2, LV_ALIGN_BOTTOM_LEFT, 0, -2);
     lv_label_set_text(lblFooterLine2, "--.--.--.--");
@@ -1195,7 +1222,7 @@ void UIController::createFooter() {
     chartVersionLabel = lv_label_create(lv_scr_act());
     ::chartVersionLabel = chartVersionLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(chartVersionLabel, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_style_text_color(chartVersionLabel, UI_PALETTE_CYAN(), 0);
     lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(chartVersionLabel, VERSION_STRING);
     lv_obj_align(chartVersionLabel, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
@@ -1290,7 +1317,10 @@ void UIController::buildUI() {
     resetUiPointers();
     lv_obj_clean(screen);
     disableScroll(lv_scr_act());
-    
+#if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK) || defined(PLATFORM_ESP32S3_4848S040)
+    lv_obj_set_style_bg_color(screen, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
+#endif
     createChart();
     createHeaderLabels();
     createPriceBoxes();
@@ -1310,7 +1340,7 @@ void UIController::updateTrendLabel()
     if (hasRet2h && hasRet30m)
     {
         const char* trendText = "";
-        lv_color_t trendColor = lv_palette_main(LV_PALETTE_GREY);
+        lv_color_t trendColor = UI_PALETTE_GREY();
         
         // Bepaal of data uit warm-start of live komt
         bool isFromWarmStart = (hasRet2hWarm && hasRet30mWarm) && !(hasRet2hLive && hasRet30mLive);
@@ -1322,32 +1352,32 @@ void UIController::updateTrendLabel()
             case TREND_UP:
                 trendText = getText("2h//", "2h//");
                 if (isFromWarmStart) {
-                    trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
+                    trendColor = UI_PALETTE_GREY(); // Grijs voor warm-start
                 } else if (isFromLive) {
                     trendColor = lv_palette_main(LV_PALETTE_GREEN); // Groen voor live UP
                 } else {
-                    trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs als fallback
+                    trendColor = UI_PALETTE_GREY(); // Grijs als fallback
                 }
                 break;
             case TREND_DOWN:
                 trendText = getText("2h\\\\", "2h\\\\");
                 if (isFromWarmStart) {
-                    trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
+                    trendColor = UI_PALETTE_GREY(); // Grijs voor warm-start
                 } else if (isFromLive) {
                     trendColor = lv_palette_main(LV_PALETTE_RED); // Rood voor live DOWN
                 } else {
-                    trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs als fallback
+                    trendColor = UI_PALETTE_GREY(); // Grijs als fallback
                 }
                 break;
             case TREND_SIDEWAYS:
             default:
                 trendText = getText("2h=", "2h=");
                 if (isFromWarmStart) {
-                    trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs voor warm-start
+                    trendColor = UI_PALETTE_GREY(); // Grijs voor warm-start
                 } else if (isFromLive) {
                     trendColor = lv_palette_main(LV_PALETTE_BLUE); // Blauw voor live SIDEWAYS
                 } else {
-                    trendColor = lv_palette_main(LV_PALETTE_GREY); // Grijs als fallback
+                    trendColor = UI_PALETTE_GREY(); // Grijs als fallback
                 }
                 break;
         }
@@ -1368,7 +1398,7 @@ void UIController::updateTrendLabel()
             if (hasRet30mWarm) {
                 // Warm-start heeft 30m data, maar hasRet30m is nog false (mogelijk bug, toon "--")
                 lv_label_set_text(::trendLabel, "--");
-                lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+                lv_obj_set_style_text_color(::trendLabel, UI_PALETTE_GREY(), 0);
                 return;
             }
             
@@ -1387,7 +1417,7 @@ void UIController::updateTrendLabel()
             } else {
                 // Zou niet moeten voorkomen (livePct30 >= 80 maar hasRet30m is false)
                 lv_label_set_text(::trendLabel, "--");
-                lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+                lv_obj_set_style_text_color(::trendLabel, UI_PALETTE_GREY(), 0);
                 return;
             }
         } else if (!hasRet2h) {
@@ -1406,18 +1436,18 @@ void UIController::updateTrendLabel()
             } else {
                 // Zou niet moeten voorkomen (livePct120 >= 80 maar hasRet2h is false)
                 lv_label_set_text(::trendLabel, "--");
-                lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+                lv_obj_set_style_text_color(::trendLabel, UI_PALETTE_GREY(), 0);
                 return;
             }
         } else {
             // Beide ontbreken (zou niet moeten voorkomen, maar fallback)
             lv_label_set_text(::trendLabel, "--");
-            lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_text_color(::trendLabel, UI_PALETTE_GREY(), 0);
             return;
         }
         
         lv_label_set_text(::trendLabel, waitText);
-        lv_obj_set_style_text_color(::trendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+        lv_obj_set_style_text_color(::trendLabel, UI_PALETTE_GREY(), 0);
     }
 }
 
@@ -1429,7 +1459,7 @@ void UIController::updateVolatilityLabel()
     if (::volatilityLabel == nullptr) return;
     
     const char* volText = "";
-    lv_color_t volColor = lv_palette_main(LV_PALETTE_GREY);
+    lv_color_t volColor = UI_PALETTE_GREY();
     
     // Fase 5.3.14: Gebruik VolatilityTracker module getter i.p.v. globale variabele
     VolatilityState currentVol = volatilityTracker.getVolatilityState();
@@ -1459,7 +1489,7 @@ void UIController::updateVolumeConfirmLabel()
     if (::volumeConfirmLabel == nullptr) return;
 
     const char* volumeText = "--";
-    lv_color_t volumeColor = lv_palette_main(LV_PALETTE_GREY);
+    lv_color_t volumeColor = UI_PALETTE_GREY();
     unsigned long nowMs = millis();
 
     if (lastVolumeRange1m.valid) {
@@ -1470,12 +1500,12 @@ void UIController::updateVolumeConfirmLabel()
                               : lv_palette_main(LV_PALETTE_RED);
         } else {
             volumeText = "VOLUME=";
-            volumeColor = lv_palette_main(LV_PALETTE_GREY);
+            volumeColor = UI_PALETTE_GREY();
         }
     } else if (lastVolumeRange1m.rangePct > 0.0f) {
         // Candle is geldig maar volume-EMA nog niet valide
         volumeText = "VOLUME=";
-        volumeColor = lv_palette_main(LV_PALETTE_GREY);
+        volumeColor = UI_PALETTE_GREY();
     }
     
     lv_label_set_text(::volumeConfirmLabel, volumeText);
@@ -1509,7 +1539,7 @@ void UIController::updateMediumTrendLabel()
         TrendState mediumTrend = trendDetector.determineMediumTrendState(0.0f, ret_1d, mediumThreshold);
         
         const char* trendText = "";
-        lv_color_t trendColor = lv_palette_main(LV_PALETTE_GREY);
+        lv_color_t trendColor = UI_PALETTE_GREY();
         
         switch (mediumTrend) {
             case TREND_UP:
@@ -1546,7 +1576,7 @@ void UIController::updateMediumTrendLabel()
     else
     {
         lv_label_set_text(::mediumTrendLabel, "--");
-        lv_obj_set_style_text_color(::mediumTrendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+        lv_obj_set_style_text_color(::mediumTrendLabel, UI_PALETTE_GREY(), 0);
         
         #if DEBUG_CALCULATIONS
         static bool lastLoggedHasRet1d = true;
@@ -1577,7 +1607,7 @@ void UIController::updateLongTermTrendLabel()
         TrendState longTermTrend = trendDetector.determineLongTermTrendState(ret_7d, longTermThreshold);
         
         const char* trendText = "";
-        lv_color_t trendColor = lv_palette_main(LV_PALETTE_GREY);
+        lv_color_t trendColor = UI_PALETTE_GREY();
         
         switch (longTermTrend) {
             case TREND_UP:
@@ -1614,7 +1644,7 @@ void UIController::updateLongTermTrendLabel()
     else
     {
         lv_label_set_text(::longTermTrendLabel, "--");
-        lv_obj_set_style_text_color(::longTermTrendLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+        lv_obj_set_style_text_color(::longTermTrendLabel, UI_PALETTE_GREY(), 0);
         
         #if DEBUG_CALCULATIONS
         static bool lastLoggedHasRet7d = true;
@@ -1798,7 +1828,7 @@ void UIController::updateBTCEURCard(bool hasNewData)
     // Zorg dat border altijd zichtbaar is voor BTCEUR blok na update
     if (::priceBox[0] != nullptr) {
         lv_obj_set_style_border_width(::priceBox[0], 1, 0);
-        lv_obj_set_style_border_color(::priceBox[0], lv_palette_main(LV_PALETTE_GREY), 0);
+        lv_obj_set_style_border_color(::priceBox[0], UI_PALETTE_GREY(), 0);
     }
 }
 
@@ -2153,7 +2183,6 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
                                     pct >= 0 ? lv_palette_lighten(LV_PALETTE_GREEN, 4)
                                              : lv_palette_lighten(LV_PALETTE_RED, 3),
                                     0);
-        
         lv_color_t bg = pct >= 0
                             ? lv_color_mix(lv_palette_main(LV_PALETTE_GREEN), lv_color_black(), 127)
                             : lv_color_mix(lv_palette_main(LV_PALETTE_RED), lv_color_black(), 127);
@@ -2161,7 +2190,7 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
     }
     else
     {
-        lv_obj_set_style_text_color(::priceLbl[index], lv_palette_main(LV_PALETTE_GREY), 0);
+        lv_obj_set_style_text_color(::priceLbl[index], UI_PALETTE_GREY(), 0);
         lv_obj_set_style_bg_color(::priceBox[index], lv_color_black(), 0);
     }
     

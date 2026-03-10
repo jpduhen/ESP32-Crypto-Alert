@@ -112,7 +112,8 @@ AlertEngine::AlertEngine() {
     last1mEvent = {EVENT_NONE, 0, 0.0f, false};
     last5mEvent = {EVENT_NONE, 0, 0.0f, false};
     lastConfluenceAlert = 0;
-    
+    last30mPriorityDirection = 0;
+
     // Initialiseer buffers
     msgBuffer[0] = '\0';
     titleBuffer[0] = '\0';
@@ -178,6 +179,7 @@ static unsigned long lastKline5mOpenTime = 0;
 extern VolumeRangeStatus lastVolumeRange1m;
 extern VolumeRangeStatus lastVolumeRange5m;
 
+// Alleen gebruiken voor bronnen die per afgesloten kaars 1x updaten (niet voor WS candles die lopende volume sturen)
 static void updateVolumeEmaIfNewCandle(const KlineMetrics& kline, EmaAccumulator& ema, bool& initialized,
                                       unsigned long& lastOpenTime, uint16_t windowSize)
 {
@@ -194,6 +196,28 @@ static void updateVolumeEmaIfNewCandle(const KlineMetrics& kline, EmaAccumulator
         ema.push(kline.volume);
         lastOpenTime = kline.openTime;
     }
+}
+
+// Push afgesloten 1m/5m kaars-volume naar EMA (aanroepen vanuit .ino vóór lastKline = kline bij nieuw openTime).
+// Voorkomt vol+33400%: eerder pushten we het start-volume van de nieuwe kaars; nu pushen we het eindvolume van de vorige.
+void AlertEngine::pushClosed1mCandle(unsigned long openTime, float volume) {
+    if (volume <= 0.0f) return;
+    if (!volumeEma1mInitialized) {
+        volumeEma1m.begin(VOLUME_EMA_WINDOW_1M);
+        volumeEma1mInitialized = true;
+    }
+    volumeEma1m.push(volume);
+    lastKline1mOpenTime = openTime;
+}
+
+void AlertEngine::pushClosed5mCandle(unsigned long openTime, float volume) {
+    if (volume <= 0.0f) return;
+    if (!volumeEma5mInitialized) {
+        volumeEma5m.begin(VOLUME_EMA_WINDOW_5M);
+        volumeEma5mInitialized = true;
+    }
+    volumeEma5m.push(volume);
+    lastKline5mOpenTime = openTime;
 }
 
 static VolumeRangeStatus evaluateVolumeRange(const KlineMetrics& kline, const EmaAccumulator& ema)
@@ -218,6 +242,23 @@ static VolumeRangeStatus evaluateVolumeRange(const KlineMetrics& kline, const Em
 static bool volumeEventCooldownOk(unsigned long now)
 {
     return (lastVolumeEventMs == 0 || (now - lastVolumeEventMs) >= VOLUME_EVENT_COOLDOWN_MS);
+}
+
+// Voor 2h-meldingen staat kleur+pijltje al in de titel; stuur alleen het icoon als tag (geen dubbel kleurvakje in NTFY)
+static void tagWithoutSquare(const char* colorTag, char* out, size_t outSize) {
+    if (out == nullptr || outSize == 0) return;
+    out[0] = '\0';
+    if (colorTag == nullptr) return;
+    const char* comma = strchr(colorTag, ',');
+    if (comma != nullptr && comma[1] != '\0') {
+        const char* after = comma + 1;
+        while (*after == ' ') after++;
+        strncpy(out, after, outSize - 1);
+        out[outSize - 1] = '\0';
+    } else {
+        strncpy(out, colorTag, outSize - 1);
+        out[outSize - 1] = '\0';
+    }
 }
 
 static void appendVolumeRangeInfo(char* msg, size_t msgSize, const VolumeRangeStatus& status)
@@ -550,6 +591,133 @@ void AlertEngine::cacheAbsoluteValues(float ret_1m, float ret_5m, float ret_30m)
     valuesCached = true;
 }
 
+// --- 30m priority override: testscenario's (referentie) ---
+// 1. ret30m=+1.35%, 2h breakout actief, suppressie normaal aan -> 30m-alert MOET door (priority_override_same_direction_2h)
+// 2. ret30m=-1.42%, 2h breakdown actief, suppressie normaal aan -> 30m-alert MOET door (priority_override_same_direction_2h)
+// 3. ret30m=+1.35%, 2h breakdown actief -> override niet (richting mismatch), 30m mag NIET door via override
+// 4. ret30m=+1.62%, ongeacht 2h-context -> 30m-alert MOET door (hard_override_30m_extreme)
+// 5. Tweede identieke 30m-alert binnen cooldown -> NIET opnieuw sturen (checkAlertConditions / cooldown30MinMs)
+
+// 30m priority override: bepaal of 2h breakout up / breakdown down context actief is
+void AlertEngine::get2HBreakoutContext(uint32_t now, bool* breakoutUpActive, bool* breakdownDownActive) {
+    if (!breakoutUpActive || !breakdownDownActive) return;
+    *breakoutUpActive = false;
+    *breakdownDownActive = false;
+    TwoHMetrics metrics = computeTwoHMetrics();
+    if (!metrics.valid) return;
+    float lastPrice = prices[0];
+    if (!isValidPrice(lastPrice)) return;
+    float breakMargin = alert2HThresholds.breakMarginPct;
+    float breakThresholdUp = metrics.high2h * (1.0f + breakMargin / 100.0f);
+    float breakThresholdDown = metrics.low2h * (1.0f - breakMargin / 100.0f);
+    *breakoutUpActive = (lastPrice > breakThresholdUp) ||
+        (gAlert2H.lastBreakoutUpMs > 0 && (now - gAlert2H.lastBreakoutUpMs) < alert2HThresholds.breakCooldownMs);
+    *breakdownDownActive = (lastPrice < breakThresholdDown) ||
+        (gAlert2H.lastBreakoutDownMs > 0 && (now - gAlert2H.lastBreakoutDownMs) < alert2HThresholds.breakCooldownMs);
+}
+
+// 30m priority override: moet deze 30m-alert doorgelaten worden ondanks suppressie?
+// Eén prioriteitsmelding per regime: re-arm als abs(ret30m) onder drempel, 2h-context eind, of richtingswissel.
+// outHardOverride = true als |ret_30m| >= hardOverridePct (hard override)
+// outSameDir2H = true alszelfde richting als actieve 2h breakout/breakdown (priority override)
+bool AlertEngine::shouldForce30mPriorityAlert(float ret_30m, float effMove30m, float hardOverridePct,
+                                              bool* outHardOverride, bool* outSameDir2H) {
+    if (outHardOverride) *outHardOverride = false;
+    if (outSameDir2H) *outSameDir2H = false;
+    float abs30 = fabsf(ret_30m);
+    int8_t currentSign = (ret_30m >= 0.0f) ? 1 : -1;
+    uint32_t now = (uint32_t)millis();
+    bool upActive = false, downActive = false;
+    get2HBreakoutContext(now, &upActive, &downActive);
+    // Re-arm: onder drempel of 2h-context voor deze richting geëindigd
+    if (abs30 < effMove30m)
+        last30mPriorityDirection = 0;
+    else if (currentSign == 1 && !upActive)
+        last30mPriorityDirection = 0;
+    else if (currentSign == -1 && !downActive)
+        last30mPriorityDirection = 0;
+    bool alreadySentThisRegime = (last30mPriorityDirection == currentSign);
+    if (abs30 >= hardOverridePct) {
+        if (outHardOverride) *outHardOverride = true;
+        if (alreadySentThisRegime) return false;
+        return true;
+    }
+    if (abs30 < effMove30m) return false;
+    bool sameDir = (ret_30m > 0.0f && upActive) || (ret_30m < 0.0f && downActive);
+    if (outSameDir2H) *outSameDir2H = sameDir;
+    if (sameDir && alreadySentThisRegime) return false;
+    return sameDir;
+}
+
+const char* AlertEngine::get30mOverrideReason(bool hardOverride, bool sameDir2H) {
+    if (hardOverride) return "hard_override_30m_extreme";
+    if (sameDir2H) return "priority_override_same_direction_2h";
+    return "normal";
+}
+
+// --- 5m classificatie op basis van 2h-richting (alleen 2h, geen 30m) ---
+// Testscenario's:
+// 1. 5m +0.55%, 2h trend OP   -> trend-following omhoog
+// 2. 5m -0.52%, 2h trend NEER -> trend-following omlaag
+// 3. 5m -0.48%, 2h trend OP   -> countertrend pullback in uptrend
+// 4. 5m +0.45%, 2h trend NEER -> countertrend rebound in downtrend
+// 5. 5m +0.50%, 2h trend neutraal -> neutrale 5m move
+// 6. Countertrend 5m-alert moet gewoon verstuurd worden (geen suppressie)
+
+int AlertEngine::get2HTrendDirectionFor5mClassification() {
+    TwoHMetrics metrics = computeTwoHMetrics();
+    if (!metrics.valid) return 0;
+    float lastPrice = prices[0];
+    if (!isValidPrice(lastPrice)) return 0;
+    uint32_t now = (uint32_t)millis();
+    bool breakoutUp = false, breakdownDown = false;
+    get2HBreakoutContext(now, &breakoutUp, &breakdownDown);
+    if (breakoutUp && !breakdownDown) return 1;
+    if (breakdownDown && !breakoutUp) return -1;
+    float marginPct = 0.15f;
+    float margin = metrics.avg2h * (marginPct / 100.0f);
+    if (lastPrice > metrics.avg2h + margin) return 1;
+    if (lastPrice < metrics.avg2h - margin) return -1;
+    return 0;
+}
+
+bool AlertEngine::is5mTrendFollowing(float ret5m, int trend2HDir) {
+    if (trend2HDir == 0) return false;
+    return (ret5m > 0.0f && trend2HDir > 0) || (ret5m < 0.0f && trend2HDir < 0);
+}
+
+bool AlertEngine::is5mCountertrend(float ret5m, int trend2HDir) {
+    if (trend2HDir == 0) return false;
+    return (ret5m < 0.0f && trend2HDir > 0) || (ret5m > 0.0f && trend2HDir < 0);
+}
+
+void AlertEngine::get5mAlert2HTrendText(int trend2hDir, char* out, size_t outSize) {
+    if (!out || outSize == 0) return;
+    if (trend2hDir > 0) { safeStrncpy(out, getText("OP", "UP"), outSize); return; }
+    if (trend2hDir < 0) { safeStrncpy(out, getText("NEER", "DOWN"), outSize); return; }
+    safeStrncpy(out, getText("ZIJWAARTS", "SIDEWAYS"), outSize);
+}
+
+void AlertEngine::get5mAlertClassificationLabel(int trend2hDir, float ret5m, char* out, size_t outSize) {
+    if (!out || outSize == 0) return;
+    out[0] = '\0';
+    if (is5mTrendFollowing(ret5m, trend2hDir)) {
+        if (ret5m >= 0.0f)
+            safeStrncpy(out, getText("Trendversnelling omhoog", "Trend acceleration up"), outSize);
+        else
+            safeStrncpy(out, getText("Trendversnelling omlaag", "Trend acceleration down"), outSize);
+        return;
+    }
+    if (is5mCountertrend(ret5m, trend2hDir)) {
+        if (ret5m < 0.0f)
+            safeStrncpy(out, getText("Pullback in uptrend", "Pullback in uptrend"), outSize);
+        else
+            safeStrncpy(out, getText("Rebound in downtrend", "Rebound in downtrend"), outSize);
+        return;
+    }
+    safeStrncpy(out, getText("Move", "Move"), outSize);
+}
+
 // Helper: Bereken min/max uit fiveMinutePrices (gebruikt zelfde logica als 1m en 30m)
 // Fase: Extra sanity-range om corrupte waarden te filteren
 bool AlertEngine::findMinMaxInFiveMinutePrices(float& minVal, float& maxVal) {
@@ -661,12 +829,8 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
     
     unsigned long now = millis();
     
-    // Update volume EMA en status altijd, ook als returns 0 zijn
-    updateVolumeEmaIfNewCandle(lastKline1m, volumeEma1m, volumeEma1mInitialized,
-                               lastKline1mOpenTime, VOLUME_EMA_WINDOW_1M);
-    updateVolumeEmaIfNewCandle(lastKline5m, volumeEma5m, volumeEma5mInitialized,
-                               lastKline5mOpenTime, VOLUME_EMA_WINDOW_5M);
-    
+    // Volume-EMA wordt alleen bijgewerkt via pushClosed1mCandle/pushClosed5mCandle (in .ino bij nieuw openTime).
+    // Zo vergelijken we lopende kaars-volume met het gemiddelde van afgesloten kaarsen (geen vol+33400% meer).
     VolumeRangeStatus volumeRange1m = evaluateVolumeRange(lastKline1m, volumeEma1m);
     VolumeRangeStatus volumeRange5m = evaluateVolumeRange(lastKline5m, volumeEma5m);
     lastVolumeRange1m = volumeRange1m;
@@ -848,83 +1012,84 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
     }
     
     // ===== 30-MINUTEN TREND MOVE ALERT =====
-    // Voorwaarde: |ret_30m| >= effectiveMove30mThreshold EN |ret_5m| >= move5mThreshold in dezelfde richting
-    if (ret_30m != 0.0f && ret_5m != 0.0f)
+    // Voorwaarde: |ret_30m| >= effectiveMove30m EN (|ret_5m| >= move5m in dezelfde richting OF priority/hard override)
+    if (ret_30m != 0.0f)
     {
-        // Gebruik gecachte absolute waarden
         float absRet30m = cachedAbsRet30m;
-        float absRet5m = cachedAbsRet5m;
-        
-        // Early return: check thresholds eerst (sneller)
-        if (absRet30m < effThresh.move30m || absRet5m < alertThresholds.move5m) {
-            // Thresholds niet gehaald, skip rest
+        float absRet5m = (ret_5m != 0.0f) ? cachedAbsRet5m : 0.0f;
+        bool sameDirection = (ret_5m != 0.0f) && ((ret_30m > 0 && ret_5m > 0) || (ret_30m < 0 && ret_5m < 0));
+        float hardOverridePct = alertThresholds.move30mHardOverride;
+        bool outHardOverride = false, outSameDir2H = false;
+        bool forceAllow = shouldForce30mPriorityAlert(ret_30m, effThresh.move30m, hardOverridePct, &outHardOverride, &outSameDir2H);
+        bool normalCandidate = (ret_5m != 0.0f) && (absRet30m >= effThresh.move30m) && (absRet5m >= alertThresholds.move5m) && sameDirection;
+        bool allow30m = normalCandidate || forceAllow;
+        const char* overrideReason = get30mOverrideReason(outHardOverride, outSameDir2H);
+        if (!allow30m) {
+            #if !DEBUG_BUTTON_ONLY
+            if (absRet30m >= effThresh.move30m && !forceAllow)
+                Serial_printf(F("[30m] Zou onderdrukt: ret_30m=%.2f%% (richting mismatch of onder drempel 2h-context)\n"), ret_30m);
+            #endif
         } else {
-        // Check of beide in dezelfde richting zijn
-        bool sameDirection = ((ret_30m > 0 && ret_5m > 0) || (ret_30m < 0 && ret_5m < 0));
-        
-        // Threshold check: ret_30m >= effectiveMove30mThreshold EN ret_5m >= move5mThreshold
-        // Note: move5mThreshold is de filter threshold, niet de alert threshold
-        // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
-            bool moveDetected = sameDirection;
-            // Als volume/range data niet beschikbaar is, onderdruk alerts niet
             bool volumeRangeOk5m = (!volumeRange5m.valid) || (volumeRange5m.volumeOk && volumeRange5m.rangeOk);
-        
-        // Debug logging alleen bij move detectie
-        if (moveDetected) {
-                #if !DEBUG_BUTTON_ONLY
+            #if !DEBUG_BUTTON_ONLY
             Serial_printf(F("[Notify] 30m move: ret_30m=%.2f%%, ret_5m=%.2f%%\n"), ret_30m, ret_5m);
+            if (forceAllow) {
+                if (outHardOverride)
+                    Serial_printf(F("[30m] Hard override actief (>=%.2f%%): doorgelaten\n"), (double)hardOverridePct);
+                else
+                    Serial_printf(F("[30m] Priority override (zelfde richting 2h): doorgelaten\n"));
+            }
+            #endif
+            if (!volumeRangeOk5m) {
+                #if !DEBUG_BUTTON_ONLY
+                Serial_printf(F("[Notify] 30m move onderdrukt (volume/range confirmatie fail)\n"));
                 #endif
-            
-                if (!volumeRangeOk5m) {
-                    #if !DEBUG_BUTTON_ONLY
-                    Serial_printf(F("[Notify] 30m move onderdrukt (volume/range confirmatie fail)\n"));
-                    #endif
-                } else {
-            // Bereken min en max uit laatste 30 minuten van minuteAverages buffer
-            float minVal, maxVal;
-            findMinMaxInLast30Minutes(minVal, maxVal);
-            
-                    // Format message met hergebruik van class buffer
-                    getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
-            float movePriceRounded = roundToEuroNotif(prices[0]);
-            float moveMinRounded = roundToEuroNotif(minVal);
-            float moveMaxRounded = roundToEuroNotif(maxVal);
-            if (ret_30m >= 0) {
-                        snprintf(msgBuffer, sizeof(msgBuffer), 
-                                 "%.0f (%s)\n30m %s move: +%.2f%% (5m: +%.2f%%)\n30m %s: %.0f\n30m %s: %.0f", 
-                                 movePriceRounded, timestampBuffer,
-                                 getText("OP", "UP"), ret_30m, ret_5m,
-                                 getText("Top", "Top"), moveMaxRounded,
-                                 getText("Dal", "Low"), moveMinRounded);
             } else {
-                        snprintf(msgBuffer, sizeof(msgBuffer), 
-                                 "%.0f (%s)\n30m %s move: %.2f%% (5m: %.2f%%)\n30m %s: %.0f\n30m %s: %.0f", 
-                                 movePriceRounded, timestampBuffer,
-                                 getText("NEER", "DOWN"), ret_30m, ret_5m,
-                                 getText("Top", "Top"), moveMaxRounded,
-                                 getText("Dal", "Low"), moveMinRounded);
-                    }
-                    appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange5m);
-            
-            const char* colorTag = determineColorTag(ret_30m, effThresh.move30m, effThresh.move30m * 1.5f);
-                    snprintf(titleBuffer, sizeof(titleBuffer), "%s 30m %s", bitvavoSymbol, getText("Move", "Move"));
-            
-            // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
-                    if (!volumeEventCooldownOk(now)) {
+                float minVal, maxVal;
+                findMinMaxInLast30Minutes(minVal, maxVal);
+                getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
+                float movePriceRounded = roundToEuroNotif(prices[0]);
+                float moveMinRounded = roundToEuroNotif(minVal);
+                float moveMaxRounded = roundToEuroNotif(maxVal);
+                if (ret_30m >= 0) {
+                    snprintf(msgBuffer, sizeof(msgBuffer),
+                             "%.0f (%s)\n30m %s move: +%.2f%% (5m: +%.2f%%)\n30m %s: %.0f\n30m %s: %.0f",
+                             movePriceRounded, timestampBuffer,
+                             getText("OP", "UP"), ret_30m, ret_5m,
+                             getText("Top", "Top"), moveMaxRounded,
+                             getText("Dal", "Low"), moveMinRounded);
+                } else {
+                    snprintf(msgBuffer, sizeof(msgBuffer),
+                             "%.0f (%s)\n30m %s move: %.2f%% (5m: %.2f%%)\n30m %s: %.0f\n30m %s: %.0f",
+                             movePriceRounded, timestampBuffer,
+                             getText("NEER", "DOWN"), ret_30m, ret_5m,
+                             getText("Top", "Top"), moveMaxRounded,
+                             getText("Dal", "Low"), moveMinRounded);
+                }
+                appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange5m);
+                if (forceAllow) {
+                    size_t len = strnlen(msgBuffer, sizeof(msgBuffer));
+                    if (len + 48 < sizeof(msgBuffer))
+                        snprintf(msgBuffer + len, sizeof(msgBuffer) - len, "\n[%s]", overrideReason);
+                }
+                const char* colorTag = determineColorTag(ret_30m, effThresh.move30m, effThresh.move30m * 1.5f);
+                snprintf(titleBuffer, sizeof(titleBuffer), "%s 30m %s", bitvavoSymbol, getText("Move", "Move"));
+                if (!volumeEventCooldownOk(now)) {
+                    #if !DEBUG_BUTTON_ONLY
+                    Serial_printf(F("[Notify] 30m move onderdrukt (volume-event cooldown)\n"));
+                    #endif
+                } else if (checkAlertConditions(now, lastNotification30Min, notificationCooldowns.cooldown30MinMs,
+                                                alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR, "30m move")) {
+                    bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
+                    if (sent) {
+                        lastNotification30Min = now;
+                        alerts30MinThisHour++;
+                        lastVolumeEventMs = now;
+                        if (forceAllow)
+                            last30mPriorityDirection = (ret_30m >= 0.0f) ? 1 : -1;
                         #if !DEBUG_BUTTON_ONLY
-                        Serial_printf(F("[Notify] 30m move onderdrukt (volume-event cooldown)\n"));
+                        Serial_printf(F("[Notify] 30m move notificatie verstuurd (%d/%d dit uur)\n"), alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR);
                         #endif
-                    } else if (checkAlertConditions(now, lastNotification30Min, notificationCooldowns.cooldown30MinMs, 
-                                     alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR, "30m move")) {
-                        bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
-                        if (sent) {
-                lastNotification30Min = now;
-                alerts30MinThisHour++;
-                            lastVolumeEventMs = now;
-                            #if !DEBUG_BUTTON_ONLY
-                Serial_printf(F("[Notify] 30m move notificatie verstuurd (%d/%d dit uur)\n"), alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR);
-                            #endif
-                        }
                     }
                 }
             }
@@ -989,46 +1154,69 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             Serial_printf(F("[Notify] 5m move onderdrukt (nachtstand, 30m richting mismatch)\n"));
                             #endif
                 } else {
-                            // Bereken min en max uit fiveMinutePrices buffer (geoptimaliseerde versie)
+                            // 5m classificatie op basis van 2h-richting (geen 30m)
+                            int trend2hDir = get2HTrendDirectionFor5mClassification();
+                            char trend2hText[16];
+                            get5mAlert2HTrendText(trend2hDir, trend2hText, sizeof(trend2hText));
+                            char classLabel[48];
+                            get5mAlertClassificationLabel(trend2hDir, ret_5m, classLabel, sizeof(classLabel));
+                            #if !DEBUG_BUTTON_ONLY
+                            if (trend2hDir > 0) Serial_printf(F("[5m] 2h trend for classification: UP\n"));
+                            else if (trend2hDir < 0) Serial_printf(F("[5m] 2h trend for classification: DOWN\n"));
+                            else Serial_printf(F("[5m] 2h trend for classification: NEUTRAL (missing/unclear 2h context)\n"));
+                            if (is5mTrendFollowing(ret_5m, trend2hDir)) Serial_printf(F("[5m] Classified as trend-following\n"));
+                            else if (is5mCountertrend(ret_5m, trend2hDir)) Serial_printf(F("[5m] Classified as countertrend pullback/rebound\n"));
+                            else Serial_printf(F("[5m] Classified as neutral\n"));
+                            #endif
+                            // Bereken min en max uit fiveMinutePrices buffer
                             float minVal, maxVal;
                             findMinMaxInFiveMinutePrices(minVal, maxVal);
-                            
-                            // Format message met hergebruik van class buffer
                             getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
-                            // ret_30m is beschikbaar in checkAndNotify scope
-                    float move5mPriceRounded = roundToEuroNotif(prices[0]);
-                    float move5mMinRounded = roundToEuroNotif(minVal);
-                    float move5mMaxRounded = roundToEuroNotif(maxVal);
-                    if (ret_5m >= 0) {
-                                snprintf(msgBuffer, sizeof(msgBuffer), 
-                                         "%.0f (%s)\n5m %s move: +%.2f%% (30m: %+.2f%%)\n5m %s: %.0f\n5m %s: %.0f", 
-                                         move5mPriceRounded, timestampBuffer,
-                                         getText("OP", "UP"), ret_5m, ret_30m,
-                                         getText("Top", "Top"), move5mMaxRounded,
-                                         getText("Dal", "Low"), move5mMinRounded);
-                    } else {
-                                snprintf(msgBuffer, sizeof(msgBuffer), 
-                                         "%.0f (%s)\n5m %s move: %.2f%% (30m: %+.2f%%)\n5m %s: %.0f\n5m %s: %.0f", 
-                                         move5mPriceRounded, timestampBuffer,
-                                         getText("NEER", "DOWN"), ret_5m, ret_30m,
-                                         getText("Top", "Top"), move5mMaxRounded,
-                                         getText("Dal", "Low"), move5mMinRounded);
+                            float move5mPriceRounded = roundToEuroNotif(prices[0]);
+                            float move5mMinRounded = roundToEuroNotif(minVal);
+                            float move5mMaxRounded = roundToEuroNotif(maxVal);
+                            bool countertrend = is5mCountertrend(ret_5m, trend2hDir);
+                            const char* counterPhrase = nullptr;
+                            if (ret_5m < 0.0f && trend2hDir > 0) counterPhrase = getText("korte tegenbeweging / pullback", "short pullback");
+                            else if (ret_5m > 0.0f && trend2hDir < 0) counterPhrase = getText("korte tegenbeweging / rebound", "short rebound");
+                            if (ret_5m >= 0) {
+                                if (counterPhrase)
+                                    snprintf(msgBuffer, sizeof(msgBuffer), "%.0f (%s)\n5m %s move: +%.2f%% | 2h trend: %s | %s\n5m %s: %.0f\n5m %s: %.0f",
+                                             move5mPriceRounded, timestampBuffer, getText("OP", "UP"), ret_5m, trend2hText, counterPhrase,
+                                             getText("Top", "Top"), move5mMaxRounded, getText("Dal", "Low"), move5mMinRounded);
+                                else
+                                    snprintf(msgBuffer, sizeof(msgBuffer), "%.0f (%s)\n5m %s move: +%.2f%% | 2h trend: %s\n5m %s: %.0f\n5m %s: %.0f",
+                                             move5mPriceRounded, timestampBuffer, getText("OP", "UP"), ret_5m, trend2hText,
+                                             getText("Top", "Top"), move5mMaxRounded, getText("Dal", "Low"), move5mMinRounded);
+                            } else {
+                                if (counterPhrase)
+                                    snprintf(msgBuffer, sizeof(msgBuffer), "%.0f (%s)\n5m %s move: %.2f%% | 2h trend: %s | %s\n5m %s: %.0f\n5m %s: %.0f",
+                                             move5mPriceRounded, timestampBuffer, getText("NEER", "DOWN"), ret_5m, trend2hText, counterPhrase,
+                                             getText("Top", "Top"), move5mMaxRounded, getText("Dal", "Low"), move5mMinRounded);
+                                else
+                                    snprintf(msgBuffer, sizeof(msgBuffer), "%.0f (%s)\n5m %s move: %.2f%% | 2h trend: %s\n5m %s: %.0f\n5m %s: %.0f",
+                                             move5mPriceRounded, timestampBuffer, getText("NEER", "DOWN"), ret_5m, trend2hText,
+                                             getText("Top", "Top"), move5mMaxRounded, getText("Dal", "Low"), move5mMinRounded);
                             }
                             appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange5m);
-                    
-                    const char* colorTag = determineColorTag(ret_5m, effThresh.move5m, effThresh.move5m * 1.5f);
-                            snprintf(titleBuffer, sizeof(titleBuffer), "%s 5m %s", bitvavoSymbol, getText("Move", "Move"));
-                    
-                    // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
-                    if (checkAlertConditions(now, lastNotification5Min, cooldown5mMs, 
-                                             alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR, "5m move")) {
+                            const char* colorTag;
+                            if (is5mTrendFollowing(ret_5m, trend2hDir))
+                                colorTag = determineColorTag(ret_5m, effThresh.move5m, effThresh.move5m * 1.5f);
+                            else if (countertrend)
+                                colorTag = (ret_5m >= 0) ? "green_square,↗" : "orange_square,↘";  // subtieler dan strong
+                            else
+                                colorTag = determineColorTag(ret_5m, effThresh.move5m, effThresh.move5m * 1.5f);
+                            const char* arrow5m = (ret_5m >= 0) ? "\xE2\x86\x97\xEF\xB8\x8F " : "\xE2\x86\x98\xEF\xB8\x8F ";
+                            snprintf(titleBuffer, sizeof(titleBuffer), "%s%s 5m %s", arrow5m, bitvavoSymbol, classLabel);
+                            if (checkAlertConditions(now, lastNotification5Min, cooldown5mMs,
+                                                     alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR, "5m move")) {
                                 bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
                                 if (sent) {
-                        lastNotification5Min = now;
-                        alerts5MinThisHour++;
+                                    lastNotification5Min = now;
+                                    alerts5MinThisHour++;
                                     lastVolumeEventMs = now;
                                     #if !DEBUG_BUTTON_ONLY
-                        Serial_printf(F("[Notify] 5m move notificatie verstuurd (%d/%d dit uur)\n"), alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR);
+                                    Serial_printf(F("[Notify] 5m move notificatie verstuurd (%d/%d dit uur)\n"), alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR);
                                     #endif
                                 }
                             }
@@ -1166,7 +1354,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                      getText("Gem", "Avg"), avgRounded,
                      getText("Dal", "Low"), lowRounded);
             // FASE X.2: Gebruik throttling wrapper
-            if (send2HNotification(ALERT2H_COMPRESS, title, msg, "yellow_square,📉")) {
+            if (send2HNotification(ALERT2H_COMPRESS, title, msg, "yellow_square,↕")) {
             gAlert2H.lastCompressMs = now;
             gAlert2H.setCompressArmed(false);
             }
@@ -1210,7 +1398,9 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                      getText("Raakt", "Touched"), getText("gem.", "avg"), directionText,
                      getText("na", "after"), distPct, getText("verwijdering", "away"));
             // FASE X.2: Gebruik throttling wrapper
-            if (send2HNotification(ALERT2H_MEAN_TOUCH, title, msg, "green_square,📊")) {
+            const char* meanTag = (gAlert2H.getMeanFarSide() > 0) ? "green_square,⤵" : "green_square,⤴";
+            if (send2HNotification(ALERT2H_MEAN_TOUCH, title, msg, meanTag,
+                                  (gAlert2H.getMeanFarSide() > 0) ? 1 : 0, -1)) {
             gAlert2H.lastMeanMs = now;
             gAlert2H.setMeanArmed(false);
             gAlert2H.setMeanWasFar(false);
@@ -1255,8 +1445,8 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                      getText("Top", "High"), highRounded,
                      getText("Gem", "Avg"), avgRounded,
                      getText("Dal", "Low"), lowRounded);
-            // FASE X.2: Gebruik throttling wrapper
-            if (send2HNotification(ALERT2H_ANCHOR_CTX, title, msg, "purple_square,⚓")) {
+            // FASE X.2: Gebruik throttling wrapper; tag 🟫, prefix ↗️⚓️ (boven 2h) of ↘️⚓️ (onder 2h) via meanTouchFromAbove
+            if (send2HNotification(ALERT2H_ANCHOR_CTX, title, msg, "\xF0\x9F\x9F\xAB", condAnchorHigh ? 1 : 0, -1)) {
             gAlert2H.lastAnchorCtxMs = now;
             gAlert2H.setAnchorCtxArmed(false);
             }
@@ -1299,7 +1489,7 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
                  getText("Prijs", "Price"), getText("Top", "High"), highRounded,
                  getText("Gem", "Avg"), avgRounded, getText("Band", "Range"), metrics.rangePct);
         // FASE X.2: Gebruik throttling wrapper (Breakout mag altijd door)
-        send2HNotification(ALERT2H_BREAKOUT_UP, title, msg, "blue_square,🔼");
+        send2HNotification(ALERT2H_BREAKOUT_UP, title, msg, "purple_square,⏫");
     } else {
         #if DEBUG_2H_ALERTS
         Serial.printf("[ALERT2H] breakdown_down sent: price=%.0f < low2h=%.0f (avg=%.0f, range=%.2f%%)\n",
@@ -1316,7 +1506,7 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
                  getText("Prijs", "Price"), getText("Dal", "Low"), lowRounded,
                  getText("Gem", "Avg"), avgRounded, getText("Band", "Range"), metrics.rangePct);
         // FASE X.2: Gebruik throttling wrapper (Breakdown mag altijd door)
-        send2HNotification(ALERT2H_BREAKOUT_DOWN, title, msg, "orange_square,🔽");
+        send2HNotification(ALERT2H_BREAKOUT_DOWN, title, msg, "red_square,⏬");
     }
 }
 
@@ -1331,7 +1521,7 @@ static uint32_t lastSecondarySentMillis = 0;
 // FASE X.5: Coalescing state voor burst-demping
 static Alert2HType pendingSecondaryType = ALERT2H_NONE;
 static uint32_t pendingSecondaryCreatedMillis = 0;
-static char pendingSecondaryTitle[64];
+static char pendingSecondaryTitle[96];  // prefix + 👀 + titel
 static char pendingSecondaryMsg[256];
 static char pendingSecondaryColorTag[32];
 
@@ -1359,7 +1549,7 @@ static uint32_t getSecondaryCooldownSec(Alert2HType lastType, Alert2HType nextTy
     // Specifieke pair-regels (hardcoded defaults, later uitbreidbaar)
     switch (lastType) {
         case ALERT2H_TREND_CHANGE:
-            if (nextType == ALERT2H_TREND_CHANGE) return 180UL * 60UL;  // 180 min
+            if (nextType == ALERT2H_TREND_CHANGE) return 30UL * 60UL;   // 30 min (voorkom 3x in 30 min)
             if (nextType == ALERT2H_MEAN_TOUCH) return 60UL * 60UL;     // 60 min (bestaat)
             if (nextType == ALERT2H_ANCHOR_CTX) return 120UL * 60UL;    // 120 min
             if (nextType == ALERT2H_COMPRESS) return 120UL * 60UL;      // 120 min
@@ -1484,11 +1674,8 @@ static bool flushPendingSecondaryAlertInternal(uint32_t now) {
         return false;
     }
     
-    // Verstuur pending alert
-        char titleWithClass[64];
-        snprintf(titleWithClass, sizeof(titleWithClass), "[%s] %s", 
-                 getText("Context", "Context"), pendingSecondaryTitle);
-        bool result = sendNotification(titleWithClass, pendingSecondaryMsg, pendingSecondaryColorTag);
+    // Verstuur pending alert (titel bevat al prefix + 👀 + tekst)
+        bool result = sendNotification(pendingSecondaryTitle, pendingSecondaryMsg, pendingSecondaryColorTag);
     
     // Update throttling state: bij success normaal, bij failure korte backoff om spam te voorkomen
     if (result) {
@@ -1511,11 +1698,62 @@ static bool flushPendingSecondaryAlertInternal(uint32_t now) {
     return result;
 }
 
+// NTFY titel: strip trailing pijltjes en spaties (geen pijltjes meer aan het eind)
+static void stripTrailingArrows(char* buf, size_t bufSize) {
+    if (buf == nullptr || bufSize == 0) return;
+    size_t len = strlen(buf);
+    while (len > 0) {
+        char c = buf[len - 1];
+        if (c == ' ' || c == '\t') { len--; continue; }
+        // UTF-8 arrows: 3 bytes (E2 xx xx) of 4 bytes (E2 xx xx FE0F variation selector)
+        if (len >= 3 && (unsigned char)buf[len - 3] == 0xE2) {
+            unsigned char b1 = (unsigned char)buf[len - 2];
+            unsigned char b0 = (unsigned char)buf[len - 1];
+            if (b1 == 0x86 && (b0 == 0x91 || b0 == 0x93 || b0 == 0x95 || b0 == 0x97 || b0 == 0x98)) { len -= 3; continue; } // ↑↓↕↗↘
+            if (b1 == 0x8F && (b0 == 0xAB || b0 == 0xAC)) { len -= 3; continue; } // ⏫⏬
+            if (b1 == 0xA4 && (b0 == 0xB4 || b0 == 0xB5)) { len -= 3; continue; } // ⤴⤵
+        }
+        if (len >= 4 && (unsigned char)buf[len - 4] == 0xE2 && (unsigned char)buf[len - 1] == 0x8F) { len -= 4; continue; } // arrow + FE0F
+        break;
+    }
+    buf[len] = '\0';
+}
+
+// NTFY titelprefix: alleen pijltje (geen kleurvakje; kleur staat in Tags). Anker: ↗️⚓️ (boven 2h) of ↘️⚓️ (onder 2h)
+// UTF-8: ⏬️ ↘️ ↕️ ⤵️ ⤴️ ↗️⚓️ ↘️⚓️ ⏫️
+static void get2HArrowOnlyPrefix(Alert2HType type, int8_t meanTouchFromAbove, int8_t trendChangeUp, char* out, size_t outSize) {
+    const char* arrow = "";
+    switch (type) {
+        case ALERT2H_BREAKOUT_DOWN: arrow = "\xE2\x8F\xAC\xEF\xB8\x8F "; break;   // ⏬️
+        case ALERT2H_COMPRESS:      arrow = "\xE2\x86\x95\xEF\xB8\x8F "; break;   // ↕️
+        case ALERT2H_MEAN_TOUCH:    arrow = (meanTouchFromAbove == 1) ? "\xE2\xA4\xB5\xEF\xB8\x8F " : "\xE2\xA4\xB4\xEF\xB8\x8F "; break;  // ⤵️ / ⤴️
+        case ALERT2H_ANCHOR_CTX:   arrow = (meanTouchFromAbove == 1) ? "\xE2\x86\x97\xEF\xB8\x8F\xE2\x9A\x93\xEF\xB8\x8F " : "\xE2\x86\x98\xEF\xB8\x8F\xE2\x9A\x93\xEF\xB8\x8F "; break;   // ↗️⚓️ / ↘️⚓️
+        case ALERT2H_BREAKOUT_UP:   arrow = "\xE2\x8F\xAB\xEF\xB8\x8F "; break;   // ⏫️
+        case ALERT2H_TREND_CHANGE:
+            if (trendChangeUp == 1) arrow = "\xE2\x86\x97\xEF\xB8\x8F ";       // ↗️
+            else if (trendChangeUp == 0) arrow = "\xE2\x86\x98\xEF\xB8\x8F ";  // ↘️
+            else arrow = "\xE2\x86\x95\xEF\xB8\x8F ";                          // ↕️ sideways
+            break;
+        default: arrow = "\xE2\x86\x95\xEF\xB8\x8F "; break;  // ↕️ fallback
+    }
+    strncpy(out, arrow, outSize - 1);
+    out[outSize - 1] = '\0';
+}
+
 // FASE X.2: Wrapper voor sendNotification() met 2h throttling
 // FASE X.3: PRIMARY alerts override throttling, SECONDARY alerts onderhevig aan throttling
 // FASE X.5: Uitgebreid met coalescing voor SECONDARY alerts
-bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, const char* msg, const char* colorTag) {
+bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, const char* msg, const char* colorTag,
+                                    int8_t meanTouchFromAbove, int8_t trendChangeUp) {
     uint32_t now = millis();
+    
+    // Titel: alleen pijltje (geen kleurvakje; kleur in Tags), dan ⚠️ (primair) of 👀 (context), dan tekst
+    char strippedTitle[64];
+    strncpy(strippedTitle, title ? title : "", sizeof(strippedTitle) - 1);
+    strippedTitle[sizeof(strippedTitle) - 1] = '\0';
+    stripTrailingArrows(strippedTitle, sizeof(strippedTitle));
+    char prefixBuf[24];
+    get2HArrowOnlyPrefix(alertType, meanTouchFromAbove, trendChangeUp, prefixBuf, sizeof(prefixBuf));
     
     // FASE X.3: PRIMARY alerts override throttling (altijd door, geen coalescing)
     bool isPrimary = isPrimary2HAlert(alertType);
@@ -1529,10 +1767,10 @@ bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, c
             return false;
         }
         
-        // Verstuur PRIMARY alert
-        char titleWithClass[64];
-        snprintf(titleWithClass, sizeof(titleWithClass), "[%s] %s", 
-                 getText("PRIMAIR", "PRIMARY"), title);
+        // Verstuur PRIMARY alert: pijltje + ⚠️ + titel, colorTag (kleurvakje) in Tags
+        char titleWithClass[96];
+        snprintf(titleWithClass, sizeof(titleWithClass), "%s\xE2\x9A\xA0\xEF\xB8\x8F %s",
+                 prefixBuf, strippedTitle);
         bool result = sendNotification(titleWithClass, msg, colorTag);
         
         // Update throttling state: bij failure ook cooldown zodat we niet spam-retryen
@@ -1581,9 +1819,11 @@ bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, c
                 Serial_printf(F("[2h coalesced] old->new: %d->%d (priority %d->%d)\n"),
                              pendingSecondaryType, alertType, pendingPriority, newPriority);
                 #endif
-                // Update pending met nieuwe (hogere prioriteit) alert
+                // Update pending met nieuwe (hogere prioriteit) alert; titel = prefix + 👀 + tekst
+                char fullTitle[96];
+                snprintf(fullTitle, sizeof(fullTitle), "%s\xF0\x9F\x91\x80 %s", prefixBuf, strippedTitle);
+                safeStrncpy(pendingSecondaryTitle, fullTitle, sizeof(pendingSecondaryTitle));
                 pendingSecondaryType = alertType;
-                safeStrncpy(pendingSecondaryTitle, title, sizeof(pendingSecondaryTitle));
                 safeStrncpy(pendingSecondaryMsg, msg, sizeof(pendingSecondaryMsg));
                 safeStrncpy(pendingSecondaryColorTag, colorTag ? colorTag : "", sizeof(pendingSecondaryColorTag));
                 pendingSecondaryCreatedMillis = now;
@@ -1596,10 +1836,11 @@ bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, c
         }
     }
     
-    // Geen pending of pending geflusht: start nieuw pending
-    // (We versturen niet direct, maar wachten op coalesce window of flush)
+    // Geen pending of pending geflusht: start nieuw pending (titel = prefix + 👀 + tekst)
+    char fullTitle[96];
+    snprintf(fullTitle, sizeof(fullTitle), "%s\xF0\x9F\x91\x80 %s", prefixBuf, strippedTitle);
     pendingSecondaryType = alertType;
-    safeStrncpy(pendingSecondaryTitle, title, sizeof(pendingSecondaryTitle));
+    safeStrncpy(pendingSecondaryTitle, fullTitle, sizeof(pendingSecondaryTitle));
     safeStrncpy(pendingSecondaryMsg, msg, sizeof(pendingSecondaryMsg));
     safeStrncpy(pendingSecondaryColorTag, colorTag ? colorTag : "", sizeof(pendingSecondaryColorTag));
     pendingSecondaryCreatedMillis = now;

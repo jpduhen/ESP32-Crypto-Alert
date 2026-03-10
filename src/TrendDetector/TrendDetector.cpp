@@ -284,8 +284,9 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
                  getText("1d trend", "1d trend"), mediumTrendText,
                  getText("7d trend", "7d trend"), longTermTrendText);
         
-        // FASE X.2: Gebruik throttling wrapper voor Trend Change
-        if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag)) {
+        // FASE X.2: Gebruik throttling wrapper voor Trend Change (prefix + pijltje op basis van nieuwe trend)
+        int8_t trendUp = (this->trendState == TREND_UP) ? 1 : (this->trendState == TREND_DOWN) ? 0 : -1;
+        if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag, -1, trendUp)) {
             lastTrendChangeNotification = now;
         }
             
@@ -374,10 +375,9 @@ void TrendDetector::checkMediumTrendChange(float ret_4h_value, float ret_1d_valu
                  ret_1d_value,
                  getText("2h trend", "2h trend"), shortTermTrendText);
         
-        // FASE X.2: Gebruik throttling wrapper voor 1d Trend Change
-        // Note: We gebruiken ALERT2H_TREND_CHANGE type omdat er geen apart type is voor 1d
-        // De throttling logica zal dit behandelen als een trend change notificatie
-        if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag)) {
+        // FASE X.2: Gebruik throttling wrapper voor 1d Trend Change (prefix + pijltje op basis van nieuwe trend)
+        int8_t trendUp = (newMediumTrend == TREND_UP) ? 1 : (newMediumTrend == TREND_DOWN) ? 0 : -1;
+        if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag, -1, trendUp)) {
             lastMediumTrendChangeNotification = now;
         }
         
@@ -417,7 +417,8 @@ void TrendDetector::checkLongTermTrendChange(float ret_7d_value, float longTermT
         // Geoptimaliseerd: gebruik helper functies
         const char* fromTrend = getTrendName(this->longTermTrendState);
         const char* toTrend = getTrendName(newLongTermTrend);
-        const char* colorTag = getTrendColorTag(newLongTermTrend);
+        // 7d trend: alleen 🟧 als tag (geen mix van 🟥🟧↘️)
+        const char* colorTag = "\xF0\x9F\x9F\xA7";  // 🟧
         
         // Gebruik lokale buffers (stack geheugen i.p.v. DRAM)
         char title[64];
@@ -435,6 +436,20 @@ void TrendDetector::checkLongTermTrendChange(float ret_7d_value, float longTermT
         else if (strcmp(toTrend, "DOWN") == 0) toTrendTranslated = "7d\\\\";
         else if (strcmp(toTrend, "SIDEWAYS") == 0) toTrendTranslated = "7d=";
         
+        // Bepaal 1d trend voor context
+        const char* mediumTermTrendText = "";
+        switch (this->mediumTrendState) {
+            case TREND_UP:
+                mediumTermTrendText = "1d//";
+                break;
+            case TREND_DOWN:
+                mediumTermTrendText = "1d\\\\";
+                break;
+            case TREND_SIDEWAYS:
+            default:
+                mediumTermTrendText = "1d=";
+                break;
+        }
         // Bepaal korte termijn trend voor context
         extern TrendState trendState;
         const char* shortTermTrendText = "";
@@ -454,16 +469,16 @@ void TrendDetector::checkLongTermTrendChange(float ret_7d_value, float longTermT
         snprintf(title, sizeof(title), "%s %s", 
                  bitvavoSymbol, getText("7d Trend Wijziging", "7d Trend Change"));
         snprintf(msg, sizeof(msg), 
-                 "%.2f (%s)\n%s: %s → %s\n7d: %+.2f%%\n%s: %s",
+                 "%.2f (%s)\n%s: %s → %s\n7d: %+.2f%%\n%s: %s\n%s: %s",
                  prices[0], timestamp,
                  getText("7d trend change", "7d trend change"), fromTrendTranslated, toTrendTranslated,
                  ret_7d_value,
+                 getText("1d trend", "1d trend"), mediumTermTrendText,
                  getText("2h trend", "2h trend"), shortTermTrendText);
         
-        // FASE X.2: Gebruik throttling wrapper voor 7d Trend Change
-        // Note: We gebruiken ALERT2H_TREND_CHANGE type omdat er geen apart type is voor 7d
-        // De throttling logica zal dit behandelen als een trend change notificatie
-        if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag)) {
+        // FASE X.2: Gebruik throttling wrapper voor 7d Trend Change (prefix + pijltje op basis van nieuwe trend)
+        int8_t trendUp = (newLongTermTrend == TREND_UP) ? 1 : (newLongTermTrend == TREND_DOWN) ? 0 : -1;
+        if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag, -1, trendUp)) {
             lastLongTermTrendChangeNotification = now;
         }
         

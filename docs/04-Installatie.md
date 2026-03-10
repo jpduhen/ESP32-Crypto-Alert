@@ -59,7 +59,7 @@ Controleer in Apparaatbeheer (Windows) of de COM-poort verschijnt wanneer je het
 5. **Belangrijke instellingen** (Tools-menu):
    - Upload Speed: 921600 (verlaag naar 115200 bij problemen)
    - Flash Mode: QIO
-   - Partition Scheme: "Default 4MB with spiffs" of "Huge APP"
+   - Partition Scheme: **CYD/TTGO/Super Mini:** "Huge APP". **S3-GEEK, LCDWIKI 2.8, 4848S040 (OTA):** "Minimal SPIFFS (1.9MB APP with OTA)" — anders werkt de web-OTA updater niet (er zijn twee app-partities nodig).
    - PSRAM: **Disabled** voor CYD24/CYD28 en TTGO, **Enabled** voor S3-boards met PSRAM
 
 6. **Board-specifieke define**:

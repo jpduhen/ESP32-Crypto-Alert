@@ -6,8 +6,8 @@
 //#define PLATFORM_CYD28_1USB  // 1USB variant: geen kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
 //#define PLATFORM_CYD28_2USB  // 2USB variant: met kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
 //#define PLATFORM_TTGO
-#define PLATFORM_ESP32S3_SUPERMINI
-//#define PLATFORM_ESP32S3_GEEK
+//#define PLATFORM_ESP32S3_SUPERMINI
+#define PLATFORM_ESP32S3_GEEK
 //#define PLATFORM_ESP32S3_LCDWIKI_28
 //#define PLATFORM_ESP32S3_4848S040
 //#define PLATFORM_ESP32S3_AMOLED_206
@@ -21,8 +21,8 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 5
-#define VERSION_MINOR 9
-#define VERSION_STRING "5.09"
+#define VERSION_MINOR 22
+#define VERSION_STRING "5.22"
 #endif
 
 // --- Debug Configuration ---
@@ -57,6 +57,22 @@
 // Je kunt de taal altijd wijzigen via de web interface
 #ifndef DEFAULT_LANGUAGE
 #define DEFAULT_LANGUAGE 0  // 0 = Nederlands, 1 = English
+#endif
+
+// OTA (Over-The-Air) updates: alleen voor boards met voldoende RAM (S3-GEEK, LCDWIKI 2.8, 4848S040). Supermini uitgesloten.
+// Vereiste: partitieschema met twee app-partities (ota_0 + ota_1), bijv. "Minimal SPIFFS (1.9MB APP with OTA)".
+// huge_app heeft maar één app-partitie; dan werkt de web-OTA updater niet.
+#if defined(PLATFORM_ESP32S3_GEEK) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_4848S040)
+#define OTA_ENABLED 1
+#if defined(PLATFORM_ESP32S3_GEEK)
+#define OTA_HOSTNAME "s3geek-crypto"
+#elif defined(PLATFORM_ESP32S3_LCDWIKI_28)
+#define OTA_HOSTNAME "lcdwiki28-crypto"
+#else
+#define OTA_HOSTNAME "4848s040-crypto"
+#endif
+#else
+#define OTA_ENABLED 0
 #endif
 
 // Platform-specifieke instellingen

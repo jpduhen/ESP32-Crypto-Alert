@@ -91,12 +91,13 @@ public:
     }
     
     // Helper: Get color tag for trend (geoptimaliseerd: elimineert switch duplicatie)
+    // Tag conventie: kleur + pijltje (zelfde semantiek als 2h-titels: ↗️ stijging, ↘️ daling, ↕️ sideways)
     static inline const char* getTrendColorTag(TrendState trend) {
         switch (trend) {
-            case TREND_UP: return "green_square,📈";
-            case TREND_DOWN: return "red_square,📉";
+            case TREND_UP: return "blue_square,↗";
+            case TREND_DOWN: return "orange_square,↘";
             case TREND_SIDEWAYS:
-            default: return "grey_square,➡️";
+            default: return "yellow_square,↕";
         }
     }
     

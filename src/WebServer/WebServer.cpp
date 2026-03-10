@@ -1,6 +1,9 @@
 #include "WebServer.h"
 #include <WebServer.h>
 #include <WiFi.h>
+#if OTA_ENABLED
+#include <Update.h>
+#endif
 #include <WiFiManager.h>
 #include <PubSubClient.h>
 #include <ESP.h>  // Voor ESP.restart()
@@ -25,6 +28,9 @@ extern bool anchorActive;
 extern float anchorPrice;
 extern char ntfyTopic[];
 extern char bitvavoSymbol[];  // Bitvavo market (bijv. "BTC-EUR")
+extern bool duckdnsEnabled;
+extern char duckdnsToken[64];
+extern void getDuckDnsSubdomainFromNtfyTopic(const char* topic, char* buffer, size_t bufferSize);
 extern uint8_t language;
 extern uint8_t displayRotation;
 extern char mqttHost[];
@@ -92,6 +98,8 @@ extern bool safeStrncpy(char* dest, const char* src, size_t destSize);
 extern bool isValidPrice(float price);
 extern bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const char* caller);
 extern void safeMutexGive(SemaphoreHandle_t mutex, const char* caller);
+extern uint8_t getNotificationLogCount();
+extern bool getNotificationLogEntry(uint8_t index, char* titleOut, size_t titleSize, char* messageOut, size_t messageSize, char* colorTagOut, size_t colorTagSize, uint32_t* timeMsOut);
 extern bool queueAnchorSetting(float value, bool useCurrentPrice);
 extern void requestDisplayRotation(uint8_t rotation);
 extern void requestMqttReconnect();
@@ -109,6 +117,8 @@ extern void requestMqttReconnect();
 static inline bool isClientConnected(WebServer* srv) {
     return (srv != nullptr) && srv->client().connected();
 }
+
+// Auth wordt door nginx (of reverse proxy) afgehandeld; ESP32 vereist geen inlog meer.
 extern float calculateReturn1Minute();
 extern float calculateReturn5Minutes();
 extern float calculateReturn30Minutes();
@@ -178,6 +188,17 @@ void WebServerModule::setupWebServer() {
     Serial.println(F("[WebServer] Route '/wifi/reset' geregistreerd"));
     server->on("/status", HTTP_GET, [this]() { this->handleStatus(); });  // WEB-PERF-3: Status endpoint
     Serial.println(F("[WebServer] Route '/status' geregistreerd"));
+    server->on("/settings-export", HTTP_GET, [this]() { this->handleSettingsExport(); });
+    Serial.println(F("[WebServer] Route '/settings-export' geregistreerd"));
+    server->on("/notifications", HTTP_GET, [this]() { this->handleNotifications(); });
+    Serial.println(F("[WebServer] Route '/notifications' geregistreerd"));
+#if OTA_ENABLED
+    server->on("/update", HTTP_GET, [this]() { this->handleUpdateGet(); });
+    server->on("/update/start", HTTP_POST, [this]() { this->handleUpdateStart(); });
+    server->on("/update/chunk", HTTP_POST, [this]() { this->handleUpdateChunkPost(); }, [this]() { this->handleUpdateChunkUpload(); });
+    server->on("/update/end", HTTP_POST, [this]() { this->handleUpdateEnd(); });
+    Serial.println(F("[WebServer] Routes /update, /update/start, /update/chunk, /update/end (chunked OTA)"));
+#endif
     server->onNotFound([this]() { this->handleNotFound(); }); // 404 handler
     Serial.println(F("[WebServer] 404 handler geregistreerd"));
     server->begin();
@@ -339,6 +360,14 @@ void WebServerModule::renderSettingsHTML() {
     snprintf(tmpBuf, sizeof(tmpBuf), "<div style='margin-top:10px;font-size:11px;color:#666;' id='apiState'></div>");
     server->sendContent(tmpBuf);
     server->sendContent(F("</div>"));
+    // Beveiliging: uitleg login (optioneel eigen wachtwoord of NTFY-afgeleid)
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='info' style='margin:15px 0;padding:12px;background:#252525;border:1px solid #444;border-radius:4px;'>%s: %s <strong>admin</strong>. %s: %s (NTFY-topic zonder &quot;-alert&quot;, kleine letters), %s.</div>",
+             getText("Beveiliging / Login", "Security / Login"),
+             getText("Gebruikersnaam", "Username"),
+             getText("Wachtwoord", "Password"),
+             getText("standaard", "default"),
+             getText("of stel hieronder een sterk wachtwoord in", "or set a strong password below"));
+    server->sendContent(tmpBuf);
     
     // Basis & Connectiviteit sectie
     sendSectionHeader(getText("Basis & Connectiviteit", "Basic & Connectivity"), "basic", true);
@@ -365,6 +394,23 @@ void WebServerModule::renderSettingsHTML() {
                  (displayRotation == 2) ? "2" : "0", 
                  getText("0 = normaal, 2 = 180 graden gedraaid", "0 = normal, 2 = rotated 180 degrees"), 0, 2, 2);
     
+    sendSectionFooter();
+    
+    // Externe toegang (DuckDNS): subdomain = NTFY topic zonder -alert, lowercase
+    sendSectionHeader(getText("Externe toegang (DuckDNS)", "External access (DuckDNS)"), "duckdns", false);
+    sendSectionDesc(getText("Maak de webinterface bereikbaar buiten je thuisnetwerk via een DuckDNS subdomain. Subdomain wordt afgeleid van je NTFY topic (kleine letters, zonder -alert). Stel op je router port forwarding in (poort 80 naar het IP van dit apparaat). Beveiliging regel je zelf via nginx of een reverse proxy.", "Expose the web interface outside your home network via a DuckDNS subdomain. Subdomain is derived from your NTFY topic (lowercase, without -alert). Set up port forwarding on your router (port 80 to this device IP). Secure access via nginx or a reverse proxy."));
+    sendCheckboxRow(getText("DuckDNS inschakelen", "Enable DuckDNS"), "duckdnsenabled", duckdnsEnabled);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<input type='password' name='duckdnstoken' value='%s' maxlength='63' placeholder='Token van duckdns.org' style='width:100%%;padding:8px;margin:8px 0;border:1px solid #444;background:#1a1a1a;color:#fff;border-radius:4px;box-sizing:border-box;'>", duckdnsToken);
+    server->sendContent(F("<label>"));
+    server->sendContent(getText("DuckDNS token", "DuckDNS token"));
+    server->sendContent(F(": "));
+    server->sendContent(tmpBuf);
+    server->sendContent(F("</label>"));
+    char duckSub[32];
+    getDuckDnsSubdomainFromNtfyTopic(ntfyTopic, duckSub, sizeof(duckSub));
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='info' style='margin-top:8px;'>%s: <strong>http://%s.duckdns.org</strong></div>", 
+             getText("Webinterface bereikbaar op", "Web interface available at"), duckSub[0] ? duckSub : "subdomain");
+    server->sendContent(tmpBuf);
     sendSectionFooter();
     
     // Anchor & Risicokader sectie
@@ -419,6 +465,11 @@ void WebServerModule::renderSettingsHTML() {
     sendInputRow(getText("30m Move Threshold", "30m Move Threshold"), "move30m", "number", 
                  valueBuf, getText("Minimum 30m return voor move alert", "Minimum 30m return for move alert"), 
                  0.01f, 20.0f, 0.01f);
+    
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", alertThresholds.move30mHardOverride);
+    sendInputRow(getText("30m Hard Override (%)", "30m Hard Override (%)"), "move30mHard", "number", 
+                 valueBuf, getText("Boven deze %: 30m-alert nooit onderdrukken door 2h-context", "Above this %: never suppress 30m alert by 2h context"), 
+                 0.5f, 5.0f, 0.01f);
     
     snprintf(valueBuf, sizeof(valueBuf), "%.2f", trendThreshold);
     sendInputRow(getText("Trend Threshold", "Trend Threshold"), "trendTh", "number", 
@@ -812,10 +863,7 @@ void WebServerModule::renderSettingsHTML() {
 
 // Fase 9.1.4: Web handlers verplaatst vanuit .ino
 void WebServerModule::handleRoot() {
-    if (server == nullptr) {
-        return;
-    }
-    
+    if (server == nullptr) return;
     // M1: Rate-limited heap telemetry in web server (alleen bij "/")
     logHeap("WEB_ROOT");
     
@@ -823,10 +871,7 @@ void WebServerModule::handleRoot() {
 }
 
 void WebServerModule::handleSave() {
-    if (server == nullptr) {
-        return;
-    }
-    
+    if (server == nullptr) return;
     // M1: Rate-limited heap telemetry in web server (alleen bij "/save")
     logHeap("WEB_SAVE");
     
@@ -880,6 +925,12 @@ void WebServerModule::handleSave() {
             strncpy(ntfyTopic, start, topicLen);
             ntfyTopic[topicLen] = '\0';
         }
+    }
+    duckdnsEnabled = server->hasArg("duckdnsenabled");
+    if (server->hasArg("duckdnstoken")) {
+        String tok = server->arg("duckdnstoken");
+        tok.trim();
+        safeStrncpy(duckdnsToken, tok.c_str(), sizeof(duckdnsToken));
     }
     if (server->hasArg("bitvavosymbol")) {
         // Fix: gebruik String object eerst om dangling pointer te voorkomen
@@ -946,6 +997,9 @@ void WebServerModule::handleSave() {
     }
     if (parseFloatArg("move30m", floatVal, 0.01f, 20.0f)) {
         move30mThreshold = floatVal;
+    }
+    if (parseFloatArg("move30mHard", floatVal, 0.5f, 5.0f)) {
+        alertThresholds.move30mHardOverride = floatVal;
     }
     if (parseFloatArg("move5m", floatVal, 0.01f, 10.0f)) {
         move5mThreshold = floatVal;
@@ -1261,10 +1315,7 @@ void WebServerModule::handleSave() {
 }
 
 void WebServerModule::handleNotFound() {
-    if (server == nullptr) {
-        return;
-    }
-    
+    if (server == nullptr) return;
     // Performance optimalisatie: gebruik char buffer i.p.v. String concatenatie
     // Max URI length + method + args info = ~512 bytes
     char message[512];
@@ -1294,7 +1345,6 @@ void WebServerModule::handleNotFound() {
 // WEB-PERF-3: Status endpoint - JSON met live waarden (geen heap-allocaties)
 void WebServerModule::handleStatus() {
     if (server == nullptr) return;
-    
     #if !DEBUG_BUTTON_ONLY
     unsigned long statusStart = millis();
     #endif
@@ -1457,16 +1507,168 @@ void WebServerModule::handleStatus() {
     #endif
 }
 
+#if OTA_ENABLED
+// Chunked OTA state (geschreven door handlers, gebruikt voor progress in WebUI)
+static size_t s_otaWritten = 0;
+static size_t s_otaTotal = 0;
+static bool s_otaStarted = false;
+static const size_t OTA_MAX_SIZE = 0x1E0000u;  // 1.875 MB (min_spiffs)
+
+// Eenvoudige JSON-parse voor "total": number
+static bool parseOtaTotalFromBody(const String& body, size_t& outTotal) {
+    int i = body.indexOf(F("\"total\""));
+    if (i < 0) return false;
+    i = body.indexOf(':', i);
+    if (i < 0) return false;
+    const char* p = body.c_str() + i + 1;
+    while (*p == ' ' || *p == '\t') p++;
+    unsigned long val = 0;
+    while (*p >= '0' && *p <= '9') { val = val * 10 + (*p - '0'); p++; }
+    if (val == 0 || val > OTA_MAX_SIZE) return false;
+    outTotal = (size_t)val;
+    return true;
+}
+
+void WebServerModule::handleUpdateGet() {
+    if (server == nullptr) return;
+    if (!isClientConnected(server)) return;
+    const char* html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>Firmware update</title><style>body{font-family:sans-serif;background:#1a1a1a;color:#eee;padding:20px;max-width:500px;margin:0 auto;} "
+        "h1{font-size:1.2em;} input[type=file]{margin:10px 0;} button{background:#2196F3;color:#fff;border:none;padding:12px 24px;border-radius:4px;cursor:pointer;font-size:16px;} "
+        "button:disabled{opacity:0.5;cursor:not-allowed;} #msg{margin-top:15px;padding:10px;border-radius:4px;} .ok{background:#2e7d32;} .err{background:#c62828;} "
+        ".progress-wrap{margin-top:12px;display:none;} .progress-bar{height:24px;background:#333;border-radius:4px;overflow:hidden;} .progress-fill{height:100%;background:#2196F3;width:0%;transition:width 0.15s;} #progressPct{margin-top:6px;font-size:14px;color:#00BCD4;}</style></head><body>"
+        "<h1>Firmware update (OTA)</h1>"
+        "<p>Kies een .bin bestand.</p>"
+        "<p style='font-size:0.9em;color:#aaa;'>In Arduino IDE compileer je via Menu &rarr; Sketch &rarr; Export compiled Binary. Het bestand &hellip;.ino.bin staat in de build-map.</p>"
+        "<p><input type='file' id='file' accept='.bin'><button type='button' id='btn' onclick='doOtaUpload()'>Upload</button></p>"
+        "<div class='progress-wrap' id='progressWrap'><div class='progress-bar'><div class='progress-fill' id='progressFill'></div></div><div id='progressPct'>0%</div></div>"
+        "<div id='msg'></div>"
+        "<script>"
+        "function doOtaUpload(){"
+        "var f=document.getElementById('file').files[0],btn=document.getElementById('btn');"
+        "var wrap=document.getElementById('progressWrap'),fill=document.getElementById('progressFill');"
+        "var pct=document.getElementById('progressPct'),msg=document.getElementById('msg');"
+        "if(!f){msg.innerHTML='<span class=err>Kies een bestand.</span>';return;}"
+        "btn.disabled=true;msg.textContent='Uploaden...';wrap.style.display='block';fill.style.width='0%';pct.textContent='0%';"
+        "function setPct(w,t){var v=(t>0)?Math.min(100,Math.round(100*w/t)):0;fill.style.width=v+'%';pct.textContent=v+'%';}"
+        "function fail(e){msg.innerHTML='<span class=err>'+e.message+'</span>';btn.disabled=false;wrap.style.display='none';}"
+        "var CHUNK=32768;"
+        "fetch('/update/start?total='+f.size,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({total:f.size})}).then(function(r){if(!r.ok)throw new Error(r.status);return r.json();}).then(function(j){if(!j.ok)throw new Error(j.error||'Start');"
+        "var off=0;"
+        "function next(){"
+        "if(off>=f.size){return fetch('/update/end',{method:'POST'}).then(function(r){if(!r.ok)throw new Error(r.status);return r.json();}).then(function(){fill.style.width='100%';pct.textContent='100%';msg.innerHTML='<span class=ok>OK. Herstart...</span>';setTimeout(function(){location.href='/';},3000);}).catch(function(e){msg.innerHTML='<span class=err>'+e.message+'</span>';btn.disabled=false;});}"
+        "var end=Math.min(off+CHUNK,f.size),fd=new FormData();fd.append('c',f.slice(off,end));"
+        "return fetch('/update/chunk',{method:'POST',body:fd}).then(function(r){if(!r.ok)throw new Error(r.status);return r.json();}).then(function(j){off=end;setPct(j.written,j.total);return next();});"
+        "}"
+        "return next();"
+        "}).catch(fail);"
+        "}"
+        "</script>"
+        "</body></html>";
+    server->send(200, "text/html", html);
+}
+
+void WebServerModule::handleUpdateStart() {
+    if (server == nullptr) return;
+    size_t total = 0;
+    // Total uit URL-parameter (betrouwbaar) of uit JSON-body
+    if (server->hasArg("total")) {
+        long t = server->arg("total").toInt();
+        if (t > 0 && (size_t)t <= OTA_MAX_SIZE) total = (size_t)t;
+    }
+    if (total == 0 && parseOtaTotalFromBody(server->arg("plain"), total)) { /* body gebruikt */ }
+    if (total == 0) {
+        server->send(400, "application/json", "{\"ok\":false,\"error\":\"Invalid total\"}");
+        return;
+    }
+    if (total > OTA_MAX_SIZE) {
+        server->send(400, "application/json", "{\"ok\":false,\"error\":\"File too large\"}");
+        return;
+    }
+    if (s_otaStarted) {
+        Update.abort();
+        s_otaStarted = false;
+    }
+    if (!Update.begin(total, U_FLASH)) {
+        Update.printError(Serial);
+        server->send(500, "application/json", "{\"ok\":false,\"error\":\"Update.begin failed\"}");
+        return;
+    }
+    s_otaWritten = 0;
+    s_otaTotal = total;
+    s_otaStarted = true;
+    Serial_printf(F("[OTA] Start: %u bytes\n"), (unsigned)total);
+    char buf[80];
+    snprintf(buf, sizeof(buf), "{\"ok\":true,\"total\":%u}", (unsigned)total);
+    server->send(200, "application/json", buf);
+}
+
+void WebServerModule::handleUpdateChunkUpload() {
+    if (server == nullptr) return;
+    HTTPUpload& upload = server->upload();
+    static unsigned long s_lastLogKb = 0;
+    if (upload.status == UPLOAD_FILE_WRITE) {
+        if (s_otaWritten + upload.currentSize > OTA_MAX_SIZE) {
+            Update.abort();
+            s_otaStarted = false;
+            return;
+        }
+        if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+            Update.printError(Serial);
+            return;
+        }
+        s_otaWritten += upload.currentSize;
+        unsigned long kb = (unsigned long)(s_otaWritten / 1024u);
+        if (kb >= s_lastLogKb + 100u || (s_lastLogKb == 0 && kb >= 100u)) {
+            Serial_printf(F("[OTA] %lu KB\n"), kb);
+            s_lastLogKb = kb;
+        }
+    } else if (upload.status == UPLOAD_FILE_END) {
+        s_lastLogKb = 0;
+    }
+}
+
+void WebServerModule::handleUpdateChunkPost() {
+    if (server == nullptr) return;
+    if (Update.hasError()) {
+        Update.printError(Serial);
+        server->send(500, "application/json", "{\"written\":0,\"total\":0,\"error\":\"write failed\"}");
+        return;
+    }
+    char buf[80];
+    snprintf(buf, sizeof(buf), "{\"written\":%u,\"total\":%u}", (unsigned)s_otaWritten, (unsigned)s_otaTotal);
+    server->send(200, "application/json", buf);
+}
+
+void WebServerModule::handleUpdateEnd() {
+    if (server == nullptr) return;
+    s_otaStarted = false;
+    if (!Update.end(true)) {
+        Update.printError(Serial);
+        server->send(500, "application/json", "{\"done\":false,\"error\":\"Update.end failed\"}");
+        return;
+    }
+    Serial_printf(F("[OTA] Klaar: %u bytes, herstart\n"), (unsigned)s_otaWritten);
+    server->send(200, "application/json", "{\"done\":true}");
+    delay(1500);
+    Serial.flush();
+    ESP.restart();
+}
+#else
+void WebServerModule::handleUpdateGet() { (void)0; }
+void WebServerModule::handleUpdateStart() { (void)0; }
+void WebServerModule::handleUpdateChunkPost() { (void)0; }
+void WebServerModule::handleUpdateChunkUpload() { (void)0; }
+void WebServerModule::handleUpdateEnd() { (void)0; }
+#endif
+
 // Handler voor anchor set (aparte route om crashes te voorkomen)
 // Gebruikt een queue om asynchroon te verwerken vanuit main loop
 // Thread-safe: schrijft naar volatile variabelen die worden gelezen vanuit uiTask
 // C1: Network-safe anchor-set handler (geen HTTPS in web thread)
 // Zet alleen flags, verwerking gebeurt in apiTask waar HTTPS calls al zijn
 void WebServerModule::handleAnchorSet() {
-    if (server == nullptr) {
-        return;  // Server niet geïnitialiseerd
-    }
-    
+    if (server == nullptr) return;
     // Zorg ervoor dat er altijd een response wordt gestuurd
     bool responseSent = false;
     
@@ -1533,7 +1735,6 @@ void WebServerModule::handleAnchorSet() {
 
 void WebServerModule::handleNtfyReset() {
     if (server == nullptr) return;
-    
     // Genereer standaard topic en sla op
     generateDefaultNtfyTopic(ntfyTopic, 64);  // ntfyTopic is 64 bytes groot
     
@@ -1553,7 +1754,6 @@ void WebServerModule::handleNtfyReset() {
 
 void WebServerModule::handleWifiReset() {
     if (server == nullptr) return;
-    
     Serial_println(F("[Web] WiFi reset aangevraagd"));
     
     // Wis WiFi credentials via WiFiManager
@@ -1569,6 +1769,172 @@ void WebServerModule::handleWifiReset() {
     server->send(200, "text/plain", "OK");
     delay(200);
     ESP.restart();
+}
+
+// Escape HTML voor veilige weergave in notificatielog
+static String escapeHtml(const char* s) {
+    if (!s) return String();
+    String out;
+    for (; *s; s++) {
+        char c = *s;
+        if (c == '&') out += F("&amp;");
+        else if (c == '<') out += F("&lt;");
+        else if (c == '>') out += F("&gt;");
+        else if (c == '"') out += F("&quot;");
+        else out += c;
+    }
+    return out;
+}
+
+// Instellingen export: alle settings als kopieerbare key=value (HTML pagina met links terug)
+void WebServerModule::handleSettingsExport() {
+    if (server == nullptr) return;
+    CryptoMonitorSettings s = settingsStore.load();
+    const size_t BUF = 256;
+    char line[BUF];
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server->send(200, "text/html; charset=utf-8", "");
+    server->sendContent(F("<!DOCTYPE html><html lang='nl'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"));
+    server->sendContent(F("<title>"));
+    server->sendContent(getText("Instellingen kopiëren", "Copy settings"));
+    server->sendContent(F("</title>"));
+    server->sendContent(F("<style>body{font-family:sans-serif;margin:16px;background:#1a1a1a;color:#eee;}"));
+    server->sendContent(F("a{color:#6af;} pre{background:#252525;padding:12px;overflow-x:auto;border:1px solid #444;}"));
+    server->sendContent(F("p.nav{margin-top:16px;font-size:0.95em;}</style></head><body>"));
+    server->sendContent(F("<h1>"));
+    server->sendContent(getText("Instellingen kopiëren", "Copy settings"));
+    server->sendContent(F("</h1><pre>"));
+    #define SEND_LINE(fmt, ...) do { snprintf(line, sizeof(line), fmt, ##__VA_ARGS__); server->sendContent(escapeHtml(line).c_str()); server->sendContent("\n"); } while(0)
+    #define SEND_LINE_C(fmt, ...) do { snprintf(line, sizeof(line), fmt, ##__VA_ARGS__); server->sendContent(escapeHtml(line).c_str()); server->sendContent("\n"); } while(0)
+    SEND_LINE("# Crypto Monitor settings export - copy alles onder deze regel");
+    SEND_LINE_C("ntfyTopic=%s  # %s", s.ntfyTopic, getText("NTFY.sh topic voor notificaties", "NTFY.sh topic for notifications"));
+    SEND_LINE_C("bitvavoSymbol=%s  # %s", s.bitvavoSymbol, getText("Bijv. BTC-EUR, ETH-EUR", "E.g. BTC-EUR, ETH-EUR"));
+    SEND_LINE_C("duckdnsEnabled=%d  # %s", s.duckdnsEnabled ? 1 : 0, getText("DuckDNS inschakelen", "Enable DuckDNS"));
+    SEND_LINE_C("language=%u  # %s", (unsigned)s.language, getText("0 = Nederlands, 1 = English", "0 = Dutch, 1 = English"));
+    SEND_LINE_C("displayRotation=%u  # %s", (unsigned)s.displayRotation, getText("0 = normaal, 2 = 180 graden gedraaid", "0 = normal, 2 = rotated 180 degrees"));
+    SEND_LINE_C("alertThresholds.spike1m=%.4f  # %s", s.alertThresholds.spike1m, getText("Minimum 1m return voor spike alert", "Minimum 1m return for spike alert"));
+    SEND_LINE_C("alertThresholds.spike5m=%.4f  # %s", s.alertThresholds.spike5m, getText("Minimum 5m return voor spike confirmatie", "Minimum 5m return for spike confirmation"));
+    SEND_LINE_C("alertThresholds.move30m=%.4f  # %s", s.alertThresholds.move30m, getText("Minimum 30m return voor move alert", "Minimum 30m return for move alert"));
+    SEND_LINE_C("alertThresholds.move30mHardOverride=%.4f  # %s", s.alertThresholds.move30mHardOverride, getText("30m hard override: nooit onderdrukken door 2h boven deze %", "30m hard override: never suppress by 2h above this %"));
+    SEND_LINE_C("alertThresholds.move5m=%.4f  # %s", s.alertThresholds.move5m, getText("Minimum 5m return voor 30m move confirmatie", "Minimum 5m return for 30m move confirmation"));
+    SEND_LINE_C("alertThresholds.move5mAlert=%.4f  # %s", s.alertThresholds.move5mAlert, getText("Minimum 5m return voor move alert", "Minimum 5m return for move alert"));
+    SEND_LINE_C("alertThresholds.threshold1MinUp=%.4f  # %s", s.alertThresholds.threshold1MinUp, getText("1m spike up drempel", "1m spike up threshold"));
+    SEND_LINE_C("alertThresholds.threshold1MinDown=%.4f  # %s", s.alertThresholds.threshold1MinDown, getText("1m spike down drempel", "1m spike down threshold"));
+    SEND_LINE_C("alertThresholds.threshold30MinUp=%.4f  # %s", s.alertThresholds.threshold30MinUp, getText("30m up drempel", "30m up threshold"));
+    SEND_LINE_C("alertThresholds.threshold30MinDown=%.4f  # %s", s.alertThresholds.threshold30MinDown, getText("30m down drempel", "30m down threshold"));
+    SEND_LINE_C("notificationCooldowns.cooldown1MinMs=%lu  # %s", (unsigned long)s.notificationCooldowns.cooldown1MinMs, getText("Cooldown tussen 1m spike alerts in seconden", "Cooldown between 1m spike alerts in seconds"));
+    SEND_LINE_C("notificationCooldowns.cooldown30MinMs=%lu  # %s", (unsigned long)s.notificationCooldowns.cooldown30MinMs, getText("Cooldown tussen 30m move alerts in seconden", "Cooldown between 30m move alerts in seconds"));
+    SEND_LINE_C("notificationCooldowns.cooldown5MinMs=%lu  # %s", (unsigned long)s.notificationCooldowns.cooldown5MinMs, getText("Cooldown tussen 5m move alerts in seconden", "Cooldown between 5m move alerts in seconds"));
+    SEND_LINE_C("alert2HThresholds.breakMarginPct=%.4f  # %s", s.alert2HThresholds.breakMarginPct, getText("Minimaal percentage boven/onder 2h high/low voor breakout", "Minimum percentage above/below 2h high/low for breakout"));
+    SEND_LINE_C("alert2HThresholds.breakCooldownMs=%lu  # %s", (unsigned long)s.alert2HThresholds.breakCooldownMs, getText("Cooldown in minuten tussen breakout alerts", "Cooldown in minutes between breakout alerts"));
+    SEND_LINE_C("alert2HThresholds.meanMinDistancePct=%.4f  # %s", s.alert2HThresholds.meanMinDistancePct, getText("Minimaal percentage afstand van avg2h voor mean reversion", "Minimum percentage distance from avg2h for mean reversion"));
+    SEND_LINE_C("alert2HThresholds.meanTouchBandPct=%.4f  # %s", s.alert2HThresholds.meanTouchBandPct, getText("Band rond avg2h voor 'touch' detectie", "Band around avg2h for 'touch' detection"));
+    SEND_LINE_C("alert2HThresholds.meanCooldownMs=%lu  # %s", (unsigned long)s.alert2HThresholds.meanCooldownMs, getText("Cooldown in minuten tussen mean reversion alerts", "Cooldown in minutes between mean reversion alerts"));
+    SEND_LINE_C("alert2HThresholds.compressThresholdPct=%.4f  # %s", s.alert2HThresholds.compressThresholdPct, getText("Maximum range% voor compressie alert", "Maximum range% for compression alert"));
+    SEND_LINE_C("alert2HThresholds.compressCooldownMs=%lu  # %s", (unsigned long)s.alert2HThresholds.compressCooldownMs, getText("Cooldown in minuten tussen compressie alerts", "Cooldown in minutes between compression alerts"));
+    SEND_LINE_C("alert2HThresholds.twoHSecondaryGlobalCooldownSec=%lu  # %s", (unsigned long)s.alert2HThresholds.twoHSecondaryGlobalCooldownSec, getText("Globale cooldown voor alle SECONDARY alerts (hard cap)", "Global cooldown for all SECONDARY alerts (hard cap)"));
+    SEND_LINE_C("mqttHost=%s  # %s", s.mqttHost, getText("MQTT broker hostname of IP", "MQTT broker hostname or IP"));
+    SEND_LINE_C("mqttPort=%u  # %s", (unsigned)s.mqttPort, getText("MQTT broker poort", "MQTT broker port"));
+    SEND_LINE_C("anchorTakeProfit=%.4f  # %s", s.anchorTakeProfit, getText("Take profit percentage boven anchor", "Take profit percentage above anchor"));
+    SEND_LINE_C("anchorMaxLoss=%.4f  # %s", s.anchorMaxLoss, getText("Max loss percentage onder anchor (negatief)", "Max loss percentage below anchor (negative)"));
+    SEND_LINE_C("anchorStrategy=%u  # %s", (unsigned)s.anchorStrategy, getText("2h/2h Strategie: 0=Handmatig, 1=Conservatief, 2=Actief", "2h/2h Strategy: 0=Manual, 1=Conservative, 2=Active"));
+    SEND_LINE_C("trendAdaptiveAnchorsEnabled=%d  # %s", s.trendAdaptiveAnchorsEnabled ? 1 : 0, getText("Trend-Adaptive Anchors", "Trend-Adaptive Anchors"));
+    SEND_LINE_C("smartConfluenceEnabled=%d  # %s", s.smartConfluenceEnabled ? 1 : 0, getText("Smart Confluence Mode", "Smart Confluence Mode"));
+    SEND_LINE_C("nightModeEnabled=%d  # %s", s.nightModeEnabled ? 1 : 0, getText("Nachtstand actief", "Night mode enabled"));
+    SEND_LINE_C("nightModeStartHour=%u  # %s", (unsigned)s.nightModeStartHour, getText("0-23, starttijd voor nachtfilter", "0-23, start time for night filter"));
+    SEND_LINE_C("nightModeEndHour=%u  # %s", (unsigned)s.nightModeEndHour, getText("0-23, eindtijd voor nachtfilter", "0-23, end time for night filter"));
+    SEND_LINE_C("warmStartEnabled=%d  # %s", s.warmStartEnabled ? 1 : 0, getText("Warm-Start Ingeschakeld", "Warm-Start Enabled"));
+    SEND_LINE_C("warmStart5mCandles=%u  # %s", (unsigned)s.warmStart5mCandles, getText("Aantal 5m candles", "Number of 5m candles"));
+    SEND_LINE_C("warmStart30mCandles=%u  # %s", (unsigned)s.warmStart30mCandles, getText("Aantal 30m candles", "Number of 30m candles"));
+    SEND_LINE_C("warmStart2hCandles=%u  # %s", (unsigned)s.warmStart2hCandles, getText("Aantal 2h candles", "Number of 2h candles"));
+    SEND_LINE_C("autoVolatilityEnabled=%d  # %s", s.autoVolatilityEnabled ? 1 : 0, getText("Auto-Volatility Mode", "Auto-Volatility Mode"));
+    SEND_LINE_C("autoVolatilityWindowMinutes=%u  # %s", (unsigned)s.autoVolatilityWindowMinutes, getText("Aantal minuten voor volatiliteit berekening", "Number of minutes for volatility calculation"));
+    SEND_LINE_C("trendThreshold=%.4f  # %s", s.trendThreshold, getText("Minimum 2h return voor trend detectie", "Minimum 2h return for trend detection"));
+    SEND_LINE_C("volatilityLowThreshold=%.4f  # %s", s.volatilityLowThreshold, getText("Threshold voor lage volatiliteit", "Threshold for low volatility"));
+    SEND_LINE_C("volatilityHighThreshold=%.4f  # %s", s.volatilityHighThreshold, getText("Threshold voor hoge volatiliteit", "Threshold for high volatility"));
+    #undef SEND_LINE_C
+    #undef SEND_LINE
+    server->sendContent(F("</pre>"));
+    server->sendContent(F("<p class='nav'><a href='/'>← "));
+    server->sendContent(getText("Instellingen", "Settings"));
+    server->sendContent(F("</a> &middot; <a href='/notifications'>"));
+    server->sendContent(getText("Notificatielog", "Notification log"));
+    server->sendContent(F("</a></p></body></html>"));
+}
+
+// Notificatielog: toon laatste notificaties (nieuwste bovenaan)
+// Zet opgeslagen tag (bijv. "purple_square,⏫️" of "🟧") om naar alleen het kleurvakje-emoji voor weergave.
+static void tagToSquareOnly(const char* colorTag, char* out, size_t outSize) {
+    if (!out || outSize < 5) return;
+    out[0] = '\0';
+    if (!colorTag || !colorTag[0]) return;
+    if (strstr(colorTag, "purple_square"))  { memcpy(out, "\xF0\x9F\x9F\xAA", 5); return; }  // 🟪
+    if (strstr(colorTag, "green_square"))   { memcpy(out, "\xF0\x9F\x9F\xA9", 5); return; }  // 🟩
+    if (strstr(colorTag, "orange_square"))  { memcpy(out, "\xF0\x9F\x9F\xA7", 5); return; }  // 🟧
+    if (strstr(colorTag, "red_square"))     { memcpy(out, "\xF0\x9F\x9F\xA5", 5); return; }  // 🟥
+    if (strstr(colorTag, "blue_square"))    { memcpy(out, "\xF0\x9F\x9F\xA6", 5); return; }  // 🟦
+    if (strstr(colorTag, "yellow_square"))  { memcpy(out, "\xF0\x9F\x9F\xA8", 5); return; }  // 🟨
+    if (strstr(colorTag, "\xF0\x9F\x9F\xAB")) { memcpy(out, "\xF0\x9F\x9F\xAB", 5); return; }  // 🟫 (anchor)
+    // Alleen emoji (bijv. 🟧): eerste teken is 4-byte UTF-8
+    if ((uint8_t)colorTag[0] == 0xF0 && colorTag[1]) {
+        size_t n = (outSize >= 5) ? 4u : (outSize - 1);
+        memcpy(out, colorTag, n);
+        out[n] = '\0';
+    }
+}
+
+void WebServerModule::handleNotifications() {
+    if (server == nullptr) return;
+    uint8_t n = getNotificationLogCount();
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server->send(200, "text/html; charset=utf-8", "");
+    server->sendContent(F("<!DOCTYPE html><html lang='nl'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"));
+    server->sendContent(F("<title>Notificatielog</title>"));
+    server->sendContent(F("<style>body{font-family:sans-serif;margin:16px;background:#1a1a1a;color:#eee;}"));
+    server->sendContent(F("a{color:#6af;} table{border-collapse:collapse;width:100%;margin-top:12px;}"));
+    server->sendContent(F("th,td{border:1px solid #444;padding:8px;text-align:left;} th{background:#333;}"));
+    server->sendContent(F(".time{color:#888;font-size:0.9em;} .tag{font-size:0.85em;color:#8f8;}"));
+    server->sendContent(F("td.msg{min-width:18em;max-width:42em;white-space:normal;word-break:break-word;}</style></head><body>"));
+    server->sendContent(F("<h1>Notificatielog</h1>"));
+    char tmpBuf[64];
+    snprintf(tmpBuf, sizeof(tmpBuf), "<p>%s: %u</p>", getText("Laatste notificaties (max 128)", "Last notifications (max 128)"), n);
+    server->sendContent(tmpBuf);
+    server->sendContent(F("<p><a href='/'>← "));
+    server->sendContent(getText("Instellingen", "Settings"));
+    server->sendContent(F("</a> | <a href='/settings-export'>"));
+    server->sendContent(getText("Instellingen kopiëren", "Copy settings"));
+    server->sendContent(F("</a></p><table><tr><th>"));
+    server->sendContent(getText("Tijd (relatief)", "Time (relative)"));
+    server->sendContent(F("</th><th>Tag</th><th>"));
+    server->sendContent(getText("Titel", "Title"));
+    server->sendContent(F("</th><th>"));
+    server->sendContent(getText("Bericht", "Message"));
+    server->sendContent(F("</th></tr>"));
+    uint32_t nowMs = (uint32_t)millis();
+    char title[48], message[160], colorTag[24];
+    for (uint8_t i = 0; i < n; i++) {
+        uint32_t timeMs = 0;
+        if (!getNotificationLogEntry(i, title, sizeof(title), message, sizeof(message), colorTag, sizeof(colorTag), &timeMs)) continue;
+        uint32_t agoSec = (nowMs - timeMs) / 1000;
+        unsigned long dd = (unsigned long)(agoSec / 86400UL);
+        unsigned long hh = (unsigned long)((agoSec % 86400UL) / 3600UL);
+        unsigned long mm = (unsigned long)((agoSec % 3600UL) / 60UL);
+        unsigned long ss = (unsigned long)(agoSec % 60UL);
+        snprintf(tmpBuf, sizeof(tmpBuf), "<tr><td class='time'>");
+        server->sendContent(tmpBuf);
+        snprintf(tmpBuf, sizeof(tmpBuf), "%02lu %02lu:%02lu:%02lu", dd, hh, mm, ss);
+        server->sendContent(tmpBuf);
+        server->sendContent("</td><td class='tag'>");
+        char tagSquare[8];
+        tagToSquareOnly(colorTag, tagSquare, sizeof(tagSquare));
+        server->sendContent(tagSquare[0] ? tagSquare : " ");
+        server->sendContent("</td><td>");
+        server->sendContent(escapeHtml(title).c_str());
+        server->sendContent("</td><td class='msg'>");
+        server->sendContent(escapeHtml(message).c_str());
+        server->sendContent("</td></tr>");
+    }
+    server->sendContent(F("</table></body></html>"));
 }
 
 // WEB-PERF-3: Cache invalidation helper
@@ -1661,7 +2027,8 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
         ".status-row{display:flex;justify-content:space-between;margin:8px 0;padding:8px 0;border-bottom:1px solid #333;flex-wrap:wrap;}"
         ".status-label{color:#888;flex:1;min-width:120px;}"
         ".status-value{color:#fff;font-weight:bold;text-align:right;flex:1;min-width:100px;}"
-        ".section-header{background:#2a2a2a;border:1px solid #444;border-radius:4px;padding:12px;margin:15px 0 0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;}"
+        ".settings-section{margin-top:15px;}"
+        ".section-header{background:#2a2a2a;border:1px solid #444;border-radius:4px;padding:12px;margin:0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;}"
         ".section-header:hover{background:#333;}"
         ".section-header h3{margin:0;color:#00BCD4;font-size:16px;}"
         ".section-content{display:none;padding:15px;background:#1a1a1a;border:1px solid #444;border-top:none;border-radius:0 0 4px 4px;}"
@@ -1863,6 +2230,17 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
 void WebServerModule::sendHtmlFooter() {
     if (server == nullptr) return;
     if (!isClientConnected(server)) return;
+    server->sendContent(F("<p style='margin-top:16px;font-size:13px;'>"));
+    server->sendContent(F("<a href='/settings-export' style='color:#6af;'>"));
+    server->sendContent(getText("Instellingen kopiëren (tekst)", "Copy settings (text)"));
+    server->sendContent(F("</a> &middot; <a href='/notifications' style='color:#6af;'>"));
+    server->sendContent(getText("Notificatielog", "Notification log"));
+    server->sendContent(F("</a></p>"));
+#if OTA_ENABLED
+    server->sendContent(F("<p style='margin-top:20px;font-size:12px;'><a href='/update' style='color:#888;'>"));
+    server->sendContent(getText("Firmware update (OTA)", "Firmware update (OTA)"));
+    server->sendContent(F("</a></p>"));
+#endif
     server->sendContent(F("</div>"));
     server->sendContent(F("</body></html>"));
 }
@@ -1959,7 +2337,8 @@ void WebServerModule::sendStatusRow(const char* label, const char* value) {
 
 void WebServerModule::sendSectionHeader(const char* title, const char* sectionId, bool expanded) {
     if (server == nullptr) return;
-    char buf[256];
+    char buf[384];
+    server->sendContent(F("<div class='settings-section'>"));
     snprintf(buf, sizeof(buf), "<div class='section-header' data-section='%s'><h3>%s</h3><span class='toggle-icon' id='icon-%s'>%s</span></div>",
              sectionId, title, sectionId, expanded ? "&#9660;" : "&#9654;");
     server->sendContent(buf);
@@ -1970,7 +2349,7 @@ void WebServerModule::sendSectionHeader(const char* title, const char* sectionId
 
 void WebServerModule::sendSectionFooter() {
     if (server == nullptr) return;
-    server->sendContent(F("</div>"));
+    server->sendContent(F("</div></div>"));
 }
 
 void WebServerModule::sendSectionDesc(const char* desc) {

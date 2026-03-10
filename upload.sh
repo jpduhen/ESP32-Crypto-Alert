@@ -9,35 +9,43 @@ SKETCH_NAME="UNIFIED-LVGL9-Crypto_Monitor"
 cd "$SKETCH_DIR"
 
 # Detecteer platform uit platform_config.h
+# OTA (web-updater) vereist een partitieschema met twee app-partities (ota_0 + ota_1).
+# huge_app heeft slechts één app-partitie en ondersteunt geen OTA.
 PLATFORM_CONFIG="$SKETCH_DIR/platform_config.h"
 PLATFORM_NAME="Unknown Platform"
-PARTITION_SCHEME="huge_app"  # Beide platforms gebruiken huge_app
+PARTITION_SCHEME="huge_app"
 
 if [ -f "$PLATFORM_CONFIG" ]; then
     if grep -q "^#define PLATFORM_TTGO" "$PLATFORM_CONFIG"; then
         PLATFORM_NAME="TTGO T-Display"
-        PARTITION_SCHEME="huge_app"  # TTGO: huge_app met 4MB flash
+        PARTITION_SCHEME="huge_app"
     elif grep -q "^#define PLATFORM_CYD24" "$PLATFORM_CONFIG"; then
         PLATFORM_NAME="CYD ESP32-2432S024"
-        PARTITION_SCHEME="huge_app"  # CYD24: huge_app met 4MB flash
+        PARTITION_SCHEME="huge_app"
     elif grep -q "^#define PLATFORM_CYD28" "$PLATFORM_CONFIG"; then
         PLATFORM_NAME="CYD ESP32-2432S028"
-        PARTITION_SCHEME="huge_app"  # CYD28: huge_app met 16MB flash
+        PARTITION_SCHEME="huge_app"
+    elif grep -q "^#define PLATFORM_ESP32S3_GEEK" "$PLATFORM_CONFIG"; then
+        PLATFORM_NAME="ESP32-S3 GEEK"
+        PARTITION_SCHEME="min_spiffs"  # OTA: twee app-partities (1.9MB elk)
+    elif grep -q "^#define PLATFORM_ESP32S3_LCDWIKI_28" "$PLATFORM_CONFIG"; then
+        PLATFORM_NAME="ESP32-S3 LCDWIKI 2.8"
+        PARTITION_SCHEME="min_spiffs"  # OTA: twee app-partities
+    elif grep -q "^#define PLATFORM_ESP32S3_4848S040" "$PLATFORM_CONFIG"; then
+        PLATFORM_NAME="ESP32-S3 4848S040"
+        PARTITION_SCHEME="min_spiffs"  # OTA: twee app-partities
     elif grep -q "^#define PLATFORM_ESP32S3_SUPERMINI" "$PLATFORM_CONFIG"; then
         PLATFORM_NAME="ESP32-S3 Super Mini"
-        PARTITION_SCHEME="huge_app"  # ESP32-S3: huge_app met 4MB flash
+        PARTITION_SCHEME="huge_app"    # Geen OTA op dit board
     fi
 fi
 
 # Bepaal FQBN op basis van platform
 if [ "$PLATFORM_NAME" = "TTGO T-Display" ]; then
-    # TTGO: gebruik esp32 board met huge_app partition scheme en expliciet 4MB flash
     FQBN="esp32:esp32:esp32:UploadSpeed=460800,CPUFreq=240,FlashFreq=80,FlashMode=qio,FlashSize=4M,PartitionScheme=${PARTITION_SCHEME},DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=none"
-elif [ "$PLATFORM_NAME" = "ESP32-S3 Super Mini" ]; then
-    # ESP32-S3: gebruik esp32s3 board (FlashFreq optie niet beschikbaar voor ESP32-S3)
+elif [ "$PLATFORM_NAME" = "ESP32-S3 GEEK" ] || [ "$PLATFORM_NAME" = "ESP32-S3 LCDWIKI 2.8" ] || [ "$PLATFORM_NAME" = "ESP32-S3 4848S040" ] || [ "$PLATFORM_NAME" = "ESP32-S3 Super Mini" ]; then
     FQBN="esp32:esp32:esp32s3:UploadSpeed=460800,CPUFreq=240,FlashMode=qio,FlashSize=4M,PartitionScheme=${PARTITION_SCHEME},DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=none"
 else
-    # CYD24/CYD28: gebruik esp32 board met huge_app partition scheme
     FQBN="esp32:esp32:esp32:UploadSpeed=460800,CPUFreq=240,FlashFreq=80,FlashMode=qio,FlashSize=4M,PartitionScheme=${PARTITION_SCHEME},DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=none"
 fi
 

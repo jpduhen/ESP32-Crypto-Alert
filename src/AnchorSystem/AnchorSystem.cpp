@@ -157,8 +157,9 @@ void AnchorSystem::formatAnchorNotification(AnchorEventType eventType, float anc
     else if (strcmp(trendName, "SIDEWAYS") == 0) trendNameTranslated = getText("ZIJWAARTS", "SIDEWAYS");
     
     // Geoptimaliseerd: enum switch i.p.v. strcmp (sneller, geen string vergelijkingen)
+    // Prefix voor NTFY: ⏫️⚓️⚠️ (winstpakker) of ⏬️⚓️⚠️ (verliesbeperker), tag 🟫
     if (eventType == ANCHOR_EVENT_TAKE_PROFIT) {
-        snprintf(titleBuffer, titleSize, "%s %s: %s", bitvavoSymbol, 
+        snprintf(titleBuffer, titleSize, "\xE2\x8F\xAB\xEF\xB8\x8F\xE2\x9A\x93\xEF\xB8\x8F\xE2\x9A\xA0\xEF\xB8\x8F %s %s: %s", bitvavoSymbol,
                  getText("Anker", "Anchor"), getText("Winstpakker", "Take Profit"));
         float priceRounded = roundToEuroNotif(prices[0]);
         float anchorRounded = roundToEuroNotif(this->anchorPrice);
@@ -181,7 +182,7 @@ void AnchorSystem::formatAnchorNotification(AnchorEventType eventType, float anc
                      anchorPct, getText("thr", "thr"), effAnchor.takeProfitPct);
         }
     } else {  // ANCHOR_EVENT_MAX_LOSS
-        snprintf(titleBuffer, titleSize, "%s %s: %s", bitvavoSymbol,
+        snprintf(titleBuffer, titleSize, "\xE2\x8F\xAC\xEF\xB8\x8F\xE2\x9A\x93\xEF\xB8\x8F\xE2\x9A\xA0\xEF\xB8\x8F %s %s: %s", bitvavoSymbol,
                  getText("Anker", "Anchor"), getText("Verliesbeperker", "Max Loss"));
         float priceRounded = roundToEuroNotif(prices[0]);
         float anchorRounded = roundToEuroNotif(this->anchorPrice);
@@ -213,14 +214,14 @@ void AnchorSystem::sendAnchorAlert(AnchorEventType eventType, float anchorPct,
                                    const char* trendName) {
     // Gebruik lokale buffers (stack geheugen i.p.v. DRAM)
     char timestamp[32];
-    char title[40];
+    char title[64];  // ruimte voor emoji-prefix (⏫️⚓️⚠️ / ⏬️⚓️⚠️) + symbol + tekst
     char msg[140];
     
     formatAnchorNotification(eventType, anchorPct, effAnchor, trendName,
                            msg, sizeof(msg), title, sizeof(title), timestamp, sizeof(timestamp));
     
-    // Bepaal color tag en MQTT event type op basis van event type
-    const char* colorTag = (eventType == ANCHOR_EVENT_TAKE_PROFIT) ? "green_square,💰" : "red_square,⚠️";
+    // Bepaal color tag en MQTT event type op basis van event type (tag 🟫 voor beide)
+    const char* colorTag = "\xF0\x9F\x9F\xAB";  // 🟫
     const char* mqttEventType = (eventType == ANCHOR_EVENT_TAKE_PROFIT) ? "take_profit" : "max_loss";
     
     sendNotification(title, msg, colorTag);

@@ -38,7 +38,7 @@ Arduino_DataBus *bus = new Arduino_ESP32SPI(TFT_DC, TFT_CS, TFT_SCLK, TFT_MOSI, 
 // Rotation 0 = portrait
 Arduino_GFX *gfx = new Arduino_ILI9341(bus, TFT_RST, 0 /* rotation */, false /* IPS */);
 
-// LCDWIKI 2.8" kleureninversie (aanbevolen)
+// Kleurinversie voor correcte kleuren; contrast wordt gecompenseerd in de UI (lichtere accentkleuren).
 #define PLATFORM_LCDWIKI28_INVERT_COLORS
 
 // Device initialization function

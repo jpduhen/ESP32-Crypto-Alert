@@ -22,6 +22,9 @@
     #include <WebSocketsClient.h>
     #define WS_LIB_AVAILABLE 1
 #endif
+#if OTA_ENABLED
+    #include <ArduinoOTA.h>
+#endif
 
 // Touchscreen functionaliteit volledig verwijderd - gebruik nu fysieke boot knop (GPIO 0)
 #include <SPI.h>
@@ -220,6 +223,7 @@
 #define SPIKE_1M_THRESHOLD_DEFAULT 0.31f   // 1m spike: |ret_1m| >= 0.31%
 #define SPIKE_5M_THRESHOLD_DEFAULT 0.65f   // 5m spike filter: |ret_5m| >= 0.65% (past bij actuele volatiliteit)
 #define MOVE_30M_THRESHOLD_DEFAULT 1.3f    // 30m move: |ret_30m| >= 1.3% (0.8% was te gevoelig)
+#define MOVE_30M_HARD_OVERRIDE_DEFAULT 1.6f  // |ret30m| >= dit % → 30m-alert nooit onderdrukken door 2h
 #define MOVE_5M_THRESHOLD_DEFAULT 0.40f    // 5m move filter: |ret_5m| >= 0.40% (gevoeliger op momentum-opbouw)
 #define MOVE_5M_ALERT_THRESHOLD_DEFAULT 0.8f  // 5m move alert: |ret_5m| >= 0.8% (historisch vaak bij trend start)
 
@@ -736,6 +740,7 @@ AlertThresholds alertThresholds = {
     .spike1m = SPIKE_1M_THRESHOLD_DEFAULT,
     .spike5m = SPIKE_5M_THRESHOLD_DEFAULT,
     .move30m = MOVE_30M_THRESHOLD_DEFAULT,
+    .move30mHardOverride = MOVE_30M_HARD_OVERRIDE_DEFAULT,
     .move5m = MOVE_5M_THRESHOLD_DEFAULT,
     .move5mAlert = MOVE_5M_ALERT_THRESHOLD_DEFAULT,
     .threshold1MinUp = THRESHOLD_1MIN_UP_DEFAULT,
@@ -838,6 +843,9 @@ char mqttHost[64] = MQTT_HOST_DEFAULT;    // MQTT broker IP
 uint16_t mqttPort = MQTT_PORT_DEFAULT;    // MQTT poort
 char mqttUser[64] = MQTT_USER_DEFAULT;     // MQTT gebruiker
 char mqttPass[64] = MQTT_PASS_DEFAULT;     // MQTT wachtwoord
+bool duckdnsEnabled = false;               // DuckDNS: externe toegang webinterface (subdomain = NTFY topic zonder -alert, lowercase)
+char duckdnsToken[64] = "";               // DuckDNS token (instelbaar via web UI)
+char webPassword[64] = "";                 // Optioneel sterk web-wachtwoord; leeg = NTFY-topic zonder -alert
 // MQTT_CLIENT_ID_PREFIX wordt nu dynamisch gegenereerd op basis van NTFY topic
 // (niet meer nodig als macro, wordt nu direct in connectMQTT() gegenereerd)
 
@@ -1336,8 +1344,12 @@ parse_done:
     
     if (lastParsedKline.valid && interval != nullptr) {
         if (strcmp(interval, "1m") == 0) {
+            if (lastParsedKline.openTime != lastKline1m.openTime && lastKline1m.valid && lastKline1m.volume > 0.0f)
+                AlertEngine::pushClosed1mCandle(lastKline1m.openTime, lastKline1m.volume);
             lastKline1m = lastParsedKline;
         } else if (strcmp(interval, "5m") == 0) {
+            if (lastParsedKline.openTime != lastKline5m.openTime && lastKline5m.valid && lastKline5m.volume > 0.0f)
+                AlertEngine::pushClosed5mCandle(lastKline5m.openTime, lastKline5m.volume);
             lastKline5m = lastParsedKline;
         }
     }
@@ -2884,9 +2896,13 @@ static void processWsTextMessage(const char* wsBuf, size_t length)
                 kline.volume = volume;
                 kline.valid = (openTime > 0 && close > 0.0f);
                 if (strcmp(intervalBuf, "1m") == 0) {
+                    if (kline.openTime != lastKline1m.openTime && lastKline1m.valid && lastKline1m.volume > 0.0f)
+                        AlertEngine::pushClosed1mCandle(lastKline1m.openTime, lastKline1m.volume);
                     lastKline1m = kline;
                     wsLastCandle1mMs = millis();
                 } else if (strcmp(intervalBuf, "5m") == 0) {
+                    if (kline.openTime != lastKline5m.openTime && lastKline5m.valid && lastKline5m.volume > 0.0f)
+                        AlertEngine::pushClosed5mCandle(lastKline5m.openTime, lastKline5m.volume);
                     lastKline5m = kline;
                     wsLastCandle5mMs = millis();
                 } else if (strcmp(intervalBuf, "4h") == 0) {
@@ -3326,6 +3342,43 @@ static void checkHeapTelemetry()
 }
 
 // ============================================================================
+// Notification log (ring buffer voor webpagina /notifications)
+// ============================================================================
+#define NOTIF_LOG_SIZE 128
+struct NotificationLogEntry {
+    uint32_t timeMs;
+    char title[48];
+    char message[160];
+    char colorTag[24];
+};
+static NotificationLogEntry s_notificationLog[NOTIF_LOG_SIZE];
+static uint8_t s_notificationLogHead = 0;
+static uint8_t s_notificationLogCount = 0;
+
+static void appendNotificationLog(const char *title, const char *message, const char *colorTag) {
+    uint8_t idx = s_notificationLogHead % NOTIF_LOG_SIZE;
+    s_notificationLog[idx].timeMs = millis();
+    safeStrncpy(s_notificationLog[idx].title, title ? title : "", sizeof(s_notificationLog[idx].title));
+    safeStrncpy(s_notificationLog[idx].message, message ? message : "", sizeof(s_notificationLog[idx].message));
+    safeStrncpy(s_notificationLog[idx].colorTag, colorTag ? colorTag : "", sizeof(s_notificationLog[idx].colorTag));
+    s_notificationLogHead++;
+    if (s_notificationLogCount < NOTIF_LOG_SIZE) s_notificationLogCount++;
+}
+
+uint8_t getNotificationLogCount() { return s_notificationLogCount; }
+bool getNotificationLogEntry(uint8_t index, char* titleOut, size_t titleSize, char* messageOut, size_t messageSize, char* colorTagOut, size_t colorTagSize, uint32_t* timeMsOut) {
+    if (index >= s_notificationLogCount || !titleOut || !messageOut) return false;
+    // index 0 = newest
+    uint8_t pos = (s_notificationLogHead + NOTIF_LOG_SIZE - 1 - index) % NOTIF_LOG_SIZE;
+    const NotificationLogEntry* e = &s_notificationLog[pos];
+    safeStrncpy(titleOut, e->title, titleSize);
+    safeStrncpy(messageOut, e->message, messageSize);
+    if (colorTagOut && colorTagSize) safeStrncpy(colorTagOut, e->colorTag, colorTagSize);
+    if (timeMsOut) *timeMsOut = e->timeMs;
+    return true;
+}
+
+// ============================================================================
 // Notification Functions
 // ============================================================================
 
@@ -3333,6 +3386,7 @@ static void checkHeapTelemetry()
 // Fase 5.1: static verwijderd zodat TrendDetector module deze functie kan aanroepen (later verplaatst naar AlertEngine)
 bool sendNotification(const char *title, const char *message, const char *colorTag = nullptr)
 {
+    appendNotificationLog(title, message, colorTag);
     return sendNtfyNotification(title, message, colorTag);
 }
 
@@ -3541,6 +3595,42 @@ void getDeviceIdFromTopic(const char* topic, char* buffer, size_t bufferSize) {
     buffer[bufferSize - 1] = '\0';
 }
 
+// DuckDNS: subdomain uit NTFY topic = deel vóór "-alert", lowercase (bijv. 2081S3-alert -> 2081s3)
+void getDuckDnsSubdomainFromNtfyTopic(const char* topic, char* buffer, size_t bufferSize) {
+    if (topic == nullptr || buffer == nullptr || bufferSize == 0) {
+        if (buffer && bufferSize > 0) buffer[0] = '\0';
+        return;
+    }
+    getDeviceIdFromTopic(topic, buffer, bufferSize);
+    for (size_t i = 0; buffer[i] != '\0' && i < bufferSize - 1; i++) {
+        if (buffer[i] >= 'A' && buffer[i] <= 'Z')
+            buffer[i] = (char)(buffer[i] + 32);
+    }
+}
+
+// DuckDNS: update IP voor subdomain (aanroepen wanneer duckdnsEnabled en token gezet)
+// DuckDNS ziet de publieke IP van het request; thuis moet je port forwarding instellen.
+static void updateDuckDnsIfNeeded() {
+    if (!duckdnsEnabled || duckdnsToken[0] == '\0') return;
+    char sub[32];
+    getDuckDnsSubdomainFromNtfyTopic(ntfyTopic, sub, sizeof(sub));
+    if (sub[0] == '\0') return;
+    char url[160];
+    snprintf(url, sizeof(url), "https://www.duckdns.org/update?domains=%s&token=%s", sub, duckdnsToken);
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    if (!http.begin(client, url)) return;
+    http.setTimeout(8000);
+    int code = http.GET();
+    if (code == HTTP_CODE_OK) {
+        String body = http.getString();
+        if (body.indexOf("OK") >= 0)
+            Serial_printf(F("[DuckDNS] IP bijgewerkt voor %s.duckdns.org\n"), sub);
+    }
+    http.end();
+}
+
 // Load settings from Preferences
 // ============================================================================
 // Settings Management Functions
@@ -3573,6 +3663,9 @@ static void loadSettings()
     mqttPort = settings.mqttPort;
     safeStrncpy(mqttUser, settings.mqttUser, sizeof(mqttUser));
     safeStrncpy(mqttPass, settings.mqttPass, sizeof(mqttPass));
+    duckdnsEnabled = settings.duckdnsEnabled;
+    safeStrncpy(duckdnsToken, settings.duckdnsToken, sizeof(duckdnsToken));
+    safeStrncpy(webPassword, settings.webPassword, sizeof(webPassword));
     
     // Copy anchor settings
     anchorTakeProfit = settings.anchorTakeProfit;
@@ -3651,6 +3744,9 @@ void saveSettings()
     settings.mqttPort = mqttPort;
     safeStrncpy(settings.mqttUser, mqttUser, sizeof(settings.mqttUser));
     safeStrncpy(settings.mqttPass, mqttPass, sizeof(settings.mqttPass));
+    settings.duckdnsEnabled = duckdnsEnabled;
+    safeStrncpy(settings.duckdnsToken, duckdnsToken, sizeof(settings.duckdnsToken));
+    safeStrncpy(settings.webPassword, webPassword, sizeof(settings.webPassword));
     
     // Copy anchor settings
     settings.anchorTakeProfit = anchorTakeProfit;
@@ -8251,6 +8347,8 @@ static bool setupWiFiConnection()
     lv_obj_remove_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLL_MOMENTUM);
     lv_obj_set_style_bg_opa(lv_scr_act(), LV_OPA_TRANSP, LV_PART_SCROLLBAR);
     lv_obj_set_style_width(lv_scr_act(), 0, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(lv_scr_act(), LV_OPA_COVER, 0);
     
     wifiSpinner = lv_spinner_create(lv_scr_act());
     lv_spinner_set_anim_params(wifiSpinner, 8000, 200);
@@ -8447,6 +8545,8 @@ void showConnectionInfo()
     // Verberg scroll indicators volledig
     lv_obj_set_style_bg_opa(lv_scr_act(), LV_OPA_TRANSP, LV_PART_SCROLLBAR);
     lv_obj_set_style_width(lv_scr_act(), 0, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(lv_scr_act(), LV_OPA_COVER, 0);
     
     // Maak spinner voor "Opening Bitvavo Session" (8px naar beneden vanaf midden)
     lv_obj_t *spinner = lv_spinner_create(lv_scr_act());
@@ -8537,7 +8637,13 @@ void wifiConnectionAndFetchPrice()
     // Start web server voor instellingen
     // Fase 9.1.2: Gebruik module versie
     webServerModule.setupWebServer();
-    
+#if OTA_ENABLED
+    if (WiFi.status() == WL_CONNECTED) {
+        ArduinoOTA.setHostname(OTA_HOSTNAME);
+        ArduinoOTA.begin();
+        Serial_println(F("[OTA] Gestart (hostname: " OTA_HOSTNAME ")"));
+    }
+#endif
     // Scherm wordt leeggemaakt door buildUI() in setup()
 }
 // ============================================================================
@@ -8567,6 +8673,8 @@ void apiTask(void *parameter)
     // M1: Rate-limited heap telemetry (elke 60s)
     static unsigned long lastHeapLog = 0;
     const unsigned long HEAP_LOG_INTERVAL_MS = 60000;  // 60 seconden
+    static unsigned long lastDuckDnsUpdate = 0;
+    const unsigned long DUCKDNS_UPDATE_INTERVAL_MS = 300000;  // 5 minuten
     
     static bool wsInitAttempted = false;
     for (;;)
@@ -8590,6 +8698,12 @@ void apiTask(void *parameter)
                 wsInitAttempted = true;
             }
             updateLatestKlineMetricsIfNeeded();
+            
+            // DuckDNS: periodiek IP bijwerken voor externe toegang (subdomain.duckdns.org)
+            if (duckdnsEnabled && duckdnsToken[0] != '\0' && (t0 - lastDuckDnsUpdate) >= DUCKDNS_UPDATE_INTERVAL_MS) {
+                updateDuckDnsIfNeeded();
+                lastDuckDnsUpdate = t0;
+            }
             
             // C1: Verwerk pending anchor setting (network-safe: gebeurt in apiTask waar HTTPS calls al zijn)
             if (pendingAnchorSetting.pending) {
@@ -8810,7 +8924,9 @@ void loop()
 {
     // Geef tijd aan andere tasks
     vTaskDelay(pdMS_TO_TICKS(10));
-    
+#if OTA_ENABLED
+    ArduinoOTA.handle();
+#endif
     // Deferred MQTT reconnect (thread-safe)
     applyPendingMqttReconnect();
 

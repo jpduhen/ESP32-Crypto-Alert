@@ -199,6 +199,10 @@ public:
     static void send2HBreakoutNotification(bool isUp, float lastPrice, float threshold, 
                                              const TwoHMetrics& metrics, uint32_t now);
     
+    // Volume-EMA: alleen afgesloten kaars pushen (voorkomt vol+33400% door vergelijken lopende kaars met start-volume)
+    static void pushClosed1mCandle(unsigned long openTime, float volume);
+    static void pushClosed5mCandle(unsigned long openTime, float volume);
+    
     // FASE X.5: Flush pending SECONDARY alert (aanroepen periodiek of na check2HNotifications)
     static void flushPendingSecondaryAlert();
     
@@ -214,7 +218,9 @@ public:
     // FASE X.2: Wrapper voor sendNotification() met 2h throttling
     // FASE X.3: PRIMARY alerts override throttling, SECONDARY alerts onderhevig aan throttling
     // Gebruik deze functie in plaats van direct sendNotification() voor 2h alerts
-    static bool send2HNotification(Alert2HType alertType, const char* title, const char* msg, const char* colorTag);
+    // meanTouchFromAbove: 0=van onderen (⤴️), 1=van boven (⤵️), -1=N/A. trendChangeUp: 0=daling (↘️), 1=stijging (↗️), -1=sideways (↕️)
+    static bool send2HNotification(Alert2HType alertType, const char* title, const char* msg, const char* colorTag,
+                                    int8_t meanTouchFromAbove = -1, int8_t trendChangeUp = -1);
     
     // Sync state: Update AlertEngine state met globale variabelen (voor parallel implementatie)
     void syncStateFromGlobals();
@@ -233,6 +239,8 @@ private:
     LastOneMinuteEvent last1mEvent;
     LastFiveMinuteEvent last5mEvent;
     unsigned long lastConfluenceAlert;
+    // 30m priority override: één melding per regime; re-arm bij onder drempel / 2h context eind / richtingswissel
+    int8_t last30mPriorityDirection;  // 0=none, 1=up sent, -1=down sent
     
     // Geheugen optimalisatie: hergebruik buffers i.p.v. lokale stack allocaties
     // Vergroot om volledige notificatieteksten te ondersteunen
@@ -248,6 +256,19 @@ private:
     
     // Helper: Cache absolute waarden (voorkomt herhaalde fabsf calls)
     void cacheAbsoluteValues(float ret_1m, float ret_5m, float ret_30m);
+    
+    // 30m priority override: 2h-context en hard-override (>= move30mHardOverride)
+    void get2HBreakoutContext(uint32_t now, bool* breakoutUpActive, bool* breakdownDownActive);
+    bool shouldForce30mPriorityAlert(float ret_30m, float effMove30m, float hardOverridePct,
+                                     bool* outHardOverride, bool* outSameDir2H);
+    static const char* get30mOverrideReason(bool hardOverride, bool sameDir2H);
+
+    // 5m classificatie op basis van 2h-richting (trend-following / countertrend / neutraal)
+    int get2HTrendDirectionFor5mClassification();  // -1=down, 0=neutraal, +1=up (alleen 2h-context)
+    static bool is5mTrendFollowing(float ret5m, int trend2HDir);
+    static bool is5mCountertrend(float ret5m, int trend2HDir);
+    void get5mAlertClassificationLabel(int trend2hDir, float ret5m, char* out, size_t outSize);
+    void get5mAlert2HTrendText(int trend2hDir, char* out, size_t outSize);  // "OP"/"NEER"/"ZIJWAARTS"
     
     // Helper: Bereken min/max uit fiveMinutePrices (geoptimaliseerde versie)
     bool findMinMaxInFiveMinutePrices(float& minVal, float& maxVal);

@@ -21,6 +21,7 @@ De web-interface biedt:
    - Kijk op het display (wordt kort getoond bij opstarten en in de voetregel van het hoofdscherm).
    - Of zoek in je router naar het apparaat.
 3. Open in je browser: `http://<IP-adres>` (bijv. http://192.168.1.123)
+4. **Login:** de webinterface is beveiligd met HTTP Basic Auth. Gebruikersnaam: **admin**. Wachtwoord: je **NTFY-topic zonder '-alert'** (alleen kleine letters), bijv. bij topic `2081S3-alert` is het wachtwoord **2081s3**. De browser vraagt om inloggegevens; daarna blijf je ingelogd voor die sessie.
 
 Als je het IP kwijt bent: houd de reset-knop 5 seconden ingedrukt bij opstarten → het board start opnieuw in AP-mode ("no-net, 192.168.4.1").
 
@@ -64,6 +65,21 @@ Selecteer een Bitvavo market, bijv. `BTC-EUR` of `ETH-EUR`.
 
 ![NTFY app voorbeeld](img/ntfy-app-notification.jpg)  
 *Voorbeeld van een alert in de NTFY-app op telefoon.*
+
+### 5.4.5 Externe toegang (DuckDNS)
+Je kunt de webinterface **buiten je thuisnetwerk** bereikbaar maken via een gratis DuckDNS-subdomain:
+
+1. Maak een (gratis) account op [duckdns.org](https://www.duckdns.org) en noteer je **token**.
+2. In de webinterface: open de sectie **"Externe toegang (DuckDNS)"**.
+3. Vink **DuckDNS inschakelen** aan en plak je DuckDNS-token in het veld. Sla op.
+4. De subdomain wordt automatisch afgeleid van je NTFY-topic: hoofdletters worden kleine letters en het achtervoegsel `-alert` wordt weggelaten. Bijvoorbeeld: NTFY-topic `2081S3-alert` → DuckDNS-domein **2081s3.duckdns.org**.
+5. Op je **router** stel je **port forwarding** in: extern poort 80 (of een andere poort) doorsturen naar het lokale IP van het ESP32-apparaat. Zonder port forwarding is het domein alleen binnen je netwerk bereikbaar.
+
+**Veiligheid:** De webinterface is beveiligd met HTTP Basic Auth (gebruikersnaam **admin**). Standaard is het wachtwoord je NTFY-topic zonder '-alert' (kleine letters). Je kunt in de sectie "Externe toegang (DuckDNS)" een **optioneel sterk wachtwoord** instellen; dan wordt dat gebruikt in plaats van het NTFY-afgeleide wachtwoord. Na **5 mislukte inlogpogingen** wordt 15 minuten geblokkeerd (rate limiting tegen brute-force).
+
+**HTTPS / reverse proxy:** Verkeer naar de ESP32 is nu HTTP (onversleuteld). Voor versleuteling (HTTPS) kun je een **reverse proxy** gebruiken: een apparaat op je netwerk dat HTTPS afhandelt en doorstuurt naar de ESP32. Een **Raspberry Pi** (of andere Linux-box) met bv. nginx of Caddy + Let's Encrypt is hiervoor het geschikte platform. Een **dedicated ESP32** kan in theorie een minimale TLS-afhandeling doen, maar heeft weinig RAM/CPU voor certificaten en meerdere verbindingen; het is niet aan te raden als reverse proxy. Gebruik voor HTTPS dus liever een Pi of vergelijkbaar apparaat.
+
+**Veiligste optie:** Geen port forwarding; toegang van buiten alleen via **VPN** (Tailscale, WireGuard, etc.) naar je thuisnetwerk, daarna de webinterface op het lokale IP openen.
 
 ## 5.5 Geavanceerde Instellingen
 

@@ -52,6 +52,7 @@ struct AlertThresholds {
     float spike1m;
     float spike5m;
     float move30m;
+    float move30mHardOverride;  // |ret30m| >= dit % → 30m-alert nooit onderdrukken door 2h (default 1.6)
     float move5m;
     float move5mAlert;
     float threshold1MinUp;
@@ -127,6 +128,9 @@ struct CryptoMonitorSettings {
     // Basic settings
     char ntfyTopic[64];
     char bitvavoSymbol[16];  // Bitvavo market (bijv. "BTC-EUR")
+    bool duckdnsEnabled;    // Externe toegang via DuckDNS subdomain (afgeleid van NTFY topic)
+    char duckdnsToken[64];  // DuckDNS account token (instelbaar via web, niet in code)
+    char webPassword[64];   // Optioneel sterk web-wachtwoord; leeg = gebruik NTFY-topic zonder -alert
     uint8_t language;
     uint8_t displayRotation;  // Display rotatie: 0 = normaal, 2 = 180 graden gedraaid
     
@@ -221,6 +225,9 @@ private:
     // Preference keys
     static const char* PREF_KEY_NTFY_TOPIC;
     static const char* PREF_KEY_BITVAVO_SYMBOL;
+    static const char* PREF_KEY_DUCKDNS_ENABLED;
+    static const char* PREF_KEY_DUCKDNS_TOKEN;
+    static const char* PREF_KEY_WEB_PASSWORD;
     static const char* PREF_KEY_LANGUAGE;
     static const char* PREF_KEY_DISPLAY_ROTATION;
     static const char* PREF_KEY_TH1_UP;
@@ -230,6 +237,7 @@ private:
     static const char* PREF_KEY_SPIKE1M;
     static const char* PREF_KEY_SPIKE5M;
     static const char* PREF_KEY_MOVE30M;
+    static const char* PREF_KEY_MOVE30M_HARD;
     static const char* PREF_KEY_MOVE5M;
     static const char* PREF_KEY_MOVE5M_ALERT;
     static const char* PREF_KEY_CD1MIN;

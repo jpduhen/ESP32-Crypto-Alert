@@ -28,6 +28,9 @@ extern bool hasPSRAM();
 #ifndef MOVE_30M_THRESHOLD_DEFAULT
 #define MOVE_30M_THRESHOLD_DEFAULT 1.3f
 #endif
+#ifndef MOVE_30M_HARD_OVERRIDE_DEFAULT
+#define MOVE_30M_HARD_OVERRIDE_DEFAULT 1.6f
+#endif
 #ifndef MOVE_5M_THRESHOLD_DEFAULT
 #define MOVE_5M_THRESHOLD_DEFAULT 0.40f
 #endif
@@ -162,6 +165,9 @@ extern bool hasPSRAM();
 const char* SettingsStore::PREF_NAMESPACE = "crypto";
 const char* SettingsStore::PREF_KEY_NTFY_TOPIC = "ntfyTopic";
 const char* SettingsStore::PREF_KEY_BITVAVO_SYMBOL = "bitvavoSymbol";
+const char* SettingsStore::PREF_KEY_DUCKDNS_ENABLED = "duckdnsEn";
+const char* SettingsStore::PREF_KEY_DUCKDNS_TOKEN = "duckdnsTok";
+const char* SettingsStore::PREF_KEY_WEB_PASSWORD = "webPwd";
 const char* SettingsStore::PREF_KEY_LANGUAGE = "language";
 const char* SettingsStore::PREF_KEY_DISPLAY_ROTATION = "displayRotation";
 const char* SettingsStore::PREF_KEY_TH1_UP = "th1Up";
@@ -171,6 +177,7 @@ const char* SettingsStore::PREF_KEY_TH30_DOWN = "th30Down";
 const char* SettingsStore::PREF_KEY_SPIKE1M = "spike1m";
 const char* SettingsStore::PREF_KEY_SPIKE5M = "spike5m";
 const char* SettingsStore::PREF_KEY_MOVE30M = "move30m";
+const char* SettingsStore::PREF_KEY_MOVE30M_HARD = "move30mHard";
 const char* SettingsStore::PREF_KEY_MOVE5M = "move5m";
 const char* SettingsStore::PREF_KEY_MOVE5M_ALERT = "move5mAlert";
 const char* SettingsStore::PREF_KEY_CD1MIN = "cd1Min";
@@ -337,6 +344,9 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     ntfyTopic[0] = '\0';
     strncpy(bitvavoSymbol, BITVAVO_SYMBOL_DEFAULT, sizeof(bitvavoSymbol) - 1);
     bitvavoSymbol[sizeof(bitvavoSymbol) - 1] = '\0';
+    duckdnsEnabled = false;
+    duckdnsToken[0] = '\0';
+    webPassword[0] = '\0';
     language = DEFAULT_LANGUAGE;
     displayRotation = 0;  // Default: normaal (0 graden)
     
@@ -344,6 +354,7 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     alertThresholds.spike1m = SPIKE_1M_THRESHOLD_DEFAULT;
     alertThresholds.spike5m = SPIKE_5M_THRESHOLD_DEFAULT;
     alertThresholds.move30m = MOVE_30M_THRESHOLD_DEFAULT;
+    alertThresholds.move30mHardOverride = MOVE_30M_HARD_OVERRIDE_DEFAULT;
     alertThresholds.move5m = MOVE_5M_THRESHOLD_DEFAULT;
     alertThresholds.move5mAlert = MOVE_5M_ALERT_THRESHOLD_DEFAULT;
     alertThresholds.threshold1MinUp = THRESHOLD_1MIN_UP_DEFAULT;
@@ -483,6 +494,10 @@ CryptoMonitorSettings SettingsStore::load() {
     strncpy(settings.ntfyTopic, topicBuffer, sizeof(settings.ntfyTopic) - 1);
     settings.ntfyTopic[sizeof(settings.ntfyTopic) - 1] = '\0';
     
+    settings.duckdnsEnabled = prefs.getBool(PREF_KEY_DUCKDNS_ENABLED, false);
+    loadStringPreference(PREF_KEY_DUCKDNS_TOKEN, settings.duckdnsToken, sizeof(settings.duckdnsToken), "");
+    loadStringPreference(PREF_KEY_WEB_PASSWORD, settings.webPassword, sizeof(settings.webPassword), "");
+    
     // Geoptimaliseerd: gebruik helper functie voor string loading
     loadStringPreference(PREF_KEY_BITVAVO_SYMBOL, settings.bitvavoSymbol, 
                         sizeof(settings.bitvavoSymbol), BITVAVO_SYMBOL_DEFAULT);
@@ -507,6 +522,7 @@ CryptoMonitorSettings SettingsStore::load() {
     settings.alertThresholds.spike1m = prefs.getFloat(PREF_KEY_SPIKE1M, SPIKE_1M_THRESHOLD_DEFAULT);
     settings.alertThresholds.spike5m = prefs.getFloat(PREF_KEY_SPIKE5M, SPIKE_5M_THRESHOLD_DEFAULT);
     settings.alertThresholds.move30m = prefs.getFloat(PREF_KEY_MOVE30M, MOVE_30M_THRESHOLD_DEFAULT);
+    settings.alertThresholds.move30mHardOverride = prefs.getFloat(PREF_KEY_MOVE30M_HARD, MOVE_30M_HARD_OVERRIDE_DEFAULT);
     settings.alertThresholds.move5m = prefs.getFloat(PREF_KEY_MOVE5M, MOVE_5M_THRESHOLD_DEFAULT);
     settings.alertThresholds.move5mAlert = prefs.getFloat(PREF_KEY_MOVE5M_ALERT, MOVE_5M_ALERT_THRESHOLD_DEFAULT);
     
@@ -685,6 +701,9 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     // Save basic settings
     prefs.putString(PREF_KEY_NTFY_TOPIC, settings.ntfyTopic);
     prefs.putString(PREF_KEY_BITVAVO_SYMBOL, settings.bitvavoSymbol);
+    prefs.putBool(PREF_KEY_DUCKDNS_ENABLED, settings.duckdnsEnabled);
+    prefs.putString(PREF_KEY_DUCKDNS_TOKEN, settings.duckdnsToken);
+    prefs.putString(PREF_KEY_WEB_PASSWORD, settings.webPassword);
     prefs.putUChar(PREF_KEY_LANGUAGE, settings.language);
     prefs.putUChar(PREF_KEY_DISPLAY_ROTATION, settings.displayRotation);
     
@@ -696,6 +715,7 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     prefs.putFloat(PREF_KEY_SPIKE1M, settings.alertThresholds.spike1m);
     prefs.putFloat(PREF_KEY_SPIKE5M, settings.alertThresholds.spike5m);
     prefs.putFloat(PREF_KEY_MOVE30M, settings.alertThresholds.move30m);
+    prefs.putFloat(PREF_KEY_MOVE30M_HARD, settings.alertThresholds.move30mHardOverride);
     prefs.putFloat(PREF_KEY_MOVE5M, settings.alertThresholds.move5m);
     prefs.putFloat(PREF_KEY_MOVE5M_ALERT, settings.alertThresholds.move5mAlert);
     
