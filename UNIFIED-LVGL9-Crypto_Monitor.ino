@@ -160,11 +160,11 @@
 #define DELAY_DEBUG_RECONNECT_MS 2000     // Delay for debugging reconnection
 
 // --- Anchor Price Configuration ---
-#define ANCHOR_TAKE_PROFIT_DEFAULT 5.0f    // Take profit: +5% boven anchor price
-#define ANCHOR_MAX_LOSS_DEFAULT -3.0f      // Max loss: -3% onder anchor price
+#define ANCHOR_TAKE_PROFIT_DEFAULT 1.2f    // Take profit: +1.2% boven anchor price
+#define ANCHOR_MAX_LOSS_DEFAULT -0.9f      // Max loss: -0.9% onder anchor price
 
 // --- Trend-Adaptive Anchor Configuration ---
-#define TREND_ADAPTIVE_ANCHORS_ENABLED_DEFAULT false  // Default: uitgeschakeld
+#define TREND_ADAPTIVE_ANCHORS_ENABLED_DEFAULT true   // Default: ingeschakeld
 #define UPTREND_MAX_LOSS_MULTIPLIER_DEFAULT 1.15f      // UP: maxLoss * 1.15
 #define UPTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT 1.2f    // UP: takeProfit * 1.2
 #define DOWNTREND_MAX_LOSS_MULTIPLIER_DEFAULT 0.85f    // DOWN: maxLoss * 0.85
@@ -175,7 +175,7 @@
 #define TREND_CHANGE_COOLDOWN_MS 600000UL  // 10 minuten cooldown voor trend change notificaties
 
 // --- Smart Confluence Mode Configuration ---
-#define SMART_CONFLUENCE_ENABLED_DEFAULT false  // Default: uitgeschakeld
+#define SMART_CONFLUENCE_ENABLED_DEFAULT true   // Default: ingeschakeld
 #define NIGHT_MODE_ENABLED_DEFAULT true  // Default: nachtstand aan (23:00-07:00)
 #define NIGHT_MODE_START_HOUR_DEFAULT 23
 #define NIGHT_MODE_END_HOUR_DEFAULT 7
@@ -220,17 +220,17 @@
 #define THRESHOLD_30MIN_DOWN_DEFAULT -2.0f // Notificatie bij dalende trend < -2% per uur
 
 // Spike/Move alert thresholds (geoptimaliseerd op basis van metingen)
-#define SPIKE_1M_THRESHOLD_DEFAULT 0.31f   // 1m spike: |ret_1m| >= 0.31%
-#define SPIKE_5M_THRESHOLD_DEFAULT 0.65f   // 5m spike filter: |ret_5m| >= 0.65% (past bij actuele volatiliteit)
-#define MOVE_30M_THRESHOLD_DEFAULT 1.3f    // 30m move: |ret_30m| >= 1.3% (0.8% was te gevoelig)
+#define SPIKE_1M_THRESHOLD_DEFAULT 0.25f   // 1m spike: |ret_1m| >= 0.25%
+#define SPIKE_5M_THRESHOLD_DEFAULT 0.50f   // 5m spike filter: |ret_5m| >= 0.50%
+#define MOVE_30M_THRESHOLD_DEFAULT 1.3f    // 30m move: |ret_30m| >= 1.3%
 #define MOVE_30M_HARD_OVERRIDE_DEFAULT 1.6f  // |ret30m| >= dit % → 30m-alert nooit onderdrukken door 2h
-#define MOVE_5M_THRESHOLD_DEFAULT 0.40f    // 5m move filter: |ret_5m| >= 0.40% (gevoeliger op momentum-opbouw)
-#define MOVE_5M_ALERT_THRESHOLD_DEFAULT 0.8f  // 5m move alert: |ret_5m| >= 0.8% (historisch vaak bij trend start)
+#define MOVE_5M_THRESHOLD_DEFAULT 0.40f    // 5m move filter: |ret_5m| >= 0.40%
+#define MOVE_5M_ALERT_THRESHOLD_DEFAULT 0.5f  // 5m move alert: |ret_5m| >= 0.5%
 
-// Cooldown tijden (in milliseconden) om spam te voorkomen (geoptimaliseerd op basis van metingen)
+// Cooldown tijden (in milliseconden) om spam te voorkomen
 #define NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT 120000   // 2 minuten tussen 1-minuut spike notificaties
-#define NOTIFICATION_COOLDOWN_30MIN_MS_DEFAULT 900000  // 15 minuten tussen 30-minuten move notificaties (grote moves → langere rust)
-#define NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT 420000   // 7 minuten tussen 5-minuten move notificaties (sneller tweede signaal bij doorbraak)
+#define NOTIFICATION_COOLDOWN_30MIN_MS_DEFAULT 900000  // 15 minuten tussen 30-minuten move notificaties
+#define NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT 600000   // 10 minuten tussen 5-minuten move notificaties
 
 // Max alerts per uur
 #define MAX_1M_ALERTS_PER_HOUR 3
@@ -248,6 +248,11 @@
 // --- Language Configuration ---
 #ifndef DEFAULT_LANGUAGE
 #define DEFAULT_LANGUAGE 0  // Standaard: Nederlands (0 = Nederlands, 1 = English)
+#endif
+
+// --- Display rotation (schone start default) ---
+#ifndef DISPLAY_ROTATION_DEFAULT
+#define DISPLAY_ROTATION_DEFAULT 2  // 0 = normaal, 2 = 180 graden gedraaid
 #endif
 
 // --- Array Size Configuration ---
@@ -760,15 +765,15 @@ NotificationCooldowns notificationCooldowns = {
 // 2-hour alert thresholds in struct voor betere organisatie
 // Wordt gebruikt door AlertEngine voor 2h notificaties
 Alert2HThresholds alert2HThresholds = {
-    .breakMarginPct = 0.15f,
+    .breakMarginPct = 0.18f,
     .breakResetMarginPct = 0.10f,
-    .breakCooldownMs = 30UL * 60UL * 1000UL, // 30 min
+    .breakCooldownMs = 30UL * 60UL * 1000UL, // 30 min (1800000 ms)
     .meanMinDistancePct = 0.60f,
     .meanTouchBandPct = 0.10f,
-    .meanCooldownMs = 60UL * 60UL * 1000UL, // 60 min
+    .meanCooldownMs = 60UL * 60UL * 1000UL, // 60 min (3600000 ms)
     .compressThresholdPct = 0.80f,
     .compressResetPct = 1.10f,
-    .compressCooldownMs = 2UL * 60UL * 60UL * 1000UL, // 2 uur
+    .compressCooldownMs = 2UL * 60UL * 60UL * 1000UL, // 2 uur (7200000 ms)
     .anchorOutsideMarginPct = 0.25f,
     .anchorCooldownMs = 3UL * 60UL * 60UL * 1000UL // 3 uur
 };

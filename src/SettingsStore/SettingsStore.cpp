@@ -20,10 +20,10 @@ extern bool hasPSRAM();
 #define THRESHOLD_30MIN_DOWN_DEFAULT -2.0f
 #endif
 #ifndef SPIKE_1M_THRESHOLD_DEFAULT
-#define SPIKE_1M_THRESHOLD_DEFAULT 0.31f
+#define SPIKE_1M_THRESHOLD_DEFAULT 0.25f
 #endif
 #ifndef SPIKE_5M_THRESHOLD_DEFAULT
-#define SPIKE_5M_THRESHOLD_DEFAULT 0.65f
+#define SPIKE_5M_THRESHOLD_DEFAULT 0.50f
 #endif
 #ifndef MOVE_30M_THRESHOLD_DEFAULT
 #define MOVE_30M_THRESHOLD_DEFAULT 1.3f
@@ -35,7 +35,7 @@ extern bool hasPSRAM();
 #define MOVE_5M_THRESHOLD_DEFAULT 0.40f
 #endif
 #ifndef MOVE_5M_ALERT_THRESHOLD_DEFAULT
-#define MOVE_5M_ALERT_THRESHOLD_DEFAULT 0.8f
+#define MOVE_5M_ALERT_THRESHOLD_DEFAULT 0.5f
 #endif
 #ifndef NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT
 #define NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT 120000UL
@@ -44,7 +44,7 @@ extern bool hasPSRAM();
 #define NOTIFICATION_COOLDOWN_30MIN_MS_DEFAULT 900000UL
 #endif
 #ifndef NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT
-#define NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT 420000UL
+#define NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT 600000UL
 #endif
 #ifndef MQTT_HOST_DEFAULT
 #define MQTT_HOST_DEFAULT "192.168.68.3"
@@ -59,13 +59,13 @@ extern bool hasPSRAM();
 #define MQTT_PASS_DEFAULT "mqtt_password"
 #endif
 #ifndef ANCHOR_TAKE_PROFIT_DEFAULT
-#define ANCHOR_TAKE_PROFIT_DEFAULT 5.0f
+#define ANCHOR_TAKE_PROFIT_DEFAULT 1.2f
 #endif
 #ifndef ANCHOR_MAX_LOSS_DEFAULT
-#define ANCHOR_MAX_LOSS_DEFAULT -3.0f
+#define ANCHOR_MAX_LOSS_DEFAULT -0.9f
 #endif
 #ifndef TREND_ADAPTIVE_ANCHORS_ENABLED_DEFAULT
-#define TREND_ADAPTIVE_ANCHORS_ENABLED_DEFAULT false
+#define TREND_ADAPTIVE_ANCHORS_ENABLED_DEFAULT true
 #endif
 #ifndef UPTREND_MAX_LOSS_MULTIPLIER_DEFAULT
 #define UPTREND_MAX_LOSS_MULTIPLIER_DEFAULT 1.15f
@@ -80,7 +80,7 @@ extern bool hasPSRAM();
 #define DOWNTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT 0.8f
 #endif
 #ifndef SMART_CONFLUENCE_ENABLED_DEFAULT
-#define SMART_CONFLUENCE_ENABLED_DEFAULT false
+#define SMART_CONFLUENCE_ENABLED_DEFAULT true
 #endif
 #ifndef NIGHT_MODE_ENABLED_DEFAULT
 #define NIGHT_MODE_ENABLED_DEFAULT true
@@ -156,6 +156,9 @@ extern bool hasPSRAM();
 #endif
 #ifndef DEFAULT_LANGUAGE
 #define DEFAULT_LANGUAGE 0
+#endif
+#ifndef DISPLAY_ROTATION_DEFAULT
+#define DISPLAY_ROTATION_DEFAULT 2
 #endif
 #ifndef BITVAVO_SYMBOL_DEFAULT
 #define BITVAVO_SYMBOL_DEFAULT "BTC-EUR"
@@ -348,7 +351,7 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     duckdnsToken[0] = '\0';
     webPassword[0] = '\0';
     language = DEFAULT_LANGUAGE;
-    displayRotation = 0;  // Default: normaal (0 graden)
+    displayRotation = DISPLAY_ROTATION_DEFAULT;
     
     // Alert thresholds defaults
     alertThresholds.spike1m = SPIKE_1M_THRESHOLD_DEFAULT;
@@ -430,15 +433,15 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     volatilityHighThreshold = VOLATILITY_HIGH_THRESHOLD_DEFAULT;
     
     // 2-hour alert thresholds defaults (van Alert2HThresholds namespace)
-    alert2HThresholds.breakMarginPct = 0.15f;
+    alert2HThresholds.breakMarginPct = 0.18f;
     alert2HThresholds.breakResetMarginPct = 0.10f;
-    alert2HThresholds.breakCooldownMs = 30UL * 60UL * 1000UL; // 30 min
+    alert2HThresholds.breakCooldownMs = 1800000UL; // 30 min
     alert2HThresholds.meanMinDistancePct = 0.60f;
     alert2HThresholds.meanTouchBandPct = 0.10f;
-    alert2HThresholds.meanCooldownMs = 60UL * 60UL * 1000UL; // 60 min
+    alert2HThresholds.meanCooldownMs = 3600000UL; // 60 min
     alert2HThresholds.compressThresholdPct = 0.80f;
     alert2HThresholds.compressResetPct = 1.10f;
-    alert2HThresholds.compressCooldownMs = 2UL * 60UL * 60UL * 1000UL; // 2 uur
+    alert2HThresholds.compressCooldownMs = 7200000UL; // 2 uur
     alert2HThresholds.anchorOutsideMarginPct = 0.25f;
     alert2HThresholds.anchorCooldownMs = 3UL * 60UL * 60UL * 1000UL; // 3 uur
     // FASE X.4: Trend hysteresis en throttling defaults
@@ -471,7 +474,7 @@ CryptoMonitorSettings SettingsStore::load() {
     CryptoMonitorSettings settings;
     prefs.begin(PREF_NAMESPACE, true); // read-only mode
     
-    // Generate default NTFY topic
+    // Default NTFY topic bij schone start (uit chip-ID afgeleid)
     char defaultTopic[64];
     generateDefaultNtfyTopic(defaultTopic, sizeof(defaultTopic));
     
@@ -506,10 +509,10 @@ CryptoMonitorSettings SettingsStore::load() {
     settings.language = prefs.getUChar(PREF_KEY_LANGUAGE, DEFAULT_LANGUAGE);
     
     // Load display rotation
-    uint8_t rotation = prefs.getUChar(PREF_KEY_DISPLAY_ROTATION, 0);
+    uint8_t rotation = prefs.getUChar(PREF_KEY_DISPLAY_ROTATION, DISPLAY_ROTATION_DEFAULT);
     // Backward compat: oudere builds konden het als UInt opslaan
     if (rotation != 0 && rotation != 2) {
-        uint32_t legacyRotation = prefs.getUInt(PREF_KEY_DISPLAY_ROTATION, 0);
+        uint32_t legacyRotation = prefs.getUInt(PREF_KEY_DISPLAY_ROTATION, DISPLAY_ROTATION_DEFAULT);
         rotation = (legacyRotation == 2) ? 2 : 0;
     }
     settings.displayRotation = rotation;
@@ -590,15 +593,15 @@ CryptoMonitorSettings SettingsStore::load() {
     settings.volatilityHighThreshold = prefs.getFloat(PREF_KEY_VOL_HIGH, VOLATILITY_HIGH_THRESHOLD_DEFAULT);
     
     // Load 2-hour alert thresholds
-    settings.alert2HThresholds.breakMarginPct = prefs.getFloat(PREF_KEY_2H_BREAK_MARGIN, 0.15f);
+    settings.alert2HThresholds.breakMarginPct = prefs.getFloat(PREF_KEY_2H_BREAK_MARGIN, 0.18f);
     settings.alert2HThresholds.breakResetMarginPct = prefs.getFloat(PREF_KEY_2H_BREAK_RESET, 0.10f);
-    settings.alert2HThresholds.breakCooldownMs = prefs.getULong(PREF_KEY_2H_BREAK_CD, 30UL * 60UL * 1000UL);
+    settings.alert2HThresholds.breakCooldownMs = prefs.getULong(PREF_KEY_2H_BREAK_CD, 1800000UL);
     settings.alert2HThresholds.meanMinDistancePct = prefs.getFloat(PREF_KEY_2H_MEAN_MIN_DIST, 0.60f);
     settings.alert2HThresholds.meanTouchBandPct = prefs.getFloat(PREF_KEY_2H_MEAN_TOUCH, 0.10f);
-    settings.alert2HThresholds.meanCooldownMs = prefs.getULong(PREF_KEY_2H_MEAN_CD, 60UL * 60UL * 1000UL);
+    settings.alert2HThresholds.meanCooldownMs = prefs.getULong(PREF_KEY_2H_MEAN_CD, 3600000UL);
     settings.alert2HThresholds.compressThresholdPct = prefs.getFloat(PREF_KEY_2H_COMPRESS_TH, 0.80f);
     settings.alert2HThresholds.compressResetPct = prefs.getFloat(PREF_KEY_2H_COMPRESS_RESET, 1.10f);
-    settings.alert2HThresholds.compressCooldownMs = prefs.getULong(PREF_KEY_2H_COMPRESS_CD, 2UL * 60UL * 60UL * 1000UL);
+    settings.alert2HThresholds.compressCooldownMs = prefs.getULong(PREF_KEY_2H_COMPRESS_CD, 7200000UL);
     settings.alert2HThresholds.anchorOutsideMarginPct = prefs.getFloat(PREF_KEY_2H_ANCHOR_MARGIN, 0.25f);
     settings.alert2HThresholds.anchorCooldownMs = prefs.getULong(PREF_KEY_2H_ANCHOR_CD, 3UL * 60UL * 60UL * 1000UL);
     // FASE X.4: Trend hysteresis en throttling settings
