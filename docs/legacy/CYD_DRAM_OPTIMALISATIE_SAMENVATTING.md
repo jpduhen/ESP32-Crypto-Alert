@@ -1,4 +1,11 @@
+> **Legacy document — Historical reference only.**  
+> CYD wordt niet meer ondersteund. Dit document is bewaard voor referentie.
+
+---
+
 # CYD DRAM Optimalisatie Samenvatting
+
+**Status:** CYD wordt niet meer ondersteund. Dit document is **historisch**; bewaard voor referentie.
 
 ## Overzicht
 Dit document bevat een overzicht van alle wijzigingen die zijn gemaakt om de CYD (zonder PSRAM) weer werkend te krijgen en DRAM overflow te voorkomen.

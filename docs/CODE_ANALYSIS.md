@@ -534,15 +534,9 @@ DOWN → SIDEWAYS: ret_4h > -(longTermThreshold * 0.65) || ret_1d > 0
 - PSRAM beschikbaar (double buffering)
 - Betere performance dan ESP32
 
-**CYD 2.8 (ESP32):**
-- Geen PSRAM
-- Single buffer rendering
-- Memory constraints
-- **Varianten (Versie 4.27):**
-  - `PLATFORM_CYD28_1USB`: Geen kleurinversie
-  - `PLATFORM_CYD28_2USB`: Met kleurinversie (`gfx->invertDisplay(true)`)
-  - Automatische `PLATFORM_CYD28` definitie bij variant selectie
-  - Display inversie via `PLATFORM_CYD28_INVERT_COLORS` flag in PINS files
+**CYD 2.8 (ESP32) — niet meer ondersteund:**
+- CYD24/CYD28 zijn als doelplatform uit de firmware gehaald (legacy; onvoldoende RAM). Onderstaande info is historisch.
+- Geen PSRAM, single buffer rendering, memory constraints. Varianten waren 1USB (geen inversie) en 2USB (met `PLATFORM_CYD28_INVERT_COLORS`).
 
 ---
 
@@ -611,10 +605,7 @@ DOWN → SIDEWAYS: ret_4h > -(longTermThreshold * 0.65) || ret_1d > 0
    - "ST" (Short Term) voor Engels
    - Zelfde notatie en kleuren als LT trend (+, =, -)
 
-3. **Platform Configuratie:**
-   - CYD 2.8 varianten: `PLATFORM_CYD28_1USB` en `PLATFORM_CYD28_2USB`
-   - Automatische `PLATFORM_CYD28` definitie
-   - Display inversie via PINS files (`PLATFORM_CYD28_INVERT_COLORS`)
+3. **Platform Configuratie:** (CYD24/CYD28 zijn later als doelplatform verwijderd; zie [docs/legacy/IMPACT_ANALYSIS_CYD_REMOVAL.md](legacy/IMPACT_ANALYSIS_CYD_REMOVAL.md).)
 
 4. **DRAM Optimalisaties:**
    - Meerdere buffers verkleind om DRAM overflow te voorkomen

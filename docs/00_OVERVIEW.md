@@ -2,7 +2,7 @@
 
 ## Doel van het project
 
-De **UNIFIED-LVGL9 Crypto Monitor** is een embedded firmware voor ESP32/ESP32-S3 boards (o.a. TTGO T-Display, CYD 2.4/2.8, ESP32-S3 GEEK) die:
+De **UNIFIED-LVGL9 Crypto Monitor** is een embedded firmware voor ESP32/ESP32-S3 boards (o.a. TTGO T-Display, ESP32-S3 GEEK, LCDWIKI 2.8, 4848S040) die:
 
 - **Live prijzen** ophaalt van de Bitvavo API voor een gekozen markt (bijv. BTC-EUR).
 - **Timeframe-returns** berekent (1m, 5m, 30m, 2h, 4h, 1d, 7d) via ringbuffers en optioneel warm-start (historische candles).
@@ -20,7 +20,7 @@ De code is modulair opgezet: netwerk, API, prijsdata, trend, volatiliteit, ancho
 | Pad | Rol |
 |-----|-----|
 | **UNIFIED-LVGL9-Crypto_Monitor.ino** | Hoofdsketch: globals, `setup()`, `loop()`, tasks (`apiTask`, `uiTask`, `webTask`, `priceRepeatTask`), `fetchPrice()`, warm-start, WiFi, MQTT, NTFY. |
-| **platform_config.h** | Platformkeuze (CYD24/CYD28/TTGO/ESP32S3_*), versie, debug, OTA, SYMBOL_COUNT, font/chart/UI-constanten. |
+| **platform_config.h** | Platformkeuze (TTGO/ESP32S3_*), versie, debug, OTA, SYMBOL_COUNT, font/chart/UI-constanten. |
 | **lv_conf.h** | LVGL 9 configuratie: kleurdiepte, geheugen, DPI, FreeRTOS, rendering, fonts. |
 | **PINS_*.h** | Per board: display-bus (Arduino_GFX), pinnen (TFT_*, GFX_BL), resolutie, `gfx`/`bus`, `DEV_DEVICE_INIT()`. |
 | **src/Net** | `HttpFetch`: streaming HTTP body naar buffer (`httpGetToBuffer`), netwerk-mutex. |
@@ -46,6 +46,8 @@ De code is modulair opgezet: netwerk, API, prijsdata, trend, volatiliteit, ancho
 - **Threading**: `dataMutex` beschermt gedeelde prijs/buffer-state; `apiTask` (Core 1) doet fetch + buffer-updates; `uiTask` (Core 0) doet LVGL; `priceRepeatTask` herhaalt laatste prijs elke 2s in de ringbuffer; `webTask` doet `handleClient()`.
 
 Geen wachtwoorden of API-keys in de documentatie; die staan in NVS of (voor NTFY-topic) worden gegenereerd uit device-ID.
+
+Historische/legacy documentatie (o.a. CYD-verwijdering): [docs/legacy/](legacy/).
 
 ---
 **[Overzicht technische docs](../README_NL.md#technische-documentatie-code-werking)** | **[01 Architectuur →](01_ARCHITECTURE.md)**

@@ -17,8 +17,14 @@ PLATFORM_NAME="Unknown Platform"
 if [ -f "$PLATFORM_CONFIG" ]; then
     if grep -q "^#define PLATFORM_TTGO" "$PLATFORM_CONFIG"; then
         PLATFORM_NAME="TTGO T-Display"
-    elif grep -q "^#define PLATFORM_CYD28" "$PLATFORM_CONFIG"; then
-        PLATFORM_NAME="CYD 2.8"
+    elif grep -q "^#define PLATFORM_ESP32S3_GEEK" "$PLATFORM_CONFIG"; then
+        PLATFORM_NAME="ESP32-S3 GEEK"
+    elif grep -q "^#define PLATFORM_ESP32S3_LCDWIKI_28" "$PLATFORM_CONFIG"; then
+        PLATFORM_NAME="ESP32-S3 LCDWIKI 2.8"
+    elif grep -q "^#define PLATFORM_ESP32S3_4848S040" "$PLATFORM_CONFIG"; then
+        PLATFORM_NAME="ESP32-S3 4848S040"
+    elif grep -q "^#define PLATFORM_ESP32S3_SUPERMINI" "$PLATFORM_CONFIG"; then
+        PLATFORM_NAME="ESP32-S3 Super Mini"
     fi
 fi
 

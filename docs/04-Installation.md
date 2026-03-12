@@ -59,11 +59,11 @@ Check in Device Manager (Windows) whether the COM port appears when you connect 
 5. **Important settings** (Tools menu):
    - Upload Speed: 921600 (lower to 115200 if issues occur)
    - Flash Mode: QIO
-   - Partition Scheme: **CYD/TTGO/Super Mini:** "Huge APP". **S3-GEEK, LCDWIKI 2.8, 4848S040 (OTA):** "Minimal SPIFFS (1.9MB APP with OTA)" — required for web OTA updates (two app partitions needed).
-   - PSRAM: **Disabled** for CYD24/CYD28 and TTGO, **Enabled** for S3 boards with PSRAM
+   - Partition Scheme: **TTGO/Super Mini:** "Huge APP". **S3-GEEK, LCDWIKI 2.8, 4848S040 (OTA):** "Minimal SPIFFS (1.9MB APP with OTA)" — required for web OTA updates (two app partitions needed).
+   - PSRAM: **Disabled** for TTGO, **Enabled** for S3 boards with PSRAM
 
 6. **Board-specific define**:
-   - In `platform_config.h` select the right board (`PLATFORM_CYD24`, `PLATFORM_CYD28`, `PLATFORM_TTGO`, `PLATFORM_ESP32S3_GEEK`, `PLATFORM_ESP32S3_SUPERMINI`, `PLATFORM_ESP32S3_4848S040`).
+   - In `platform_config.h` select the right board (`PLATFORM_TTGO`, `PLATFORM_ESP32S3_GEEK`, `PLATFORM_ESP32S3_SUPERMINI`, `PLATFORM_ESP32S3_LCDWIKI_28`, `PLATFORM_ESP32S3_4848S040`, `PLATFORM_ESP32S3_AMOLED_206`).
    - Keep exactly one platform enabled.
 
 ![Code defines](img/code-defines.jpg)  

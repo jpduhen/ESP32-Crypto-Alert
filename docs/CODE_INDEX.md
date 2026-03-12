@@ -1,8 +1,8 @@
 # Code Index - UNIFIED-LVGL9-Crypto_Monitor
 
 **Versie:** 4.27  
-**Platform:** ESP32 (TTGO T-Display, CYD 2.4/2.8, ESP32-S3 Super Mini)  
-**Laatste update:** 2026-01-06 - Versie 4.27: Long-term trend detection (4h/1d), KT/ST trend labels, LT trend notifications, CYD 2.8 varianten, DRAM optimalisaties
+**Platform:** ESP32 (TTGO T-Display, ESP32-S3 Super Mini, GEEK, LCDWIKI 2.8, 4848S040, AMOLED 206)
+**Laatste update:** 2026-01-06 - Versie 4.27: Long-term trend detection (4h/1d), KT/ST trend labels, LT trend notifications, DRAM optimalisaties; CYD removed (Fase 1–4).
 
 ---
 
@@ -358,25 +358,14 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 
 **Defines:**
 - `PLATFORM_TTGO` - TTGO T-Display
-- `PLATFORM_CYD24` - CYD 2.4 inch
-- `PLATFORM_CYD28_1USB` - CYD 2.8 inch (1 USB, geen kleurinversie)
-- `PLATFORM_CYD28_2USB` - CYD 2.8 inch (2 USB, met kleurinversie)
-- `PLATFORM_CYD28` - Automatisch gedefinieerd bij CYD28 variant selectie
 - `PLATFORM_ESP32S3_SUPERMINI` - ESP32-S3 Super Mini
 - `VERSION_MAJOR` / `VERSION_MINOR` / `VERSION_STRING`
 - `DEBUG_BUTTON_ONLY` - Debug logging configuratie
 
 ### Pin Configuratiebestanden
 - `PINS_TTGO_T_Display.h` - TTGO pin configuratie
-- `PINS_CYD-ESP32-2432S024.h` - CYD 2.4 pin configuratie
-- `PINS_CYD-ESP32-2432S028-1USB.h` - CYD 2.8 pin configuratie (1 USB, geen inversie)
-- `PINS_CYD-ESP32-2432S028-2USB.h` - CYD 2.8 pin configuratie (2 USB, met inversie via `PLATFORM_CYD28_INVERT_COLORS`)
 - `PINS_ESP32S3_SuperMini_ST7789_154.h` - ESP32-S3 Super Mini pin configuratie
-
-**Versie 4.27 Features:**
-- CYD 2.8 varianten: Selecteer `PLATFORM_CYD28_1USB` of `PLATFORM_CYD28_2USB` in `platform_config.h`
-- Automatische `PLATFORM_CYD28` definitie
-- Display inversie via `PLATFORM_CYD28_INVERT_COLORS` flag in PINS files
+- (CYD24/CYD28 PINS-bestanden zijn in Fase 4 verwijderd; platform niet meer ondersteund.)
 
 ### `lv_conf.h`
 **Doel:** LVGL library configuratie
@@ -493,15 +482,9 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 - **Implementatie:** `UIController::updateLongTermTrendLabel()`
 - **Bestand:** `src/UIController/UIController.cpp`
 
-#### Platform Configuratie (CYD 2.8 Varianten)
-- **Feature:** CYD 2.8 varianten met display inversie optie
-- **Implementatie:** 
-  - `PLATFORM_CYD28_1USB` / `PLATFORM_CYD28_2USB` selectie
-  - Automatische `PLATFORM_CYD28` definitie
-  - Display inversie via `PLATFORM_CYD28_INVERT_COLORS` in PINS files
-- **Bestanden:** 
-  - `platform_config.h`
-  - `PINS_CYD-ESP32-2432S028-1USB.h` / `PINS_CYD-ESP32-2432S028-2USB.h`
+#### Platform Configuratie (CYD — verwijderd)
+- **Status:** CYD24/CYD28 zijn verwijderd (Fase 1–4). Platformdefines, PINS-bestanden en CYD-specifieke code zijn opgeruimd.
+- **Legacy documentatie:** Zie [docs/legacy/](legacy/) voor de historische impactanalyse en CYD DRAM-samenvatting.
 
 #### DRAM Optimalisaties
 - **Feature:** Buffer verkleiningen om DRAM overflow te voorkomen

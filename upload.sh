@@ -19,12 +19,6 @@ if [ -f "$PLATFORM_CONFIG" ]; then
     if grep -q "^#define PLATFORM_TTGO" "$PLATFORM_CONFIG"; then
         PLATFORM_NAME="TTGO T-Display"
         PARTITION_SCHEME="huge_app"
-    elif grep -q "^#define PLATFORM_CYD24" "$PLATFORM_CONFIG"; then
-        PLATFORM_NAME="CYD ESP32-2432S024"
-        PARTITION_SCHEME="huge_app"
-    elif grep -q "^#define PLATFORM_CYD28" "$PLATFORM_CONFIG"; then
-        PLATFORM_NAME="CYD ESP32-2432S028"
-        PARTITION_SCHEME="huge_app"
     elif grep -q "^#define PLATFORM_ESP32S3_GEEK" "$PLATFORM_CONFIG"; then
         PLATFORM_NAME="ESP32-S3 GEEK"
         PARTITION_SCHEME="min_spiffs"  # OTA: twee app-partities (1.9MB elk)

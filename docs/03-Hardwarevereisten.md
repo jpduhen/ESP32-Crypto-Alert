@@ -16,7 +16,8 @@ Een display is sterk aanbevolen, maar niet verplicht (headless gebruik met allee
 ## 3.2 Aanbevolen Kant-en-Klare Boards
 
 ### 3.2.1 ESP32-2432S02xx "Cheap Yellow Display" (CYD)
-De meest gebruikte en goedkoopste optie (€10-15). Er zijn 2.4" en 2.8" varianten (CYD24/CYD28) met resistive touchscreen, SD-kaartslot en veel GPIO.
+De meest gebruikte en goedkoopste optie (€10-15). Er zijn 2.4" en 2.8" varianten (CYD24/CYD28) met resistive touchscreen, SD-kaartslot en veel GPIO.  
+**Let op:** CYD24/CYD28 worden in deze firmware niet meer als doelplatform ondersteund (legacy; onvoldoende RAM voor huidige functies).
 
 ![Cheap Yellow Display voorkant](img/cyd-front.webp)  
 *Voorkant van de ESP32-2432S028R "Cheap Yellow Display".*
@@ -62,7 +63,7 @@ Bij gebruik van een generieke ESP32 (bijv. DevKit) kun je een los TFT-display aa
 
 | Board/Model                  | Display Type          | Resolutie                   | Touch         | Direct Ondersteund | Opmerkingen                          |
 |------------------------------|-----------------------|-----------------------------|---------------|---------------------|--------------------------------------|
-| ESP32-2432S02xx (CYD24/28)   | 2.4" / 2.8" TFT       | Variantafhankelijk           | Resistive    | Ja                 | Beste prijs/kwaliteit                |
+| ESP32-2432S02xx (CYD24/28)   | 2.4" / 2.8" TFT       | Variantafhankelijk           | Resistive    | Nee (legacy)       | Niet meer ondersteund in deze firmware |
 | ESP32-S3 LCDWIKI 2.8         | 2.8" ILI9341         | 240×320                     | Capacitive  | Ja                 | S3 + PSRAM, kleureninversie nodig    |
 | ESP32-4848S040C_i            | 4.0" rond ST7701     | 480×480                     | Afhankelijk  | Ja                 | Groot, hoge resolutie                |
 | LilyGO TTGO T-Display        | 1.14" ST7789         | 240×135                     | Nee          | Ja                 | Compact                              |

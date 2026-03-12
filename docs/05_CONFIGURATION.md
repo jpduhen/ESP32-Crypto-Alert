@@ -14,9 +14,9 @@ Er worden **geen** wachtwoorden of API-keys in code of documentatie gezet. NTFY-
 
 ## platform_config.h
 
-- **Platform**: precies één van: `PLATFORM_CYD24`, `PLATFORM_CYD28_1USB`, `PLATFORM_CYD28_2USB`, `PLATFORM_TTGO`, `PLATFORM_ESP32S3_SUPERMINI`, `PLATFORM_ESP32S3_GEEK`, `PLATFORM_ESP32S3_LCDWIKI_28`, `PLATFORM_ESP32S3_4848S040`, `PLATFORM_ESP32S3_AMOLED_206`.
+- **Platform**: precies één van: `PLATFORM_TTGO`, `PLATFORM_ESP32S3_SUPERMINI`, `PLATFORM_ESP32S3_GEEK`, `PLATFORM_ESP32S3_LCDWIKI_28`, `PLATFORM_ESP32S3_4848S040`, `PLATFORM_ESP32S3_AMOLED_206`.
 - **Versie**: `VERSION_STRING` (bijv. "5.15").
-- **Debug**: `DEBUG_BUTTON_ONLY` (1 = alleen knop-log), `DEBUG_CALCULATIONS` (0 = uit op CYD/TTGO i.v.m. DRAM).
+- **Debug**: `DEBUG_BUTTON_ONLY` (1 = alleen knop-log), `DEBUG_CALCULATIONS` (0 = uit op TTGO i.v.m. DRAM).
 - **WebSocket**: `WS_ENABLED` (0/1).
 - **Taal default**: `DEFAULT_LANGUAGE` (0 = NL, 1 = EN).
 - **OTA**: `OTA_ENABLED`, `OTA_HOSTNAME` (alleen voor boards met voldoende flash-partities).

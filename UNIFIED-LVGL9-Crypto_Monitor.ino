@@ -1,5 +1,5 @@
 // Tutorial : https://youtu.be/JqQEG0eipic
-// Unified Crypto Monitor - Supports TTGO T-Display and CYD 2.8
+// Unified Crypto Monitor - Supports TTGO T-Display, ESP32-S3 GEEK, LCDWIKI 2.8, 4848S040, etc.
 // Select platform in platform_config.h
 
 #define LV_CONF_INCLUDE_SIMPLE // Use the lv_conf.h included in this project, to configure see https://docs.lvgl.io/master/get-started/platforms/arduino.html
@@ -104,7 +104,7 @@
     
     // DEBUG_CALCULATIONS logging werkt altijd, ongeacht DEBUG_BUTTON_ONLY
     // WAARSCHUWING: DEBUG_CALCULATIONS gebruikt DRAM voor debug strings
-    // Voor CYD/TTGO (geen PSRAM) wordt dit standaard UIT gezet in platform_config.h
+    // Voor TTGO (geen PSRAM) wordt dit standaard UIT gezet in platform_config.h
     #if DEBUG_CALCULATIONS
         #undef Serial_printf
         #undef Serial_println
@@ -277,7 +277,7 @@
 // Global Variables
 // ============================================================================
 
-// Touchscreen functionaliteit volledig verwijderd - CYD's gebruiken nu fysieke boot knop (GPIO 0)
+// Touchscreen functionaliteit volledig verwijderd - fysieke boot knop (GPIO 0)
 
 // LVGL Display global variables
 // Fase 8: Display state - gebruikt door UIController module
@@ -289,9 +289,9 @@ size_t disp_draw_buf_size = 0;  // Buffer grootte in bytes (voor logging)
 // Fase 8: UI object pointers - gebruikt door UIController module (zie src/UIController/UIController.h)
 lv_obj_t *chart;
 lv_chart_series_t *dataSeries;     // Blauwe serie voor alle punten
-lv_obj_t *lblFooterLine1; // Footer regel 1 (alleen voor CYD: dBm links, RAM rechts)
-lv_obj_t *lblFooterLine2; // Footer regel 2 (alleen voor CYD: IP links, versie rechts)
-lv_obj_t *ramLabel; // RAM label rechts op regel 1 (alleen voor CYD)
+lv_obj_t *lblFooterLine1; // Footer regel 1 (dBm links, RAM rechts)
+lv_obj_t *lblFooterLine2; // Footer regel 2 (IP links, versie rechts)
+lv_obj_t *ramLabel; // RAM label rechts op regel 1
 
 // One card per symbol
 // Fase 8: UI object pointers - gebruikt door UIController module
@@ -311,7 +311,7 @@ SemaphoreHandle_t gNetMutex = NULL;
 #if defined(PLATFORM_ESP32S3_4848S040)
 char symbol0[16] = "BTC-EUR";
 extern const char *const symbols[SYMBOL_COUNT] = {symbol0, SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL, SYMBOL_1D_LABEL, SYMBOL_7D_LABEL};
-#elif defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28)
+#elif defined(PLATFORM_ESP32S3_LCDWIKI_28)
 char symbol0[16] = "BTC-EUR";
 extern const char *const symbols[SYMBOL_COUNT] = {symbol0, SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL};
 #else
@@ -512,7 +512,7 @@ uint32_t minRange;
 // chartMaxLabel verwijderd - niet meer nodig
 
 // Fase 8: UI object pointers - gebruikt door UIController module (zie src/UIController/UIController.h)
-lv_obj_t *chartTitle;     // Label voor chart titel (symbool) - alleen voor CYD
+lv_obj_t *chartTitle;     // Label voor chart titel (symbool)
 lv_obj_t *chartVersionLabel; // Label voor versienummer (rechts bovenste regel)
 lv_obj_t *chartDateLabel; // Label voor datum rechtsboven (vanaf pixel 180)
 lv_obj_t *chartTimeLabel; // Label voor tijd rechtsboven
@@ -524,9 +524,9 @@ lv_obj_t *price1MinDiffLabel; // Label voor verschil tussen max en min in 1 min 
 lv_obj_t *price30MinMaxLabel; // Label voor max waarde in 30 min buffer
 lv_obj_t *price30MinMinLabel; // Label voor min waarde in 30 min buffer
 lv_obj_t *price30MinDiffLabel; // Label voor verschil tussen max en min in 30 min buffer
-lv_obj_t *price2HMaxLabel = nullptr; // Label voor max waarde in 2h buffer (alleen CYD, nullptr voor andere platforms)
-lv_obj_t *price2HMinLabel = nullptr; // Label voor min waarde in 2h buffer (alleen CYD, nullptr voor andere platforms)
-lv_obj_t *price2HDiffLabel = nullptr; // Label voor verschil tussen max en min in 2h buffer (alleen CYD, nullptr voor andere platforms)
+lv_obj_t *price2HMaxLabel = nullptr; // Label voor max waarde in 2h buffer (LCDWIKI/4848S040; nullptr voor 3-symbol platforms)
+lv_obj_t *price2HMinLabel = nullptr; // Label voor min waarde in 2h buffer
+lv_obj_t *price2HDiffLabel = nullptr; // Label voor verschil tussen max en min in 2h buffer
 lv_obj_t *price1DMaxLabel = nullptr; // Label voor max waarde in 1d buffer (4848S040)
 lv_obj_t *price1DMinLabel = nullptr; // Label voor min waarde in 1d buffer (4848S040)
 lv_obj_t *price1DDiffLabel = nullptr; // Label voor verschil tussen max en min in 1d buffer (4848S040)
@@ -584,7 +584,7 @@ char anchorMaxLabelBuffer[18];  // Buffer voor anchor max label (max: "12345.67"
 char anchorLabelBuffer[24];  // Buffer voor anchor label (max: "12345.67" = ~8 chars)
 char anchorMinLabelBuffer[24];  // Buffer voor anchor min label (max: "12345.67" = ~8 chars)
 // Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
-char priceTitleBuffer[SYMBOL_COUNT][40];  // Buffers voor price titles (verkleind van 48 naar 40 bytes, bespaart 24 bytes voor CYD)
+char priceTitleBuffer[SYMBOL_COUNT][40];  // Buffers voor price titles (verkleind van 48 naar 40 bytes)
 char price1MinMaxLabelBuffer[18];  // Buffer voor 1m max label (max: "12345.67" = ~8 chars)
 char price1MinMinLabelBuffer[18];  // Buffer voor 1m min label (max: "12345.67" = ~8 chars)
 char price1MinDiffLabelBuffer[18];  // Buffer voor 1m diff label (max: "12345.67" = ~8 chars)
@@ -614,9 +614,9 @@ float lastPrice1MinDiffValue = -1.0f;  // Cache voor 1m diff
 float lastPrice30MinMaxValue = -1.0f;  // Cache voor 30m max
 float lastPrice30MinMinValue = -1.0f;  // Cache voor 30m min
 float lastPrice30MinDiffValue = -1.0f;  // Cache voor 30m diff
-float lastPrice2HMaxValue = -1.0f;  // Cache voor 2h max (alleen gebruikt voor CYD platforms)
-float lastPrice2HMinValue = -1.0f;  // Cache voor 2h min (alleen gebruikt voor CYD platforms)
-float lastPrice2HDiffValue = -1.0f;  // Cache voor 2h diff (alleen gebruikt voor CYD platforms)
+float lastPrice2HMaxValue = -1.0f;  // Cache voor 2h max (LCDWIKI/4848S040)
+float lastPrice2HMinValue = -1.0f;  // Cache voor 2h min
+float lastPrice2HDiffValue = -1.0f;  // Cache voor 2h diff
 float lastPrice1DMaxValue = -1.0f;  // Cache voor 1d max (4848S040)
 float lastPrice1DMinValue = -1.0f;  // Cache voor 1d min (4848S040)
 float lastPrice1DDiffValue = -1.0f;  // Cache voor 1d diff (4848S040)
@@ -651,7 +651,7 @@ bool secondArrayFilled = false;
 bool newPriceDataAvailable = false;  // Flag om aan te geven of er nieuwe prijsdata is voor grafiek update
 
 // Array van 300 posities voor laatste 300 seconden (5 minuten) - voor ret_5m berekening
-// Dynamisch gealloceerd: CYD/TTGO zonder PSRAM → INTERNAL; S3 e.d. met PSRAM → SPIRAM (bespaart DRAM)
+// Dynamisch gealloceerd: TTGO zonder PSRAM → INTERNAL; S3 e.d. met PSRAM → SPIRAM (bespaart DRAM)
 float *fiveMinutePrices = nullptr;
 DataSource *fiveMinutePricesSource = nullptr;
 uint16_t fiveMinuteIndex = 0;
@@ -659,7 +659,7 @@ bool fiveMinuteArrayFilled = false;
 
 // Array van 120 posities voor laatste 120 minuten (2 uur)
 // Elke minuut wordt het gemiddelde van de 60 seconden opgeslagen
-// Dynamisch gealloceerd: CYD/TTGO zonder PSRAM → INTERNAL; S3 e.d. met PSRAM → SPIRAM (bespaart DRAM)
+// Dynamisch gealloceerd: TTGO zonder PSRAM → INTERNAL; S3 e.d. met PSRAM → SPIRAM (bespaart DRAM)
 float *minuteAverages = nullptr;
 DataSource *minuteAveragesSource = nullptr;
 // Fase 4.2.9: static verwijderd zodat PriceData getters deze kunnen gebruiken
@@ -2279,10 +2279,11 @@ static WarmStartMode performWarmStart()
     #endif
     
     // Initialiseer prices array met warm-start waarden (voor directe UI weergave)
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
+    #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_4848S040)
     if (hasRet2h) {
         prices[3] = ret_2h;  // Zet 2h return direct na warm-start
     }
+    #endif
     #if defined(PLATFORM_ESP32S3_4848S040)
     if (hasRet1d) {
         prices[4] = ret_1d;  // Zet 1d return direct na warm-start
@@ -2290,7 +2291,6 @@ static WarmStartMode performWarmStart()
     if (hasRet7d) {
         prices[5] = ret_7d;  // Zet 7d return direct na warm-start
     }
-    #endif
     #endif
     
     // Bereken 2h gemiddelde na warm-start (voor UI weergave)
@@ -2726,13 +2726,8 @@ static void maybeInitWebSocketAfterWarmStart()
 #else
     const uint32_t freeHeap = ESP.getFreeHeap();
     const uint32_t largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-        const uint32_t wsMinFreeHeap = 14000;
-        const uint32_t wsMinLargestBlock = 1200;
-    #else
-        const uint32_t wsMinFreeHeap = 20000;
-        const uint32_t wsMinLargestBlock = 2000;
-    #endif
+    const uint32_t wsMinFreeHeap = 20000;
+    const uint32_t wsMinLargestBlock = 2000;
     if (freeHeap < wsMinFreeHeap || largestBlock < wsMinLargestBlock) {
         Serial_printf(F("[WS] Skip init: low heap (free=%u, largest=%u, minFree=%u, minLargest=%u)\n"),
                       freeHeap, largestBlock, wsMinFreeHeap, wsMinLargestBlock);
@@ -3267,10 +3262,8 @@ void netMutexUnlock(const char* taskName)
 // Fase 6.1: AlertEngine module gebruikt deze functies (extern declarations in AlertEngine.cpp)
 void findMinMaxInSecondPrices(float &minVal, float &maxVal);
 void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
-void findMinMaxInLast2Hours(float &minVal, float &maxVal);  // CYD + 4848S040
-#endif
+#if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_4848S040)
+void findMinMaxInLast2Hours(float &minVal, float &maxVal);
 #endif
 TwoHMetrics computeTwoHMetrics();  // Compute 2-hour metrics uniformly from existing state
 static void checkHeapTelemetry();
@@ -6102,13 +6095,6 @@ static float calculateLinearTrend2Hours()
         return 0.0f;
     }
     
-    // Calculate average price for display (update averagePrices[3])
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-    if (avgCount > 0) {
-        averagePrices[3] = avgSum / avgCount;
-    }
-    #endif
-    
     // Calculate slope (b)
     float n = (float)validPoints;
     float denominator = (n * sumX2) - (sumX * sumX);
@@ -6641,9 +6627,8 @@ void findMinMaxInLast30Minutes(float &minVal, float &maxVal)
     bool result = findMinMaxInArray(minuteAverages, MINUTES_FOR_30MIN_CALC, minuteIndex, minuteArrayFilled, 30, true, minVal, maxVal);
 }
 
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_4848S040)
+#if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_4848S040)
 // Find min and max values in last 2 hours (120 minutes) of minuteAverages array
-// CYD + 4848S040 platforms met 2h box
 // Fase 2.1: Geoptimaliseerd: gebruikt generic findMinMaxInArray() helper
 void findMinMaxInLast2Hours(float &minVal, float &maxVal)
 {
@@ -6652,18 +6637,17 @@ void findMinMaxInLast2Hours(float &minVal, float &maxVal)
 #endif
 
 // Compute 2-hour metrics uniformly from existing state
-// Gebruikt bestaande berekeningen: averagePrices[3], findMinMaxInLast2Hours() (CYD) of minuteAverages (andere), hasRet2h
+// Gebruikt bestaande berekeningen: averagePrices[3], findMinMaxInLast2Hours() (LCDWIKI/4848S040) of minuteAverages (andere), hasRet2h
 TwoHMetrics computeTwoHMetrics()
 {
     TwoHMetrics metrics;
     
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
+    #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_4848S040)
     // Gebruik bestaande 2h average (wordt berekend in calculateReturn2Hours())
     metrics.avg2h = averagePrices[3];
-    // Gebruik bestaande findMinMaxInLast2Hours() functie voor CYD platforms
     findMinMaxInLast2Hours(metrics.low2h, metrics.high2h);
     #else
-    // Voor niet-CYD platforms: bereken 2h avg/min/max uit minuteAverages (zoals findMinMaxInLast2Hours doet)
+    // Voor 3-symbol platforms: bereken 2h avg/min/max uit minuteAverages (zoals findMinMaxInLast2Hours doet)
     metrics.avg2h = 0.0f;
     metrics.low2h = 0.0f;
     metrics.high2h = 0.0f;
@@ -7027,7 +7011,7 @@ void fetchPrice()
         #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
         const TickType_t apiMutexTimeout = pdMS_TO_TICKS(500); // TTGO/GEEK: 500ms
         #else
-        const TickType_t apiMutexTimeout = pdMS_TO_TICKS(400); // CYD/ESP32-S3: 400ms voor betere mutex acquisitie
+        const TickType_t apiMutexTimeout = pdMS_TO_TICKS(400); // 400ms voor betere mutex acquisitie
         #endif
         
         // Geoptimaliseerd: betere mutex timeout handling met retry logica
@@ -7109,32 +7093,12 @@ void fetchPrice()
             // Update hasRet30m: beschikbaar als warm-start OF live OF 30+ minuten data beschikbaar
             hasRet30m = hasRet30mWarm || hasRet30mLive || (availableMinutes >= 30);
             
-            // Bereken ret_2h: herbereken zodra er 2+ minuten data zijn (ook als mix van warm-start en live)
-            // Dit zorgt ervoor dat de waarde wordt bijgewerkt naarmate er meer live data binnenkomt
-            #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-            if (availableMinutes >= 2) {
-                // Genoeg data beschikbaar: herbereken met beschikbare data (kan mix zijn)
-                ret_2h = calculateReturn2Hours();
-                #if DEBUG_CALCULATIONS
-                Serial_printf(F("[API][2h] Recalculated (regressie): ret_2h=%.4f%%, availableMinutes=%u, livePct=%u%%\n"),
-                             ret_2h, availableMinutes, livePct120);
-                #endif
-            } else if (hasRet2hWarm) {
-                // Niet genoeg data, maar warm-start beschikbaar: behoud warm-start waarde
-                // ret_2h blijft de warm-start waarde
-            } else {
-                // Niet genoeg data en geen warm-start: reset naar 0
-                ret_2h = 0.0f;
-            }
-            #else
-            // Voor niet-CYD platforms: alleen herbereken als er 120+ minuten zijn
+            // Herbereken ret_2h alleen als er 120+ minuten data zijn
             if (hasRet2hLive) {
                 ret_2h = calculateReturn2Hours();
             } else if (!hasRet2hWarm) {
                 ret_2h = 0.0f;
             }
-            // Als hasRet2hWarm true is maar hasRet2hLive false, behoud dan de warm-start waarde (doe niets)
-            #endif
             
             // Hourly buffer availability
             uint16_t availableHours = getAvailableHours();
@@ -7262,8 +7226,8 @@ void fetchPrice()
                 prices[2] = 0.0f; // Reset naar 0 om aan te geven dat er nog geen data is
             }
             
-            // 2h return voor CYD platforms (index 3)
-            #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
+            // 2h return (index 3) voor LCDWIKI_28 en 4848S040
+            #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_4848S040)
             // ret_2h wordt nu altijd berekend in calculateReturn2Hours(), ook als er minder dan 120 minuten zijn
             // Het berekent een return op basis van beschikbare data (minimaal 2 minuten nodig)
             if (hasRet2h) {
@@ -7373,7 +7337,7 @@ static char lastDateText[11] = {0};  // Cache voor date label
 static char lastTimeText[9] = {0};   // Cache voor time label
 
 // ============================================================================
-// RGB LED Functions (alleen voor CYD platforms)
+// RGB LED Functions
 // ============================================================================
 
 // Helper functie om footer bij te werken
@@ -7469,7 +7433,7 @@ void updateFooter()
         lv_label_set_text(lblFooterLine2, ipStr);
     }
     
-    // CYD: Update versie label (rechtsonder, regel 2) - force update als cache leeg is
+    // Update versie label (rechtsonder, regel 2) - force update als cache leeg is
     if (chartVersionLabel != nullptr) {
         if (strlen(lastVersionText) == 0 || strcmp(lastVersionText, VERSION_STRING) != 0) {
             lv_label_set_text(chartVersionLabel, VERSION_STRING);
@@ -7532,7 +7496,7 @@ void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
     lv_disp_flush_ready(disp);
 }
 
-// Physical button check function (voor TTGO en CYD platforms)
+// Physical button check function (voor TTGO en ESP32-S3)
 #if HAS_PHYSICAL_BUTTON
 // Button debouncing - edge detection voor betere eerste-druk detectie
 // Fase 8.9.1: static verwijderd zodat UIController module deze kan gebruiken
@@ -7659,7 +7623,7 @@ static void setupSerialAndDevice()
     DEV_DEVICE_INIT();
     #endif
     
-    // Initialiseer fysieke reset button (voor TTGO en CYD platforms)
+    // Initialiseer fysieke reset button (voor TTGO en ESP32-S3)
     #if HAS_PHYSICAL_BUTTON
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     #endif
@@ -7688,20 +7652,15 @@ static void setupDisplay()
     // Alleen 0 en 2 zijn geldig voor 180 graden rotatie
     uint8_t rotation = (displayRotation == 2) ? 2 : 0;
     gfx->setRotation(rotation);
-    // TTGO/ESP32-S3: standaard geen inversie
-    // CYD24/CYD28: standaard false, behalve wanneer INVERT_COLORS flag is gezet
+    // TTGO/ESP32-S3: standaard geen inversie; LCDWIKI 2.8 kan PLATFORM_LCDWIKI28_INVERT_COLORS gebruiken
     #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     gfx->invertDisplay(false); // TTGO/ESP32-S3 T-Display/GEEK heeft geen inversie nodig (ST7789)
     #elif defined(PLATFORM_ESP32S3_4848S040)
     gfx->invertDisplay(false); // 4848S040: geen inversie (basisinstelling)
     #elif defined(PLATFORM_LCDWIKI28_INVERT_COLORS)
     gfx->invertDisplay(true); // LCDWIKI 2.8: kleurinversie nodig
-    #elif defined(PLATFORM_CYD24_INVERT_COLORS)
-    gfx->invertDisplay(true); // CYD24: inverteer kleuren
-    #elif defined(PLATFORM_CYD28_INVERT_COLORS)
-    gfx->invertDisplay(true); // CYD28 2USB variant: inverteer kleuren
     #else
-    gfx->invertDisplay(false); // CYD24/CYD28: geen inversie (standaard)
+    gfx->invertDisplay(false);
     #endif
     gfx->fillScreen(RGB565_BLACK);
     
@@ -7720,7 +7679,7 @@ static void setupDisplay()
     setDisplayBrigthness();
     #endif
     
-    // Geef display tijd om te stabiliseren na initialisatie (vooral belangrijk voor CYD displays en ESP32-S3)
+    // Geef display tijd om te stabiliseren na initialisatie (vooral belangrijk voor ESP32-S3)
     #if !defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     delay(200); // ESP32-S3 heeft extra tijd nodig voor SPI stabilisatie
     #endif
@@ -7753,10 +7712,7 @@ static void setupLVGL()
     
     // Bepaal useDoubleBuffer: board-aware
     bool useDoubleBuffer;
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-        // CYD zonder PSRAM: force single buffer (geen double buffering)
-        useDoubleBuffer = false;  // Altijd false voor CYD zonder PSRAM
-    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
+    #if defined(PLATFORM_ESP32S3_SUPERMINI)
         // ESP32-S3: double buffer alleen als PSRAM beschikbaar is
         useDoubleBuffer = psramAvailable;
     #elif defined(PLATFORM_ESP32S3_GEEK)
@@ -7770,20 +7726,9 @@ static void setupLVGL()
         useDoubleBuffer = psramAvailable;
     #endif
     
-    // Bepaal buffer lines per board (compile-time instelbaar voor CYD)
+    // Bepaal buffer lines per board
     uint8_t bufLines;
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-        // CYD zonder PSRAM: compile-time instelbaar (default 4, kan 1/2/4 zijn voor testen)
-        // Na geheugenoptimalisaties kunnen we meer buffer gebruiken voor betere performance
-        #ifndef CYD_BUF_LINES_NO_PSRAM
-        #define CYD_BUF_LINES_NO_PSRAM 4  // Default: 4 regels (was 1->2->4, verhoogd na geheugenoptimalisaties)
-        #endif
-        if (psramAvailable) {
-            bufLines = 40;  // CYD met PSRAM: 40 regels
-        } else {
-            bufLines = CYD_BUF_LINES_NO_PSRAM;  // CYD zonder PSRAM: compile-time instelbaar
-        }
-    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
+    #if defined(PLATFORM_ESP32S3_SUPERMINI)
         // ESP32-S3 met PSRAM: 30 regels (of fallback kleiner als geen PSRAM)
         if (psramAvailable) {
             bufLines = 30;
@@ -7831,11 +7776,7 @@ static void setupLVGL()
     
     // Bepaal board naam voor logging
     const char* boardName;
-    #if defined(PLATFORM_CYD24)
-        boardName = "CYD24";
-    #elif defined(PLATFORM_CYD28)
-        boardName = "CYD28";
-    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
+    #if defined(PLATFORM_ESP32S3_SUPERMINI)
         boardName = "ESP32-S3";
     #elif defined(PLATFORM_ESP32S3_GEEK)
         boardName = "ESP32-S3 GEEK";
@@ -7910,21 +7851,7 @@ static void setupLVGL()
 
 static void setupWatchdog()
 {
-    // Watchdog configuratie - platform-specifiek
-    #ifdef PLATFORM_CYD24
-    // Schakel task watchdog UIT voor Core 0 (UI task met LVGL)
-    // LVGL rendering gebruikt veel CPU tijd en kan de IDLE task blokkeren
-    // Door de watchdog uit te schakelen voorkomen we crashes tijdens rendering
-    // Dit is nodig voor de 2.4 inch display omdat lv_task_handler() langer duurt
-    // Work-around om zwarte scherm te voorkomen
-    esp_err_t wdt_err = esp_task_wdt_deinit();
-    if (wdt_err != ESP_OK && wdt_err != ESP_ERR_NOT_FOUND) {
-        Serial.printf("[WDT] Deinit error: %d\n", wdt_err);
-    } else {
-        Serial.println("[WDT] Watchdog UITGESCHAKELD voor Core 0 (LVGL rendering) - CYD 2.4 work-around");
-    }
-    #else
-    // Configureer task watchdog timeout (10 seconden) voor andere platforms
+    // Configureer task watchdog timeout (10 seconden)
     // ESP32 Arduino core initialiseert de watchdog al, dus eerst deinit dan init
     esp_err_t deinit_err = esp_task_wdt_deinit();
     if (deinit_err != ESP_OK && deinit_err != ESP_ERR_NOT_FOUND) {
@@ -7944,7 +7871,6 @@ static void setupWatchdog()
         Serial.printf("[WDT] Init error: %d\n", init_err);
         #endif
     }
-    #endif
 }
 
 static void setupWiFiEventHandlers()
@@ -8010,7 +7936,7 @@ static void setupMutex()
     }
 }
 
-// Alloceer ringbuffer-arrays: op PSRAM-borden (S3 e.d.) in SPIRAM, anders in INTERNAL (CYD/TTGO)
+// Alloceer ringbuffer-arrays: op PSRAM-borden (S3 e.d.) in SPIRAM, anders in INTERNAL (TTGO)
 static void allocateDynamicArrays()
 {
     if (fiveMinutePrices == nullptr) {
@@ -8156,7 +8082,7 @@ void setup()
     setupMutex();  // Mutex moet vroeg aangemaakt worden, maar tasks starten later
     logBootStage("after mutex");
     
-    // Alloceer dynamische arrays voor CYD zonder PSRAM (moet voor initialisatie)
+    // Alloceer dynamische arrays (moet voor initialisatie)
     allocateDynamicArrays();
     logBootStage("after arrays");
     
@@ -8261,39 +8187,11 @@ void setup()
     logBootStage("after buildUI");
     
     // Force LVGL to render immediately after UI creation
-    // CYD 2.4 en CYD 2.8 (zonder PSRAM, single buffering): gebruik lv_refr_now() voor directe rendering
-    // CYD boards hebben geen PSRAM, dus altijd single buffering
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-    if (disp != NULL) {
-        lv_refr_now(disp);
-        Serial.println(F("[LVGL] Forced immediate refresh (lv_refr_now) voor CYD zonder PSRAM"));
-    }
-    #else
-    // Voor andere platforms, roep timer handler aan om scherm te renderen
     for (int i = 0; i < 10; i++) {
         lv_timer_handler();
         delay(DELAY_LVGL_RENDER_MS);
     }
-    #endif
     logBootStage("after first render");
-    
-    // Fase 7.2b: Minimale guard: controleer arrays vóór tasks starten
-    // Warm-start is de enige schrijver tijdens setup (tasks bestaan nog niet)
-    // Deze check voorkomt dat tasks starten met ongeldige arrays
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-    if (!hasPSRAM()) {
-        if (fiveMinutePrices == nullptr || fiveMinutePricesSource == nullptr ||
-            minuteAverages == nullptr || minuteAveragesSource == nullptr) {
-            Serial.println(F("[FATAL] Arrays niet gealloceerd vóór task start!"));
-            Serial.printf("[Memory] Free heap: %u bytes\n", ESP.getFreeHeap());
-            while (true) {
-                delay(1000);
-                yield();
-                Serial.println(F("[FATAL] Waiting for reset..."));
-            }
-        }
-    }
-    #endif
     
     // Start FreeRTOS tasks NA buildUI() en NA warm-start
     // Warm-start heeft exclusieve toegang tijdens setup (geen race conditions mogelijk)
@@ -8791,11 +8689,11 @@ void uiTask(void *parameter)
 {
     TickType_t lastWakeTime = xTaskGetTickCount();
     const TickType_t frequency = pdMS_TO_TICKS(UPDATE_UI_INTERVAL);
-    // LVGL handler frequentie - CYD heeft meer rendering overhead, dus iets vaker aanroepen
+    // LVGL handler frequentie
     #ifdef PLATFORM_TTGO
     const TickType_t lvglFrequency = pdMS_TO_TICKS(5); // TTGO: elke 5ms
     #else
-    const TickType_t lvglFrequency = pdMS_TO_TICKS(3); // CYD/ESP32-S3: elke 3ms voor vloeiendere rendering
+    const TickType_t lvglFrequency = pdMS_TO_TICKS(3); // Elke 3ms voor vloeiendere rendering
     #endif
     TickType_t lastLvglTime = xTaskGetTickCount();
     
@@ -8815,17 +8713,9 @@ void uiTask(void *parameter)
         applyPendingDisplayRotation();
         
         // Roep LVGL task handler regelmatig aan (elke 5ms) om IDLE task tijd te geven
-        // CYD 2.4 work-around: gebruik lv_refr_now() in plaats van lv_task_handler()
-        // lv_task_handler() crasht op deze display, dus gebruiken we directe rendering
         TickType_t currentTime = xTaskGetTickCount();
         if ((currentTime - lastLvglTime) >= lvglFrequency) {
-            #ifdef PLATFORM_CYD24
-            if (disp != NULL) {
-                lv_refr_now(disp);
-            }
-            #else
-            lv_task_handler();
-            #endif
+            lv_timer_handler();
             lastLvglTime = currentTime;
         }
         
@@ -8835,7 +8725,7 @@ void uiTask(void *parameter)
         #ifdef PLATFORM_TTGO
         const TickType_t mutexTimeout = pdMS_TO_TICKS(30); // TTGO: korte timeout
         #else
-        const TickType_t mutexTimeout = pdMS_TO_TICKS(50); // CYD/ESP32-S3: korte timeout zodat API task voorrang krijgt
+        const TickType_t mutexTimeout = pdMS_TO_TICKS(50); // Korte timeout zodat API task voorrang krijgt
         #endif
         
         // UI mag niet lang in een mutex zitten (LVGL kan blocken).

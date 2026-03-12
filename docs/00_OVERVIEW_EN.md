@@ -2,7 +2,7 @@
 
 ## Project purpose
 
-The **UNIFIED-LVGL9 Crypto Monitor** is embedded firmware for ESP32/ESP32-S3 boards (e.g. TTGO T-Display, CYD 2.4/2.8, ESP32-S3 GEEK) that:
+The **UNIFIED-LVGL9 Crypto Monitor** is embedded firmware for ESP32/ESP32-S3 boards (e.g. TTGO T-Display, ESP32-S3 GEEK, LCDWIKI 2.8, 4848S040) that:
 
 - **Fetches live prices** from the Bitvavo API for a chosen market (e.g. BTC-EUR).
 - **Computes timeframe returns** (1m, 5m, 30m, 2h, 4h, 1d, 7d) via ring buffers and optional warm-start (historical candles).
@@ -20,7 +20,7 @@ The code is modular: network, API, price data, trend, volatility, anchor, alerts
 | Path | Role |
 |------|------|
 | **UNIFIED-LVGL9-Crypto_Monitor.ino** | Main sketch: globals, `setup()`, `loop()`, tasks (`apiTask`, `uiTask`, `webTask`, `priceRepeatTask`), `fetchPrice()`, warm-start, WiFi, MQTT, NTFY. |
-| **platform_config.h** | Platform choice (CYD24/CYD28/TTGO/ESP32S3_*), version, debug, OTA, SYMBOL_COUNT, font/chart/UI constants. |
+| **platform_config.h** | Platform choice (TTGO/ESP32S3_*), version, debug, OTA, SYMBOL_COUNT, font/chart/UI constants. |
 | **lv_conf.h** | LVGL 9 config: colour depth, memory, DPI, FreeRTOS, rendering, fonts. |
 | **PINS_*.h** | Per board: display bus (Arduino_GFX), pins (TFT_*, GFX_BL), resolution, `gfx`/`bus`, `DEV_DEVICE_INIT()`. |
 | **src/Net** | `HttpFetch`: streaming HTTP body to buffer (`httpGetToBuffer`), network mutex. |
@@ -46,6 +46,8 @@ The code is modular: network, API, price data, trend, volatility, anchor, alerts
 - **Threading**: `dataMutex` protects shared price/buffer state; `apiTask` (Core 1) does fetch + buffer updates; `uiTask` (Core 0) does LVGL; `priceRepeatTask` repeats last price every 2s into the ring buffer; `webTask` does `handleClient()`.
 
 No passwords or API keys in the documentation; they live in NVS or (for NTFY topic) are generated from device ID.
+
+Legacy/historical documentation (e.g. CYD removal): [docs/legacy/](legacy/).
 
 ---
 **[Technical docs overview](../README.md#technical-documentation-code--architecture)** | **[01 Architecture →](01_ARCHITECTURE_EN.md)**

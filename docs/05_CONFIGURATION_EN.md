@@ -14,9 +14,9 @@ Configuration lives in three places:
 
 ## platform_config.h
 
-- **Platform**: exactly one of: `PLATFORM_CYD24`, `PLATFORM_CYD28_1USB`, `PLATFORM_CYD28_2USB`, `PLATFORM_TTGO`, `PLATFORM_ESP32S3_SUPERMINI`, `PLATFORM_ESP32S3_GEEK`, `PLATFORM_ESP32S3_LCDWIKI_28`, `PLATFORM_ESP32S3_4848S040`, `PLATFORM_ESP32S3_AMOLED_206`.
+- **Platform**: exactly one of: `PLATFORM_TTGO`, `PLATFORM_ESP32S3_SUPERMINI`, `PLATFORM_ESP32S3_GEEK`, `PLATFORM_ESP32S3_LCDWIKI_28`, `PLATFORM_ESP32S3_4848S040`, `PLATFORM_ESP32S3_AMOLED_206`.
 - **Version**: `VERSION_STRING` (e.g. "5.15").
-- **Debug**: `DEBUG_BUTTON_ONLY` (1 = button log only), `DEBUG_CALCULATIONS` (0 = off on CYD/TTGO due to DRAM).
+- **Debug**: `DEBUG_BUTTON_ONLY` (1 = button log only), `DEBUG_CALCULATIONS` (0 = off on TTGO due to DRAM).
 - **WebSocket**: `WS_ENABLED` (0/1).
 - **Default language**: `DEFAULT_LANGUAGE` (0 = NL, 1 = EN).
 - **OTA**: `OTA_ENABLED`, `OTA_HOSTNAME` (only for boards with suitable flash partitions).

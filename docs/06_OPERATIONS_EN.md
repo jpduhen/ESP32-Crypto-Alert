@@ -45,7 +45,7 @@ Then: loop() for OTA, MQTT reconnect, deferred actions; apiTask for fetch and al
 
 - **HeapMon**: logHeap("tag") with rate limit (e.g. every 60 s in apiTask) for fragmentation audit.
 - **Buffers**: secondPrices fixed; fiveMinutePrices, minuteAverages, hourlyAverages dynamic (INTERNAL or SPIRAM); Bitvavo stream buffer heap or fallback.
-- On CYD without PSRAM: after allocation check that arrays are not null before tasks start; otherwise fatal loop with message.
+- (Legacy: on boards without PSRAM an array guard was previously used; after CYD removal no longer in use.)
 
 ---
 

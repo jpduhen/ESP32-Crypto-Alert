@@ -2,9 +2,6 @@
 // Platform-specifieke configuratie
 // Selecteer je platform door een van de onderstaande defines te activeren:
 
-//#define PLATFORM_CYD24
-//#define PLATFORM_CYD28_1USB  // 1USB variant: geen kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
-//#define PLATFORM_CYD28_2USB  // 2USB variant: met kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
 //#define PLATFORM_TTGO
 //#define PLATFORM_ESP32S3_SUPERMINI
 #define PLATFORM_ESP32S3_GEEK
@@ -12,17 +9,12 @@
 //#define PLATFORM_ESP32S3_4848S040
 //#define PLATFORM_ESP32S3_AMOLED_206
 
-// Automatisch PLATFORM_CYD28 definiëren als een CYD28 variant is gekozen
-#if defined(PLATFORM_CYD28_1USB) || defined(PLATFORM_CYD28_2USB)
-#define PLATFORM_CYD28
-#endif 
-
 // --- Version Configuration ---
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
-#define VERSION_MAJOR 5
-#define VERSION_MINOR 24
-#define VERSION_STRING "5.24"
+#define VERSION_MAJOR 6
+#define VERSION_MINOR 0
+#define VERSION_STRING "6.0"
 #endif
 
 // --- Debug Configuration ---
@@ -40,13 +32,13 @@
 // WAARSCHUWING: DEBUG_CALCULATIONS gebruikt ~2808 bytes DRAM voor debug strings
 // 
 // TEST MODE: Zet op 1 om debug logging te activeren (voor verificatie/testen)
-// PRODUCTIE: Zet op 0 om DRAM te besparen (vooral belangrijk voor CYD/TTGO zonder PSRAM)
+// PRODUCTIE: Zet op 0 om DRAM te besparen (vooral belangrijk voor TTGO zonder PSRAM)
 //
-// Automatische configuratie: CYD/TTGO krijgen automatisch 0 (geen PSRAM, DRAM besparing)
+// Automatische configuratie: TTGO zonder PSRAM krijgt 0 (DRAM besparing)
 // ESP32-S3 kan handmatig op 1 worden gezet voor testen (heeft PSRAM)
 #ifndef DEBUG_CALCULATIONS
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
-        #define DEBUG_CALCULATIONS 0  // UIT voor CYD/TTGO (geen PSRAM, DRAM besparing)
+    #if defined(PLATFORM_TTGO)
+        #define DEBUG_CALCULATIONS 0  // UIT voor TTGO (geen PSRAM, DRAM besparing)
     #else
         #define DEBUG_CALCULATIONS 0  // UIT voor ESP32-S3 (standaard productie)
     #endif
@@ -108,76 +100,6 @@
     #define FONT_SIZE_CHART_VERSION &lv_font_montserrat_10
     #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_10
     #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
-#elif defined(PLATFORM_CYD24)
-    #if !defined(UICONTROLLER_INCLUDE) && !defined(MODULE_INCLUDE)
-    #include "PINS_CYD-ESP32-2432S024.h"
-    #endif
-    #define MQTT_TOPIC_PREFIX "cyd24_crypto"
-    #define DEVICE_NAME "CYD 2.4 Crypto Monitor"
-    #define DEVICE_MODEL "ESP32 CYD 2.4"
-    #define HAS_TOUCHSCREEN false
-    #define HAS_PHYSICAL_BUTTON true
-    #define BUTTON_PIN 0
-    #define SYMBOL_1MIN_LABEL "1 min"
-    #define SYMBOL_30MIN_LABEL "30 min"
-    #define SYMBOL_2H_LABEL "2h"
-    #define CHART_WIDTH 240
-    #define CHART_HEIGHT 72  // Verkleind van 80 naar 72 (8px kleiner)
-    #define CHART_ALIGN_Y 24
-    #define PRICE_BOX_Y_START 99  // Aangepast: 24 (chart top) + 72 (chart height) + 3 (spacing) = 99
-    #define FONT_SIZE_TITLE_BTCEUR &lv_font_montserrat_14
-    #define FONT_SIZE_TITLE_OTHER &lv_font_montserrat_12
-    #define FONT_SIZE_PRICE_BTCEUR &lv_font_montserrat_12
-    #define FONT_SIZE_PRICE_OTHER &lv_font_montserrat_12
-    #define FONT_SIZE_ANCHOR &lv_font_montserrat_10
-    #define FONT_SIZE_TREND_VOLATILITY &lv_font_montserrat_12
-    #define FONT_SIZE_FOOTER &lv_font_montserrat_12
-    #define FONT_SIZE_IP_PREFIX &lv_font_montserrat_14
-    #define FONT_SIZE_IP &lv_font_montserrat_12
-    #define FONT_SIZE_CHART_DATE_TIME &lv_font_montserrat_10
-    #define FONT_SIZE_CHART_VERSION &lv_font_montserrat_10
-    #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_10
-    #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
-    #define SYMBOL_COUNT 4  // CYD: BTCEUR, 1m, 30m, 2h
-#elif defined(PLATFORM_CYD28)
-    #if !defined(UICONTROLLER_INCLUDE) && !defined(MODULE_INCLUDE)
-    // Kies automatisch de juiste PINS file op basis van CYD28 variant
-    #if defined(PLATFORM_CYD28_1USB)
-    #include "PINS_CYD-ESP32-2432S028-1USB.h"
-    #elif defined(PLATFORM_CYD28_2USB)
-    #include "PINS_CYD-ESP32-2432S028-2USB.h"
-    #else
-    // Default naar 2USB als geen variant is gekozen
-    #include "PINS_CYD-ESP32-2432S028-2USB.h"
-    #endif
-    #endif
-    #define MQTT_TOPIC_PREFIX "cyd28_crypto"
-    #define DEVICE_NAME "CYD 2.8 Crypto Monitor"
-    #define DEVICE_MODEL "ESP32 CYD 2.8"
-    #define HAS_TOUCHSCREEN false
-    #define HAS_PHYSICAL_BUTTON true
-    #define BUTTON_PIN 0
-    #define SYMBOL_1MIN_LABEL "1 min"
-    #define SYMBOL_30MIN_LABEL "30 min"
-    #define SYMBOL_2H_LABEL "2h"
-    #define CHART_WIDTH 240
-    #define CHART_HEIGHT 72  // Verkleind van 80 naar 72 (8px kleiner)
-    #define CHART_ALIGN_Y 24
-    #define PRICE_BOX_Y_START 99  // Aangepast: 24 (chart top) + 72 (chart height) + 3 (spacing) = 99
-    #define FONT_SIZE_TITLE_BTCEUR &lv_font_montserrat_14
-    #define FONT_SIZE_TITLE_OTHER &lv_font_montserrat_12
-    #define FONT_SIZE_PRICE_BTCEUR &lv_font_montserrat_12
-    #define FONT_SIZE_PRICE_OTHER &lv_font_montserrat_12
-    #define FONT_SIZE_ANCHOR &lv_font_montserrat_10
-    #define FONT_SIZE_TREND_VOLATILITY &lv_font_montserrat_12
-    #define FONT_SIZE_FOOTER &lv_font_montserrat_12
-    #define FONT_SIZE_IP_PREFIX &lv_font_montserrat_14
-    #define FONT_SIZE_IP &lv_font_montserrat_12
-    #define FONT_SIZE_CHART_DATE_TIME &lv_font_montserrat_10
-    #define FONT_SIZE_CHART_VERSION &lv_font_montserrat_10
-    #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_10
-    #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
-    #define SYMBOL_COUNT 4  // CYD: BTCEUR, 1m, 30m, 2h
 #elif defined(PLATFORM_ESP32S3_SUPERMINI)
     #if !defined(UICONTROLLER_INCLUDE) && !defined(MODULE_INCLUDE)
     #include "PINS_ESP32S3_SuperMini_ST7789_154.h"
@@ -338,7 +260,7 @@
     #define LVGL_SCREEN_WIDTH 410
     #define LVGL_SCREEN_HEIGHT 502
 #else
-    #error "Please define PLATFORM_TTGO, PLATFORM_CYD24, PLATFORM_CYD28, PLATFORM_ESP32S3_SUPERMINI, PLATFORM_ESP32S3_GEEK, PLATFORM_ESP32S3_LCDWIKI_28, PLATFORM_ESP32S3_4848S040 or PLATFORM_ESP32S3_AMOLED_206 in platform_config.h"
+    #error "Please define PLATFORM_TTGO, PLATFORM_ESP32S3_SUPERMINI, PLATFORM_ESP32S3_GEEK, PLATFORM_ESP32S3_LCDWIKI_28, PLATFORM_ESP32S3_4848S040 or PLATFORM_ESP32S3_AMOLED_206 in platform_config.h"
 #endif
 
 // Fallback: als SYMBOL_COUNT nog niet gedefinieerd is, gebruik default 3

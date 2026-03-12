@@ -10,7 +10,7 @@
 #endif
 
 // Centrale namespace voor 2-uur alert threshold defaults
-// Deze thresholds zijn gekozen om op CYD (geen PSRAM) weinig spam te geven en stabiel te zijn
+// Deze thresholds zijn gekozen voor weinig spam en stabiel gedrag (oorspronkelijk o.a. boards zonder PSRAM)
 // Note: De instelbare thresholds staan in Alert2HThresholds struct in SettingsStore.h
 // Deze namespace wordt alleen gebruikt voor defaults, niet voor runtime thresholds
 namespace Alert2HDefaults {

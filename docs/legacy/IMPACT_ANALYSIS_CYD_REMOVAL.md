@@ -1,4 +1,11 @@
+> **Legacy document — Historical reference only.**  
+> Fase 1–4 uitgevoerd; CYD is verwijderd. Dit document is bewaard voor referentie.
+
+---
+
 # Impactanalyse: Verwijderen legacy CYD-platforms
+
+**Status:** Fase 1–4 uitgevoerd. CYD-platforms en PINS-bestanden zijn verwijderd. Dit document is **historisch** (analyse vóór removal); bewaard voor referentie.
 
 **Doel:** Inventarisatie van het verwijderen van PLATFORM_CYD24, PLATFORM_CYD28_1USB, PLATFORM_CYD28_2USB en afgeleide macro PLATFORM_CYD28. Geen codewijzigingen in dit document; alleen analyse.
 
@@ -75,7 +82,7 @@
 | 272–275 | platformName "CYD24"/"CYD28" voor HTML | build/selectie, UI |
 | 1957–1965 | CYD: geen sPageCache.reserve(16000) (DRAM-besparing) | netwerk/webserver, PSRAM/bufferallocatie |
 
-- Geen gedeelde condition met andere platforms; verwijderen CYD-tak = alleen “CYD24”/“CYD28” naam en reserve-logica weg. Andere platforms ongewijzigd.
+- Geen gedeelde condition met andere platforms; verwijderen CYD-tak = alleen "CYD24"/"CYD28" naam en reserve-logica weg. Andere platforms ongewijzigd.
 
 ---
 
@@ -100,12 +107,12 @@ Type: pinmapping, displaydriver, kleurinversie. Geen andere platforms; veilig te
 
 ### Documentatie (alleen tekst)
 - **docs/03-Hardware-Requirements.md**, **docs/03-Hardwarevereisten.md** – CYD24/CYD28 in hardwaretabel en beschrijving.
-- **docs/04-Installatie.md**, **docs/04-Installation.md** – PSRAM “Disabled voor CYD24/CYD28”, boardlijst.
+- **docs/04-Installatie.md**, **docs/04-Installation.md** – PSRAM "Disabled voor CYD24/CYD28", boardlijst.
 - **docs/05_CONFIGURATION.md**, **docs/05_CONFIGURATION_EN.md** – Platformlijst met CYD24/CYD28_1USB/CYD28_2USB.
 - **docs/10-Geavanceerd-Gebruik-en-Aanpassingen.md**, **docs/10-Advanced-Usage-and-Customization.md** – Voorbeeld platform define.
-- **docs/00_OVERVIEW.md**, **docs/00_OVERVIEW_EN.md** – “CYD24/CYD28” in platform_config-beschrijving.
+- **docs/00_OVERVIEW.md**, **docs/00_OVERVIEW_EN.md** – "CYD24/CYD28" in platform_config-beschrijving.
 - **docs/CODE_INDEX.md**, **docs/CODE_ANALYSIS.md** – Uitleg CYD-varianten, PINS, inversie.
-- **docs/CYD_DRAM_OPTIMALISATIE_SAMENVATTING.md** – Voorbeelden `#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)`.
+- **docs/legacy/CYD_DRAM_OPTIMALISATIE_SAMENVATTING.md** – Voorbeelden `#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)`.
 
 Type: docs/comments. Geen runtime; aanpassen of verwijderen voor consistentie.
 
@@ -118,7 +125,7 @@ Type: docs/comments. Geen runtime; aanpassen of verwijderen voor consistentie.
 | PLATFORM_CYD24 | ~25 | Ja | Nee (alleen CYD-builds) | Laag | Overal te verwijderen of uit condition halen; TTGO blijft waar nodig (DEBUG_CALCULATIONS, buffers). |
 | PLATFORM_CYD28_1USB | 4 | Ja | Nee | Laag | Alleen platform_config + PINS include + docs. |
 | PLATFORM_CYD28_2USB | 4 | Ja | Nee | Laag | Idem + PLATFORM_CYD28_INVERT_COLORS. |
-| PLATFORM_CYD28 | ~35 | Ja | Nee | Laag | Alias; verdwijnt als CYD28_1USB/2USB weg zijn. Overal waar “CYD28” staat: uit condition halen. |
+| PLATFORM_CYD28 | ~35 | Ja | Nee | Laag | Alias; verdwijnt als CYD28_1USB/2USB weg zijn. Overal waar "CYD28" staat: uit condition halen. |
 | PLATFORM_CYD24_INVERT_COLORS | 2 | Ja | Nee | Laag | Alleen in PINS + .ino invertDisplay. |
 | PLATFORM_CYD28_INVERT_COLORS | 2 | Ja | Nee | Laag | Idem. |
 
@@ -134,13 +141,13 @@ Type: docs/comments. Geen runtime; aanpassen of verwijderen voor consistentie.
   - `.ino` symbols[] (314), warm-start prices[3] (2282), findMinMaxInLast2Hours (6644, 6660), computeTwoHMetrics (6660), ret_2h (7266).  
   - UIController: findMinMaxInLast2Hours extern + alle 2h-UI-blokken.  
   **Risico:** Als je per ongeluk het hele `#if`-blok verwijdert in plaats van alleen `PLATFORM_CYD24` en `PLATFORM_CYD28` uit de condition, dan breken PLATFORM_ESP32S3_LCDWIKI_28 en PLATFORM_ESP32S3_4848S040 (2h-symbolen en 2h-logica).  
-  **Mitigatie:** Alleen de twee CYD-macro’s uit de condition verwijderen; `#if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_4848S040)` (evt. met andere S3) laten staan.
+  **Mitigatie:** Alleen de twee CYD-macro's uit de condition verwijderen; `#if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_4848S040)` (evt. met andere S3) laten staan.
 
 - **platform_config.h #error (341):**  
   Na verwijderen CYD moet de #error-lijst korter (zonder PLATFORM_CYD24, PLATFORM_CYD28). Anders blijft de build geldig voor alle overige platforms.
 
 - **DEBUG_CALCULATIONS (platform_config.h 48):**  
-  Condition is nu `PLATFORM_CYD24 || PLATFORM_CYD28 || PLATFORM_TTGO`. Na CYD-verwijdering alleen `PLATFORM_TTGO` laten voor de “geen PSRAM, DRAM-besparing”-tak. ESP32-S3 blijft in de `#else`-tak. Geen risico.
+  Condition is nu `PLATFORM_CYD24 || PLATFORM_CYD28 || PLATFORM_TTGO`. Na CYD-verwijdering alleen `PLATFORM_TTGO` laten voor de "geen PSRAM, DRAM-besparing"-tak. ESP32-S3 blijft in de `#else`-tak. Geen risico.
 
 - **CYD-only blokken (.ino 2729, 6106, 7114, 7756, 7775, 7914, 8266, 8283, 8822; UIController 2376, 2395, 2453–2456; WebServer 272–275, 1957–1965):**  
   Gehele `#if`-blokken kunnen worden verwijderd of (waar logisch) vervangen door een TTGO-only variant. Geen impact op S3 of andere boards.
@@ -185,7 +192,7 @@ Type: docs/comments. Geen runtime; aanpassen of verwijderen voor consistentie.
 
 ---
 
-## 5. Bestanden met belangrijkste risico’s
+## 5. Bestanden met belangrijkste risico's
 
 - **UNIFIED-LVGL9-Crypto_Monitor.ino** – Meeste CYD-referenties; meerdere gedeelde conditions met PLATFORM_ESP32S3_LCDWIKI_28 en PLATFORM_ESP32S3_4848S040. Hier alleen CYD uit de conditions halen, geen hele blokken weghalen waar S3 nog van afhankelijk is.  
 - **src/UIController/UIController.cpp** – Zelfde patroon: overal waar CYD samen met LCDWIKI/4848S040 staat, alleen CYD uit de `#if` halen.  

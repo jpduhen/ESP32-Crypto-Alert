@@ -45,7 +45,7 @@ Daarna: loop() voor OTA, MQTT reconnect, deferred acties; apiTask voor fetch en 
 
 - **HeapMon**: logHeap("tag") met rate limit (bijv. elke 60 s in apiTask) voor fragmentatie-audit.
 - **Buffers**: secondPrices vast; fiveMinutePrices, minuteAverages, hourlyAverages dynamisch (INTERNAL of SPIRAM); Bitvavo stream buffer heap of fallback.
-- Bij CYD zonder PSRAM: controle na allocatie dat arrays niet null zijn voordat tasks starten; anders fatal loop met melding.
+- (Legacy: op boards zonder PSRAM was voorheen een array-guard actief; na CYD-removal niet meer in gebruik.)
 
 ---
 
