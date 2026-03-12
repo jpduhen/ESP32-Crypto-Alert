@@ -173,10 +173,6 @@ const char* SettingsStore::PREF_KEY_DUCKDNS_TOKEN = "duckdnsTok";
 const char* SettingsStore::PREF_KEY_WEB_PASSWORD = "webPwd";
 const char* SettingsStore::PREF_KEY_LANGUAGE = "language";
 const char* SettingsStore::PREF_KEY_DISPLAY_ROTATION = "displayRotation";
-const char* SettingsStore::PREF_KEY_TH1_UP = "th1Up";
-const char* SettingsStore::PREF_KEY_TH1_DOWN = "th1Down";
-const char* SettingsStore::PREF_KEY_TH30_UP = "th30Up";
-const char* SettingsStore::PREF_KEY_TH30_DOWN = "th30Down";
 const char* SettingsStore::PREF_KEY_SPIKE1M = "spike1m";
 const char* SettingsStore::PREF_KEY_SPIKE5M = "spike5m";
 const char* SettingsStore::PREF_KEY_MOVE30M = "move30m";
@@ -360,10 +356,6 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     alertThresholds.move30mHardOverride = MOVE_30M_HARD_OVERRIDE_DEFAULT;
     alertThresholds.move5m = MOVE_5M_THRESHOLD_DEFAULT;
     alertThresholds.move5mAlert = MOVE_5M_ALERT_THRESHOLD_DEFAULT;
-    alertThresholds.threshold1MinUp = THRESHOLD_1MIN_UP_DEFAULT;
-    alertThresholds.threshold1MinDown = THRESHOLD_1MIN_DOWN_DEFAULT;
-    alertThresholds.threshold30MinUp = THRESHOLD_30MIN_UP_DEFAULT;
-    alertThresholds.threshold30MinDown = THRESHOLD_30MIN_DOWN_DEFAULT;
     
     // Notification cooldowns defaults
     notificationCooldowns.cooldown1MinMs = NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT;
@@ -518,10 +510,6 @@ CryptoMonitorSettings SettingsStore::load() {
     settings.displayRotation = rotation;
     
     // Load alert thresholds
-    settings.alertThresholds.threshold1MinUp = prefs.getFloat(PREF_KEY_TH1_UP, THRESHOLD_1MIN_UP_DEFAULT);
-    settings.alertThresholds.threshold1MinDown = prefs.getFloat(PREF_KEY_TH1_DOWN, THRESHOLD_1MIN_DOWN_DEFAULT);
-    settings.alertThresholds.threshold30MinUp = prefs.getFloat(PREF_KEY_TH30_UP, THRESHOLD_30MIN_UP_DEFAULT);
-    settings.alertThresholds.threshold30MinDown = prefs.getFloat(PREF_KEY_TH30_DOWN, THRESHOLD_30MIN_DOWN_DEFAULT);
     settings.alertThresholds.spike1m = prefs.getFloat(PREF_KEY_SPIKE1M, SPIKE_1M_THRESHOLD_DEFAULT);
     settings.alertThresholds.spike5m = prefs.getFloat(PREF_KEY_SPIKE5M, SPIKE_5M_THRESHOLD_DEFAULT);
     settings.alertThresholds.move30m = prefs.getFloat(PREF_KEY_MOVE30M, MOVE_30M_THRESHOLD_DEFAULT);
@@ -711,10 +699,6 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     prefs.putUChar(PREF_KEY_DISPLAY_ROTATION, settings.displayRotation);
     
     // Save alert thresholds
-    prefs.putFloat(PREF_KEY_TH1_UP, settings.alertThresholds.threshold1MinUp);
-    prefs.putFloat(PREF_KEY_TH1_DOWN, settings.alertThresholds.threshold1MinDown);
-    prefs.putFloat(PREF_KEY_TH30_UP, settings.alertThresholds.threshold30MinUp);
-    prefs.putFloat(PREF_KEY_TH30_DOWN, settings.alertThresholds.threshold30MinDown);
     prefs.putFloat(PREF_KEY_SPIKE1M, settings.alertThresholds.spike1m);
     prefs.putFloat(PREF_KEY_SPIKE5M, settings.alertThresholds.spike5m);
     prefs.putFloat(PREF_KEY_MOVE30M, settings.alertThresholds.move30m);

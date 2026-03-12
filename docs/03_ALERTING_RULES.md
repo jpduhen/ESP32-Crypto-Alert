@@ -11,6 +11,7 @@ Dit document beschrijft **wanneer** welke alerts mogen worden *beslist* (drempel
 ### 1m spike
 
 - **Eenheid ret_***: percentagepunten (0,31 = 0,31%); zie docs 02 en 07.
+- **Basisdrempel**: `spike1m` (default `SPIKE_1M_THRESHOLD_DEFAULT`); na auto-volatility ontstaat `effectiveSpike1m`.
 - **Voorwaarde**: `|ret_1m| >= effectiveSpike1m` (effective = basis of auto-volatility aangepast).
 - **Extra**: richting (up/down), kleurtag (bijv. blauw/oranje/paars/rood); optioneel volume/range-check.
 - **Cooldown**: `notificationCooldowns.cooldown1MinMs` (default 120000 = 2 min).
@@ -19,15 +20,20 @@ Dit document beschrijft **wanneer** welke alerts mogen worden *beslist* (drempel
 
 ### 5m move / 5m alert
 
-- **Move-filter**: `|ret_5m| >= move5mThreshold` (filter, niet per se notificatie).
-- **5m alert**: `|ret_5m| >= move5mAlertThreshold` (sterker signaal).
+- **5m-confirmatie voor 30m move**: `move5m` → `move5mThreshold` (default `MOVE_5M_THRESHOLD_DEFAULT`):  
+  `|ret_5m| >= move5mThreshold` wordt gebruikt als **filter / bevestiging** bij 30m move alerts (geen zelfstandige 5m-alert).
+- **Zelfstandige 5m move-alert**: `move5mAlert` → `move5mAlertThreshold` (default `MOVE_5M_ALERT_THRESHOLD_DEFAULT`):  
+  `|ret_5m| >= move5mAlertThreshold` triggert een **losse 5m move-alert**, mits cooldown/volumenormen gehaald worden.
 - **Cooldown**: `notificationCooldowns.cooldown5MinMs` (default 420000 = 7 min).
 - **Max per uur**: `MAX_5M_ALERTS_PER_HOUR` (3).
 - Zelfde patroon: `checkAlertConditions` met `lastNotification5Min`, `alerts5MinThisHour`.
 
 ### 30m move
 
-- **Voorwaarde**: `|ret_30m| >= effectiveMove30m` en vaak gecombineerd met richting van ret_5m (zelfde richting).
+- **Basisdrempel**: `move30m` (default `MOVE_30M_THRESHOLD_DEFAULT`); na auto-volatility ontstaat `effectiveMove30m`.
+- **5m-confirmatie**: `move5m` wordt als filter gebruikt: voldoende 5m-move in **dezelfde richting** als 30m.
+- **Hard override**: `move30mHardOverride` (default `MOVE_30M_HARD_OVERRIDE_DEFAULT`): bij extreem sterke 30m-move mag de alert **nooit** door 2h-context worden onderdrukt.
+- **Voorwaarde** (normaal): `|ret_30m| >= effectiveMove30m` **én** `|ret_5m| >= move5mThreshold` in dezelfde richting, tenzij hard/priority override actief is.
 - **Cooldown**: `notificationCooldowns.cooldown30MinMs` (default 900000 = 15 min).
 - **Max per uur**: `MAX_30M_ALERTS_PER_HOUR` (2).
 - Zelfde patroon: `checkAlertConditions` met `lastNotification30Min`, `alerts30MinThisHour`.
@@ -100,7 +106,7 @@ Dit document beschrijft **wanneer** welke alerts mogen worden *beslist* (drempel
 
 | Onderdeel | Locatie |
 |-----------|---------|
-| Default thresholds/cooldowns | .ino: `THRESHOLD_*`, `SPIKE_*`, `MOVE_*`, `NOTIFICATION_COOLDOWN_*`, `MAX_*_ALERTS_PER_HOUR` |
+| Default thresholds/cooldowns | .ino: `SPIKE_*`, `MOVE_*`, `NOTIFICATION_COOLDOWN_*`, `MAX_*_ALERTS_PER_HOUR` |
 | Instelbare structs | `AlertThresholds`, `NotificationCooldowns`, `Alert2HThresholds` (SettingsStore.h / .ino) |
 | Check & send 1m/5m/30m | `AlertEngine::checkAndNotify()` |
 | checkAlertConditions | `AlertEngine::checkAlertConditions()` |

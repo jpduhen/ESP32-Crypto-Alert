@@ -11,6 +11,7 @@ This document describes **when** which alerts may be *decided* (thresholds, cond
 ### 1m spike
 
 - **ret_* unit**: percentage points (0.31 = 0.31%); see docs 02 and 07.
+- **Base threshold**: `spike1m` (default `SPIKE_1M_THRESHOLD_DEFAULT`); with auto-volatility we get `effectiveSpike1m`.
 - **Condition**: `|ret_1m| >= effectiveSpike1m` (effective = base or auto-volatility adjusted).
 - **Extra**: direction (up/down), color tag (e.g. blue/orange/purple/red); optional volume/range check.
 - **Cooldown**: `notificationCooldowns.cooldown1MinMs` (default 120000 = 2 min).
@@ -19,15 +20,20 @@ This document describes **when** which alerts may be *decided* (thresholds, cond
 
 ### 5m move / 5m alert
 
-- **Move filter**: `|ret_5m| >= move5mThreshold` (filter, not necessarily notification).
-- **5m alert**: `|ret_5m| >= move5mAlertThreshold` (stronger signal).
+- **5m confirmation for 30m move**: `move5m` → `move5mThreshold` (default `MOVE_5M_THRESHOLD_DEFAULT`):  
+  `|ret_5m| >= move5mThreshold` is used as **filter / confirmation** for 30m move alerts (no standalone 5m alert).
+- **Standalone 5m move alert**: `move5mAlert` → `move5mAlertThreshold` (default `MOVE_5M_ALERT_THRESHOLD_DEFAULT`):  
+  `|ret_5m| >= move5mAlertThreshold` triggers a **standalone 5m move alert**, as long as cooldown/volume rules are respected.
 - **Cooldown**: `notificationCooldowns.cooldown5MinMs` (default 420000 = 7 min).
 - **Max per hour**: `MAX_5M_ALERTS_PER_HOUR` (3).
 - Same pattern: `checkAlertConditions` with `lastNotification5Min`, `alerts5MinThisHour`.
 
 ### 30m move
 
-- **Condition**: `|ret_30m| >= effectiveMove30m` and often combined with ret_5m direction (same direction).
+- **Base threshold**: `move30m` (default `MOVE_30M_THRESHOLD_DEFAULT`); with auto-volatility we get `effectiveMove30m`.
+- **5m confirmation**: `move5m` is used as filter: sufficient 5m move in the **same direction** as 30m.
+- **Hard override**: `move30mHardOverride` (default `MOVE_30M_HARD_OVERRIDE_DEFAULT`): for extreme 30m moves, the alert **must never** be suppressed by the 2h context.
+- **Condition** (normal): `|ret_30m| >= effectiveMove30m` **and** `|ret_5m| >= move5mThreshold` in the same direction, unless hard/priority override is active.
 - **Cooldown**: `notificationCooldowns.cooldown30MinMs` (default 900000 = 15 min).
 - **Max per hour**: `MAX_30M_ALERTS_PER_HOUR` (2).
 - Same pattern: `checkAlertConditions` with `lastNotification30Min`, `alerts30MinThisHour`.
@@ -100,7 +106,7 @@ This document describes **when** which alerts may be *decided* (thresholds, cond
 
 | Part | Location |
 |------|----------|
-| Default thresholds/cooldowns | .ino: `THRESHOLD_*`, `SPIKE_*`, `MOVE_*`, `NOTIFICATION_COOLDOWN_*`, `MAX_*_ALERTS_PER_HOUR` |
+| Default thresholds/cooldowns | .ino: `SPIKE_*`, `MOVE_*`, `NOTIFICATION_COOLDOWN_*`, `MAX_*_ALERTS_PER_HOUR` |
 | Configurable structs | `AlertThresholds`, `NotificationCooldowns`, `Alert2HThresholds` (SettingsStore.h / .ino) |
 | Check & send 1m/5m/30m | `AlertEngine::checkAndNotify()` |
 | checkAlertConditions | `AlertEngine::checkAlertConditions()` |

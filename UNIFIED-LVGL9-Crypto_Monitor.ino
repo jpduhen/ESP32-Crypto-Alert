@@ -747,11 +747,7 @@ AlertThresholds alertThresholds = {
     .move30m = MOVE_30M_THRESHOLD_DEFAULT,
     .move30mHardOverride = MOVE_30M_HARD_OVERRIDE_DEFAULT,
     .move5m = MOVE_5M_THRESHOLD_DEFAULT,
-    .move5mAlert = MOVE_5M_ALERT_THRESHOLD_DEFAULT,
-    .threshold1MinUp = THRESHOLD_1MIN_UP_DEFAULT,
-    .threshold1MinDown = THRESHOLD_1MIN_DOWN_DEFAULT,
-    .threshold30MinUp = THRESHOLD_30MIN_UP_DEFAULT,
-    .threshold30MinDown = THRESHOLD_30MIN_DOWN_DEFAULT
+    .move5mAlert = MOVE_5M_ALERT_THRESHOLD_DEFAULT
 };
 
 // Notification cooldowns in struct voor betere organisatie
@@ -784,10 +780,6 @@ Alert2HThresholds alert2HThresholds = {
 #define move30mThreshold alertThresholds.move30m
 #define move5mThreshold alertThresholds.move5m
 #define move5mAlertThreshold alertThresholds.move5mAlert
-#define threshold1MinUp alertThresholds.threshold1MinUp
-#define threshold1MinDown alertThresholds.threshold1MinDown
-#define threshold30MinUp alertThresholds.threshold30MinUp
-#define threshold30MinDown alertThresholds.threshold30MinDown
 #define notificationCooldown1MinMs notificationCooldowns.cooldown1MinMs
 #define notificationCooldown30MinMs notificationCooldowns.cooldown30MinMs
 #define notificationCooldown5MinMs notificationCooldowns.cooldown5MinMs
@@ -3717,8 +3709,8 @@ static void loadSettings()
     volatilityLowThreshold = settings.volatilityLowThreshold;
     volatilityHighThreshold = settings.volatilityHighThreshold;
     
-    Serial_printf(F("[Settings] Loaded: topic=%s, symbol=%s, 1min trend=%.2f/%.2f%%/min, 30min trend=%.2f/%.2f%%/uur, cooldown=%lu/%lu ms\n"),
-                  ntfyTopic, bitvavoSymbol, threshold1MinUp, threshold1MinDown, threshold30MinUp, threshold30MinDown,
+    Serial_printf(F("[Settings] Loaded: topic=%s, symbol=%s, cooldown=%lu/%lu ms\n"),
+                  ntfyTopic, bitvavoSymbol,
                   notificationCooldown1MinMs, notificationCooldown30MinMs);
 }
 

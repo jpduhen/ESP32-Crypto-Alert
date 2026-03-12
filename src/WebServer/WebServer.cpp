@@ -439,36 +439,36 @@ void WebServerModule::renderSettingsHTML() {
     
     // Signaalgeneratie sectie
     sendSectionHeader(getText("Signaalgeneratie", "Signal Generation"), "signals", false);
-    sendSectionDesc(getText("Thresholds voor spike en move detectie", "Thresholds for spike and move detection"));
+    sendSectionDesc(getText("Drempels voor spike- en move-detectie (1m/5m/30m)", "Thresholds for spike and move detection (1m/5m/30m)"));
     
     snprintf(valueBuf, sizeof(valueBuf), "%.2f", spike1mThreshold);
     sendInputRow(getText("1m Spike Threshold", "1m Spike Threshold"), "spike1m", "number", 
-                 valueBuf, getText("Minimum 1m return voor spike alert", "Minimum 1m return for spike alert"), 
+                 valueBuf, getText("Minimum 1m return voor spike-detectie", "Minimum 1m return for spike detection"), 
                  0.01f, 10.0f, 0.01f);
     
     snprintf(valueBuf, sizeof(valueBuf), "%.2f", spike5mThreshold);
     sendInputRow(getText("5m Spike Threshold", "5m Spike Threshold"), "spike5m", "number", 
-                 valueBuf, getText("Minimum 5m return voor spike confirmatie", "Minimum 5m return for spike confirmation"), 
+                 valueBuf, getText("Minimum 5m return als bevestiging van een 1m-spike", "Minimum 5m return as confirmation of a 1m spike"), 
                  0.01f, 10.0f, 0.01f);
     
     snprintf(valueBuf, sizeof(valueBuf), "%.2f", move5mAlertThreshold);
     sendInputRow(getText("5m Move Threshold", "5m Move Threshold"), "move5mAlert", "number", 
-                 valueBuf, getText("Minimum 5m return voor move alert", "Minimum 5m return for move alert"), 
+                 valueBuf, getText("Minimum 5m return voor zelfstandige 5m move-alert", "Minimum 5m return for standalone 5m move alerts"), 
                  0.01f, 10.0f, 0.01f);
     
     snprintf(valueBuf, sizeof(valueBuf), "%.2f", move5mThreshold);
     sendInputRow(getText("5m Move Filter", "5m Move Filter"), "move5m", "number", 
-                 valueBuf, getText("Minimum 5m return voor 30m move confirmatie", "Minimum 5m return for 30m move confirmation"), 
+                 valueBuf, getText("Minimum 5m return als bevestiging van een 30m move", "Minimum 5m return as confirmation of a 30m move"), 
                  0.01f, 10.0f, 0.01f);
     
     snprintf(valueBuf, sizeof(valueBuf), "%.2f", move30mThreshold);
     sendInputRow(getText("30m Move Threshold", "30m Move Threshold"), "move30m", "number", 
-                 valueBuf, getText("Minimum 30m return voor move alert", "Minimum 30m return for move alert"), 
+                 valueBuf, getText("Minimum 30m return voor move-detectie", "Minimum 30m return for move detection"), 
                  0.01f, 20.0f, 0.01f);
     
     snprintf(valueBuf, sizeof(valueBuf), "%.2f", alertThresholds.move30mHardOverride);
     sendInputRow(getText("30m Hard Override (%)", "30m Hard Override (%)"), "move30mHard", "number", 
-                 valueBuf, getText("Boven deze %: 30m-alert nooit onderdrukken door 2h-context", "Above this %: never suppress 30m alert by 2h context"), 
+                 valueBuf, getText("Boven deze %: extreme 30m move nooit onderdrukken door 2h-context", "Above this %: never suppress extreme 30m move by 2h context"), 
                  0.5f, 5.0f, 0.01f);
     
     snprintf(valueBuf, sizeof(valueBuf), "%.2f", trendThreshold);
@@ -1812,16 +1812,12 @@ void WebServerModule::handleSettingsExport() {
     SEND_LINE_C("duckdnsEnabled=%d  # %s", s.duckdnsEnabled ? 1 : 0, getText("DuckDNS inschakelen", "Enable DuckDNS"));
     SEND_LINE_C("language=%u  # %s", (unsigned)s.language, getText("0 = Nederlands, 1 = English", "0 = Dutch, 1 = English"));
     SEND_LINE_C("displayRotation=%u  # %s", (unsigned)s.displayRotation, getText("0 = normaal, 2 = 180 graden gedraaid", "0 = normal, 2 = rotated 180 degrees"));
-    SEND_LINE_C("alertThresholds.spike1m=%.4f  # %s", s.alertThresholds.spike1m, getText("Minimum 1m return voor spike alert", "Minimum 1m return for spike alert"));
-    SEND_LINE_C("alertThresholds.spike5m=%.4f  # %s", s.alertThresholds.spike5m, getText("Minimum 5m return voor spike confirmatie", "Minimum 5m return for spike confirmation"));
-    SEND_LINE_C("alertThresholds.move30m=%.4f  # %s", s.alertThresholds.move30m, getText("Minimum 30m return voor move alert", "Minimum 30m return for move alert"));
-    SEND_LINE_C("alertThresholds.move30mHardOverride=%.4f  # %s", s.alertThresholds.move30mHardOverride, getText("30m hard override: nooit onderdrukken door 2h boven deze %", "30m hard override: never suppress by 2h above this %"));
-    SEND_LINE_C("alertThresholds.move5m=%.4f  # %s", s.alertThresholds.move5m, getText("Minimum 5m return voor 30m move confirmatie", "Minimum 5m return for 30m move confirmation"));
-    SEND_LINE_C("alertThresholds.move5mAlert=%.4f  # %s", s.alertThresholds.move5mAlert, getText("Minimum 5m return voor move alert", "Minimum 5m return for move alert"));
-    SEND_LINE_C("alertThresholds.threshold1MinUp=%.4f  # %s", s.alertThresholds.threshold1MinUp, getText("1m spike up drempel", "1m spike up threshold"));
-    SEND_LINE_C("alertThresholds.threshold1MinDown=%.4f  # %s", s.alertThresholds.threshold1MinDown, getText("1m spike down drempel", "1m spike down threshold"));
-    SEND_LINE_C("alertThresholds.threshold30MinUp=%.4f  # %s", s.alertThresholds.threshold30MinUp, getText("30m up drempel", "30m up threshold"));
-    SEND_LINE_C("alertThresholds.threshold30MinDown=%.4f  # %s", s.alertThresholds.threshold30MinDown, getText("30m down drempel", "30m down threshold"));
+    SEND_LINE_C("alertThresholds.spike1m=%.4f  # %s", s.alertThresholds.spike1m, getText("Minimum 1m return voor spike-detectie", "Minimum 1m return for spike detection"));
+    SEND_LINE_C("alertThresholds.spike5m=%.4f  # %s", s.alertThresholds.spike5m, getText("Minimum 5m return als bevestiging van een 1m-spike", "Minimum 5m return as confirmation of a 1m spike"));
+    SEND_LINE_C("alertThresholds.move30m=%.4f  # %s", s.alertThresholds.move30m, getText("Minimum 30m return voor move-detectie", "Minimum 30m return for move detection"));
+    SEND_LINE_C("alertThresholds.move30mHardOverride=%.4f  # %s", s.alertThresholds.move30mHardOverride, getText("Harde override: extreme 30m move nooit onderdrukken door 2h-context", "Hard override: never suppress extreme 30m move by 2h context"));
+    SEND_LINE_C("alertThresholds.move5m=%.4f  # %s", s.alertThresholds.move5m, getText("Minimum 5m return als bevestiging van een 30m move", "Minimum 5m return as confirmation of a 30m move"));
+    SEND_LINE_C("alertThresholds.move5mAlert=%.4f  # %s", s.alertThresholds.move5mAlert, getText("Minimum 5m return voor zelfstandige 5m move-alert", "Minimum 5m return for standalone 5m move alerts"));
     SEND_LINE_C("notificationCooldowns.cooldown1MinMs=%lu  # %s", (unsigned long)s.notificationCooldowns.cooldown1MinMs, getText("Cooldown tussen 1m spike alerts in seconden", "Cooldown between 1m spike alerts in seconds"));
     SEND_LINE_C("notificationCooldowns.cooldown30MinMs=%lu  # %s", (unsigned long)s.notificationCooldowns.cooldown30MinMs, getText("Cooldown tussen 30m move alerts in seconden", "Cooldown between 30m move alerts in seconds"));
     SEND_LINE_C("notificationCooldowns.cooldown5MinMs=%lu  # %s", (unsigned long)s.notificationCooldowns.cooldown5MinMs, getText("Cooldown tussen 5m move alerts in seconden", "Cooldown between 5m move alerts in seconds"));

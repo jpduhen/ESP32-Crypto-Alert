@@ -42,7 +42,7 @@ Enkele belangrijke (defaults; veel zijn overschrijfbaar via NVS/settings):
 - **Trend**: `TREND_THRESHOLD_DEFAULT`, `TREND_CHANGE_COOLDOWN_MS`.
 - **Volatiliteit**: `VOLATILITY_LOW_THRESHOLD_DEFAULT`, `VOLATILITY_HIGH_THRESHOLD_DEFAULT`, `VOLATILITY_LOOKBACK_MINUTES`.
 - **Warm-start**: `WARM_START_*_DEFAULT`, `WARM_START_SKIP_1M_DEFAULT`, `WARM_START_SKIP_5M_DEFAULT`.
-- **Alerts**: `SPIKE_1M_THRESHOLD_DEFAULT`, `MOVE_5M_ALERT_THRESHOLD_DEFAULT`, `NOTIFICATION_COOLDOWN_*_MS_DEFAULT`, `MAX_*_ALERTS_PER_HOUR`.
+- **Alerts**: `SPIKE_1M_THRESHOLD_DEFAULT`, `SPIKE_5M_THRESHOLD_DEFAULT`, `MOVE_30M_THRESHOLD_DEFAULT`, `MOVE_30M_HARD_OVERRIDE_DEFAULT`, `MOVE_5M_THRESHOLD_DEFAULT`, `MOVE_5M_ALERT_THRESHOLD_DEFAULT`, `NOTIFICATION_COOLDOWN_*_MS_DEFAULT`, `MAX_*_ALERTS_PER_HOUR`.
 - **Arraygroottes**: `SECONDS_PER_MINUTE`, `SECONDS_PER_5MINUTES`, `MINUTES_FOR_30MIN_CALC`, enz.
 
 ---
@@ -52,7 +52,7 @@ Enkele belangrijke (defaults; veel zijn overschrijfbaar via NVS/settings):
 Alle onderstaande velden kunnen via **web UI** of **MQTT** worden ingesteld en worden in NVS opgeslagen. Alleen de logische groepen worden genoemd; geen volledige struct-definitie.
 
 - **Basis**: ntfyTopic, bitvavoSymbol, duckdnsEnabled, duckdnsToken, webPassword, language, displayRotation.
-- **Alert thresholds**: spike1m, spike5m, move30m, move5m, move5mAlert, threshold1MinUp/Down, threshold30MinUp/Down.
+- **Alert thresholds**: spike1m, spike5m, move30m, move5m, move5mAlert.
 - **Notification cooldowns**: cooldown1MinMs, cooldown30MinMs, cooldown5MinMs.
 - **2h-alerts**: breakMarginPct, breakCooldownMs, meanMinDistancePct, meanTouchBandPct, meanCooldownMs, compressThresholdPct, compressResetPct, compressCooldownMs, anchorOutsideMarginPct, anchorCooldownMs; trend hysteresis en throttling (trendChange, mean touch, compress, secondary global/coalesce).
 - **Anchor**: anchorTakeProfit, anchorMaxLoss, anchorStrategy; trendAdaptiveAnchorsEnabled, uptrend/downtrend multipliers.

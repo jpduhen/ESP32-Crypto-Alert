@@ -55,10 +55,6 @@ struct AlertThresholds {
     float move30mHardOverride;  // |ret30m| >= dit % → 30m-alert nooit onderdrukken door 2h (default 1.6)
     float move5m;
     float move5mAlert;
-    float threshold1MinUp;
-    float threshold1MinDown;
-    float threshold30MinUp;
-    float threshold30MinDown;
 };
 
 // Notification cooldowns struct
@@ -230,10 +226,6 @@ private:
     static const char* PREF_KEY_WEB_PASSWORD;
     static const char* PREF_KEY_LANGUAGE;
     static const char* PREF_KEY_DISPLAY_ROTATION;
-    static const char* PREF_KEY_TH1_UP;
-    static const char* PREF_KEY_TH1_DOWN;
-    static const char* PREF_KEY_TH30_UP;
-    static const char* PREF_KEY_TH30_DOWN;
     static const char* PREF_KEY_SPIKE1M;
     static const char* PREF_KEY_SPIKE5M;
     static const char* PREF_KEY_MOVE30M;
