@@ -4,6 +4,9 @@
 #include <WiFiManager.h>
 #include <PubSubClient.h>
 #include <ESP.h>  // Voor ESP.restart()
+#if OTA_ENABLED
+#include <Update.h>
+#endif
 #include <Arduino_GFX_Library.h>  // Voor Arduino_GFX type
 #include "../SettingsStore/SettingsStore.h"
 // Platform config voor platform naam detectie
@@ -113,6 +116,13 @@ extern float calculateReturn1Minute();
 extern float calculateReturn5Minutes();
 extern float calculateReturn30Minutes();
 extern bool sendNotification(const char* title, const char* message, const char* colorTag);
+extern uint8_t getNotificationLogCount(void);
+extern bool getNotificationLogEntry(uint8_t index,
+                                    char *titleOut, size_t titleSize,
+                                    char *messageOut, size_t messageSize,
+                                    char *colorTagOut, size_t colorTagSize,
+                                    uint32_t *timeMsOut,
+                                    uint8_t *sentOut);
 
 // WEB-PERF-3: Externe variabelen voor /status endpoint
 extern float ret_2h;  // 2-hour return (static in .ino, maar extern hier)
@@ -178,6 +188,22 @@ void WebServerModule::setupWebServer() {
     Serial.println(F("[WebServer] Route '/wifi/reset' geregistreerd"));
     server->on("/status", HTTP_GET, [this]() { this->handleStatus(); });  // WEB-PERF-3: Status endpoint
     Serial.println(F("[WebServer] Route '/status' geregistreerd"));
+    // Read-only plain-text settings export (voor copy/paste)
+    server->on("/settings.txt", HTTP_GET, [this]() { this->handleSettingsExport(); });
+    Serial.println(F("[WebServer] Route '/settings.txt' geregistreerd"));
+    // Read-only notification log page
+    server->on("/notifications", HTTP_GET, [this]() { this->handleNotifications(); });
+    Serial.println(F("[WebServer] Route '/notifications' geregistreerd"));
+#if OTA_ENABLED
+    // Web-based OTA firmware update (chunked upload)
+    server->on("/update", HTTP_GET, [this]() { this->handleUpdateGet(); });
+    server->on("/update/start", HTTP_POST, [this]() { this->handleUpdateStart(); });
+    server->on("/update/chunk", HTTP_POST,
+               [this]() { this->handleUpdateChunkPost(); },
+               [this]() { this->handleUpdateChunkUpload(); });
+    server->on("/update/end", HTTP_POST, [this]() { this->handleUpdateEnd(); });
+    Serial.println(F("[WebServer] Routes /update, /update/start, /update/chunk, /update/end (chunked OTA)"));
+#endif
     server->onNotFound([this]() { this->handleNotFound(); }); // 404 handler
     Serial.println(F("[WebServer] 404 handler geregistreerd"));
     server->begin();
@@ -1291,6 +1317,484 @@ void WebServerModule::handleNotFound() {
     Serial_printf(F("[WebServer] 404: %s\n"), server->uri().c_str());
 }
 
+// WEB: Read-only settings export in plain text (easy copy/paste)
+// Route: GET /settings.txt
+void WebServerModule::handleSettingsExport() {
+    if (server == nullptr) {
+        return;
+    }
+
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server->send(200, "text/plain; charset=utf-8", "");
+
+    char line[192];
+
+    // Header (version from platform_config.h)
+    snprintf(line, sizeof(line),
+             "# ESP32-Crypto-Alert %s settings export\n", VERSION_STRING);
+    server->sendContent(line);
+    snprintf(line, sizeof(line),
+             "# Format: key=value (for easy copy/paste)\n\n");
+    server->sendContent(line);
+
+    // Basic
+    server->sendContent("[basic]\n");
+    snprintf(line, sizeof(line), "bitvavoSymbol=%s\n", bitvavoSymbol);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "ntfyTopic=%s\n", ntfyTopic);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "language=%u\n", static_cast<unsigned>(language));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "displayRotation=%u\n\n", static_cast<unsigned>(displayRotation));
+    server->sendContent(line);
+
+    // Alerts
+    server->sendContent("[alerts]\n");
+    snprintf(line, sizeof(line), "spike1m=%.4f\n", alertThresholds.spike1m);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "spike5m=%.4f\n", alertThresholds.spike5m);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "move30m=%.4f\n", alertThresholds.move30m);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "move5m=%.4f\n", alertThresholds.move5m);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "move5mAlert=%.4f\n\n", alertThresholds.move5mAlert);
+    server->sendContent(line);
+
+    // Cooldowns
+    server->sendContent("[cooldowns]\n");
+    snprintf(line, sizeof(line), "cooldown1MinMs=%lu\n",
+             static_cast<unsigned long>(notificationCooldowns.cooldown1MinMs));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "cooldown5MinMs=%lu\n",
+             static_cast<unsigned long>(notificationCooldowns.cooldown5MinMs));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "cooldown30MinMs=%lu\n",
+             static_cast<unsigned long>(notificationCooldowns.cooldown30MinMs));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "nightCooldown5mSec=%u\n\n",
+             static_cast<unsigned>(nightCooldown5mSec));
+    server->sendContent(line);
+
+    // 2h thresholds (kernwaarden, geen auto-anchor-details)
+    server->sendContent("[2h]\n");
+    snprintf(line, sizeof(line), "breakMarginPct=%.4f\n", alert2HThresholds.breakMarginPct);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "breakResetMarginPct=%.4f\n", alert2HThresholds.breakResetMarginPct);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "breakCooldownMs=%lu\n",
+             static_cast<unsigned long>(alert2HThresholds.breakCooldownMs));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "meanMinDistancePct=%.4f\n", alert2HThresholds.meanMinDistancePct);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "meanTouchBandPct=%.4f\n", alert2HThresholds.meanTouchBandPct);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "meanCooldownMs=%lu\n",
+             static_cast<unsigned long>(alert2HThresholds.meanCooldownMs));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "compressThresholdPct=%.4f\n", alert2HThresholds.compressThresholdPct);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "compressResetPct=%.4f\n", alert2HThresholds.compressResetPct);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "compressCooldownMs=%lu\n",
+             static_cast<unsigned long>(alert2HThresholds.compressCooldownMs));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "anchorOutsideMarginPct=%.4f\n", alert2HThresholds.anchorOutsideMarginPct);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "anchorCooldownMs=%lu\n",
+             static_cast<unsigned long>(alert2HThresholds.anchorCooldownMs));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "trendHysteresisFactor=%.4f\n", alert2HThresholds.trendHysteresisFactor);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "throttlingTrendChangeMs=%lu\n",
+             static_cast<unsigned long>(alert2HThresholds.throttlingTrendChangeMs));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "throttlingTrendToMeanMs=%lu\n",
+             static_cast<unsigned long>(alert2HThresholds.throttlingTrendToMeanMs));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "throttlingMeanTouchMs=%lu\n",
+             static_cast<unsigned long>(alert2HThresholds.throttlingMeanTouchMs));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "throttlingCompressMs=%lu\n",
+             static_cast<unsigned long>(alert2HThresholds.throttlingCompressMs));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "twoHSecondaryGlobalCooldownSec=%lu\n",
+             static_cast<unsigned long>(alert2HThresholds.twoHSecondaryGlobalCooldownSec));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "twoHSecondaryCoalesceWindowSec=%lu\n",
+             static_cast<unsigned long>(alert2HThresholds.twoHSecondaryCoalesceWindowSec));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "anchorSourceMode=%u\n\n",
+             static_cast<unsigned>(alert2HThresholds.anchorSourceMode));
+    server->sendContent(line);
+
+    // Anchor
+    server->sendContent("[anchor]\n");
+    snprintf(line, sizeof(line), "anchorTakeProfit=%.4f\n", anchorTakeProfit);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "anchorMaxLoss=%.4f\n", anchorMaxLoss);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "anchorStrategy=%u\n", static_cast<unsigned>(anchorStrategy));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "trendAdaptiveAnchorsEnabled=%u\n",
+             static_cast<unsigned>(trendAdaptiveAnchorsEnabled ? 1 : 0));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "uptrendMaxLossMultiplier=%.4f\n", uptrendMaxLossMultiplier);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "uptrendTakeProfitMultiplier=%.4f\n", uptrendTakeProfitMultiplier);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "downtrendMaxLossMultiplier=%.4f\n", downtrendMaxLossMultiplier);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "downtrendTakeProfitMultiplier=%.4f\n\n", downtrendTakeProfitMultiplier);
+    server->sendContent(line);
+
+    // Modes & filters
+    server->sendContent("[modes]\n");
+    snprintf(line, sizeof(line), "smartConfluenceEnabled=%u\n",
+             static_cast<unsigned>(smartConfluenceEnabled ? 1 : 0));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "nightModeEnabled=%u\n",
+             static_cast<unsigned>(nightModeEnabled ? 1 : 0));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "nightModeStartHour=%u\n",
+             static_cast<unsigned>(nightModeStartHour));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "nightModeEndHour=%u\n",
+             static_cast<unsigned>(nightModeEndHour));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "warmStartEnabled=%u\n",
+             static_cast<unsigned>(warmStartEnabled ? 1 : 0));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "autoVolatilityEnabled=%u\n\n",
+             static_cast<unsigned>(autoVolatilityEnabled ? 1 : 0));
+    server->sendContent(line);
+
+    // Night mode details
+    server->sendContent("[night]\n");
+    snprintf(line, sizeof(line), "nightSpike5mThreshold=%.4f\n", nightSpike5mThreshold);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "nightMove5mAlertThreshold=%.4f\n", nightMove5mAlertThreshold);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "nightMove30mThreshold=%.4f\n", nightMove30mThreshold);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "nightAutoVolMinMultiplier=%.4f\n", nightAutoVolMinMultiplier);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "nightAutoVolMaxMultiplier=%.4f\n\n", nightAutoVolMaxMultiplier);
+    server->sendContent(line);
+
+    // Warm-start
+    server->sendContent("[warmStart]\n");
+    snprintf(line, sizeof(line), "warmStart1mExtraCandles=%u\n",
+             static_cast<unsigned>(warmStart1mExtraCandles));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "warmStart5mCandles=%u\n",
+             static_cast<unsigned>(warmStart5mCandles));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "warmStart30mCandles=%u\n",
+             static_cast<unsigned>(warmStart30mCandles));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "warmStart2hCandles=%u\n",
+             static_cast<unsigned>(warmStart2hCandles));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "warmStartSkip1m=%u\n",
+             static_cast<unsigned>(warmStartSkip1m ? 1 : 0));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "warmStartSkip5m=%u\n\n",
+             static_cast<unsigned>(warmStartSkip5m ? 1 : 0));
+    server->sendContent(line);
+
+    // Auto-volatility
+    server->sendContent("[autoVolatility]\n");
+    snprintf(line, sizeof(line), "autoVolatilityWindowMinutes=%u\n",
+             static_cast<unsigned>(autoVolatilityWindowMinutes));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "autoVolatilityBaseline1mStdPct=%.4f\n",
+             autoVolatilityBaseline1mStdPct);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "autoVolatilityMinMultiplier=%.4f\n",
+             autoVolatilityMinMultiplier);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "autoVolatilityMaxMultiplier=%.4f\n",
+             autoVolatilityMaxMultiplier);
+    server->sendContent(line);
+
+    // Trend & volatility thresholds
+    server->sendContent("\n[trend]\n");
+    snprintf(line, sizeof(line), "trendThreshold=%.4f\n", trendThreshold);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "volatilityLowThreshold=%.4f\n", volatilityLowThreshold);
+    server->sendContent(line);
+      snprintf(line, sizeof(line), "volatilityHighThreshold=%.4f\n", volatilityHighThreshold);
+      server->sendContent(line);
+
+      // Footer
+      server->sendContent("\n# end\n");
+}
+
+// WEB: Read-only notification log page (HTML table, newest first)
+void WebServerModule::handleNotifications() {
+    if (server == nullptr) {
+        return;
+    }
+
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server->send(200, "text/html; charset=utf-8", "");
+
+    server->sendContent(F("<!DOCTYPE html><html><head><meta charset='UTF-8'>"));
+    // Titel: Laatste notificaties / Recent notifications
+    server->sendContent(F("<title>"));
+    server->sendContent(getText("Laatste notificaties", "Recent notifications"));
+    server->sendContent(F("</title>"));
+    server->sendContent(F("<style>"
+                          "body{font-family:Arial;background:#1a1a1a;color:#fff;margin:10px;}"
+                          "a{color:#00BCD4;text-decoration:none;}"
+                          "table{border-collapse:collapse;width:100%;max-width:960px;margin-top:10px;table-layout:fixed;}"
+                          "th,td{border:1px solid #444;padding:6px 8px;font-size:12px;vertical-align:top;}"
+                          "th{background:#2a2a2a;}"
+                          "tr:nth-child(even){background:#222;}"
+                          ".ok{color:#4CAF50;font-weight:bold;}"
+                          ".fail{color:#F44336;font-weight:bold;}"
+                          "th:nth-child(1),td:nth-child(1){width:5%;white-space:nowrap;text-align:center;}"
+                          "th:nth-child(2),td:nth-child(2){width:14%;white-space:nowrap;text-align:center;}"
+                          "th:nth-child(3),td:nth-child(3){width:10%;white-space:nowrap;text-align:center;}"
+                          "th:nth-child(4),td:nth-child(4){width:8%;white-space:nowrap;text-align:center;}"
+                          "th:nth-child(5),td:nth-child(5){width:23%;overflow:hidden;text-overflow:ellipsis;text-align:left;}"
+                          "th:nth-child(6),td:nth-child(6){width:40%;word-wrap:break-word;word-break:break-word;text-align:left;}"
+                          "</style></head><body>"));
+    server->sendContent(F("<h2>"));
+    server->sendContent(getText("Laatste notificaties", "Recent notifications"));
+    server->sendContent(F("</h2>"));
+    server->sendContent(F("<div><a href='/'>"));
+    server->sendContent(getText("Terug naar instellingen", "Back to settings"));
+    server->sendContent(F("</a></div>"));
+
+    uint8_t count = getNotificationLogCount();
+    char buf[256];
+
+    snprintf(buf, sizeof(buf), "<p>%u %s</p>",
+             static_cast<unsigned>(count),
+             getText("items in log", "entries in log"));
+    server->sendContent(buf);
+
+    server->sendContent(F("<table><tr>"
+                          "<th>#</th>"
+                          "<th>"));
+    server->sendContent(getText("Tijd", "Time"));
+    server->sendContent(F("</th><th>"));
+    server->sendContent(getText("Resultaat", "Result"));
+    server->sendContent(F("</th><th>"));
+    server->sendContent(getText("Tag", "Tag"));
+    server->sendContent(F("</th><th>"));
+    server->sendContent(getText("Titel", "Title"));
+    server->sendContent(F("</th><th>"));
+    server->sendContent(getText("Bericht", "Message"));
+    server->sendContent(F("</th></tr>"));
+
+    // Lokale maximale lengtes voor web-rendering van de notificatielog.
+    // Deze hoeven niet exact gelijk te zijn aan de interne logbuffers,
+    // zolang ze maar kleiner of gelijk zijn.
+    #define WEB_NOTIF_TITLE_MAX   48
+    #define WEB_NOTIF_MSG_MAX    160
+    #define WEB_NOTIF_TAG_MAX     24
+
+    for (uint8_t i = 0; i < count; ++i) {
+        char title[WEB_NOTIF_TITLE_MAX];
+        char message[WEB_NOTIF_MSG_MAX];
+        char tag[WEB_NOTIF_TAG_MAX];
+        uint32_t timeMs = 0;
+        uint8_t sent = 0;
+        if (!getNotificationLogEntry(i, title, sizeof(title),
+                                     message, sizeof(message),
+                                     tag, sizeof(tag),
+                                     &timeMs, &sent)) {
+            continue;
+        }
+        const char* cls = sent ? "ok" : "fail";
+        const char* txt = sent ? "OK" : "FAIL";
+        snprintf(buf, sizeof(buf),
+                 "<tr><td>%u</td><td>%lu</td><td class='%s'>%s</td>"
+                 "<td>%s</td><td>%s</td><td>%s</td></tr>",
+                 static_cast<unsigned>(i),
+                 static_cast<unsigned long>(timeMs),
+                 cls, txt,
+                 tag, title, message);
+        server->sendContent(buf);
+    }
+
+    server->sendContent(F("</table></body></html>"));
+}
+
+#if OTA_ENABLED
+// Chunked OTA state (geschreven door handlers, gebruikt voor progress in WebUI)
+static size_t s_otaWritten = 0;
+static size_t s_otaTotal = 0;
+static bool s_otaStarted = false;
+// Beperk maximale OTA-bestandsgrootte tot ~1.875 MB (zoals mainline min_spiffs voorbeeld).
+static const size_t OTA_MAX_SIZE = 0x1E0000u;
+
+// Eenvoudige JSON-parse voor "total": number
+static bool parseOtaTotalFromBody(const String& body, size_t& outTotal) {
+    int i = body.indexOf(F("\"total\""));
+    if (i < 0) return false;
+    i = body.indexOf(':', i);
+    if (i < 0) return false;
+    const char* p = body.c_str() + i + 1;
+    while (*p == ' ' || *p == '\t') p++;
+    unsigned long val = 0;
+    while (*p >= '0' && *p <= '9') { val = val * 10 + (*p - '0'); p++; }
+    if (val == 0 || val > OTA_MAX_SIZE) return false;
+    outTotal = (size_t)val;
+    return true;
+}
+
+void WebServerModule::handleUpdateGet() {
+    if (server == nullptr) return;
+    if (!isClientConnected(server)) return;
+    const char* html =
+        "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>Firmware update</title><style>"
+        "body{font-family:sans-serif;background:#1a1a1a;color:#eee;padding:20px;max-width:500px;margin:0 auto;}"
+        "h1{font-size:1.2em;} input[type=file]{margin:10px 0;}"
+        "button{background:#2196F3;color:#fff;border:none;padding:12px 24px;border-radius:4px;cursor:pointer;font-size:16px;}"
+        "button:disabled{opacity:0.5;cursor:not-allowed;}"
+        "#msg{margin-top:15px;padding:10px;border-radius:4px;}"
+        ".ok{background:#2e7d32;}.err{background:#c62828;}"
+        ".progress-wrap{margin-top:12px;display:none;}"
+        ".progress-bar{height:24px;background:#333;border-radius:4px;overflow:hidden;}"
+        ".progress-fill{height:100%;background:#2196F3;width:0%;transition:width 0.15s;}"
+        "#progressPct{margin-top:6px;font-size:14px;color:#00BCD4;}"
+        "</style></head><body>"
+        "<h1>Firmware update (OTA)</h1>"
+        "<p>Kies een .bin bestand.</p>"
+        "<p style='font-size:0.9em;color:#aaa;'>In Arduino IDE compileer je via Menu &rarr; Sketch &rarr; Export compiled Binary. "
+        "Het bestand &hellip;.ino.bin staat in de build-map.</p>"
+        "<p><input type='file' id='file' accept='.bin'><button type='button' id='btn' onclick='doOtaUpload()'>Upload</button></p>"
+        "<div class='progress-wrap' id='progressWrap'><div class='progress-bar'>"
+        "<div class='progress-fill' id='progressFill'></div></div><div id='progressPct'>0%</div></div>"
+        "<div id='msg'></div>"
+        "<script>"
+        "function doOtaUpload(){"
+        "var f=document.getElementById('file').files[0],btn=document.getElementById('btn');"
+        "var wrap=document.getElementById('progressWrap'),fill=document.getElementById('progressFill');"
+        "var pct=document.getElementById('progressPct'),msg=document.getElementById('msg');"
+        "if(!f){msg.innerHTML='<span class=err>Kies een bestand.</span>';return;}"
+        "btn.disabled=true;msg.textContent='Uploaden...';wrap.style.display='block';fill.style.width='0%';pct.textContent='0%';"
+        "function setPct(w,t){var v=(t>0)?Math.min(100,Math.round(100*w/t)):0;fill.style.width=v+'%';pct.textContent=v+'%';}"
+        "function fail(e){msg.innerHTML='<span class=err>'+e.message+'</span>';btn.disabled=false;wrap.style.display='none';}"
+        "var CHUNK=32768;"
+        "fetch('/update/start?total='+f.size,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({total:f.size})})"
+        ".then(function(r){if(!r.ok)throw new Error(r.status);return r.json();}).then(function(j){if(!j.ok)throw new Error(j.error||'Start');"
+        "var off=0;"
+        "function next(){"
+        "if(off>=f.size){return fetch('/update/end',{method:'POST'}).then(function(r){if(!r.ok)throw new Error(r.status);return r.json();})"
+        ".then(function(){fill.style.width='100%';pct.textContent='100%';msg.innerHTML='<span class=ok>OK. Herstart...</span>';setTimeout(function(){location.href='/';},3000);})"
+        ".catch(function(e){msg.innerHTML='<span class=err>'+e.message+'</span>';btn.disabled=false;});}"
+        "var end=Math.min(off+CHUNK,f.size),fd=new FormData();fd.append('c',f.slice(off,end));"
+        "return fetch('/update/chunk',{method:'POST',body:fd}).then(function(r){if(!r.ok)throw new Error(r.status);return r.json();})"
+        ".then(function(j){off=end;setPct(j.written,j.total);return next();});"
+        "}"
+        "return next();"
+        "}).catch(fail);"
+        "}"
+        "</script>"
+        "</body></html>";
+    server->send(200, "text/html", html);
+}
+
+void WebServerModule::handleUpdateStart() {
+    if (server == nullptr) return;
+    size_t total = 0;
+    // Total uit URL-parameter (betrouwbaar) of uit JSON-body
+    if (server->hasArg("total")) {
+        long t = server->arg("total").toInt();
+        if (t > 0 && (size_t)t <= OTA_MAX_SIZE) total = (size_t)t;
+    }
+    if (total == 0 && parseOtaTotalFromBody(server->arg("plain"), total)) { /* body gebruikt */ }
+    if (total == 0) {
+        server->send(400, "application/json", "{\"ok\":false,\"error\":\"Invalid total\"}");
+        return;
+    }
+    if (total > OTA_MAX_SIZE) {
+        server->send(400, "application/json", "{\"ok\":false,\"error\":\"File too large\"}");
+        return;
+    }
+    if (s_otaStarted) {
+        Update.abort();
+        s_otaStarted = false;
+    }
+    if (!Update.begin(total, U_FLASH)) {
+        Update.printError(Serial);
+        server->send(500, "application/json", "{\"ok\":false,\"error\":\"Update.begin failed\"}");
+        return;
+    }
+    s_otaWritten = 0;
+    s_otaTotal = total;
+    s_otaStarted = true;
+    Serial_printf(F("[OTA] Start: %u bytes\n"), (unsigned)total);
+    char buf[80];
+    snprintf(buf, sizeof(buf), "{\"ok\":true,\"total\":%u}", (unsigned)total);
+    server->send(200, "application/json", buf);
+}
+
+void WebServerModule::handleUpdateChunkUpload() {
+    if (server == nullptr) return;
+    HTTPUpload& upload = server->upload();
+    static unsigned long s_lastLogKb = 0;
+    if (upload.status == UPLOAD_FILE_WRITE) {
+        if (s_otaWritten + upload.currentSize > OTA_MAX_SIZE) {
+            Update.abort();
+            s_otaStarted = false;
+            return;
+        }
+        if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+            Update.printError(Serial);
+            return;
+        }
+        s_otaWritten += upload.currentSize;
+        unsigned long kb = (unsigned long)(s_otaWritten / 1024u);
+        if (kb >= s_lastLogKb + 100u || (s_lastLogKb == 0 && kb >= 100u)) {
+            Serial_printf(F("[OTA] %lu KB\n"), kb);
+            s_lastLogKb = kb;
+        }
+    } else if (upload.status == UPLOAD_FILE_END) {
+        s_lastLogKb = 0;
+    }
+}
+
+void WebServerModule::handleUpdateChunkPost() {
+    if (server == nullptr) return;
+    if (Update.hasError()) {
+        Update.printError(Serial);
+        server->send(500, "application/json", "{\"written\":0,\"total\":0,\"error\":\"write failed\"}");
+        return;
+    }
+    char buf[80];
+    snprintf(buf, sizeof(buf), "{\"written\":%u,\"total\":%u}", (unsigned)s_otaWritten, (unsigned)s_otaTotal);
+    server->send(200, "application/json", buf);
+}
+
+void WebServerModule::handleUpdateEnd() {
+    if (server == nullptr) return;
+    s_otaStarted = false;
+    if (!Update.end(true)) {
+        Update.printError(Serial);
+        server->send(500, "application/json", "{\"done\":false,\"error\":\"Update.end failed\"}");
+        return;
+    }
+    Serial_printf(F("[OTA] Klaar: %u bytes, herstart\n"), (unsigned)s_otaWritten);
+    server->send(200, "application/json", "{\"done\":true}");
+    delay(1500);
+    Serial.flush();
+    ESP.restart();
+}
+#else
+void WebServerModule::handleUpdateGet() { (void)0; }
+void WebServerModule::handleUpdateStart() { (void)0; }
+void WebServerModule::handleUpdateChunkPost() { (void)0; }
+void WebServerModule::handleUpdateChunkUpload() { (void)0; }
+void WebServerModule::handleUpdateEnd() { (void)0; }
+#endif
+
 // WEB-PERF-3: Status endpoint - JSON met live waarden (geen heap-allocaties)
 void WebServerModule::handleStatus() {
     if (server == nullptr) return;
@@ -1852,6 +2356,17 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(F("</script>"));
     server->sendContent(F("</head><body>"));
     server->sendContent(F("<div class='container'>"));
+    // Eenvoudige navigatie
+    server->sendContent(F("<div style='margin-bottom:10px;font-size:13px;'>"));
+    server->sendContent(F("<a href=\"/notifications\" style='color:#00BCD4;text-decoration:none;'>"));
+    server->sendContent(getText("Laatste notificaties", "Recent notifications"));
+    server->sendContent(F("</a>"));
+#if OTA_ENABLED
+    server->sendContent(F(" &middot; <a href=\"/update\" style='color:#00BCD4;text-decoration:none;'>"));
+    server->sendContent(getText("Firmware-update (OTA)", "Firmware update (OTA)"));
+    server->sendContent(F("</a>"));
+#endif
+    server->sendContent(F("</div>"));
     
     // Title - gebruik bitvavoSymbol in plaats van platformName, voeg versie toe
     char h1Buf[128];

@@ -20,19 +20,19 @@ extern bool hasPSRAM();
 #define THRESHOLD_30MIN_DOWN_DEFAULT -2.0f
 #endif
 #ifndef SPIKE_1M_THRESHOLD_DEFAULT
-#define SPIKE_1M_THRESHOLD_DEFAULT 0.31f
+#define SPIKE_1M_THRESHOLD_DEFAULT 0.25f
 #endif
 #ifndef SPIKE_5M_THRESHOLD_DEFAULT
-#define SPIKE_5M_THRESHOLD_DEFAULT 0.65f
+#define SPIKE_5M_THRESHOLD_DEFAULT 0.50f
 #endif
 #ifndef MOVE_30M_THRESHOLD_DEFAULT
 #define MOVE_30M_THRESHOLD_DEFAULT 1.3f
 #endif
 #ifndef MOVE_5M_THRESHOLD_DEFAULT
-#define MOVE_5M_THRESHOLD_DEFAULT 0.40f
+#define MOVE_5M_THRESHOLD_DEFAULT 0.50f
 #endif
 #ifndef MOVE_5M_ALERT_THRESHOLD_DEFAULT
-#define MOVE_5M_ALERT_THRESHOLD_DEFAULT 0.8f
+#define MOVE_5M_ALERT_THRESHOLD_DEFAULT 0.50f
 #endif
 #ifndef NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT
 #define NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT 120000UL
@@ -42,6 +42,9 @@ extern bool hasPSRAM();
 #endif
 #ifndef NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT
 #define NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT 420000UL
+#endif
+#ifndef DISPLAY_ROTATION_DEFAULT
+#define DISPLAY_ROTATION_DEFAULT 0
 #endif
 #ifndef MQTT_HOST_DEFAULT
 #define MQTT_HOST_DEFAULT "192.168.68.3"
@@ -338,7 +341,7 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     strncpy(bitvavoSymbol, BITVAVO_SYMBOL_DEFAULT, sizeof(bitvavoSymbol) - 1);
     bitvavoSymbol[sizeof(bitvavoSymbol) - 1] = '\0';
     language = DEFAULT_LANGUAGE;
-    displayRotation = 0;  // Default: normaal (0 graden)
+    displayRotation = DISPLAY_ROTATION_DEFAULT;  // Default: platform-specifieke rotatie
     
     // Alert thresholds defaults
     alertThresholds.spike1m = SPIKE_1M_THRESHOLD_DEFAULT;
@@ -491,10 +494,10 @@ CryptoMonitorSettings SettingsStore::load() {
     settings.language = prefs.getUChar(PREF_KEY_LANGUAGE, DEFAULT_LANGUAGE);
     
     // Load display rotation
-    uint8_t rotation = prefs.getUChar(PREF_KEY_DISPLAY_ROTATION, 0);
+    uint8_t rotation = prefs.getUChar(PREF_KEY_DISPLAY_ROTATION, DISPLAY_ROTATION_DEFAULT);
     // Backward compat: oudere builds konden het als UInt opslaan
     if (rotation != 0 && rotation != 2) {
-        uint32_t legacyRotation = prefs.getUInt(PREF_KEY_DISPLAY_ROTATION, 0);
+        uint32_t legacyRotation = prefs.getUInt(PREF_KEY_DISPLAY_ROTATION, DISPLAY_ROTATION_DEFAULT);
         rotation = (legacyRotation == 2) ? 2 : 0;
     }
     settings.displayRotation = rotation;

@@ -2663,12 +2663,13 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
     } while(0);
     
     // C2: ALTIJD cleanup (ook bij code<0, code!=200, parse error)
-    // Hard close: http.end() + client.stop() voor volledige cleanup
-    http.end();
+    // Phase 1: Safer order – stream->stop() vóór http.end(); expliciet ntfyClient.stop()
     WiFiClient* stream = http.getStreamPtr();
     if (stream != nullptr) {
         stream->stop();
-        }
+    }
+    http.end();
+    ntfyClient.stop();
         
         if (attemptOk) {
             if (attempt > 0) {
@@ -3329,11 +3330,83 @@ static void checkHeapTelemetry()
 // Notification Functions
 // ============================================================================
 
+// Best-effort notification log (ringbuffer, fixed size, try-lock only in writer)
+#define NOTIF_LOG_TITLE_MAX   48
+#define NOTIF_LOG_MSG_MAX    160
+#define NOTIF_LOG_TAG_MAX     24
+#define NOTIF_LOG_SIZE        64
+
+struct NotificationLogEntry {
+    uint32_t timeMs;
+    uint8_t  sent;   // 0 = send failed, 1 = send success
+    char title[NOTIF_LOG_TITLE_MAX];
+    char message[NOTIF_LOG_MSG_MAX];
+    char colorTag[NOTIF_LOG_TAG_MAX];
+};
+
+static NotificationLogEntry s_notificationLog[NOTIF_LOG_SIZE];
+static uint8_t s_notificationLogHead   = 0;
+static uint8_t s_notificationLogCount  = 0;
+static SemaphoreHandle_t s_notifLogMutex = NULL;
+
+// Best-effort, strictly non-blocking writer. Try-lock only; if mutex NULL of lock faalt, skip append.
+static void appendNotificationLog(const char *title, const char *message, const char *colorTag, uint8_t sent) {
+    if (s_notifLogMutex == NULL) return;  // Safety: no unsafe write without mutex
+    if (xSemaphoreTake(s_notifLogMutex, 0) != pdTRUE) return;  // Try-lock only; never wait
+    uint8_t idx = s_notificationLogHead % NOTIF_LOG_SIZE;
+    s_notificationLog[idx].timeMs = millis();
+    s_notificationLog[idx].sent   = sent;
+    safeStrncpy(s_notificationLog[idx].title,   title   ? title   : "", sizeof(s_notificationLog[idx].title));
+    safeStrncpy(s_notificationLog[idx].message, message ? message : "", sizeof(s_notificationLog[idx].message));
+    safeStrncpy(s_notificationLog[idx].colorTag, colorTag ? colorTag : "", sizeof(s_notificationLog[idx].colorTag));
+    s_notificationLogHead++;
+    if (s_notificationLogCount < NOTIF_LOG_SIZE) s_notificationLogCount++;
+    xSemaphoreGive(s_notifLogMutex);
+}
+
+// Read helpers voor Web UI (mag kort blokkeren met timeout)
+uint8_t getNotificationLogCount(void) {
+    if (s_notifLogMutex != NULL && xSemaphoreTake(s_notifLogMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        uint8_t n = s_notificationLogCount;
+        xSemaphoreGive(s_notifLogMutex);
+        return n;
+    }
+    return s_notificationLogCount;  // best-effort when mutex busy or NULL
+}
+
+bool getNotificationLogEntry(uint8_t index,
+                             char *titleOut, size_t titleSize,
+                             char *messageOut, size_t messageSize,
+                             char *colorTagOut, size_t colorTagSize,
+                             uint32_t *timeMsOut,
+                             uint8_t *sentOut) {
+    if (titleOut == nullptr || messageOut == nullptr) return false;
+    if (s_notifLogMutex != NULL && xSemaphoreTake(s_notifLogMutex, pdMS_TO_TICKS(50)) != pdTRUE)
+        return false;  // best-effort: skip read if mutex busy
+    if (index >= s_notificationLogCount) {
+        if (s_notifLogMutex != NULL) xSemaphoreGive(s_notifLogMutex);
+        return false;
+    }
+    // Newest first: index 0 = meest recente entry
+    uint8_t pos = (s_notificationLogHead + NOTIF_LOG_SIZE - 1 - index) % NOTIF_LOG_SIZE;
+    const NotificationLogEntry *e = &s_notificationLog[pos];
+    safeStrncpy(titleOut,   e->title,   titleSize);
+    safeStrncpy(messageOut, e->message, messageSize);
+    if (colorTagOut && colorTagSize) safeStrncpy(colorTagOut, e->colorTag, colorTagSize);
+    if (timeMsOut) *timeMsOut = e->timeMs;
+    if (sentOut) *sentOut = e->sent;
+    if (s_notifLogMutex != NULL) xSemaphoreGive(s_notifLogMutex);
+    return true;
+}
+
 // Send notification via NTFY
 // Fase 5.1: static verwijderd zodat TrendDetector module deze functie kan aanroepen (later verplaatst naar AlertEngine)
+// Phase 1: logging gebeurt NA sendNtfyNotification() en is best-effort
 bool sendNotification(const char *title, const char *message, const char *colorTag = nullptr)
 {
-    return sendNtfyNotification(title, message, colorTag);
+    bool sent = sendNtfyNotification(title, message, colorTag);
+    appendNotificationLog(title, message, colorTag, sent ? 1u : 0u);
+    return sent;
 }
 
 // Fase 5.3.4: checkTrendChange() wrapper functie verwijderd - alle calls gebruiken nu directe module calls
@@ -7203,13 +7276,7 @@ void fetchPrice()
             float ret30mLocal = ret_30m;
             float manualAnchorLocal = anchorActive ? anchorPrice : 0.0f;
             
-            // Auto anchor timing flags (buiten mutex uitvoeren)
-            static unsigned long lastAutoAnchorCheckMs = 0;
-            static bool firstAutoAnchorUpdateDone = false;
-            unsigned long nowMs = millis();
-            bool doAutoAnchorForce = (!firstAutoAnchorUpdateDone && nowMs >= 5000);
-            bool doAutoAnchorPeriodic = (firstAutoAnchorUpdateDone && (nowMs - lastAutoAnchorCheckMs) >= (5UL * 60UL * 1000UL));
-            
+            // Phase 1: Auto-anchor uitgeschakeld (alleen manual anchor)
             safeMutexGive(dataMutex, "fetchPrice");  // MUTEX EERST VRIJGEVEN!
             ok = true;
             
@@ -7227,26 +7294,6 @@ void fetchPrice()
             
             // Publiceer waarden naar MQTT
             publishMqttValues(fetchedLocal, ret1mLocal, ret5mLocal, ret30mLocal);
-            
-            // Periodieke auto anchor update (elke 5 minuten checken)
-            if (doAutoAnchorForce) {
-                Serial.println("[API Task] Eerste auto anchor update (na 5s delay, buiten mutex)...");
-                bool result = AlertEngine::maybeUpdateAutoAnchor(true);  // Force update na warm-start
-                Serial.printf("[API Task] Auto anchor update result: %s\n", result ? "SUCCESS" : "FAILED");
-                firstAutoAnchorUpdateDone = true;
-                lastAutoAnchorCheckMs = nowMs;
-            } else if (doAutoAnchorPeriodic) {
-                AlertEngine::maybeUpdateAutoAnchor(false);  // Non-force update
-                lastAutoAnchorCheckMs = nowMs;
-            }
-            
-            // WS-triggered auto anchor update (candle rollover)
-            static unsigned long lastWsAutoAnchorMs = 0;
-            if (wsAutoAnchorTrigger && (nowMs - lastWsAutoAnchorMs) >= 60000UL) {
-                AlertEngine::maybeUpdateAutoAnchor(false);
-                wsAutoAnchorTrigger = false;
-                lastWsAutoAnchorMs = nowMs;
-            }
         } else {
             // Fase 4.1: Geconsolideerde mutex timeout handling
             handleMutexTimeout(mutexTimeoutCount, "API", bitvavoSymbol);
@@ -7483,14 +7530,11 @@ void checkButton() {
             }
         }
         
-        // Gebruik helper functie om anchor in te stellen (gebruikt huidige prijs als default)
-        // Fase 6.2.7: Gebruik AnchorSystem module i.p.v. globale functie
-        if (anchorSystem.setAnchorPrice(0.0f)) {
-            // Update UI (this will also take the mutex internally)
-            // Fase 8.8.1: Gebruik module versie (parallel - oude functie blijft bestaan)
+        // Phase 1: Anchor set in apiTask context (queue; geen HTTPS in button/UI task)
+        if (queueAnchorSetting(0.0f, true)) {
             uiController.updateUI();
         } else {
-            Serial_println("[Button] WARN: Kon anchor niet instellen");
+            Serial_println("[Button] WARN: Kon anchor niet in queue zetten");
         }
         
         // Publish to MQTT if connected (optional, for logging)
@@ -7914,6 +7958,12 @@ static void setupMutex()
         Serial.println(F("[Error] Kon gNetMutex niet aanmaken!"));
     } else {
         Serial.println("[FreeRTOS] Mutex aangemaakt");
+    }
+
+    // Notification log mutex (try-lock only in writer; reader mag korte timeout gebruiken)
+    s_notifLogMutex = xSemaphoreCreateMutex();
+    if (s_notifLogMutex == NULL) {
+        Serial.println(F("[Notify] Log mutex niet aangemaakt; notification log append uit."));
     }
 }
 

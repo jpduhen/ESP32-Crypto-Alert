@@ -116,6 +116,8 @@ extern lv_obj_t *lblFooterLine2;
 extern lv_obj_t *ramLabel;
 extern void disableScroll(lv_obj_t *obj);
 extern const char* const symbols[];
+// Phase 1: Anchor queue (uitgevoerd in apiTask)
+extern bool queueAnchorSetting(float value, bool useCurrentPrice);
 // VERSION_STRING wordt gedefinieerd in platform_config.h (beschikbaar voor alle modules)
 // Geen fallback nodig omdat platform_config.h altijd wordt geïncludeerd
 extern void formatIPAddress(IPAddress ip, char* buffer, size_t bufferSize);
@@ -2306,14 +2308,11 @@ void UIController::checkButton()
             }
         }
         
-        // Gebruik helper functie om anchor in te stellen (gebruikt huidige prijs als default)
-        // Fase 6.2.7: Gebruik AnchorSystem module i.p.v. globale functie
-        if (anchorSystem.setAnchorPrice(0.0f)) {
-            // Update UI (this will also take the mutex internally)
-            // Fase 8.8.1: Gebruik module versie (binnen class, gebruik this->)
+        // Phase 1: Anchor set in apiTask context (queue; geen HTTPS in UI task)
+        if (queueAnchorSetting(0.0f, true)) {
             this->updateUI();
         } else {
-            Serial.println("[Button] WARN: Kon anchor niet instellen");
+            Serial.println("[Button] WARN: Kon anchor niet in queue zetten");
         }
     } else {
         // Update lastButtonState voor edge detection

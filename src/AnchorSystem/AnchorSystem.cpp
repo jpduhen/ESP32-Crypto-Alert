@@ -157,8 +157,12 @@ void AnchorSystem::formatAnchorNotification(AnchorEventType eventType, float anc
     else if (strcmp(trendName, "SIDEWAYS") == 0) trendNameTranslated = getText("ZIJWAARTS", "SIDEWAYS");
     
     // Geoptimaliseerd: enum switch i.p.v. strcmp (sneller, geen string vergelijkingen)
+    // Verbeterde presentatie: NTFY-titel met emoji-prefix voor snelle herkenning
     if (eventType == ANCHOR_EVENT_TAKE_PROFIT) {
-        snprintf(titleBuffer, titleSize, "%s %s: %s", bitvavoSymbol, 
+        // ⏫️⚓️⚠️ <symbol> Anchor: Take Profit
+        snprintf(titleBuffer, titleSize,
+                 "\xE2\x8F\xAB\xEF\xB8\x8F\xE2\x9A\x93\xEF\xB8\x8F\xE2\x9A\xA0\xEF\xB8\x8F %s %s: %s",
+                 bitvavoSymbol,
                  getText("Anker", "Anchor"), getText("Winstpakker", "Take Profit"));
         float priceRounded = roundToEuroNotif(prices[0]);
         float anchorRounded = roundToEuroNotif(this->anchorPrice);
@@ -181,7 +185,10 @@ void AnchorSystem::formatAnchorNotification(AnchorEventType eventType, float anc
                      anchorPct, getText("thr", "thr"), effAnchor.takeProfitPct);
         }
     } else {  // ANCHOR_EVENT_MAX_LOSS
-        snprintf(titleBuffer, titleSize, "%s %s: %s", bitvavoSymbol,
+        // ⏬️⚓️⚠️ <symbol> Anchor: Max Loss
+        snprintf(titleBuffer, titleSize,
+                 "\xE2\x8F\xAC\xEF\xB8\x8F\xE2\x9A\x93\xEF\xB8\x8F\xE2\x9A\xA0\xEF\xB8\x8F %s %s: %s",
+                 bitvavoSymbol,
                  getText("Anker", "Anchor"), getText("Verliesbeperker", "Max Loss"));
         float priceRounded = roundToEuroNotif(prices[0]);
         float anchorRounded = roundToEuroNotif(this->anchorPrice);
@@ -220,7 +227,12 @@ void AnchorSystem::sendAnchorAlert(AnchorEventType eventType, float anchorPct,
                            msg, sizeof(msg), title, sizeof(title), timestamp, sizeof(timestamp));
     
     // Bepaal color tag en MQTT event type op basis van event type
-    const char* colorTag = (eventType == ANCHOR_EVENT_TAKE_PROFIT) ? "green_square,💰" : "red_square,⚠️";
+    // Phase 1: onderscheid TP/ML duidelijk:
+    // - Take Profit : 🟩
+    // - Max Loss    : 🟥
+    const char* colorTag = (eventType == ANCHOR_EVENT_TAKE_PROFIT)
+        ? "\xF0\x9F\x9F\xA9"   // 🟩
+        : "\xF0\x9F\x9F\xA5";  // 🟥
     const char* mqttEventType = (eventType == ANCHOR_EVENT_TAKE_PROFIT) ? "take_profit" : "max_loss";
     
     sendNotification(title, msg, colorTag);
@@ -428,9 +440,14 @@ bool AnchorSystem::setAnchorPrice(float anchorValue, bool shouldUpdateUI, bool s
             char title[40];
             char msg[80];
             getFormattedTimestamp(timestamp, sizeof(timestamp));
-            snprintf(title, sizeof(title), "%s Anchor Set", bitvavoSymbol);
+            // Anchor Set: 🟫 ⚓️ BTC-EUR Anchor Set
+            snprintf(title, sizeof(title), "%s %s %s Anchor Set",
+                     "\xF0\x9F\x9F\xAB",         // 🟫
+                     "\xE2\x9A\x93\xEF\xB8\x8F", // ⚓️
+                     bitvavoSymbol);
             snprintf(msg, sizeof(msg), "%s: %.2f EUR", timestamp, priceToSet);
-            sendNotification(title, msg, "white_check_mark");
+            // Phase 1: Anchor Set (geen TP/ML) → anchor-specifieke tag 🟫
+            sendNotification(title, msg, "\xF0\x9F\x9F\xAB");  // 🟫
         }
         
         // Update UI alleen als gevraagd (niet vanuit web/MQTT threads)

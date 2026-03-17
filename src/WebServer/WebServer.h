@@ -32,6 +32,13 @@ public:
     void handleNtfyReset();
     void handleWifiReset();
     void handleStatus();  // WEB-PERF-3: JSON status endpoint
+    void handleSettingsExport();  // Plain-text settings export (read-only)
+    void handleNotifications();   // Read-only notification log page
+    void handleUpdateGet();          // Web OTA: uploadpagina (chunked flow)
+    void handleUpdateStart();        // POST /update/start: begin OTA, body JSON {"total":N}
+    void handleUpdateChunkPost();    // POST /update/chunk: na multipart upload, stuur {written,total}
+    void handleUpdateChunkUpload();  // Upload-callback voor /update/chunk
+    void handleUpdateEnd();          // POST /update/end: Update.end(), 200, reboot
     
     // Handler voor webTask (blijft in .ino, maar kan module method aanroepen)
     void handleClient();

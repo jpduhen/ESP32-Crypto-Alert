@@ -92,11 +92,15 @@ public:
     
     // Helper: Get color tag for trend (geoptimaliseerd: elimineert switch duplicatie)
     static inline const char* getTrendColorTag(TrendState trend) {
+        // Phase 1 tag-schema:
+        // - Trend up      : 🟩
+        // - Trend down    : 🟥
+        // - Trend sideways: 🟨
         switch (trend) {
-            case TREND_UP: return "green_square,📈";
-            case TREND_DOWN: return "red_square,📉";
+            case TREND_UP: return "\xF0\x9F\x9F\xA9";   // 🟩
+            case TREND_DOWN: return "\xF0\x9F\x9F\xA5"; // 🟥
             case TREND_SIDEWAYS:
-            default: return "grey_square,➡️";
+            default: return "\xF0\x9F\x9F\xA8";         // 🟨
         }
     }
     

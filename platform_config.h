@@ -6,8 +6,8 @@
 //#define PLATFORM_CYD28_1USB  // 1USB variant: geen kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
 //#define PLATFORM_CYD28_2USB  // 2USB variant: met kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
 //#define PLATFORM_TTGO
-#define PLATFORM_ESP32S3_SUPERMINI
-//#define PLATFORM_ESP32S3_GEEK
+//#define PLATFORM_ESP32S3_SUPERMINI
+#define PLATFORM_ESP32S3_GEEK
 //#define PLATFORM_ESP32S3_LCDWIKI_28
 //#define PLATFORM_ESP32S3_4848S040
 //#define PLATFORM_ESP32S3_AMOLED_206
@@ -21,8 +21,8 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 5
-#define VERSION_MINOR 9
-#define VERSION_STRING "5.09"
+#define VERSION_MINOR 10
+#define VERSION_STRING "5.10"
 #endif
 
 // --- Debug Configuration ---
@@ -34,6 +34,13 @@
 // --- WebSocket Configuration (stap-voor-stap migratie) ---
 #ifndef WS_ENABLED
 #define WS_ENABLED 1  // 0 = uit, 1 = aan (later inschakelen)
+#endif
+
+// --- OTA (Over-The-Air) updates via web UI ---
+// Vereist een partitieschema met OTA-ondersteuning (twee app-partities, bijv. "Minimal SPIFFS (1.9MB APP with OTA)").
+// Standaard uitgeschakeld; zet OTA_ENABLED op 1 alleen als je een geschikt schema gebruikt.
+#ifndef OTA_ENABLED
+#define OTA_ENABLED 1
 #endif
 
 // Zet op 1 om uitgebreide debug logging toe te voegen voor berekeningen verificatie

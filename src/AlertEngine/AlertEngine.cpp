@@ -78,7 +78,7 @@ extern NotificationCooldowns notificationCooldowns;
 #define SECONDS_PER_5MINUTES 300
 #define VOLUME_CONFIRM_MULTIPLIER 1.5f
 #define RANGE_CONFIRM_MIN_PCT 0.2f
-#define VOLUME_EVENT_COOLDOWN_MS 120000UL
+#define VOLUME_EVENT_COOLDOWN_MS 60000UL
 #define VOLUME_EMA_WINDOW_1M 20
 #define VOLUME_EMA_WINDOW_5M 20
 // Nachtstand thresholds (instelbaar)
@@ -526,10 +526,9 @@ bool AlertEngine::checkAndSendConfluenceAlert(unsigned long now, float ret_30m)
     if (sent) {
         lastVolumeEventMs = now;
     
-    // Mark events as used
-    last1mEvent.usedInConfluence = true;
-    last5mEvent.usedInConfluence = true;
-    lastConfluenceAlert = now;
+        // Mark events as used
+        last1mEvent.usedInConfluence = true;
+        lastConfluenceAlert = now;
     }
     
     #if !DEBUG_BUTTON_ONLY
@@ -1076,8 +1075,8 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
     float breakThresholdUp = metrics.high2h * (1.0f + breakMargin / 100.0f);
     float breakThresholdDown = metrics.low2h * (1.0f - breakMargin / 100.0f);
     
-    // Static functie: gebruik lokale buffers (kan geen instance members gebruiken)
-    char title[32];
+    // Static functie: gebruik lokale buffers (title 80 voor emoji-prefix)
+    char title[80];
     char msg[200];  // Verhoogd om volledige notificatieteksten te ondersteunen
     char timestamp[32];
     
@@ -1153,7 +1152,8 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                          roundToEuroNotif(metrics.low2h));
             #endif
             getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
-            snprintf(title, sizeof(title), "%s 2h %s", 
+            // 🟨 ↕️ 👀 BTC-EUR 2h Compressie
+            snprintf(title, sizeof(title), "\xF0\x9F\x9F\xA8 \xE2\x86\x95\xEF\xB8\x8F \xF0\x9F\x91\x80 %s 2h %s",
                      bitvavoSymbol, getText("Compressie", "Compression"));
             float priceRounded = roundToEuroNotif(lastPrice);
             float highRounded = roundToEuroNotif(metrics.high2h);
@@ -1166,7 +1166,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                      getText("Gem", "Avg"), avgRounded,
                      getText("Dal", "Low"), lowRounded);
             // FASE X.2: Gebruik throttling wrapper
-            if (send2HNotification(ALERT2H_COMPRESS, title, msg, "yellow_square,📉")) {
+            if (send2HNotification(ALERT2H_COMPRESS, title, msg, "\xF0\x9F\x9F\xA8")) {  // 🟨
             gAlert2H.lastCompressMs = now;
             gAlert2H.setCompressArmed(false);
             }
@@ -1199,8 +1199,14 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                          roundToEuroNotif(lastPrice), roundToEuroNotif(metrics.avg2h), distPct, direction);
             #endif
             getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
-            snprintf(title, sizeof(title), "%s 2h %s", 
-                     bitvavoSymbol, getText("Raakt Gemiddelde", "Mean Touch"));
+            // from above: 🟦 ⤵️ 👀 ... ; from below: 🟦 ⤴️ 👀 ...
+            if (gAlert2H.getMeanFarSide() > 0) {
+                snprintf(title, sizeof(title), "\xF0\x9F\x9F\xA6 \xE2\xA4\xB5\xEF\xB8\x8F \xF0\x9F\x91\x80 %s 2h %s",
+                         bitvavoSymbol, getText("Raakt Gemiddelde", "Mean Touch"));
+            } else {
+                snprintf(title, sizeof(title), "\xF0\x9F\x9F\xA6 \xE2\xA4\xB4\xEF\xB8\x8F \xF0\x9F\x91\x80 %s 2h %s",
+                         bitvavoSymbol, getText("Raakt Gemiddelde", "Mean Touch"));
+            }
             const char* directionText = (gAlert2H.getMeanFarSide() > 0) ? 
                                         getText("van boven", "from above") : 
                                         getText("van onderen", "from below");
@@ -1241,9 +1247,14 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                          roundToEuroNotif(metrics.high2h), roundToEuroNotif(metrics.avg2h));
             #endif
             getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
-            snprintf(title, sizeof(title), "%s %s 2h", 
-                     bitvavoSymbol,
-                     getText("Anker buiten", "Anchor outside"));
+            // anchor above band: 🟫 ⏫️ 👀 ... ; anchor below band: 🟫 ⏬️ 👀 ...
+            if (condAnchorHigh) {
+                snprintf(title, sizeof(title), "\xF0\x9F\x9F\xAB \xE2\x8F\xAB\xEF\xB8\x8F \xF0\x9F\x91\x80 %s %s 2h",
+                         bitvavoSymbol, getText("Anker buiten", "Anchor outside"));
+            } else {
+                snprintf(title, sizeof(title), "\xF0\x9F\x9F\xAB \xE2\x8F\xAC\xEF\xB8\x8F \xF0\x9F\x91\x80 %s %s 2h",
+                         bitvavoSymbol, getText("Anker buiten", "Anchor outside"));
+            }
             float priceRounded = roundToEuroNotif(lastPrice);
             float anchorRounded = roundToEuroNotif(activeAnchorPrice);
             float highRounded = roundToEuroNotif(metrics.high2h);
@@ -1275,8 +1286,8 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
 // Geoptimaliseerd: elimineert code duplicatie tussen breakout up en breakdown down
 void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float threshold, 
                                              const TwoHMetrics& metrics, uint32_t now) {
-    // Static functie: gebruik lokale buffers
-    char title[32];
+    // Static functie: gebruik lokale buffers (title 80 voor emoji-prefix)
+    char title[80];
     char msg[200];  // Verhoogd om volledige notificatieteksten te ondersteunen
     char timestamp[32];
     
@@ -1289,7 +1300,8 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
                      roundToEuroNotif(lastPrice), roundToEuroNotif(metrics.high2h),
                      roundToEuroNotif(metrics.avg2h), metrics.rangePct);
         #endif
-        snprintf(title, sizeof(title), "%s 2h %s ↑", 
+        // 🟪 ⏫️ ⚠️ BTC-EUR 2h breakout
+        snprintf(title, sizeof(title), "\xF0\x9F\x9F\xAA \xE2\x8F\xAB\xEF\xB8\x8F \xE2\x9A\xA0\xEF\xB8\x8F %s 2h %s",
                  bitvavoSymbol, getText("breakout", "breakout"));
         float priceRounded = roundToEuroNotif(lastPrice);
         float highRounded = roundToEuroNotif(metrics.high2h);
@@ -1298,15 +1310,16 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
                  priceRounded, timestamp,
                  getText("Prijs", "Price"), getText("Top", "High"), highRounded,
                  getText("Gem", "Avg"), avgRounded, getText("Band", "Range"), metrics.rangePct);
-        // FASE X.2: Gebruik throttling wrapper (Breakout mag altijd door)
-        send2HNotification(ALERT2H_BREAKOUT_UP, title, msg, "blue_square,🔼");
+        // FASE X.2: Gebruik throttling wrapper (Breakout mag altijd door). Tag congruent met title: 🟪
+        send2HNotification(ALERT2H_BREAKOUT_UP, title, msg, "\xF0\x9F\x9F\xAA");  // 🟪
     } else {
         #if DEBUG_2H_ALERTS
         Serial.printf("[ALERT2H] breakdown_down sent: price=%.0f < low2h=%.0f (avg=%.0f, range=%.2f%%)\n",
                      roundToEuroNotif(lastPrice), roundToEuroNotif(metrics.low2h),
                      roundToEuroNotif(metrics.avg2h), metrics.rangePct);
         #endif
-        snprintf(title, sizeof(title), "%s 2h %s ↓", 
+        // 🟥 ⏬️ ⚠️ BTC-EUR 2h breakdown
+        snprintf(title, sizeof(title), "\xF0\x9F\x9F\xA5 \xE2\x8F\xAC\xEF\xB8\x8F \xE2\x9A\xA0\xEF\xB8\x8F %s 2h %s",
                  bitvavoSymbol, getText("breakdown", "breakdown"));
         float priceRounded = roundToEuroNotif(lastPrice);
         float lowRounded = roundToEuroNotif(metrics.low2h);
@@ -1315,8 +1328,8 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
                  priceRounded, timestamp,
                  getText("Prijs", "Price"), getText("Dal", "Low"), lowRounded,
                  getText("Gem", "Avg"), avgRounded, getText("Band", "Range"), metrics.rangePct);
-        // FASE X.2: Gebruik throttling wrapper (Breakdown mag altijd door)
-        send2HNotification(ALERT2H_BREAKOUT_DOWN, title, msg, "orange_square,🔽");
+        // FASE X.2: Gebruik throttling wrapper (Breakdown mag altijd door). Tag congruent met title: 🟥
+        send2HNotification(ALERT2H_BREAKOUT_DOWN, title, msg, "\xF0\x9F\x9F\xA5");  // 🟥
     }
 }
 
@@ -1484,11 +1497,8 @@ static bool flushPendingSecondaryAlertInternal(uint32_t now) {
         return false;
     }
     
-    // Verstuur pending alert
-        char titleWithClass[64];
-        snprintf(titleWithClass, sizeof(titleWithClass), "[%s] %s", 
-                 getText("Context", "Context"), pendingSecondaryTitle);
-        bool result = sendNotification(titleWithClass, pendingSecondaryMsg, pendingSecondaryColorTag);
+    // Verstuur pending alert (titel ongewijzigd; bevat al emoji/context, geen [Context]-prefix)
+        bool result = sendNotification(pendingSecondaryTitle, pendingSecondaryMsg, pendingSecondaryColorTag);
     
     // Update throttling state: bij success normaal, bij failure korte backoff om spam te voorkomen
     if (result) {
@@ -1529,11 +1539,8 @@ bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, c
             return false;
         }
         
-        // Verstuur PRIMARY alert
-        char titleWithClass[64];
-        snprintf(titleWithClass, sizeof(titleWithClass), "[%s] %s", 
-                 getText("PRIMAIR", "PRIMARY"), title);
-        bool result = sendNotification(titleWithClass, msg, colorTag);
+        // Verstuur PRIMARY alert (titel ongewijzigd, geen [PRIMARY]-prefix)
+        bool result = sendNotification(title, msg, colorTag);
         
         // Update throttling state: bij failure ook cooldown zodat we niet spam-retryen
         if (result) {
@@ -1865,7 +1872,7 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
                     snprintf(msg, sizeof(msg), "%.0f (%s)\n%s: %.0f", 
                              anchorRounded, timestamp,
                              getText("Bijgewerkt", "Updated"), anchorRounded);
-                    bool sent = sendNotification(title, msg, "anchor");
+                    bool sent = sendNotification(title, msg, "\xF0\x9F\x9F\xAB");  // 🟫
                     if (!sent) {
                         Serial.println("[ANCHOR][AUTO] WARN: Auto anchor notificatie niet verstuurd");
                     }

@@ -273,8 +273,25 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
             longTermTrendText = "--";
         }
         
-        snprintf(title, sizeof(title), "%s %s", 
-                 bitvavoSymbol, getText("Trend Wijziging", "Trend Change"));
+        // Titel met richting:
+        // UP      → 🟩 ↗️ BTC-EUR Trend Wijziging
+        // DOWN    → 🟥 ↘️ BTC-EUR Trend Wijziging
+        // SIDEWAYS→ 🟨 ↔️ BTC-EUR Trend Wijziging
+        const bool toUp = (strcmp(toTrend, "UP") == 0);
+        const bool toDown = (strcmp(toTrend, "DOWN") == 0);
+        const char* trendColor = toUp
+            ? "\xF0\x9F\x9F\xA9"         // 🟩
+            : (toDown ? "\xF0\x9F\x9F\xA5" // 🟥
+                      : "\xF0\x9F\x9F\xA8"); // 🟨
+        const char* trendArrow = toUp
+            ? "\xE2\x86\x97\xEF\xB8\x8F"  // ↗️
+            : (toDown ? "\xE2\x86\x98\xEF\xB8\x8F" // ↘️
+                      : "\xE2\x86\x94\xEF\xB8\x8F"); // ↔️
+        snprintf(title, sizeof(title), "%s %s %s %s",
+                 trendColor,
+                 trendArrow,
+                 bitvavoSymbol,
+                 getText("Trend Wijziging", "Trend Change"));
             snprintf(msg, sizeof(msg), 
                  "%.2f (%s)\n%s: %s → %s\n2h: %+.2f%%\n30m: %+.2f%%\n%s: %s\n%s: %s",
                  prices[0], timestamp,
@@ -365,8 +382,25 @@ void TrendDetector::checkMediumTrendChange(float ret_4h_value, float ret_1d_valu
                 break;
         }
         
-        snprintf(title, sizeof(title), "%s %s", 
-                 bitvavoSymbol, getText("1d Trend Wijziging", "1d Trend Change"));
+        // 1d Trend change:
+        // UP      → 🟩 ↗️ BTC-EUR 1d Trend Wijziging
+        // DOWN    → 🟥 ↘️ BTC-EUR 1d Trend Wijziging
+        // SIDEWAYS→ 🟨 ↔️ BTC-EUR 1d Trend Wijziging
+        const bool toUp = (strcmp(toTrend, "UP") == 0);
+        const bool toDown = (strcmp(toTrend, "DOWN") == 0);
+        const char* trendColor = toUp
+            ? "\xF0\x9F\x9F\xA9"         // 🟩
+            : (toDown ? "\xF0\x9F\x9F\xA5" // 🟥
+                      : "\xF0\x9F\x9F\xA8"); // 🟨
+        const char* trendArrow = toUp
+            ? "\xE2\x86\x97\xEF\xB8\x8F"  // ↗️
+            : (toDown ? "\xE2\x86\x98\xEF\xB8\x8F" // ↘️
+                      : "\xE2\x86\x94\xEF\xB8\x8F"); // ↔️
+        snprintf(title, sizeof(title), "%s %s %s %s",
+                 trendColor,
+                 trendArrow,
+                 bitvavoSymbol,
+                 getText("1d Trend Wijziging", "1d Trend Change"));
         snprintf(msg, sizeof(msg), 
                  "%.2f (%s)\n%s: %s → %s\n1d: %+.2f%%\n%s: %s",
                  prices[0], timestamp,
@@ -451,8 +485,25 @@ void TrendDetector::checkLongTermTrendChange(float ret_7d_value, float longTermT
                 break;
         }
         
-        snprintf(title, sizeof(title), "%s %s", 
-                 bitvavoSymbol, getText("7d Trend Wijziging", "7d Trend Change"));
+        // 7d Trend change:
+        // UP      → 🟩 ↗️ BTC-EUR 7d Trend Wijziging
+        // DOWN    → 🟥 ↘️ BTC-EUR 7d Trend Wijziging
+        // SIDEWAYS→ 🟨 ↔️ BTC-EUR 7d Trend Wijziging
+        const bool toUp = (strcmp(toTrend, "UP") == 0);
+        const bool toDown = (strcmp(toTrend, "DOWN") == 0);
+        const char* trendColor = toUp
+            ? "\xF0\x9F\x9F\xA9"         // 🟩
+            : (toDown ? "\xF0\x9F\x9F\xA5" // 🟥
+                      : "\xF0\x9F\x9F\xA8"); // 🟨
+        const char* trendArrow = toUp
+            ? "\xE2\x86\x97\xEF\xB8\x8F"  // ↗️
+            : (toDown ? "\xE2\x86\x98\xEF\xB8\x8F" // ↘️
+                      : "\xE2\x86\x94\xEF\xB8\x8F"); // ↔️
+        snprintf(title, sizeof(title), "%s %s %s %s",
+                 trendColor,
+                 trendArrow,
+                 bitvavoSymbol,
+                 getText("7d Trend Wijziging", "7d Trend Change"));
         snprintf(msg, sizeof(msg), 
                  "%.2f (%s)\n%s: %s → %s\n7d: %+.2f%%\n%s: %s",
                  prices[0], timestamp,
