@@ -1215,8 +1215,8 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                      priceRounded, timestamp,
                      getText("Raakt", "Touched"), getText("gem.", "avg"), directionText,
                      getText("na", "after"), distPct, getText("verwijdering", "away"));
-            // FASE X.2: Gebruik throttling wrapper
-            if (send2HNotification(ALERT2H_MEAN_TOUCH, title, msg, "green_square,📊")) {
+            // FASE X.2: Gebruik throttling wrapper (colorTag 🟦 = blue context, consistent met title)
+            if (send2HNotification(ALERT2H_MEAN_TOUCH, title, msg, "\xF0\x9F\x9F\xA6")) {
             gAlert2H.lastMeanMs = now;
             gAlert2H.setMeanArmed(false);
             gAlert2H.setMeanWasFar(false);

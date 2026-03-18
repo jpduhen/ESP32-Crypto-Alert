@@ -2361,8 +2361,11 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(F("<a href=\"/notifications\" style='color:#00BCD4;text-decoration:none;'>"));
     server->sendContent(getText("Laatste notificaties", "Recent notifications"));
     server->sendContent(F("</a>"));
+    server->sendContent(F(" &middot; <a href=\"/settings.txt\" style='color:#00BCD4;text-decoration:none;'>"));
+    server->sendContent(getText("Instellingen kopiëren (tekst)", "Copy settings (text)"));
+    server->sendContent(F("</a>"));
 #if OTA_ENABLED
-    server->sendContent(F(" &middot; <a href=\"/update\" style='color:#00BCD4;text-decoration:none;'>"));
+    server->sendContent(F(" &middot; <a href=\"/update\" style='color:red;text-decoration:none;'>"));
     server->sendContent(getText("Firmware-update (OTA)", "Firmware update (OTA)"));
     server->sendContent(F("</a>"));
 #endif
