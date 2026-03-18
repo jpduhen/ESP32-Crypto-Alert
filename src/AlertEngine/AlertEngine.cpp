@@ -1018,8 +1018,13 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             }
                             appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange5m);
                     
-                    const char* colorTag = determineColorTag(ret_5m, effThresh.move5m, effThresh.move5m * 1.5f);
-                            snprintf(titleBuffer, sizeof(titleBuffer), "%s 5m %s", bitvavoSymbol, getText("Move", "Move"));
+                    const char* colorTag = (ret_5m >= 0.0f) ? "\xF0\x9F\x9F\xA6" /* 🟦 */ : "\xF0\x9F\x9F\xA7" /* 🟧 */;
+                            snprintf(titleBuffer, sizeof(titleBuffer),
+                                     "%s %s %s 5m %s",
+                                     (ret_5m >= 0.0f) ? "\xF0\x9F\x9F\xA6" /* 🟦 */ : "\xF0\x9F\x9F\xA7" /* 🟧 */,
+                                     (ret_5m >= 0.0f) ? "\xF0\x9F\x94\xBC" /* 🔼 */ : "\xF0\x9F\x94\xBD" /* 🔽 */,
+                                     bitvavoSymbol,
+                                     getText("Move", "Move"));
                     
                     // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
                     if (checkAlertConditions(now, lastNotification5Min, cooldown5mMs, 
