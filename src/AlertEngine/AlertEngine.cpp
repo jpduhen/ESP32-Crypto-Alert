@@ -659,6 +659,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
     }
     
     unsigned long now = millis();
+    bool confluenceSentThisRound = false;
     
     // Update volume EMA en status altijd, ook als returns 0 zijn
     updateVolumeEmaIfNewCandle(lastKline1m, volumeEma1m, volumeEma1mInitialized,
@@ -773,9 +774,12 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
             bool confluenceFound = false;
             if (smartConfluenceEnabled) {
                 confluenceFound = checkAndSendConfluenceAlert(now, ret_30m);
+                if (confluenceFound) {
+                    confluenceSentThisRound = true;
+                }
             }
             
-            // Als confluence werd gevonden, skip individuele alert
+            // Als confluence werd gevonden, skip individuele 1m alert (Phase 1A/1B/1C)
             if (confluenceFound) {
                         #if !DEBUG_BUTTON_ONLY
                 Serial_printf(F("[Notify] 1m spike onderdrukt (gebruikt in confluence alert)\n"));
@@ -966,24 +970,23 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
             bool confluenceFound = false;
             if (smartConfluenceEnabled) {
                 confluenceFound = checkAndSendConfluenceAlert(now, ret_30m);
+                if (confluenceFound) {
+                    confluenceSentThisRound = true;
+                }
             }
             
-            // Als confluence werd gevonden, skip individuele alert
-            if (confluenceFound) {
+            // Phase 1C: laat 5m doorgaan als er deze ronde een confluence alert is verstuurd
+            // (zowel suppress via usedInConfluence als volume-event cooldown worden dan overgeslagen)
+            // Check of dit event al gebruikt is in confluence (suppress individuele alert, behalve bij Phase 1C-case)
+            if (smartConfluenceEnabled && last5mEvent.usedInConfluence && !confluenceSentThisRound) {
                         #if !DEBUG_BUTTON_ONLY
-                Serial_printf(F("[Notify] 5m move onderdrukt (gebruikt in confluence alert)\n"));
+                Serial_printf(F("[Notify] 5m move onderdrukt (al gebruikt in confluence)\n"));
                         #endif
-            } else {
-                // Check of dit event al gebruikt is in confluence (suppress individuele alert)
-                if (smartConfluenceEnabled && last5mEvent.usedInConfluence) {
-                            #if !DEBUG_BUTTON_ONLY
-                    Serial_printf(F("[Notify] 5m move onderdrukt (al gebruikt in confluence)\n"));
-                            #endif
-                        } else if (!volumeEventCooldownOk(now)) {
-                            #if !DEBUG_BUTTON_ONLY
-                            Serial_printf(F("[Notify] 5m move onderdrukt (volume-event cooldown)\n"));
-                            #endif
-                } else if (!nightModeAllows5mMove(ret_5m, ret_30m)) {
+            } else if (!confluenceSentThisRound && !volumeEventCooldownOk(now)) {
+                        #if !DEBUG_BUTTON_ONLY
+                        Serial_printf(F("[Notify] 5m move onderdrukt (volume-event cooldown)\n"));
+                        #endif
+            } else if (!nightModeAllows5mMove(ret_5m, ret_30m)) {
                             #if !DEBUG_BUTTON_ONLY
                             Serial_printf(F("[Notify] 5m move onderdrukt (nachtstand, 30m richting mismatch)\n"));
                             #endif
@@ -1037,7 +1040,6 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
             }
         }
     }
-}
 
 // Check 2-hour notifications (breakout, breakdown, compression, mean reversion, anchor context)
 // Wordt aangeroepen na elke price update
