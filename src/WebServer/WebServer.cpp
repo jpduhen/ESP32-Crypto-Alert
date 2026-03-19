@@ -195,13 +195,9 @@ void WebServerModule::setupWebServer() {
     server->on("/notifications", HTTP_GET, [this]() { this->handleNotifications(); });
     Serial.println(F("[WebServer] Route '/notifications' geregistreerd"));
 #if OTA_ENABLED
-    // Web-based OTA firmware update (chunked upload)
-    server->on("/update", HTTP_GET, [this]() { this->handleUpdateGet(); });
-    server->on("/update/start", HTTP_POST, [this]() { this->handleUpdateStart(); });
-    server->on("/update/chunk", HTTP_POST,
-               [this]() { this->handleUpdateChunkPost(); },
-               [this]() { this->handleUpdateChunkUpload(); });
-    server->on("/update/end", HTTP_POST, [this]() { this->handleUpdateEnd(); });
+    // Web-based OTA firmware update (chunked upload) - extracted to module
+    otaWebUpdater.begin(server);
+    otaWebUpdater.registerRoutes(server);
     Serial.println(F("[WebServer] Routes /update, /update/start, /update/chunk, /update/end (chunked OTA)"));
 #endif
     server->onNotFound([this]() { this->handleNotFound(); }); // 404 handler

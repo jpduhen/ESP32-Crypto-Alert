@@ -6,6 +6,7 @@
 #include "../TrendDetector/TrendDetector.h"
 #include "../VolatilityTracker/VolatilityTracker.h"
 #include "../AlertEngine/AlertEngine.h"  // Voor VolumeRangeStatus
+#include "../OtaWebUpdater/OtaWebUpdater.h"
 
 // Forward declarations voor dependencies
 class AnchorSystem;
@@ -34,6 +35,9 @@ public:
     void handleStatus();  // WEB-PERF-3: JSON status endpoint
     void handleSettingsExport();  // Plain-text settings export (read-only)
     void handleNotifications();   // Read-only notification log page
+
+    // Legacy handlers (web OTA upload) - kept for backwards compatibility.
+    // Routes are now registered via src/OtaWebUpdater/.
     void handleUpdateGet();          // Web OTA: uploadpagina (chunked flow)
     void handleUpdateStart();        // POST /update/start: begin OTA, body JSON {"total":N}
     void handleUpdateChunkPost();    // POST /update/chunk: na multipart upload, stuur {written,total}
@@ -74,6 +78,9 @@ private:
     // WebServer instance (wordt extern gedeclareerd in .ino)
     // Note: WebServer is een externe library class, we gebruiken een referentie
     WebServer* server;
+
+    // Reusable web-based chunked OTA updater (GET/POST /update* routes).
+    OtaWebUpdater otaWebUpdater;
 };
 
 // Global instance (wordt aangemaakt in .ino)
