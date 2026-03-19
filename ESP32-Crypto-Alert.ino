@@ -31,6 +31,10 @@
 #include <freertos/semphr.h>
 #include <esp_task_wdt.h>
 #include <esp_heap_caps.h>
+#if __has_include(<esp_cache.h>)
+#include <esp_cache.h>
+#define CRYPTO_ALERT_LVGL_HAS_ESP_CACHE 1
+#endif
 
 // SettingsStore module
 #include "src/SettingsStore/SettingsStore.h"
@@ -302,7 +306,7 @@ SemaphoreHandle_t gNetMutex = NULL;
 #if defined(PLATFORM_ESP32S3_4848S040)
 char symbol0[16] = "BTC-EUR";
 extern const char *const symbols[SYMBOL_COUNT] = {symbol0, SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL, SYMBOL_1D_LABEL, SYMBOL_7D_LABEL};
-#elif defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28)
+#elif defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
 char symbol0[16] = "BTC-EUR";
 extern const char *const symbols[SYMBOL_COUNT] = {symbol0, SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL};
 #else
@@ -6621,7 +6625,7 @@ void findMinMaxInLast30Minutes(float &minVal, float &maxVal)
     bool result = findMinMaxInArray(minuteAverages, MINUTES_FOR_30MIN_CALC, minuteIndex, minuteArrayFilled, 30, true, minVal, maxVal);
 }
 
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_4848S040)
+#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
 // Find min and max values in last 2 hours (120 minutes) of minuteAverages array
 // CYD + 4848S040 platforms met 2h box
 // Fase 2.1: Geoptimaliseerd: gebruikt generic findMinMaxInArray() helper
@@ -7480,6 +7484,19 @@ void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 {
     uint32_t w = lv_area_get_width(area);
     uint32_t h = lv_area_get_height(area);
+    const size_t len = (size_t)w * (size_t)h * sizeof(uint16_t);
+
+    // ESP32-S3: als px_map in PSRAM zit en de display-driver DMA leest, moet de data-cache
+    // naar geheugen worden teruggeschreven — anders willekeurige gekleurde blokjes (~cacheline).
+#if defined(CRYPTO_ALERT_LVGL_HAS_ESP_CACHE) && (defined(CONFIG_IDF_TARGET_ESP32S3) || defined(ARDUINO_ESP32S3_DEV))
+    if (len > 0 && esp_ptr_external_ram(px_map)) {
+        int msync_flags = ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_TYPE_DATA;
+#if defined(ESP_CACHE_MSYNC_FLAG_UNALIGNED)
+        msync_flags |= ESP_CACHE_MSYNC_FLAG_UNALIGNED;
+#endif
+        (void)esp_cache_msync((void *)px_map, len, msync_flags);
+    }
+#endif
 
     gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)px_map, w, h);
 
@@ -7627,7 +7644,11 @@ static void setupSerialAndDevice()
 static void setupDisplay()
 {
     // Init Display
+    #ifdef GFX_SPEED
+    if (!gfx->begin(GFX_SPEED))
+    #else
     if (!gfx->begin())
+    #endif
     {
         Serial_println("gfx->begin() failed!");
         while (true)
@@ -7701,6 +7722,12 @@ static void setupLVGL()
     
     // Detecteer PSRAM beschikbaarheid
     bool psramAvailable = hasPSRAM();
+
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+    const bool lvglDrawBufForceInternal = true;
+#else
+    const bool lvglDrawBufForceInternal = false;
+#endif
     
     // Bepaal useDoubleBuffer: board-aware
     bool useDoubleBuffer;
@@ -7713,6 +7740,8 @@ static void setupLVGL()
     #elif defined(PLATFORM_ESP32S3_GEEK)
         // ESP32-S3 GEEK: double buffer alleen als PSRAM beschikbaar is
         useDoubleBuffer = psramAvailable;
+    #elif defined(PLATFORM_ESP32S3_JC3248W535)
+        useDoubleBuffer = false;
     #elif defined(PLATFORM_TTGO)
         // TTGO: double buffer alleen als PSRAM beschikbaar is
         useDoubleBuffer = psramAvailable;
@@ -7790,6 +7819,8 @@ static void setupLVGL()
         boardName = "ESP32-S3";
     #elif defined(PLATFORM_ESP32S3_GEEK)
         boardName = "ESP32-S3 GEEK";
+    #elif defined(PLATFORM_ESP32S3_JC3248W535)
+        boardName = "JC3248W535";
     #elif defined(PLATFORM_TTGO)
         boardName = "TTGO";
     #else
@@ -7798,7 +7829,7 @@ static void setupLVGL()
     
     // Alloceer buffer één keer bij init (niet herhaald)
     if (disp_draw_buf == nullptr) {
-        if (psramAvailable) {
+        if (psramAvailable && !lvglDrawBufForceInternal) {
             // Met PSRAM: probeer eerst SPIRAM allocatie
             disp_draw_buf = (lv_color_t *)heap_caps_malloc(bufSizeBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
             if (disp_draw_buf) {
@@ -7810,8 +7841,7 @@ static void setupLVGL()
                 disp_draw_buf = (lv_color_t *)heap_caps_malloc(bufSizeBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
             }
         } else {
-            // Zonder PSRAM: gebruik INTERNAL+DMA geheugen (geen DEFAULT)
-            bufferLocation = "INTERNAL+DMA";
+            bufferLocation = lvglDrawBufForceInternal ? "INTERNAL+DMA (QSPI/DMA-safe)" : "INTERNAL+DMA";
             disp_draw_buf = (lv_color_t *)heap_caps_malloc(bufSizeBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
         }
         
@@ -7850,13 +7880,11 @@ static void setupLVGL()
     size_t bufSizeBytesPerBuffer = bufSizePixels * sizeof(lv_color_t);  // Bytes per buffer
     lv_display_render_mode_t renderMode = useFullFrame ? LV_DISPLAY_RENDER_MODE_FULL : LV_DISPLAY_RENDER_MODE_PARTIAL;
     
+    void *buf2 = nullptr;
     if (useDoubleBuffer) {
-        // Double buffering: beide buffers in dezelfde allocatie
-        lv_display_set_buffers(disp, disp_draw_buf, NULL, bufSizeBytes, renderMode);
-    } else {
-        // Single buffering: alleen eerste buffer gebruiken (size in bytes)
-        lv_display_set_buffers(disp, disp_draw_buf, NULL, bufSizeBytesPerBuffer, renderMode);
+        buf2 = (uint8_t *)disp_draw_buf + bufSizeBytesPerBuffer;
     }
+    lv_display_set_buffers(disp, disp_draw_buf, buf2, bufSizeBytesPerBuffer, renderMode);
 }
 
 static void setupWatchdog()

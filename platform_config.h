@@ -7,8 +7,9 @@
 //#define PLATFORM_CYD28_2USB  // 2USB variant: met kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
 //#define PLATFORM_TTGO
 //#define PLATFORM_ESP32S3_SUPERMINI
-#define PLATFORM_ESP32S3_GEEK
+//#define PLATFORM_ESP32S3_GEEK
 //#define PLATFORM_ESP32S3_LCDWIKI_28
+#define PLATFORM_ESP32S3_JC3248W535  // JC3248W535CIY 3.5" QSPI (AXS15231B), 320x480
 //#define PLATFORM_ESP32S3_4848S040
 //#define PLATFORM_ESP32S3_AMOLED_206
 
@@ -261,6 +262,39 @@
     #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_10
     #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
     #define SYMBOL_COUNT 4  // LCDwiki 2.8: BTCEUR, 1m, 30m, 2h
+#elif defined(PLATFORM_ESP32S3_JC3248W535)
+    #if !defined(UICONTROLLER_INCLUDE) && !defined(MODULE_INCLUDE)
+    #include "PINS_ESP32S3_JC3248W535_AXS15231B.h"
+    #endif
+    #define MQTT_TOPIC_PREFIX "jc3248w535_crypto"
+    #define DEVICE_NAME "JC3248W535 Crypto Monitor"
+    #define DEVICE_MODEL "ESP32-S3 JC3248W535 3.5\""
+    #define HAS_TOUCHSCREEN false
+    #define HAS_PHYSICAL_BUTTON true
+    #define BUTTON_PIN 0
+    #define SYMBOL_1MIN_LABEL "1 min"
+    #define SYMBOL_30MIN_LABEL "30 min"
+    #define SYMBOL_2H_LABEL "2h"
+    #define CHART_WIDTH 240
+    #define CHART_HEIGHT 72
+    #define CHART_ALIGN_Y 24
+    #define PRICE_BOX_Y_START 99
+    #define FONT_SIZE_TITLE_BTCEUR &lv_font_montserrat_14
+    #define FONT_SIZE_TITLE_OTHER &lv_font_montserrat_12
+    #define FONT_SIZE_PRICE_BTCEUR &lv_font_montserrat_12
+    #define FONT_SIZE_PRICE_OTHER &lv_font_montserrat_12
+    #define FONT_SIZE_ANCHOR &lv_font_montserrat_10
+    #define FONT_SIZE_TREND_VOLATILITY &lv_font_montserrat_12
+    #define FONT_SIZE_FOOTER &lv_font_montserrat_12
+    #define FONT_SIZE_IP_PREFIX &lv_font_montserrat_14
+    #define FONT_SIZE_IP &lv_font_montserrat_12
+    #define FONT_SIZE_CHART_DATE_TIME &lv_font_montserrat_10
+    #define FONT_SIZE_CHART_VERSION &lv_font_montserrat_10
+    #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_10
+    #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
+    #define SYMBOL_COUNT 4  // JC3248W535: BTCEUR, 1m, 30m, 2h
+    #define LVGL_SCREEN_WIDTH 320
+    #define LVGL_SCREEN_HEIGHT 480
 #elif defined(PLATFORM_ESP32S3_4848S040)
     #if !defined(UICONTROLLER_INCLUDE) && !defined(MODULE_INCLUDE)
     #include "PINS_ESP32S3_4848S040_ST7701_480.h"
@@ -329,7 +363,7 @@
     #define LVGL_SCREEN_WIDTH 410
     #define LVGL_SCREEN_HEIGHT 502
 #else
-    #error "Please define PLATFORM_TTGO, PLATFORM_CYD24, PLATFORM_CYD28, PLATFORM_ESP32S3_SUPERMINI, PLATFORM_ESP32S3_GEEK, PLATFORM_ESP32S3_LCDWIKI_28, PLATFORM_ESP32S3_4848S040 or PLATFORM_ESP32S3_AMOLED_206 in platform_config.h"
+    #error "Please define PLATFORM_TTGO, PLATFORM_CYD24, PLATFORM_CYD28, PLATFORM_ESP32S3_SUPERMINI, PLATFORM_ESP32S3_GEEK, PLATFORM_ESP32S3_LCDWIKI_28, PLATFORM_ESP32S3_JC3248W535, PLATFORM_ESP32S3_4848S040 or PLATFORM_ESP32S3_AMOLED_206 in platform_config.h"
 #endif
 
 // Fallback: als SYMBOL_COUNT nog niet gedefinieerd is, gebruik default 3
