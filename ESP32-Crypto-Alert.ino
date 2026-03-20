@@ -3375,13 +3375,16 @@ void netMutexLock(const char* taskName)
     // #endif
     
     const char* safeTaskName = (taskName != nullptr) ? taskName : "net";
+    const bool suppressWsReconnectAcqRel = (safeTaskName != nullptr && strstr(safeTaskName, "reconnect loop") != nullptr);
     // Rate-limited waiting logs om connect-heavy acties te kunnen correleren.
     uint32_t lastWaitLogMs = 0;
     const uint32_t waitLogEveryMs = 2000;
     for (;;) {
         if (xSemaphoreTake(gNetMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
             #if !DEBUG_BUTTON_ONLY
-            Serial.printf(F("[NET] acquire %s\n"), safeTaskName);
+            if (!suppressWsReconnectAcqRel) {
+                Serial.printf(F("[NET] acquire %s\n"), safeTaskName);
+            }
             #endif
             return;
         }
@@ -3389,7 +3392,9 @@ void netMutexLock(const char* taskName)
         if (now - lastWaitLogMs >= waitLogEveryMs) {
             lastWaitLogMs = now;
             #if !DEBUG_BUTTON_ONLY
-            Serial.printf(F("[NET] waiting for network slot %s\n"), safeTaskName);
+            if (!suppressWsReconnectAcqRel) {
+                Serial.printf(F("[NET] waiting for network slot %s\n"), safeTaskName);
+            }
             #endif
         }
     }
@@ -3410,7 +3415,10 @@ void netMutexUnlock(const char* taskName)
     const char* safeTaskName = (taskName != nullptr) ? taskName : "net";
     xSemaphoreGive(gNetMutex);
     #if !DEBUG_BUTTON_ONLY
-    Serial.printf(F("[NET] release %s\n"), safeTaskName);
+    const bool suppressWsReconnectRelease = (safeTaskName != nullptr && strstr(safeTaskName, "reconnect loop") != nullptr);
+    if (!suppressWsReconnectRelease) {
+        Serial.printf(F("[NET] release %s\n"), safeTaskName);
+    }
     #endif
 }
 
@@ -9413,14 +9421,59 @@ void loop()
     if (wsInitialized && wsClientPtr != nullptr) {
         if (WiFi.status() == WL_CONNECTED) {
             // Regie: tijdens (re)connect nemen we de netwerkmutex zodat NTFY/MQTT/API niet tegelijk connect zware acties doen.
+            static unsigned long wsReconnectLastPollMs = 0;
+            static unsigned long wsReconnectLastWaitLogMs = 0;
+            static unsigned long wsReconnectSessionStartMs = 0;
+            static bool wsReconnectSessionActive = false;
+            static bool wsReconnectTimeoutLogged = false;
+
+            const unsigned long WS_RECONNECT_POLL_THROTTLE_MS = 250UL;
+            const unsigned long WS_RECONNECT_TIMEOUT_MS = 15000UL;
+            const unsigned long WS_RECONNECT_WAIT_LOG_EVERY_MS = 3000UL;
+
             if (wsPauseForNtfySend) {
-                // Diagnosetest: we pauzeren WS verwerking zodat NTFY/HTTPS volledig geïsoleerd wordt.
-                // Geen wsClientPtr->loop() calls in deze periode.
+                // Pauze: we doen geen wsClientPtr->loop() calls om NTFY/HTTP volledig te isoleren.
+                wsReconnectSessionActive = false;
             } else if (!wsConnected) {
-                netMutexLock("[WS] reconnect loop");
-                wsClientPtr->loop();
-                netMutexUnlock("[WS] reconnect loop");
+                const unsigned long nowWs = millis();
+
+                if (wsReconnectSessionActive && !wsConnecting) {
+                    // Reconnect sessie gestopt door event handler; geen extra reconnect-logging meer.
+                    wsReconnectSessionActive = false;
+                    wsReconnectTimeoutLogged = false;
+                }
+
+                if (wsConnecting && !wsReconnectSessionActive) {
+                    wsReconnectSessionActive = true;
+                    wsReconnectSessionStartMs = nowWs;
+                    wsReconnectTimeoutLogged = false;
+                    wsReconnectLastWaitLogMs = 0;
+                    Serial_println(F("[WS] reconnect start"));
+                }
+
+                if (wsReconnectSessionActive && wsConnecting && !wsReconnectTimeoutLogged) {
+                    if ((nowWs - wsReconnectSessionStartMs) >= WS_RECONNECT_TIMEOUT_MS) {
+                        Serial_println(F("[WS] reconnect timeout"));
+                        wsReconnectTimeoutLogged = true;
+                    } else if ((nowWs - wsReconnectLastWaitLogMs) >= WS_RECONNECT_WAIT_LOG_EVERY_MS) {
+                        wsReconnectLastWaitLogMs = nowWs;
+                        Serial_println(F("[WS] reconnect waiting..."));
+                    }
+                }
+
+                // Throttle wsClientPtr->loop() tijdens reconnect zodat we niet in een te strakke lus hangen.
+                if ((nowWs - wsReconnectLastPollMs) >= WS_RECONNECT_POLL_THROTTLE_MS) {
+                    netMutexLock("[WS] reconnect loop");
+                    wsClientPtr->loop();
+                    netMutexUnlock("[WS] reconnect loop");
+                    wsReconnectLastPollMs = nowWs;
+                }
             } else {
+                if (wsReconnectSessionActive) {
+                    Serial_println(F("[WS] reconnect complete"));
+                    wsReconnectSessionActive = false;
+                    wsReconnectTimeoutLogged = false;
+                }
                 wsClientPtr->loop();
             }
             if (wsPending) {
