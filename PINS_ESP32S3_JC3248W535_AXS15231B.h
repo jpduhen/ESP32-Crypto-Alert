@@ -13,7 +13,9 @@
 
 #if defined(ESP32) || defined(ESP32S3) || defined(ARDUINO_ESP32S3_DEV) || defined(CONFIG_IDF_TARGET_ESP32S3)
 
-#include <Arduino_GFX_Library.h>
+#if !defined(CRYPTO_ALERT_NO_ARDUINO_GFX_BUS)
+    #include <Arduino_GFX_Library.h>
+#endif
 
 // --- Display (QSPI, AXS15231B) ---
 #define TFT_CS   15   // LCD CS  (IO15)
@@ -35,12 +37,14 @@
 #define GFX_SPEED 20000000UL
 
 // QSPI-bus (CS, SCK, D0, D1, D2, D3)
+#if !defined(CRYPTO_ALERT_NO_ARDUINO_GFX_BUS)
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(
     TFT_CS, TFT_SCK, TFT_D0, TFT_D1, TFT_D2, TFT_D3);
 
 // Displaydriver AXS15231B (320×480)
 Arduino_GFX *gfx = new Arduino_AXS15231B(
     bus, TFT_RST, 0 /* rotation */, false /* IPS */, GFX_WIDTH, GFX_HEIGHT);
+#endif
 
 // --- Touch (I2C, optioneel voor toekomstig gebruik) ---
 #define TOUCH_SDA  8

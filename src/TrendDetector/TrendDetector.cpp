@@ -22,6 +22,11 @@ extern VolatilityState volatilityState;  // Hoort bij VolatilityTracker module
 // Constants
 #define TREND_CHANGE_COOLDOWN_MS 600000UL  // 10 minuten cooldown voor trend change notificaties
 
+// Eerste ~45 s na boot: geen trend-wijziging NTFY (minder burst naar ntfy.sh / 429).
+#ifndef NTFY_TREND_STARTUP_SUPPRESS_MS
+#define NTFY_TREND_STARTUP_SUPPRESS_MS 45000UL
+#endif
+
 // Forward declaration voor Serial_printf macro
 #ifndef Serial_printf
 #define Serial_printf Serial.printf
@@ -302,14 +307,20 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
                  getText("7d trend", "7d trend"), longTermTrendText);
         
         // FASE X.2: Gebruik throttling wrapper voor Trend Change
-        if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag)) {
-            lastTrendChangeNotification = now;
+        if (millis() < NTFY_TREND_STARTUP_SUPPRESS_MS) {
+            #if !DEBUG_BUTTON_ONLY
+            unsigned long msLeft = NTFY_TREND_STARTUP_SUPPRESS_MS - millis();
+            Serial_printf(F("[Trend] startup: 2h trend NTFY suppressed (%lu ms left)\n"), msLeft);
+            #endif
+        } else {
+            if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag)) {
+                lastTrendChangeNotification = now;
+            }
+            #if !DEBUG_BUTTON_ONLY
+            Serial_printf(F("[Trend] Trend change notificatie verzonden: %s → %s (2h: %.2f%%, 30m: %.2f%%, Vol: %s)\n"),
+                          fromTrend, toTrend, ret_2h, ret_30m_value, volText);
+            #endif
         }
-            
-        #if !DEBUG_BUTTON_ONLY
-            Serial_printf(F("[Trend] Trend change notificatie verzonden: %s → %s (2h: %.2f%%, 30m: %.2f%%, Vol: %s)\n"), 
-                         fromTrend, toTrend, ret_2h, ret_30m_value, volText);
-        #endif
         }
         
         // Update previous trend state
@@ -411,14 +422,20 @@ void TrendDetector::checkMediumTrendChange(float ret_4h_value, float ret_1d_valu
         // FASE X.2: Gebruik throttling wrapper voor 1d Trend Change
         // Note: We gebruiken ALERT2H_TREND_CHANGE type omdat er geen apart type is voor 1d
         // De throttling logica zal dit behandelen als een trend change notificatie
-        if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag)) {
-            lastMediumTrendChangeNotification = now;
+        if (millis() < NTFY_TREND_STARTUP_SUPPRESS_MS) {
+            #if !DEBUG_BUTTON_ONLY
+            unsigned long msLeft = NTFY_TREND_STARTUP_SUPPRESS_MS - millis();
+            Serial_printf(F("[1d Trend] startup: 1d trend NTFY suppressed (%lu ms left)\n"), msLeft);
+            #endif
+        } else {
+            if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag)) {
+                lastMediumTrendChangeNotification = now;
+            }
+            #if !DEBUG_BUTTON_ONLY
+            Serial_printf(F("[1d Trend] 1d trend change notificatie verzonden: %s → %s (1d: %.2f%%)\n"),
+                          fromTrend, toTrend, ret_1d_value);
+            #endif
         }
-        
-        #if !DEBUG_BUTTON_ONLY
-        Serial_printf(F("[1d Trend] 1d trend change notificatie verzonden: %s → %s (1d: %.2f%%)\n"), 
-                     fromTrend, toTrend, ret_1d_value);
-        #endif
     }
     
     // Update previous medium trend state
@@ -514,14 +531,20 @@ void TrendDetector::checkLongTermTrendChange(float ret_7d_value, float longTermT
         // FASE X.2: Gebruik throttling wrapper voor 7d Trend Change
         // Note: We gebruiken ALERT2H_TREND_CHANGE type omdat er geen apart type is voor 7d
         // De throttling logica zal dit behandelen als een trend change notificatie
-        if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag)) {
-            lastLongTermTrendChangeNotification = now;
+        if (millis() < NTFY_TREND_STARTUP_SUPPRESS_MS) {
+            #if !DEBUG_BUTTON_ONLY
+            unsigned long msLeft = NTFY_TREND_STARTUP_SUPPRESS_MS - millis();
+            Serial_printf(F("[7d Trend] startup: 7d trend NTFY suppressed (%lu ms left)\n"), msLeft);
+            #endif
+        } else {
+            if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag)) {
+                lastLongTermTrendChangeNotification = now;
+            }
+            #if !DEBUG_BUTTON_ONLY
+            Serial_printf(F("[7d Trend] 7d trend change notificatie verzonden: %s → %s (7d: %.2f%%)\n"),
+                          fromTrend, toTrend, ret_7d_value);
+            #endif
         }
-        
-        #if !DEBUG_BUTTON_ONLY
-        Serial_printf(F("[7d Trend] 7d trend change notificatie verzonden: %s → %s (7d: %.2f%%)\n"), 
-                     fromTrend, toTrend, ret_7d_value);
-        #endif
     }
     
     // Update previous long term trend state

@@ -15,7 +15,7 @@
 
 #include "UIController.h"
 #include <lvgl.h>
-#include <Arduino_GFX_Library.h>
+#include "../display/DisplayBackend.h"
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 // Fase 8.5.2: updateTrendLabel() dependencies
@@ -94,7 +94,7 @@ extern const lv_font_t lv_font_montserrat_14;
 // Forward declarations voor globale variabelen (worden gebruikt door callbacks)
 extern void Serial_println(const char*);
 extern void Serial_println(const __FlashStringHelper*);
-extern Arduino_GFX* gfx;
+// display backend global wordt gedeclareerd in DisplayBackend.h
 // Fase 8.10.1: setupLVGL() dependencies
 extern lv_display_t *disp;
 extern lv_color_t *disp_draw_buf;
@@ -378,14 +378,27 @@ uint32_t UIController::millis_cb(void) {
 // Fase 8.1.3: Verplaatst naar UIController module
 // Note: Deze functie moet extern blijven voor LVGL (niet static in header)
 void UIController::my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
-    uint32_t w = lv_area_get_width(area);
-    uint32_t h = lv_area_get_height(area);
-    
-    if (gfx != nullptr) {
-        gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)px_map, w, h);
+    static bool s_loggedFirstFlush = false;
+    if (!s_loggedFirstFlush) {
+        if (area) {
+            Serial.printf("[LVGL] First flush begin: area=(%d,%d)-(%d,%d)\n", area->x1, area->y1, area->x2, area->y2);
+        } else {
+            Serial.println("[LVGL] First flush begin: area=<null>");
+        }
     }
-    
+
+    if (g_displayBackend && area && px_map) {
+        g_displayBackend->flush(area, px_map);
+    }
+
+    if (!s_loggedFirstFlush) {
+        Serial.println("[LVGL] Before lv_display_flush_ready()");
+    }
     lv_disp_flush_ready(disp);
+    if (!s_loggedFirstFlush) {
+        Serial.println("[LVGL] After lv_display_flush_ready()");
+        s_loggedFirstFlush = true;
+    }
 }
 
 static bool isUsdcQuoteSymbol(const char* symbol)
@@ -518,6 +531,9 @@ void UIController::createChart() {
     lv_chart_set_point_count(chart, POINTS_TO_CHART);
     lv_obj_set_size(chart, CHART_WIDTH, CHART_HEIGHT);
     #if defined(PLATFORM_ESP32S3_4848S040)
+    lv_obj_align(chart, LV_ALIGN_TOP_LEFT, 0, CHART_ALIGN_Y);
+    #elif defined(PLATFORM_ESP32S3_JC3248W535)
+    // Lijn uit met prijskaarten (links uitgelijnd, volle CHART_WIDTH).
     lv_obj_align(chart, LV_ALIGN_TOP_LEFT, 0, CHART_ALIGN_Y);
     #else
     lv_obj_align(chart, LV_ALIGN_TOP_MID, 0, CHART_ALIGN_Y);
@@ -683,6 +699,25 @@ void UIController::createHeaderLabels() {
     lv_label_set_text(chartTimeLabel, "--:--:--");
     lv_obj_set_width(chartTimeLabel, 240);
     lv_obj_set_pos(chartTimeLabel, 240, 16);
+    #elif defined(PLATFORM_ESP32S3_JC3248W535)
+    // JC3248 320×480: zelfde effectieve breedte als prijskaarten (geen 240px CYD-defaults).
+    chartDateLabel = lv_label_create(lv_scr_act());
+    ::chartDateLabel = chartDateLabel;
+    lv_obj_set_style_text_font(chartDateLabel, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(chartDateLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_align(chartDateLabel, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(chartDateLabel, "-- -- --");
+    lv_obj_set_width(chartDateLabel, LV_SIZE_CONTENT);
+    lv_obj_align(chartDateLabel, LV_ALIGN_TOP_MID, 0, 4);
+
+    chartTimeLabel = lv_label_create(lv_scr_act());
+    ::chartTimeLabel = chartTimeLabel;
+    lv_obj_set_style_text_font(chartTimeLabel, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(chartTimeLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_obj_set_style_text_align(chartTimeLabel, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_text(chartTimeLabel, "--:--:--");
+    lv_obj_set_width(chartTimeLabel, LV_SIZE_CONTENT);
+    lv_obj_align(chartTimeLabel, LV_ALIGN_TOP_RIGHT, -4, 4);
     #elif defined(PLATFORM_ESP32S3_4848S040)
     // 4848S040: footer in twee kolommen (links info, rechts versie)
     lblFooterLine1 = lv_label_create(lv_scr_act());
@@ -1284,6 +1319,7 @@ static void resetUiPointers() {
 
 // Fase 8.4.1: buildUI() verplaatst naar UIController module (parallel implementatie)
 void UIController::buildUI() {
+    static bool s_loggedFirstUiBuild = false;
     lv_obj_t* screen = lv_scr_act();
     if (screen == nullptr) {
         Serial.println(F("[UI] WARN: lv_scr_act is null, skip buildUI"));
@@ -1299,6 +1335,11 @@ void UIController::buildUI() {
     createFooter();
     applyChartHeaderFooterColors(getChartSeriesColor());
     applyBtcEurBoxColors(getChartSeriesColor());
+
+    if (!s_loggedFirstUiBuild) {
+        Serial.println("[UI] First UI build completed");
+        s_loggedFirstUiBuild = true;
+    }
 }
 
 // Fase 8.5.2: updateTrendLabel() naar Module
@@ -2324,6 +2365,7 @@ void UIController::checkButton()
 // LVGL display initialisatie
 void UIController::setupLVGL()
 {
+    Serial.println("[LVGL] Active init path: UIController::setupLVGL()");
     // init LVGL
     lv_init();
 
@@ -2335,8 +2377,8 @@ void UIController::setupLVGL()
     lv_log_register_print_cb(my_print);
 #endif
 
-    uint32_t screenWidth = gfx->width();
-    uint32_t screenHeight = gfx->height();
+    uint32_t screenWidth = g_displayBackend ? g_displayBackend->width() : 0;
+    uint32_t screenHeight = g_displayBackend ? g_displayBackend->height() : 0;
     
     // Detecteer PSRAM beschikbaarheid
     bool psramAvailable = hasPSRAM();
@@ -2344,7 +2386,7 @@ void UIController::setupLVGL()
     // JC3248W535 (QSPI + DMA): LVGL-buffer in SPIRAM geeft op ESP32-S3 vaak cache-coherentie-artefacten
     // (kleine gekleurde blokjes). Forceer INTERNAL+DMA voor de draw buffer.
 #if defined(PLATFORM_ESP32S3_JC3248W535)
-    const bool lvglDrawBufForceInternal = true;
+    const bool lvglDrawBufForceInternal = false;
 #else
     const bool lvglDrawBufForceInternal = false;
 #endif
@@ -2361,7 +2403,7 @@ void UIController::setupLVGL()
         // ESP32-S3 GEEK: double buffer alleen als PSRAM beschikbaar is
         useDoubleBuffer = psramAvailable;
     #elif defined(PLATFORM_ESP32S3_JC3248W535)
-        // Grote display + draw buffer in INTERNAL: enkelvoudige buffer (minder SRAM, voldoende voor QSPI)
+        // JC3248W535 testmodus: expliciet single buffer.
         useDoubleBuffer = false;
     #elif defined(PLATFORM_TTGO)
         // TTGO: double buffer alleen als PSRAM beschikbaar is
@@ -2372,7 +2414,7 @@ void UIController::setupLVGL()
     #endif
     
     // Bepaal buffer lines per board (compile-time instelbaar voor CYD)
-    uint8_t bufLines;
+    uint32_t bufLines;
     #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
         // CYD zonder PSRAM: compile-time instelbaar (default 4, kan 1/2/4 zijn voor testen)
         // Na geheugenoptimalisaties kunnen we meer buffer gebruiken voor betere performance
@@ -2398,6 +2440,9 @@ void UIController::setupLVGL()
         } else {
             bufLines = 2;
         }
+    #elif defined(PLATFORM_ESP32S3_JC3248W535)
+        // Forceer full-frame buffer (320x480) voor veilige AXS15231B/QSPI testmodus.
+        bufLines = screenHeight;
     #elif defined(PLATFORM_TTGO)
         // TTGO: 30 regels met PSRAM, 2 zonder
         if (psramAvailable) {
@@ -2415,14 +2460,20 @@ void UIController::setupLVGL()
     if (psramAvailable) {
         const size_t fullFrameBytes = (size_t)screenWidth * screenHeight * sizeof(lv_color_t) * 2;  // double buffer
         if (fullFrameBytes <= 400000u) {
-            bufLines = (uint8_t)screenHeight;
+            bufLines = screenHeight;
         }
     }
     #endif
-    
+
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+    const size_t bytesPerPixel = sizeof(uint16_t); // hard force RGB565 pad voor deze boardtest
+#else
+    const size_t bytesPerPixel = sizeof(lv_color_t);
+#endif
+
     uint32_t bufSize = screenWidth * bufLines;
     uint8_t numBuffers = useDoubleBuffer ? 2 : 1;  // 1 of 2 buffers afhankelijk van useDoubleBuffer
-    size_t bufSizeBytes = bufSize * sizeof(lv_color_t) * numBuffers;
+    size_t bufSizeBytes = (size_t)bufSize * bytesPerPixel * numBuffers;
     bool useFullFrame = (bufLines >= screenHeight);
     
     const char* bufferLocation;
@@ -2484,7 +2535,9 @@ void UIController::setupLVGL()
         Serial.printf("[LVGL] PSRAM: %s, useDoubleBuffer: %s, fullFrame: %s\n", 
                      psramAvailable ? "yes" : "no", useDoubleBuffer ? "true" : "false", useFullFrame ? "yes" : "no");
         Serial.printf("[LVGL] Draw buffer: %u lines, %u pixels, %u bytes (%u buffer%s)\n", 
-                     bufLines, bufSize, bufSizeBytes, numBuffers, numBuffers == 1 ? "" : "s");
+                     (unsigned)bufLines, (unsigned)bufSize, (unsigned)bufSizeBytes, numBuffers, numBuffers == 1 ? "" : "s");
+        Serial.printf("[LVGL] Draw buffer per buffer bytes: %u\n", (unsigned)((size_t)bufSize * bytesPerPixel));
+        Serial.printf("[LVGL] Buffer bytes/pixel (configured): %u\n", (unsigned)bytesPerPixel);
         Serial.printf("[LVGL] Buffer locatie: %s\n", bufferLocation);
         Serial.printf("[LVGL] Heap: %u -> %u bytes free, Largest block: %u -> %u bytes\n",
                      freeHeapBefore, freeHeapAfter, largestFreeBlockBefore, largestFreeBlockAfter);
@@ -2497,14 +2550,43 @@ void UIController::setupLVGL()
     
     // LVGL buffer setup: single of double buffering, full of partial frame
     size_t bufSizePixels = bufSize;
-    size_t bufSizeBytesPerBuffer = bufSizePixels * sizeof(lv_color_t);
+    size_t bufSizeBytesPerBuffer = bufSizePixels * bytesPerPixel;
+    // AXS15231B QSPI panels are sensitive to partial updates.
+    // Force full refresh on JC3248W535CIY to avoid random block artifacts.
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+    lv_display_render_mode_t renderMode = LV_DISPLAY_RENDER_MODE_FULL;
+#else
     lv_display_render_mode_t renderMode = useFullFrame ? LV_DISPLAY_RENDER_MODE_FULL : LV_DISPLAY_RENDER_MODE_PARTIAL;
+#endif
+
+#if defined(PLATFORM_ESP32S3_JC3248W535) && defined(LV_COLOR_FORMAT_RGB565)
+    lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
+#endif
     
     void *buf2 = nullptr;
     if (useDoubleBuffer) {
         buf2 = (uint8_t *)disp_draw_buf + bufSizeBytesPerBuffer;
     }
     lv_display_set_buffers(disp, disp_draw_buf, buf2, bufSizeBytesPerBuffer, renderMode);
+
+    const char *renderModeStr = (renderMode == LV_DISPLAY_RENDER_MODE_FULL) ? "FULL" :
+                                (renderMode == LV_DISPLAY_RENDER_MODE_PARTIAL) ? "PARTIAL" : "DIRECT";
+    lv_color_format_t activeColorFormat = lv_display_get_color_format(disp);
+    uint8_t activeBpp = lv_color_format_get_size(activeColorFormat);
+    Serial.printf("[LVGL] Active render mode: %s\n", renderModeStr);
+    Serial.printf("[LVGL] Active color format: %d, bytes/pixel: %u\n", (int)activeColorFormat, (unsigned)activeBpp);
+    Serial.printf("[LVGL] Active bufLines: %u\n", (unsigned)bufLines);
+
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+    if (activeColorFormat != LV_COLOR_FORMAT_RGB565 || activeBpp != 2) {
+        Serial.printf("[LVGL][ERROR] JC3248 requires RGB565/2BPP but got fmt=%d bpp=%u\n",
+                      (int)activeColorFormat, (unsigned)activeBpp);
+    }
+    if (renderMode != LV_DISPLAY_RENDER_MODE_FULL || !useFullFrame || bufLines != screenHeight) {
+        Serial.printf("[LVGL][ERROR] JC3248 requires full-frame. mode=%s fullFrame=%s bufLines=%u screenHeight=%u\n",
+                      renderModeStr, useFullFrame ? "yes" : "no", (unsigned)bufLines, (unsigned)screenHeight);
+    }
+#endif
 }
 
 // Helper: Update min/max/diff labels (geoptimaliseerd: elimineert code duplicatie)

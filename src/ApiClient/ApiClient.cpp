@@ -34,7 +34,7 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
     buffer[0] = '\0'; // Initialize buffer
     
     // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
-    netMutexLock("ApiClient::httpGETInternal");
+    netMutexLock("[API] HTTP GET");
     
     const uint8_t MAX_RETRIES = 0; // Geen retries voor normale calls (snellere failure, voorkomt langzame calls)
     // T1: Backoff retry delays: alleen voor speciale gevallen (niet gebruikt met MAX_RETRIES=0)
@@ -206,7 +206,7 @@ bool ApiClient::httpGETInternal(const char *url, char *buffer, size_t bufferSize
         }
     
     // C2: Geef netwerk mutex vrij (met debug logging)
-    netMutexUnlock("ApiClient::httpGETInternal");
+    netMutexUnlock("[API] HTTP GET");
     
     return result;
 }
@@ -528,7 +528,7 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
     logHeap("API_GET_PRE");
     
     // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
-    netMutexLock("ApiClient::fetchBitvavoPrice");
+    netMutexLock("[API] HTTP fetchBitvavoPrice");
     
     const uint8_t MAX_RETRIES = 0; // Geen retries voor normale price fetches (snellere failure)
     const uint32_t RETRY_DELAYS[] = {100, 200}; // Backoff delays in ms (verlaagd, niet gebruikt met MAX_RETRIES=0)
@@ -665,7 +665,7 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
     }
     
     // C2: Geef netwerk mutex vrij (met debug logging)
-    netMutexUnlock("ApiClient::fetchBitvavoPrice");
+    netMutexUnlock("[API] HTTP fetchBitvavoPrice");
     
     return ok;
 }

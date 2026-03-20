@@ -36,6 +36,13 @@
 #define CRYPTO_ALERT_LVGL_HAS_ESP_CACHE 1
 #endif
 
+// Display backend abstraction (Arduino_GFX vs esp_lcd for JC3248W535).
+#include "src/display/DisplayBackend.h"
+#include "src/display/DisplayBackend_Factory.h"
+#include "src/display/DisplayBackend_ArduinoGFX.h"
+
+DisplayBackend *g_displayBackend = nullptr;
+
 // SettingsStore module
 #include "src/SettingsStore/SettingsStore.h"
 
@@ -219,6 +226,30 @@
 #define THRESHOLD_1MIN_DOWN_DEFAULT -0.5f // Notificatie bij dalende trend < -0.5% per minuut
 #define THRESHOLD_30MIN_UP_DEFAULT 2.0f   // Notificatie bij stijgende trend > 2% per uur
 #define THRESHOLD_30MIN_DOWN_DEFAULT -2.0f // Notificatie bij dalende trend < -2% per uur
+
+// --- NTFY Reliability Tests ---
+// Zet deze aan om NTFY te testen (baseline + periodiek) onder netwerkbelasting.
+#ifndef CRYPTO_ALERT_NTFY_STARTUP_TEST
+#define CRYPTO_ALERT_NTFY_STARTUP_TEST 0
+#endif
+
+#ifndef CRYPTO_ALERT_NTFY_PERIODIC_TEST
+#define CRYPTO_ALERT_NTFY_PERIODIC_TEST 0
+#endif
+
+#ifndef CRYPTO_ALERT_NTFY_PERIODIC_TEST_MS
+#define CRYPTO_ALERT_NTFY_PERIODIC_TEST_MS 30000UL
+#endif
+
+// Diagnosetest: pauzeer WS verwerking rondom een (test-)NTFY send.
+#ifndef CRYPTO_ALERT_NTFY_PAUSE_WS_DURING_SEND
+#define CRYPTO_ALERT_NTFY_PAUSE_WS_DURING_SEND 1
+#endif
+
+// Diagnosetest: WS echt disconnecten (TLS/socket reset) rondom een (test-)NTFY send.
+#ifndef CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND
+#define CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND 1
+#endif
 
 // Spike/Move alert thresholds (geoptimaliseerd op basis van metingen)
 #define SPIKE_1M_THRESHOLD_DEFAULT 0.31f   // 1m spike: |ret_1m| >= 0.31%
@@ -497,6 +528,16 @@ static bool wsPending = false;
 static size_t wsPendingLen = 0;
 static char wsPendingBuf[360];
 
+// Diagnosetest: WS pauze tijdens NTFY-send om steady-state WS-verkeer te isoleren.
+static bool wsPauseForNtfySend = false;
+
+// Diagnosetest: waarden om WS te kunnen herstarten na een test-disconnect.
+static const char* WS_HOST = "ws.bitvavo.com";
+static const uint16_t WS_PORT = 443;
+static const char* WS_PATH = "/v2/";
+
+static bool wsWasActiveForNtfySend = false;
+
 static void processWsTextMessage(const char* wsBuf, size_t length);
 
 
@@ -728,6 +769,10 @@ char ntfyTopic[64] = "";  // NTFY topic (max 63 karakters)
 // NTFY backoff om fout-stormen te voorkomen
 static unsigned long ntfyNextAllowedMs = 0;
 static uint8_t ntfyFailStreak = 0;
+
+// NTFY test scheduling (optioneel)
+static bool ntfyStartupTestSent = false;
+static unsigned long ntfyPeriodicTestNextMs = 0;
 // Candles backoff om connect errors te temperen
 static unsigned long candlesNextAllowedMs = 0;
 static uint8_t candlesFailStreak = 0;
@@ -2489,10 +2534,75 @@ void updateWarmStartStatus()
 // Send notification via Ntfy.sh
 // colorTag: "green_square" voor stijging, "red_square" voor daling, "blue_square" voor neutraal
 // Geoptimaliseerd: betere error handling en resource cleanup
+// Debug: alle logs in dit pad gebruiken prefix [NTFY] (compact bij OK; fouten met fase + HTTPClient-code).
+
+static void ntfyLogTopicDigest(char *out, size_t outSz, const char *topic) {
+    if (out == nullptr || outSz == 0) return;
+    size_t n = strlen(topic);
+    if (n == 0) {
+        snprintf(out, outSz, "empty");
+        return;
+    }
+    if (n <= 8) {
+        snprintf(out, outSz, "len=%u", (unsigned)n);
+        return;
+    }
+    snprintf(out, outSz, "len=%u head=%.3s...tail=%.3s", (unsigned)n, topic, topic + n - 3);
+}
+
+// Wachttijd na HTTP 429: Retry-After (seconden) indien aanwezig, anders 60 s. Max 1 uur.
+static uint32_t ntfy429WaitMs(HTTPClient &http, bool *usedRetryAfterHeader) {
+    const uint32_t kDefaultMs = 60000UL;
+    if (usedRetryAfterHeader) {
+        *usedRetryAfterHeader = false;
+    }
+    String ra = http.header("Retry-After");
+    if (ra.length() == 0) {
+        return kDefaultMs;
+    }
+    int sec = ra.toInt();
+    if (sec <= 0) {
+        // Geen parsebare delta-seconds (bijv. HTTP-date) — veilige default
+        return kDefaultMs;
+    }
+    if (usedRetryAfterHeader) {
+        *usedRetryAfterHeader = true;
+    }
+    uint64_t ms = (uint64_t)sec * 1000ULL;
+    if (ms > 3600000ULL) {
+        ms = 3600000ULL;
+    }
+    return (uint32_t)ms;
+}
+
+static const char *ntfyPhaseForClientCode(int code) {
+    if (code > 0) return "http_status";
+    switch (code) {
+    case HTTPC_ERROR_CONNECTION_REFUSED: return "connect_refused";
+    case HTTPC_ERROR_SEND_HEADER_FAILED: return "send_header";
+    case HTTPC_ERROR_SEND_PAYLOAD_FAILED: return "send_body";
+    case HTTPC_ERROR_NOT_CONNECTED: return "not_connected";
+    case HTTPC_ERROR_CONNECTION_LOST: return "connection_lost";
+    case HTTPC_ERROR_NO_STREAM: return "no_stream";
+    case HTTPC_ERROR_NO_HTTP_SERVER: return "dns_or_host";
+    case HTTPC_ERROR_TOO_LESS_RAM: return "out_of_ram";
+    case HTTPC_ERROR_ENCODING: return "encoding";
+    case HTTPC_ERROR_STREAM_WRITE: return "stream_write";
+    case HTTPC_ERROR_READ_TIMEOUT: return "read_timeout";
+#ifdef HTTPC_ERROR_SSL_NOT_AVAILABLE
+    case HTTPC_ERROR_SSL_NOT_AVAILABLE: return "tls_ssl";
+#endif
+#ifdef HTTPC_ERROR_CONNECTION_FAILED
+    case HTTPC_ERROR_CONNECTION_FAILED: return "connect_failed";
+#endif
+    default: return "transport_unknown";
+    }
+}
+
 static bool sendNtfyNotification(const char *title, const char *message, const char *colorTag = nullptr)
 {
     unsigned long nowMs = millis();
-    // Debug: netwerkstatus voor NTFY (rate-limited, 1x per 60s)
+    // NTFY netwerk-diagnose (rate-limited, 1x per 60s): DNS naar ntfy.sh
     static unsigned long lastNtfyNetLogMs = 0;
     if (nowMs - lastNtfyNetLogMs >= 60000UL) {
         lastNtfyNetLogMs = nowMs;
@@ -2500,208 +2610,232 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
         bool resolved = WiFi.hostByName("ntfy.sh", ntfyIp);
         IPAddress dnsIp = WiFi.dnsIP();
         IPAddress gwIp = WiFi.gatewayIP();
-        Serial_printf(F("[Notify][Net] RSSI=%d dBm, DNS=%u.%u.%u.%u, GW=%u.%u.%u.%u, ntfy.sh=%u.%u.%u.%u (resolved=%d)\n"),
+        Serial_printf(F("[NTFY][diag] RSSI=%d DNS=%u.%u.%u.%u GW=%u.%u.%u.%u ntfy.sh=%u.%u.%u.%u resolved=%d\n"),
                       WiFi.RSSI(),
                       dnsIp[0], dnsIp[1], dnsIp[2], dnsIp[3],
                       gwIp[0], gwIp[1], gwIp[2], gwIp[3],
                       ntfyIp[0], ntfyIp[1], ntfyIp[2], ntfyIp[3],
                       resolved ? 1 : 0);
+        if (!resolved) {
+            Serial_println(F("[NTFY][diag] hint: hostByName(ntfy.sh) failed -> DNS/proxy/firewall?"));
+        }
     }
     if (ntfyNextAllowedMs != 0 && nowMs < ntfyNextAllowedMs) {
-        // Rate-limit bij eerdere failures (voorkomt spam + netwerkdruk)
         static unsigned long lastBackoffLogMs = 0;
         if (nowMs - lastBackoffLogMs > 10000) {
-            Serial_printf(F("[Notify] Ntfy backoff actief (%lu ms resterend)\n"),
+            Serial_printf(F("[NTFY] backoff active (%lu ms left)\n"),
                           (unsigned long)(ntfyNextAllowedMs - nowMs));
             lastBackoffLogMs = nowMs;
         }
         return false;
     }
-    // Check WiFi verbinding eerst
-    if (WiFi.status() != WL_CONNECTED)
-    {
-        Serial_println(F("[Notify] WiFi niet verbonden, kan NTFY notificatie niet versturen"));
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial_println(F("[NTFY] abort: WiFi not connected"));
         return false;
     }
-    
-    // Valideer inputs
-    if (strlen(ntfyTopic) == 0)
-    {
-        Serial_println(F("[Notify] Ntfy topic niet geconfigureerd"));
+    if (strlen(ntfyTopic) == 0) {
+        Serial_println(F("[NTFY] abort: topic empty (configure in web UI)"));
         return false;
     }
-    
-    if (title == nullptr || message == nullptr)
-    {
-        Serial_println(F("[Notify] Ongeldige title of message pointer"));
+    if (title == nullptr || message == nullptr) {
+        Serial_println(F("[NTFY] abort: null title or message"));
         return false;
     }
-    
-    // Valideer lengte van inputs om buffer overflows te voorkomen
-    if (strlen(title) > 64 || strlen(message) > 512)
-    {
-        Serial_println(F("[Notify] Title of message te lang"));
+    const size_t titleLen = strlen(title);
+    const size_t msgLen = strlen(message);
+    if (titleLen > 64 || msgLen > 512) {
+        Serial_printf(F("[NTFY] abort: title_len=%u or body_len=%u exceeds limit 64/512\n"),
+                      (unsigned)titleLen, (unsigned)msgLen);
         return false;
     }
-    
+    if (msgLen == 0) {
+        Serial_println(F("[NTFY] warn: empty POST body"));
+    }
+
     char url[128];
     int urlLen = snprintf(url, sizeof(url), "https://ntfy.sh/%s", ntfyTopic);
-    if (urlLen < 0 || urlLen >= (int)sizeof(url))
-    {
-        Serial_println(F("[Notify] URL buffer overflow"));
+    if (urlLen < 0 || urlLen >= (int)sizeof(url)) {
+        Serial_printf(F("[NTFY] abort: URL overflow (snprintf need %d, max %u)\n"),
+                      urlLen, (unsigned)(sizeof(url) - 1));
         return false;
     }
-    
-    Serial_printf(F("[Notify] Ntfy URL: %s\n"), url);
-    Serial_printf(F("[Notify] Ntfy Title: %s\n"), title);
-    Serial_printf(F("[Notify] Ntfy Message: %s\n"), message);
-    
-    // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
-    netMutexLock("sendNtfyNotification");
-    
-    const uint8_t MAX_RETRIES = 1; // Max 1 retry (2 pogingen totaal)
-    const uint32_t RETRY_DELAYS[] = {250, 750}; // Backoff delays in ms
+
+    char topicDigest[56];
+    ntfyLogTopicDigest(topicDigest, sizeof(topicDigest), ntfyTopic);
+
+    // WS connect heavy isolatie: disconnect WS vóór NTFY send en restore erna.
+    // Dit geldt voor alle echte NTFY sends (niet alleen tests).
+    bool wsWasActiveForNtfySend = false;
+#if CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND
+    wsWasActiveForNtfySend = ntfyDisconnectWsBeforeNtfySendIfNeeded();
+    if (wsWasActiveForNtfySend) {
+        Serial_println(F("[NTFY] sending NTFY while WS fully disconnected"));
+    }
+#else
+    wsWasActiveForNtfySend = ntfyPauseWsBeforeNtfySendIfNeeded();
+    if (wsWasActiveForNtfySend) {
+        Serial_println(F("[NTFY] sending NTFY while WS paused"));
+    }
+#endif
+
+    netMutexLock("[NTFY] sendNtfyNotification");
+
+    const uint8_t MAX_RETRIES = 1;
+    const uint32_t RETRY_DELAYS[] = {250, 750};
     bool ok = false;
-    
+
     for (uint8_t attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         bool attemptOk = false;
         bool shouldRetry = false;
         int lastCode = 0;
         HTTPClient http;
         WiFiClientSecure ntfyClient;
-        ntfyClient.setInsecure();  // NTFY: voorkom TLS problemen door tijd/CA
-    
-    // S2: do-while(0) patroon voor consistente cleanup
-    do {
-        // S2: Expliciete timeout settings
+        ntfyClient.setInsecure();
+
+        Serial_printf(
+            F("[NTFY] send start attempt=%u/%u proto=HTTPS host=ntfy.sh port=443 path=/%s full_url_len=%d title_len=%u body_len=%u tags=%s\n"),
+            (unsigned)(attempt + 1), (unsigned)(MAX_RETRIES + 1),
+            topicDigest,
+            urlLen,
+            (unsigned)titleLen,
+            (unsigned)msgLen,
+            (colorTag != nullptr && colorTag[0] != '\0') ? "yes" : "no");
+
+        do {
             http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
             http.setTimeout(HTTP_READ_TIMEOUT_MS);
-        http.setReuse(false);
-    
-        if (!http.begin(ntfyClient, url)) {
-                if (attempt == MAX_RETRIES) {
-        Serial_println(F("[Notify] Ntfy HTTP begin gefaald"));
-                }
+            http.setReuse(false);
+
+            if (!http.begin(ntfyClient, url)) {
+                Serial_println(F("[NTFY] FAIL phase=http_begin detail=HTTPClient.begin() false (TLS/client prep)"));
+                lastCode = 0;
                 shouldRetry = (attempt < MAX_RETRIES);
-            break;
-    }
-    
-    http.addHeader("Title", title);
-    http.addHeader("Priority", "high");
-    
-    // Voeg kleur tag toe als opgegeven
-        if (colorTag != nullptr && strlen(colorTag) > 0) {
-            if (strlen(colorTag) <= 64) { // Valideer lengte
-            http.addHeader(F("Tags"), colorTag);
-            Serial_printf(F("[Notify] Ntfy Tag: %s\n"), colorTag);
-        }
-    }
-    
-    Serial_println(F("[Notify] Ntfy POST versturen..."));
-    int code = http.POST(message);
+                break;
+            }
+
+            // ESP32 HTTPClient: alleen vermelde response-headers zijn leesbaar via header().
+            static const char *ntfyResponseHeaderKeys[] = {"Retry-After"};
+            http.collectHeaders(ntfyResponseHeaderKeys, 1);
+
+            http.addHeader("Title", title);
+            http.addHeader("Priority", "high");
+            if (colorTag != nullptr && strlen(colorTag) > 0 && strlen(colorTag) <= 64) {
+                http.addHeader(F("Tags"), colorTag);
+            }
+
+            int code = http.POST(message);
             lastCode = code;
-    
-    // Haal response alleen op bij succes (bespaar geheugen)
-    // Gebruik static buffer i.p.v. String om fragmentatie te voorkomen
-        if (code == 200 || code == 201) {
-        WiFiClient* stream = http.getStreamPtr();
-        if (stream != nullptr) {
-            size_t totalLen = 0;
-            while (stream->available() && totalLen < (sizeof(httpResponseBuffer) - 1)) {
-                size_t bytesRead = stream->readBytes((uint8_t*)(httpResponseBuffer + totalLen), sizeof(httpResponseBuffer) - 1 - totalLen);
-                totalLen += bytesRead;
-            }
-            httpResponseBuffer[totalLen] = '\0';
-            if (totalLen > 0) {
-                Serial_printf(F("[Notify] Ntfy response: %s\n"), httpResponseBuffer);
-            }
-        } else {
-                // M2: Fallback: stream niet beschikbaar, lees response body direct
-                // Voor POST responses kunnen we niet httpGetToBuffer() gebruiken
-                // In plaats daarvan lezen we de response body in chunks
+            String err = HTTPClient().errorToString(code);
+
+            if (code == 200 || code == 201) {
+                WiFiClient *stream = http.getStreamPtr();
                 size_t totalLen = 0;
-                const size_t CHUNK_SIZE = 256;
-                while (http.connected() && totalLen < (sizeof(httpResponseBuffer) - 1)) {
-                    size_t remaining = sizeof(httpResponseBuffer) - 1 - totalLen;
-                    size_t chunkSize = (remaining < CHUNK_SIZE) ? remaining : CHUNK_SIZE;
-                    
-                    // Probeer response body te lezen (POST response)
-                    WiFiClient* client = http.getStreamPtr();
-                    if (client == nullptr) {
-                        break;
+                if (stream != nullptr) {
+                    while (stream->available() && totalLen < (sizeof(httpResponseBuffer) - 1)) {
+                        size_t bytesRead = stream->readBytes((uint8_t *)(httpResponseBuffer + totalLen),
+                                                             sizeof(httpResponseBuffer) - 1 - totalLen);
+                        totalLen += bytesRead;
                     }
-                    
-                    size_t bytesRead = client->readBytes((uint8_t*)(httpResponseBuffer + totalLen), chunkSize);
-                    if (bytesRead == 0) {
-                        if (!client->available()) {
-                            break;
+                } else {
+                    const size_t CHUNK_SIZE = 256;
+                    while (http.connected() && totalLen < (sizeof(httpResponseBuffer) - 1)) {
+                        size_t remaining = sizeof(httpResponseBuffer) - 1 - totalLen;
+                        size_t chunkSize = (remaining < CHUNK_SIZE) ? remaining : CHUNK_SIZE;
+                        WiFiClient *client = http.getStreamPtr();
+                        if (client == nullptr) break;
+                        size_t bytesRead = client->readBytes((uint8_t *)(httpResponseBuffer + totalLen), chunkSize);
+                        if (bytesRead == 0) {
+                            if (!client->available()) break;
+                            delay(10);
+                            continue;
                         }
-                        delay(10);
-                        continue;
+                        totalLen += bytesRead;
                     }
-                    totalLen += bytesRead;
                 }
                 httpResponseBuffer[totalLen] = '\0';
-                if (totalLen > 0) {
-                    Serial_printf(F("[Notify] Ntfy response: %s\n"), httpResponseBuffer);
-                }
-            }
-            
-        Serial_printf(F("[Notify] Ntfy bericht succesvol verstuurd! (code: %d)\n"), code);
-                // Reset backoff bij succes
+
+                Serial_printf(F("[NTFY] OK attempt=%u/%u http=%d response_bytes=%u\n"),
+                              (unsigned)(attempt + 1), (unsigned)(MAX_RETRIES + 1), code, (unsigned)totalLen);
                 ntfyFailStreak = 0;
                 ntfyNextAllowedMs = 0;
                 attemptOk = true;
-            ok = true;
-        } else {
-        String err = HTTPClient().errorToString(code);
-        Serial_printf(F("[Notify] Ntfy fout bij versturen (code: %d, err: %s)\n"), code, err.c_str());
+                ok = true;
+            } else if (code == 429) {
+                // Rate limit: geen snelle in-loop retry; wacht minstens 60 s of Retry-After van server.
+                bool usedRa = false;
+                uint32_t waitMs = ntfy429WaitMs(http, &usedRa);
+                unsigned long t = millis();
+                ntfyNextAllowedMs = t + waitMs;
+                Serial_printf(
+                    F("[NTFY] FAIL attempt=%u/%u phase=rate_limited http_status=429 wait_ms=%lu source=%s err=%s\n"),
+                    (unsigned)(attempt + 1), (unsigned)(MAX_RETRIES + 1), (unsigned long)waitMs,
+                    usedRa ? "Retry-After" : "default_60s", err.c_str());
+                shouldRetry = false;
+            } else {
+                const char *phase = (code < 0) ? ntfyPhaseForClientCode(code) : "http_status";
+                if (code < 0) {
+                    Serial_printf(F("[NTFY] FAIL attempt=%u/%u phase=%s client_code=%d err=%s\n"),
+                                  (unsigned)(attempt + 1), (unsigned)(MAX_RETRIES + 1), phase, code, err.c_str());
+                } else {
+                    Serial_printf(F("[NTFY] FAIL attempt=%u/%u phase=%s http_status=%d err=%s\n"),
+                                  (unsigned)(attempt + 1), (unsigned)(MAX_RETRIES + 1), phase, code, err.c_str());
+                }
                 shouldRetry = (code == HTTPC_ERROR_CONNECTION_REFUSED ||
                                code == HTTPC_ERROR_CONNECTION_LOST ||
                                code == HTTPC_ERROR_READ_TIMEOUT ||
                                code == HTTPC_ERROR_SEND_HEADER_FAILED ||
                                code == HTTPC_ERROR_SEND_PAYLOAD_FAILED ||
-                               code == 429 ||
                                (code >= 500 && code < 600));
-    }
-    } while(0);
-    
-    // C2: ALTIJD cleanup (ook bij code<0, code!=200, parse error)
-    // Phase 1: Safer order – stream->stop() vóór http.end(); expliciet ntfyClient.stop()
-    WiFiClient* stream = http.getStreamPtr();
-    if (stream != nullptr) {
-        stream->stop();
-    }
-    http.end();
-    ntfyClient.stop();
-        
+            }
+        } while (0);
+
+        WiFiClient *stream = http.getStreamPtr();
+        if (stream != nullptr) {
+            stream->stop();
+        }
+        http.end();
+        ntfyClient.stop();
+
         if (attemptOk) {
             if (attempt > 0) {
-                Serial_printf(F("[Notify] Succes na retry (poging %d/%d)\n"), attempt + 1, MAX_RETRIES + 1);
+                Serial_printf(F("[NTFY] success after retry (attempt %u/%u)\n"),
+                              (unsigned)(attempt + 1), (unsigned)(MAX_RETRIES + 1));
             }
             break;
         }
-        
+
+        // Geen tweede HTTP-poging bij 429: backoff is al lang genoeg.
+        if (lastCode == 429) {
+            break;
+        }
+
         if (!attemptOk && attempt >= MAX_RETRIES) {
-            // Backoff bij failure (exponentieel, max 5 min)
-            if (ntfyFailStreak < 6) ntfyFailStreak++;
-            uint32_t backoffMs = 5000UL << (ntfyFailStreak - 1);
-            if (backoffMs > 300000UL) backoffMs = 300000UL;
-            ntfyNextAllowedMs = nowMs + backoffMs;
+            // 429: ntfyNextAllowedMs al gezet (rate_limited + Retry-After / 60 s); geen extra korte streak-backoff.
+            if (lastCode != 429) {
+                if (ntfyFailStreak < 6) ntfyFailStreak++;
+                uint32_t backoffMs = 5000UL << (ntfyFailStreak - 1);
+                if (backoffMs > 300000UL) backoffMs = 300000UL;
+                ntfyNextAllowedMs = nowMs + backoffMs;
+                Serial_printf(F("[NTFY] scheduling backoff %lu ms (streak=%u)\n"),
+                              (unsigned long)backoffMs, (unsigned)ntfyFailStreak);
+            }
         }
         if (shouldRetry && attempt < MAX_RETRIES) {
-            uint32_t backoffDelay = (attempt < sizeof(RETRY_DELAYS)/sizeof(RETRY_DELAYS[0])) ? RETRY_DELAYS[attempt] : 500;
-            if (lastCode == 429 && backoffDelay < 1000) {
-                backoffDelay = 1000;
-            }
-            Serial_printf(F("[Notify] Retry %d/%d na %lu ms backoff\n"), attempt + 1, MAX_RETRIES, backoffDelay);
+            uint32_t backoffDelay = (attempt < sizeof(RETRY_DELAYS) / sizeof(RETRY_DELAYS[0])) ? RETRY_DELAYS[attempt] : 500;
+            Serial_printf(F("[NTFY] retry reason=transient_error next_delay_ms=%lu (attempt %u->%u)\n"),
+                          (unsigned long)backoffDelay, (unsigned)(attempt + 1), (unsigned)(attempt + 2));
             delay(backoffDelay);
         }
     }
-    
-    // C2: Geef netwerk mutex vrij (met debug logging)
-    netMutexUnlock("sendNtfyNotification");
-    
+
+    // Restore WS after NTFY send, still within netMutex so connect-heavy actions blijven geserialiseerd.
+#if CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND
+    ntfyRestoreWsAfterNtfySend();
+#else
+    ntfyRestoreWsAfterNtfySendPausedStrategy();
+#endif
+    netMutexUnlock("[NTFY] sendNtfyNotification");
+
     return ok;
 }
 
@@ -2787,8 +2921,11 @@ static void maybeInitWebSocketAfterWarmStart()
         }
     });
     wsClientPtr->setReconnectInterval(5000);
-    wsClientPtr->beginSSL(wsHost, wsPort, wsPath);
     Serial.printf("[WS] Connecting to wss://%s%s\n", wsHost, wsPath);
+    // Regie: beginSSL kan intern een (her)connect start triggeren.
+    netMutexLock("[WS] beginSSL");
+    wsClientPtr->beginSSL(wsHost, wsPort, wsPath);
+    netMutexUnlock("[WS] beginSSL");
     wsConnecting = true;
     wsConnectStartMs = millis();
     wsInitialized = true;
@@ -3098,13 +3235,13 @@ static void applyPendingDisplayRotation()
         return;
     }
     pendingDisplayRotationApply = false;
-    if (gfx == nullptr) {
+    if (g_displayBackend == nullptr) {
         return;
     }
     // Wis scherm voor/na rotatie om residu te voorkomen
-    gfx->fillScreen(RGB565_BLACK);
-    gfx->setRotation(pendingDisplayRotationValue);
-    gfx->fillScreen(RGB565_BLACK);
+    g_displayBackend->fillScreen(0 /* RGB565_BLACK */);
+    g_displayBackend->setRotation(pendingDisplayRotationValue);
+    g_displayBackend->fillScreen(0 /* RGB565_BLACK */);
 }
 
 static void applyPendingMqttReconnect()
@@ -3237,7 +3374,25 @@ void netMutexLock(const char* taskName)
     // Serial.printf(F("[NetMutex] lock by %s (core %d)\n"), taskName, coreId);
     // #endif
     
-    xSemaphoreTake(gNetMutex, portMAX_DELAY);
+    const char* safeTaskName = (taskName != nullptr) ? taskName : "net";
+    // Rate-limited waiting logs om connect-heavy acties te kunnen correleren.
+    uint32_t lastWaitLogMs = 0;
+    const uint32_t waitLogEveryMs = 2000;
+    for (;;) {
+        if (xSemaphoreTake(gNetMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+            #if !DEBUG_BUTTON_ONLY
+            Serial.printf(F("[NET] acquire %s\n"), safeTaskName);
+            #endif
+            return;
+        }
+        uint32_t now = millis();
+        if (now - lastWaitLogMs >= waitLogEveryMs) {
+            lastWaitLogMs = now;
+            #if !DEBUG_BUTTON_ONLY
+            Serial.printf(F("[NET] waiting for network slot %s\n"), safeTaskName);
+            #endif
+        }
+    }
 }
 
 void netMutexUnlock(const char* taskName)
@@ -3252,7 +3407,11 @@ void netMutexUnlock(const char* taskName)
     // Serial.printf(F("[NetMutex] unlock by %s (core %d)\n"), taskName, coreId);
     // #endif
     
+    const char* safeTaskName = (taskName != nullptr) ? taskName : "net";
     xSemaphoreGive(gNetMutex);
+    #if !DEBUG_BUTTON_ONLY
+    Serial.printf(F("[NET] release %s\n"), safeTaskName);
+    #endif
 }
 
 // Forward declarations
@@ -3411,6 +3570,293 @@ bool sendNotification(const char *title, const char *message, const char *colorT
     bool sent = sendNtfyNotification(title, message, colorTag);
     appendNotificationLog(title, message, colorTag, sent ? 1u : 0u);
     return sent;
+}
+
+// ============================================================================
+// NTFY Reliability Test Helpers
+// ============================================================================
+static bool formatLocalTimeHHMMSS(char *out, size_t outSz)
+{
+    if (out == nullptr || outSz < 9) return false;
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) {
+        // Geen geldige tijd: fallback zodat we toch een vaste string kunnen loggen
+        strncpy(out, "--:--:--", outSz - 1);
+        out[outSz - 1] = '\0';
+        return false;
+    }
+    strftime(out, outSz, "%H:%M:%S", &timeinfo);
+    return true;
+}
+
+static bool waitLocalTimeHHMMSS(char *out, size_t outSz, uint32_t timeoutMs)
+{
+    const uint32_t start = millis();
+    for (;;) {
+        if (formatLocalTimeHHMMSS(out, outSz) && out[0] != '-') {
+            return true;
+        }
+        if (millis() - start >= timeoutMs) {
+            return false;
+        }
+        delay(250);
+    }
+}
+
+static bool isNetMutexBusy()
+{
+    if (gNetMutex == nullptr) return false;
+    if (xSemaphoreTake(gNetMutex, 0) == pdTRUE) {
+        xSemaphoreGive(gNetMutex);
+        return false;
+    }
+    return true;
+}
+
+static bool ntfyPauseWsBeforeNtfySendIfNeeded()
+{
+#if CRYPTO_ALERT_NTFY_PAUSE_WS_DURING_SEND
+#if WS_ENABLED && WS_LIB_AVAILABLE
+    Serial_println(F("[NTFY] pausing WS before send"));
+    wsPauseForNtfySend = true;
+    // We pauzeren enkel de WS loop processing (geen echte WS disconnect).
+    Serial_println(F("[NTFY] WS paused/disconnected"));
+    if (wsConnected) {
+        Serial_println(F("[NTFY] WS paused/disconnected detail: was connected"));
+    } else if (wsConnecting) {
+        Serial_println(F("[NTFY] WS paused/disconnected detail: was connecting"));
+    } else {
+        Serial_println(F("[NTFY] WS paused/disconnected detail: was idle"));
+    }
+    return true;
+#else
+    // WS compile-time uit: geen echte pauze mogelijk.
+    Serial_println(F("[NTFY] pausing WS before send (WS disabled)"));
+    Serial_println(F("[NTFY] WS paused/disconnected"));
+    return false;
+#endif
+#else
+    return false;
+#endif
+}
+
+static bool ntfyDisconnectWsBeforeNtfySendIfNeeded()
+{
+#if CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND
+#if WS_ENABLED && WS_LIB_AVAILABLE
+    Serial_println(F("[NTFY] disconnecting WS before send"));
+
+    wsWasActiveForNtfySend = (wsConnected || wsConnecting);
+    wsPauseForNtfySend = true; // stop main WS loop processing tijdens NTFY send
+
+    if (wsInitialized && wsClientPtr != nullptr && wsWasActiveForNtfySend) {
+        if (wsConnected) {
+            Serial_println(F("[NTFY] WS was connected"));
+        } else if (wsConnecting) {
+            Serial_println(F("[NTFY] WS was connecting"));
+        }
+
+        wsClientPtr->disconnect();
+        // Force local state to reflect "disconnected" quickly for test logging.
+        wsConnected = false;
+        wsConnecting = false;
+
+        // Verwerk async DISCONNECTED event door korte WS loop-run.
+        const unsigned long startMs = millis();
+        while (millis() - startMs < 3000UL) {
+            wsClientPtr->loop();
+            if (!wsConnected && !wsConnecting) break;
+            delay(50);
+        }
+    } else {
+        Serial_println(F("[NTFY] WS not active/initialized -> skipping disconnect()"));
+    }
+
+    if (!wsConnected && !wsConnecting) {
+        Serial_println(F("[NTFY] WS disconnected"));
+    } else {
+        Serial_printf(F("[NTFY] WS disconnect pending (connected=%d connecting=%d)\n"),
+                      wsConnected ? 1 : 0, wsConnecting ? 1 : 0);
+    }
+
+    return wsWasActiveForNtfySend;
+#else
+    Serial_println(F("[NTFY] disconnecting WS before send (WS disabled)"));
+    Serial_println(F("[NTFY] WS disconnected"));
+    wsWasActiveForNtfySend = false;
+    return false;
+#endif
+#else
+    return false;
+#endif
+}
+
+static void ntfyRestoreWsAfterNtfySend()
+{
+#if CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND
+#if WS_ENABLED && WS_LIB_AVAILABLE
+    if (!wsWasActiveForNtfySend) {
+        wsPauseForNtfySend = false;
+        return;
+    }
+
+    Serial_println(F("[NTFY] restoring WS after send"));
+    Serial_println(F("[NTFY] WS reconnect requested"));
+
+    // Geen concurrent WS processing: hou pauze aan tijdens re-init/reconnect.
+    wsPauseForNtfySend = true;
+    wsConnected = false;
+    wsConnecting = true;
+    wsConnectStartMs = millis();
+
+    if (wsInitialized && wsClientPtr != nullptr) {
+        wsClientPtr->setReconnectInterval(5000);
+        wsClientPtr->beginSSL(WS_HOST, WS_PORT, WS_PATH);
+
+        const unsigned long startMs = millis();
+        while (millis() - startMs < 15000UL) {
+            wsClientPtr->loop();
+            if (wsConnected) break;
+            delay(50);
+        }
+
+        if (wsConnected) {
+            Serial_println(F("[NTFY] WS restore complete"));
+        } else {
+        Serial_printf(F("[NTFY] WS restore status: connected=%d connecting=%d\n"),
+                          wsConnected ? 1 : 0, wsConnecting ? 1 : 0);
+        }
+    } else {
+        Serial_println(F("[NTFY] WS restore skipped: ws not initialized/alloc failed"));
+    }
+
+    wsPauseForNtfySend = false;
+#endif
+#endif
+}
+
+static void ntfyRestoreWsAfterNtfySendPausedStrategy()
+{
+#if CRYPTO_ALERT_NTFY_PAUSE_WS_DURING_SEND
+#if WS_ENABLED && WS_LIB_AVAILABLE
+    if (wsPauseForNtfySend) {
+        wsPauseForNtfySend = false;
+        Serial_println(F("[NTFY] restoring WS after send"));
+    }
+#endif
+#endif
+}
+
+static void ntfyStartupTestIfEnabled()
+{
+#if CRYPTO_ALERT_NTFY_STARTUP_TEST
+    if (ntfyStartupTestSent) return;
+    ntfyStartupTestSent = true;
+
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial_println(F("[NTFY][test] startup test skipped: WiFi not connected"));
+        return;
+    }
+
+    char hhmmss[10] = {0};
+    (void)waitLocalTimeHHMMSS(hhmmss, sizeof(hhmmss), 15000UL);
+
+    char text[96];
+    snprintf(text, sizeof(text), "[%s] Reboot - Setup compleet", hhmmss);
+
+    Serial_println(F("[NTFY][test] startup test queued"));
+
+    if (ntfyNextAllowedMs != 0 && millis() < ntfyNextAllowedMs) {
+        Serial_printf(F("[NTFY][test] startup test deferred due to NTFY-backoff (%lu ms left)\n"),
+                      (unsigned long)(ntfyNextAllowedMs - millis()));
+    }
+
+    if (isNetMutexBusy()) {
+        Serial_println(F("[NTFY][test] waiting for network slot (mutex busy)"));
+    }
+
+    const char *tag = "☑️";
+    bool sent = false;
+#if CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND
+    (void)ntfyDisconnectWsBeforeNtfySendIfNeeded();
+    Serial_println(F("[NTFY] sending NTFY while WS fully disconnected"));
+    sent = sendNotification(text, text, tag);
+    ntfyRestoreWsAfterNtfySend();
+#else
+    (void)ntfyPauseWsBeforeNtfySendIfNeeded();
+    Serial_println(F("[NTFY] sending NTFY while WS paused"));
+    sent = sendNotification(text, text, tag);
+    ntfyRestoreWsAfterNtfySendPausedStrategy();
+#endif
+    if (sent) {
+        Serial_println(F("[NTFY][test] startup test sent ok"));
+    } else {
+        Serial_println(F("[NTFY][test] startup test sent failed"));
+    }
+#else
+    (void)0;
+#endif
+}
+
+static void ntfyPeriodicTestIfEnabled()
+{
+#if CRYPTO_ALERT_NTFY_PERIODIC_TEST
+    if (WiFi.status() != WL_CONNECTED) return;
+
+    const unsigned long now = millis();
+    if (ntfyPeriodicTestNextMs == 0) {
+        ntfyPeriodicTestNextMs = now + CRYPTO_ALERT_NTFY_PERIODIC_TEST_MS;
+        return;
+    }
+    if (now < ntfyPeriodicTestNextMs) return;
+
+    Serial_println(F("[NTFY][test] periodic test due"));
+
+    // Als NTFY backoff actief is: uitstellen en expliciet loggen.
+    if (ntfyNextAllowedMs != 0 && now < ntfyNextAllowedMs) {
+        Serial_printf(F("[NTFY][test] periodic test deferred due to NTFY-backoff (%lu ms left)\n"),
+                      (unsigned long)(ntfyNextAllowedMs - now));
+        ntfyPeriodicTestNextMs = ntfyNextAllowedMs;
+        return;
+    }
+
+    char hhmmss[10] = {0};
+    (void)formatLocalTimeHHMMSS(hhmmss, sizeof(hhmmss));
+
+    char text[96];
+    snprintf(text, sizeof(text), "[%s] Controle NTFY", hhmmss);
+
+    if (isNetMutexBusy()) {
+        Serial_println(F("[NTFY][test] waiting for network slot (mutex busy)"));
+    }
+
+    const char *tag = "☑️";
+    bool sent = false;
+#if CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND
+    (void)ntfyDisconnectWsBeforeNtfySendIfNeeded();
+    Serial_println(F("[NTFY] sending NTFY while WS fully disconnected"));
+    sent = sendNotification(text, text, tag);
+    ntfyRestoreWsAfterNtfySend();
+#else
+    (void)ntfyPauseWsBeforeNtfySendIfNeeded();
+    Serial_println(F("[NTFY] sending NTFY while WS paused"));
+    sent = sendNotification(text, text, tag);
+    ntfyRestoreWsAfterNtfySendPausedStrategy();
+#endif
+    if (sent) {
+        Serial_println(F("[NTFY][test] periodic test sent ok"));
+    } else {
+        Serial_println(F("[NTFY][test] periodic test sent failed"));
+    }
+
+    unsigned long desiredNext = now + CRYPTO_ALERT_NTFY_PERIODIC_TEST_MS;
+    if (ntfyNextAllowedMs != 0 && ntfyNextAllowedMs > desiredNext) {
+        desiredNext = ntfyNextAllowedMs;
+    }
+    ntfyPeriodicTestNextMs = desiredNext;
+#else
+    (void)0;
+#endif
 }
 
 // Fase 5.3.4: checkTrendChange() wrapper functie verwijderd - alle calls gebruiken nu directe module calls
@@ -5098,7 +5544,12 @@ void connectMQTT() {
     snprintf(clientId, sizeof(clientId), "%s_%08x", mqttPrefix, macLower);
     Serial_printf(F("[MQTT] Connecting to %s:%d as %s...\n"), mqttHost, mqttPort, clientId);
     
-    if (mqttClient.connect(clientId, mqttUser, mqttPass)) {
+    // Regie: MQTT connect zware actie (socket/TLS) via dezelfde netwerkmutex als NTFY/API.
+    netMutexLock("[MQTT] connectMQTT");
+    bool connectedNow = mqttClient.connect(clientId, mqttUser, mqttPass);
+    netMutexUnlock("[MQTT] connectMQTT");
+
+    if (connectedNow) {
         Serial_println("[MQTT] Connected!");
         mqttConnected = true;
         mqttReconnectAttemptCount = 0; // Reset counter bij succesvolle verbinding
@@ -7482,8 +7933,8 @@ uint32_t millis_cb(void)
 // LVGL calls this function when a rendered image needs to copied to the display
 void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 {
-    uint32_t w = lv_area_get_width(area);
-    uint32_t h = lv_area_get_height(area);
+    const uint32_t w = lv_area_get_width(area);
+    const uint32_t h = lv_area_get_height(area);
     const size_t len = (size_t)w * (size_t)h * sizeof(uint16_t);
 
     // ESP32-S3: als px_map in PSRAM zit en de display-driver DMA leest, moet de data-cache
@@ -7498,7 +7949,9 @@ void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
     }
 #endif
 
-    gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)px_map, w, h);
+    if (g_displayBackend) {
+        g_displayBackend->flush(area, px_map);
+    }
 
     lv_disp_flush_ready(disp);
 }
@@ -7623,7 +8076,7 @@ static void setupSerialAndDevice()
     loadSettings();
     // ESP32-S3 fix: DEV_DEVICE_INIT() overslaan - backlight wordt later ingesteld via setDisplayBrigthness() met PWM
     // Dit voorkomt conflict tussen digitalWrite en ledcAttachChannel
-    #if !defined(PLATFORM_ESP32S3_SUPERMINI) && !defined(PLATFORM_ESP32S3_LCDWIKI_28)
+    #if !defined(PLATFORM_ESP32S3_SUPERMINI) && !defined(PLATFORM_ESP32S3_LCDWIKI_28) && !defined(PLATFORM_ESP32S3_JC3248W535)
     DEV_DEVICE_INIT();
     #endif
     
@@ -7643,39 +8096,53 @@ static void setupSerialAndDevice()
 
 static void setupDisplay()
 {
-    // Init Display
-    #ifdef GFX_SPEED
-    if (!gfx->begin(GFX_SPEED))
-    #else
-    if (!gfx->begin())
-    #endif
-    {
-        Serial_println("gfx->begin() failed!");
-        while (true)
-        {
-            /* no need to continue */
+    // Init Display (via backend abstraction)
+    if (g_displayBackend == nullptr) {
+        g_displayBackend = createDisplayBackendForCurrentPlatform();
+    }
+
+    uint32_t speed = 0;
+#ifdef GFX_SPEED
+    speed = GFX_SPEED;
+#endif
+
+    if (g_displayBackend == nullptr || !g_displayBackend->begin(speed)) {
+#if defined(CRYPTO_ALERT_FORCE_AXS15231B_BACKEND) && defined(PLATFORM_ESP32S3_JC3248W535)
+        Serial_println("AXS15231B backend forced, but init failed. Geen fallback (debug).");
+        while (true) { /* no need to continue */ }
+#else
+        // Safe fallback: ensure stable boards don't get broken.
+        // For JC3248, the esp_lcd backend may be unavailable in the current Arduino core.
+        delete g_displayBackend;
+        g_displayBackend = new DisplayBackend_ArduinoGFX();
+        if (g_displayBackend == nullptr || !g_displayBackend->begin(speed)) {
+            Serial_println("Display backend init failed (Arduino_GFX fallback also failed)!");
+            while (true) {
+                /* no need to continue */
+            }
         }
+#endif
     }
     // Pas display rotatie toe (0 = normaal, 2 = 180 graden)
     // Alleen 0 en 2 zijn geldig voor 180 graden rotatie
     uint8_t rotation = (displayRotation == 2) ? 2 : 0;
-    gfx->setRotation(rotation);
+    g_displayBackend->setRotation(rotation);
     // TTGO/ESP32-S3: standaard geen inversie
     // CYD24/CYD28: standaard false, behalve wanneer INVERT_COLORS flag is gezet
     #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
-    gfx->invertDisplay(false); // TTGO/ESP32-S3 T-Display/GEEK heeft geen inversie nodig (ST7789)
+    g_displayBackend->invertDisplay(false); // TTGO/ESP32-S3 T-Display/GEEK heeft geen inversie nodig (ST7789)
     #elif defined(PLATFORM_ESP32S3_4848S040)
-    gfx->invertDisplay(false); // 4848S040: geen inversie (basisinstelling)
+    g_displayBackend->invertDisplay(false); // 4848S040: geen inversie (basisinstelling)
     #elif defined(PLATFORM_LCDWIKI28_INVERT_COLORS)
-    gfx->invertDisplay(true); // LCDWIKI 2.8: kleurinversie nodig
+    g_displayBackend->invertDisplay(true); // LCDWIKI 2.8: kleurinversie nodig
     #elif defined(PLATFORM_CYD24_INVERT_COLORS)
-    gfx->invertDisplay(true); // CYD24: inverteer kleuren
+    g_displayBackend->invertDisplay(true); // CYD24: inverteer kleuren
     #elif defined(PLATFORM_CYD28_INVERT_COLORS)
-    gfx->invertDisplay(true); // CYD28 2USB variant: inverteer kleuren
+    g_displayBackend->invertDisplay(true); // CYD28 2USB variant: inverteer kleuren
     #else
-    gfx->invertDisplay(false); // CYD24/CYD28: geen inversie (standaard)
+    g_displayBackend->invertDisplay(false); // CYD24/CYD28: geen inversie (standaard)
     #endif
-    gfx->fillScreen(RGB565_BLACK);
+    g_displayBackend->fillScreen(0 /* RGB565_BLACK */);
     
     // ESP32-S3 fix: Backlight moet opnieuw worden ingesteld na display initialisatie
     // DEV_DEVICE_INIT() wordt eerder aangeroepen, maar ledc kan conflicteren
@@ -7711,8 +8178,8 @@ static void setupLVGL()
     lv_log_register_print_cb(my_print);
 #endif
 
-    uint32_t screenWidth = gfx->width();
-    uint32_t screenHeight = gfx->height();
+    uint32_t screenWidth = g_displayBackend ? g_displayBackend->width() : 0;
+    uint32_t screenHeight = g_displayBackend ? g_displayBackend->height() : 0;
     #ifdef LVGL_SCREEN_WIDTH
         screenWidth = LVGL_SCREEN_WIDTH;
     #endif
@@ -8188,6 +8655,12 @@ void setup()
     // WiFi connection and initial data fetch (maakt tijdelijk UI aan)
     wifiConnectionAndFetchPrice();
     logBootStage("after wifi+initial price");
+    
+    // NTFY baseline test: na succesvolle WiFi+time, maar vóór start FreeRTOS tasks/WS connect runtime.
+    ntfyStartupTestIfEnabled();
+    #if CRYPTO_ALERT_NTFY_PERIODIC_TEST
+    ntfyPeriodicTestNextMs = millis() + CRYPTO_ALERT_NTFY_PERIODIC_TEST_MS;
+    #endif
     
     // Fase 4.2.5: Synchroniseer PriceData state na warm-start (als warm-start is uitgevoerd)
     priceData.syncStateFromGlobals();
@@ -8888,6 +9361,9 @@ void loop()
 {
     // Geef tijd aan andere tasks
     vTaskDelay(pdMS_TO_TICKS(10));
+
+    // NTFY periodieke test onder netwerkbelasting (optioneel)
+    ntfyPeriodicTestIfEnabled();
     
     // Deferred MQTT reconnect (thread-safe)
     applyPendingMqttReconnect();
@@ -8936,7 +9412,17 @@ void loop()
 #if WS_ENABLED && WS_LIB_AVAILABLE
     if (wsInitialized && wsClientPtr != nullptr) {
         if (WiFi.status() == WL_CONNECTED) {
-            wsClientPtr->loop();
+            // Regie: tijdens (re)connect nemen we de netwerkmutex zodat NTFY/MQTT/API niet tegelijk connect zware acties doen.
+            if (wsPauseForNtfySend) {
+                // Diagnosetest: we pauzeren WS verwerking zodat NTFY/HTTPS volledig geïsoleerd wordt.
+                // Geen wsClientPtr->loop() calls in deze periode.
+            } else if (!wsConnected) {
+                netMutexLock("[WS] reconnect loop");
+                wsClientPtr->loop();
+                netMutexUnlock("[WS] reconnect loop");
+            } else {
+                wsClientPtr->loop();
+            }
             if (wsPending) {
                 wsPending = false;
                 processWsTextMessage(wsPendingBuf, wsPendingLen);

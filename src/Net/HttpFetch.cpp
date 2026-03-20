@@ -14,7 +14,7 @@ bool httpGetToBuffer(const char* url, char* buf, size_t bufCap, size_t* outLen, 
     buf[0] = '\0';
     
     // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
-    netMutexLock("httpGetToBuffer");
+    netMutexLock("[API] HTTP fetch");
     
     HTTPClient http;
     http.setTimeout(timeoutMs);
@@ -108,7 +108,7 @@ bool httpGetToBuffer(const char* url, char* buf, size_t bufCap, size_t* outLen, 
     }
     
     // C2: Geef netwerk mutex vrij (met debug logging)
-    netMutexUnlock("httpGetToBuffer");
+    netMutexUnlock("[API] HTTP fetch");
     
     return result;
 }

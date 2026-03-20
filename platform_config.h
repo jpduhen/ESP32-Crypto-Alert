@@ -266,6 +266,44 @@
     #if !defined(UICONTROLLER_INCLUDE) && !defined(MODULE_INCLUDE)
     #include "PINS_ESP32S3_JC3248W535_AXS15231B.h"
     #endif
+    // -------------------------------------------------------------------------
+    // JC3248W535CIY + AXS15231B — bewezen stabiele defaults (esp_lcd backend)
+    // Hoofdroute: DisplayBackend_Axs15231bEspLcd + vendor QSPI pinset (geen Arduino_GFX).
+    // Onderstaande waarden zijn de laatst geverifieerde combinatie voor correct beeld.
+    // Aanpassen alleen bij bewuste A/B-test; andere platforms blijven ongewijzigd.
+    // -------------------------------------------------------------------------
+    // RGB565: software byte-swap in DMA transportbuffer vóór draw_bitmap.
+    #ifndef CRYPTO_ALERT_AXS15231B_SWAP_RGB565_BYTES
+    #define CRYPTO_ALERT_AXS15231B_SWAP_RGB565_BYTES 1
+    #endif
+    // QSPI panel-IO pixelklok (Hz).
+    #ifndef CRYPTO_ALERT_AXS15231B_PCLK_HZ
+    #define CRYPTO_ALERT_AXS15231B_PCLK_HZ 20000000
+    #endif
+    // SPI transactie-queue diepte (1 = conservatief, stabiel met stripe-flush).
+    #ifndef CRYPTO_ALERT_AXS15231B_TRANS_QUEUE_DEPTH
+    #define CRYPTO_ALERT_AXS15231B_TRANS_QUEUE_DEPTH 1
+    #endif
+    // 1 = full-screen kleur self-test in backend begin(); 0 = normale app/LVGL.
+    #ifndef CRYPTO_ALERT_AXS15231B_SELFTEST
+    #define CRYPTO_ALERT_AXS15231B_SELFTEST 0
+    #endif
+    // 1 = pinset zoals Espressif DEMO_LVGL esp_bsp (niet schema-PINS header).
+    #ifndef CRYPTO_ALERT_AXS15231B_USE_VENDOR_ESPRESSIF_PINS
+    #define CRYPTO_ALERT_AXS15231B_USE_VENDOR_ESPRESSIF_PINS 1
+    #endif
+    // 0 = RGB element order, 1 = BGR (panel_config.rgb_ele_order).
+    #ifndef CRYPTO_ALERT_AXS15231B_COLOR_ORDER_BGR
+    #define CRYPTO_ALERT_AXS15231B_COLOR_ORDER_BGR 0
+    #endif
+    // Panel kleurinversie na init (esp_lcd_panel_invert_color).
+    #ifndef CRYPTO_ALERT_AXS15231B_INVERT_COLORS
+    #define CRYPTO_ALERT_AXS15231B_INVERT_COLORS 1
+    #endif
+    // Debugoptie:
+    // Zet deze define aan als je expliciet de AXS15231B esp_lcd-backend wil gebruiken
+    // en NIET wilt dat er stilletjes wordt teruggevallen op Arduino_GFX.
+    // #define CRYPTO_ALERT_FORCE_AXS15231B_BACKEND 1
     #define MQTT_TOPIC_PREFIX "jc3248w535_crypto"
     #define DEVICE_NAME "JC3248W535 Crypto Monitor"
     #define DEVICE_MODEL "ESP32-S3 JC3248W535 3.5\""
@@ -275,7 +313,8 @@
     #define SYMBOL_1MIN_LABEL "1 min"
     #define SYMBOL_30MIN_LABEL "30 min"
     #define SYMBOL_2H_LABEL "2h"
-    #define CHART_WIDTH 240
+    // 320px scherm: zelfde contentbreedte als prijskaarten (LV_PCT(100)), niet CYD 240-default.
+    #define CHART_WIDTH 320
     #define CHART_HEIGHT 72
     #define CHART_ALIGN_Y 24
     #define PRICE_BOX_Y_START 99
