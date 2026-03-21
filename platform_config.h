@@ -14,7 +14,7 @@
 //#define PLATFORM_ESP32S3_GEEK
 //#define PLATFORM_ESP32S3_LCDWIKI_28
 #define PLATFORM_ESP32S3_JC3248W535  // JC3248W535CIY 3.5" QSPI (AXS15231B), 320x480
-//#define PLATFORM_ESP32S3_4848S040
+//#define PLATFORM_ESP32S3_4848S040  // alleen met CRYPTO_ALERT_ENABLE_4848_BOARD 1 (zie gate hieronder)
 //#define PLATFORM_ESP32S3_AMOLED_206
 
 // Stap 1 opschonen:
@@ -31,6 +31,18 @@
   #endif
 #endif
 
+// 4848S040: buiten actieve refactorscope; code blijft in tree. Standaard niet selecteerbaar
+// voor normale builds — zet CRYPTO_ALERT_ENABLE_4848_BOARD op 1 (hieronder of -D) voor een bewuste 4848-build.
+#ifndef CRYPTO_ALERT_ENABLE_4848_BOARD
+#define CRYPTO_ALERT_ENABLE_4848_BOARD 0
+#endif
+
+#if !CRYPTO_ALERT_ENABLE_4848_BOARD
+  #if defined(PLATFORM_ESP32S3_4848S040)
+    #error "PLATFORM_ESP32S3_4848S040 geselecteerd, maar CRYPTO_ALERT_ENABLE_4848_BOARD=0. Zet de gate op 1 in platform_config.h of via -DCRYPTO_ALERT_ENABLE_4848_BOARD=1 voor een 4848-build."
+  #endif
+#endif
+
 // Automatisch PLATFORM_CYD28 definiëren als een CYD28 variant is gekozen
 #if defined(PLATFORM_CYD28_1USB) || defined(PLATFORM_CYD28_2USB)
 #define PLATFORM_CYD28
@@ -40,8 +52,8 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 5
-#define VERSION_MINOR 53
-#define VERSION_STRING "5.53"
+#define VERSION_MINOR 54
+#define VERSION_STRING "5.54"
 #endif
 
 // --- Debug Configuration ---
