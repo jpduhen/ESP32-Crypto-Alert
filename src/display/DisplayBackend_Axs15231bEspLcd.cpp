@@ -1,3 +1,12 @@
+// platform_config vóór backend-header (JC3248-macro's voor TE-sync in header).
+#define MODULE_INCLUDE
+#include "../../platform_config.h"
+#undef MODULE_INCLUDE
+
+#ifndef CRYPTO_ALERT_AXS15231B_USE_TE_SYNC
+#define CRYPTO_ALERT_AXS15231B_USE_TE_SYNC 0
+#endif
+
 #include "DisplayBackend_Axs15231bEspLcd.h"
 
 #include <Arduino.h>
@@ -12,17 +21,14 @@
 #include <esp_heap_caps.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "driver/gpio.h"
+#include "esp_attr.h"
 #if __has_include(<esp_cache.h>)
 #include <esp_cache.h>
 #define CRYPTO_ALERT_AXS15231B_HAS_ESP_CACHE 1
 #else
 #define CRYPTO_ALERT_AXS15231B_HAS_ESP_CACHE 0
 #endif
-
-// Import board-level toggles (without pulling PINS globals via platform_config include path).
-#define MODULE_INCLUDE
-#include "../../platform_config.h"
-#undef MODULE_INCLUDE
 
 #if defined(PLATFORM_ESP32S3_JC3248W535)
 #ifndef CRYPTO_ALERT_AXS15231B_USE_VENDOR_ESPRESSIF_PINS
@@ -44,7 +50,7 @@
 #define AXS15231B_PIN_D3 39
 #define AXS15231B_PIN_RST (-1)   // GPIO_NUM_NC in BSP
 #define AXS15231B_PIN_DC 8
-#define AXS15231B_PIN_TE 38      // alleen audit; geen TE-sync in deze stap
+#define AXS15231B_PIN_TE 38      // TE: tearing sync (GPIO ISR) indien CRYPTO_ALERT_AXS15231B_USE_TE_SYNC
 #define AXS15231B_PIN_BL 1       // alleen audit; backlight blijft via app (DEV_DEVICE_INIT / PWM)
 // Legacy values from PINS_ESP32S3_JC3248W535_AXS15231B.h (schema) — alleen voor vergelijkingslog.
 #define AXS15231B_LEGACY_CS 15
@@ -113,6 +119,26 @@ extern "C" {
 #endif
 #ifndef CRYPTO_ALERT_AXS15231B_INVERT_COLORS
 #define CRYPTO_ALERT_AXS15231B_INVERT_COLORS 0
+#endif
+#ifndef CRYPTO_ALERT_AXS15231B_TE_SYNC_TIMEOUT_MS
+#define CRYPTO_ALERT_AXS15231B_TE_SYNC_TIMEOUT_MS 35
+#endif
+#ifndef CRYPTO_ALERT_AXS15231B_TE_GPIO_INTR_TYPE
+#define CRYPTO_ALERT_AXS15231B_TE_GPIO_INTR_TYPE GPIO_INTR_POSEDGE
+#endif
+
+#if defined(PLATFORM_ESP32S3_JC3248W535) && CRYPTO_ALERT_AXS15231B_USE_TE_SYNC
+static void IRAM_ATTR axs15231b_te_gpio_isr(void *arg) {
+    SemaphoreHandle_t sem = static_cast<SemaphoreHandle_t>(arg);
+    if (!sem) {
+        return;
+    }
+    BaseType_t hp = pdFALSE;
+    (void)xSemaphoreGiveFromISR(sem, &hp);
+    if (hp == pdTRUE) {
+        portYIELD_FROM_ISR();
+    }
+}
 #endif
 
 bool DisplayBackend_Axs15231bEspLcd::onColorTransDone(esp_lcd_panel_io_handle_t, esp_lcd_panel_io_event_data_t *, void *user_ctx) {
@@ -251,6 +277,12 @@ bool DisplayBackend_Axs15231bEspLcd::begin(uint32_t /*speed*/) {
         Serial.printf("[AXS15231B] esp_lcd_panel_disp_on_off(false) failed: %d\n", (int)err);
     }
 
+    // TE-sync vóór grote heap-allocaties: minder stackdruk op Arduino setup() en minder race met SPI init.
+#if defined(PLATFORM_ESP32S3_JC3248W535) && CRYPTO_ALERT_AXS15231B_USE_TE_SYNC
+    Serial.println(F("[AXS15231B][TE] sync init entry (pre-buffer)"));
+    (void)teSyncInit();
+#endif
+
     // Allocate buffer for fillScreen()
     fill_buf_px_ = full_px;
     fill_buf_ = (uint16_t *)heap_caps_malloc(full_px * sizeof(uint16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
@@ -285,6 +317,7 @@ bool DisplayBackend_Axs15231bEspLcd::begin(uint32_t /*speed*/) {
     transport_ready_ = true;
     Serial.printf("[AXS15231B] DMA transport buffer bytes: %u (lines=%u, buffers=%u)\n",
                   (unsigned)trans_buf_bytes_, (unsigned)trans_buf_lines_, use_double_trans_buf_ ? 2 : 1);
+
 #if CRYPTO_ALERT_AXS15231B_SWAP_RGB565_BYTES
     Serial.println("[AXS15231B] RGB565 byte swap: ON");
 #else
@@ -366,6 +399,9 @@ void DisplayBackend_Axs15231bEspLcd::fillScreen(uint16_t rgb565_color) {
         fill_buf_[i] = rgb565_color;
     }
 
+#if defined(PLATFORM_ESP32S3_JC3248W535) && CRYPTO_ALERT_AXS15231B_USE_TE_SYNC
+    teSyncWaitBeforeDraw("fillScreen");
+#endif
     (void)esp_lcd_panel_draw_bitmap(panel_, 0, 0, (int)AXS15231B_LCD_W, (int)AXS15231B_LCD_H, fill_buf_);
 }
 
@@ -422,6 +458,11 @@ void DisplayBackend_Axs15231bEspLcd::flush(const lv_area_t *area, const uint8_t 
                       (unsigned)stripeCount, (unsigned)firstStripeY1, (unsigned)firstStripeY2);
     }
 
+#if defined(PLATFORM_ESP32S3_JC3248W535) && CRYPTO_ALERT_AXS15231B_USE_TE_SYNC
+    // Eén TE-sync vóór de eerste stripe van deze flush (volledige frame-updates blijven uit stripe-DMA pad).
+    teSyncWaitBeforeDraw("flush");
+#endif
+
     const uint8_t *src = px_map;
     for (uint32_t stripeIdx = 0; stripeIdx < stripeCount; stripeIdx++) {
         const uint32_t stripeYOff = stripeIdx * stripeLines;
@@ -467,4 +508,116 @@ void DisplayBackend_Axs15231bEspLcd::flush(const lv_area_t *area, const uint8_t 
     }
 #endif
 }
+
+#if defined(PLATFORM_ESP32S3_JC3248W535) && CRYPTO_ALERT_AXS15231B_USE_TE_SYNC
+
+// Eén keer per firmware: voorkomt herhaalde install-aanroepen als begin() ooit opnieuw zou lopen (defensief).
+static bool s_axs15231b_gpio_isr_service_ready = false;
+
+bool DisplayBackend_Axs15231bEspLcd::teSyncInit() {
+    // Al succesvol: geen dubbele GPIO/ISR-registratie (voorkomt race met gpio service).
+    if (te_sync_sem_ != nullptr) {
+        return true;
+    }
+    te_sync_ready_ = false;
+
+    const int te_pin = AXS15231B_PIN_TE;
+    if (te_pin < 0) {
+        Serial.println(F("[AXS15231B][TE] sync disabled (invalid TE pin)"));
+        return false;
+    }
+
+    te_sync_sem_ = xSemaphoreCreateBinary();
+    if (te_sync_sem_ == nullptr) {
+        Serial.println(F("[AXS15231B][TE] sync init failed: semaphore alloc"));
+        return false;
+    }
+
+    // Flag 0 = default allocatie (stabieler met Arduino/core dan alleen ESP_INTR_FLAG_IRAM i.c.m. ISR-dispatcher).
+    if (!s_axs15231b_gpio_isr_service_ready) {
+        esp_err_t err = gpio_install_isr_service(0);
+        if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
+            s_axs15231b_gpio_isr_service_ready = true;
+        } else {
+            Serial.printf("[AXS15231B][TE] sync init failed: gpio_install_isr_service err=%d\n", (int)err);
+            vSemaphoreDelete(te_sync_sem_);
+            te_sync_sem_ = nullptr;
+            return false;
+        }
+    }
+
+    esp_err_t err = ESP_OK;
+
+    gpio_config_t io_conf = {};
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    io_conf.mode = GPIO_MODE_INPUT;
+    io_conf.pin_bit_mask = (1ULL << (unsigned)te_pin);
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+    err = gpio_config(&io_conf);
+    if (err != ESP_OK) {
+        Serial.printf("[AXS15231B][TE] sync init failed: gpio_config err=%d\n", (int)err);
+        vSemaphoreDelete(te_sync_sem_);
+        te_sync_sem_ = nullptr;
+        return false;
+    }
+
+    err = gpio_set_intr_type(static_cast<gpio_num_t>(te_pin), CRYPTO_ALERT_AXS15231B_TE_GPIO_INTR_TYPE);
+    if (err != ESP_OK) {
+        Serial.printf("[AXS15231B][TE] sync init failed: gpio_set_intr_type err=%d\n", (int)err);
+        vSemaphoreDelete(te_sync_sem_);
+        te_sync_sem_ = nullptr;
+        return false;
+    }
+
+    err = gpio_isr_handler_add(static_cast<gpio_num_t>(te_pin), &axs15231b_te_gpio_isr,
+                               static_cast<void *>(te_sync_sem_));
+    if (err != ESP_OK) {
+        Serial.printf("[AXS15231B][TE] sync init failed: gpio_isr_handler_add err=%d\n", (int)err);
+        vSemaphoreDelete(te_sync_sem_);
+        te_sync_sem_ = nullptr;
+        return false;
+    }
+
+    te_sync_ready_ = true;
+    Serial.printf(
+        "[AXS15231B][TE] sync init ok (pin=%d intr=%d timeout_ms=%u)\n",
+        te_pin,
+        (int)CRYPTO_ALERT_AXS15231B_TE_GPIO_INTR_TYPE,
+        (unsigned)CRYPTO_ALERT_AXS15231B_TE_SYNC_TIMEOUT_MS);
+    return true;
+}
+
+void DisplayBackend_Axs15231bEspLcd::teSyncWaitBeforeDraw(const char *reason_tag) {
+    if (!te_sync_ready_ || te_sync_sem_ == nullptr) {
+        return;
+    }
+    const int te_pin = AXS15231B_PIN_TE;
+    if (te_pin < 0) {
+        return;
+    }
+
+    // Verwijder eventuele oude TE-events zodat we op de *volgende* flank wachten.
+    while (xSemaphoreTake(te_sync_sem_, 0) == pdTRUE) {
+    }
+
+    static uint32_t s_teVerboseCount = 0;
+    const bool verbose = (s_teVerboseCount < 3u);
+    if (verbose) {
+        Serial.println(F("[AXS15231B][TE] waiting for sync"));
+    }
+
+    const TickType_t ticks = pdMS_TO_TICKS(CRYPTO_ALERT_AXS15231B_TE_SYNC_TIMEOUT_MS);
+    if (xSemaphoreTake(te_sync_sem_, ticks) != pdTRUE) {
+        Serial.printf("[AXS15231B][TE] sync timeout (%s)\n", reason_tag ? reason_tag : "?");
+        return;
+    }
+
+    if (verbose) {
+        Serial.println(F("[AXS15231B][TE] sync acquired"));
+        s_teVerboseCount++;
+    }
+}
+
+#endif // PLATFORM_ESP32S3_JC3248W535 && CRYPTO_ALERT_AXS15231B_USE_TE_SYNC
 
