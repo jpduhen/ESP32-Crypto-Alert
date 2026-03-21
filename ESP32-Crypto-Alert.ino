@@ -572,12 +572,6 @@ lv_obj_t *price30MinDiffLabel; // Label voor verschil tussen max en min in 30 mi
 lv_obj_t *price2HMaxLabel = nullptr; // 2h min/max/diff (LCDWIKI_28 / JC3248W535; nullptr op 3-symbol boards)
 lv_obj_t *price2HMinLabel = nullptr;
 lv_obj_t *price2HDiffLabel = nullptr;
-lv_obj_t *price1DMaxLabel = nullptr; // 1d/7d min/max/diff (alleen legacy 6-symbol build)
-lv_obj_t *price1DMinLabel = nullptr;
-lv_obj_t *price1DDiffLabel = nullptr;
-lv_obj_t *price7DMaxLabel = nullptr;
-lv_obj_t *price7DMinLabel = nullptr;
-lv_obj_t *price7DDiffLabel = nullptr;
 lv_obj_t *anchorLabel; // Label voor anchor price info (rechts midden, met percentage verschil)
 lv_obj_t *anchorMaxLabel; // Label voor "Pak winst" (rechts, groen, boven)
 lv_obj_t *anchorMinLabel; // Label voor "Stop loss" (rechts, rood, onder)
@@ -639,12 +633,6 @@ char price30MinDiffLabelBuffer[20];  // Buffer voor 30m diff label (max: "12345.
 char price2HMaxLabelBuffer[20];  // Buffer voor 2h max label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
 char price2HMinLabelBuffer[20];  // Buffer voor 2h min label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
 char price2HDiffLabelBuffer[20];  // Buffer voor 2h diff label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
-char price1DMaxLabelBuffer[20];  // Buffer voor 1d max label
-char price1DMinLabelBuffer[20];  // Buffer voor 1d min label
-char price1DDiffLabelBuffer[20]; // Buffer voor 1d diff label
-char price7DMaxLabelBuffer[20];  // Buffer voor 7d max label
-char price7DMinLabelBuffer[20];  // Buffer voor 7d min label
-char price7DDiffLabelBuffer[20]; // Buffer voor 7d diff label
 
 // Cache laatste waarden (alleen updaten als veranderd)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
@@ -662,12 +650,6 @@ float lastPrice30MinDiffValue = -1.0f;  // Cache voor 30m diff
 float lastPrice2HMaxValue = -1.0f;  // Cache voor 2h max (4-symbol boards met 2h-kaart)
 float lastPrice2HMinValue = -1.0f;
 float lastPrice2HDiffValue = -1.0f;
-float lastPrice1DMaxValue = -1.0f;  // Cache voor 1d/7d (legacy 6-symbol build)
-float lastPrice1DMinValue = -1.0f;
-float lastPrice1DDiffValue = -1.0f;
-float lastPrice7DMaxValue = -1.0f;
-float lastPrice7DMinValue = -1.0f;
-float lastPrice7DDiffValue = -1.0f;
 char lastPriceTitleText[SYMBOL_COUNT][32] = {""};  // Cache voor price titles (max: "30 min  +12.34%" = ~20 chars, verkleind van 48 naar 32 bytes)
 char priceLblBufferArray[SYMBOL_COUNT][24];  // Buffers voor average price labels (max: "12345.67" = ~8 chars)
 static char footerRssiBuffer[10];  // Buffer voor footer RSSI
