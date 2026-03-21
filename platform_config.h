@@ -22,8 +22,8 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 5
-#define VERSION_MINOR 52
-#define VERSION_STRING "5.52"
+#define VERSION_MINOR 53
+#define VERSION_STRING "5.53"
 #endif
 
 // --- Debug Configuration ---
@@ -291,6 +291,15 @@
     // 1 = pinset zoals Espressif DEMO_LVGL esp_bsp (niet schema-PINS header).
     #ifndef CRYPTO_ALERT_AXS15231B_USE_VENDOR_ESPRESSIF_PINS
     #define CRYPTO_ALERT_AXS15231B_USE_VENDOR_ESPRESSIF_PINS 1
+    #endif
+    // TE-sync (GPIO TE, typ. GPIO38 op dit board): wacht op tearing-edge vóór draw_bitmap,
+    // vergelijkbaar met vendor draw_wait_cb / bsp_display_sync_cb — helpt tegen tearing/grijze sluier.
+    // Zet op 0 voor A/B-test zonder TE-wacht.
+    #ifndef CRYPTO_ALERT_AXS15231B_USE_TE_SYNC
+    #define CRYPTO_ALERT_AXS15231B_USE_TE_SYNC 1
+    #endif
+    #ifndef CRYPTO_ALERT_AXS15231B_TE_SYNC_TIMEOUT_MS
+    #define CRYPTO_ALERT_AXS15231B_TE_SYNC_TIMEOUT_MS 35
     #endif
     // 0 = RGB element order, 1 = BGR (panel_config.rgb_ele_order).
     #ifndef CRYPTO_ALERT_AXS15231B_COLOR_ORDER_BGR

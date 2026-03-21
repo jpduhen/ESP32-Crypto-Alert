@@ -18,6 +18,21 @@
 #include "atomic.h"                 // Included in this project
 #include <lvgl.h>                   // Install "lvgl" with the Library Manager (last tested on v9.2.2)
 #include "Arduino.h"
+
+// Lokale secrets (optioneel, niet in git opnemen). Gebruikt om NTFY access token veilig in te laden.
+// Verwacht in secrets_local.h bijvoorbeeld:
+//   #define NTFY_ACCESS_TOKEN "tk_..."
+#if defined(__has_include)
+    #if __has_include("secrets_local.h")
+        #include "secrets_local.h"
+    #endif
+#endif
+
+// Default: geen Bearer auth (gedraagt zich identiek aan de huidige setup).
+#ifndef NTFY_ACCESS_TOKEN
+    #define NTFY_ACCESS_TOKEN ""
+#endif
+
 #if WS_ENABLED
     #include <WebSocketsClient.h>
     #define WS_LIB_AVAILABLE 1
@@ -230,7 +245,7 @@ DisplayBackend *g_displayBackend = nullptr;
 // --- NTFY Reliability Tests ---
 // Zet deze aan om NTFY te testen (baseline + periodiek) onder netwerkbelasting.
 #ifndef CRYPTO_ALERT_NTFY_STARTUP_TEST
-#define CRYPTO_ALERT_NTFY_STARTUP_TEST 0
+#define CRYPTO_ALERT_NTFY_STARTUP_TEST 1
 #endif
 
 #ifndef CRYPTO_ALERT_NTFY_PERIODIC_TEST
@@ -770,6 +785,18 @@ char ntfyTopic[64] = "";  // NTFY topic (max 63 karakters)
 static unsigned long ntfyNextAllowedMs = 0;
 static uint8_t ntfyFailStreak = 0;
 
+// Diagnostiek: laatste NTFY poging kreeg HTTP 429.
+// Wordt alleen gezet wanneer er effectief een HTTP response code 429 is ontvangen.
+static bool ntfyLastSendAttemptWas429 = false;
+
+// Diagnostiek: NTFY send werd vroeg afgebroken door lokale backoff (geen HTTP response).
+static bool ntfyLastSendAttemptWasRateLimitedByBackoff = false;
+
+// Startup NTFY: uitgestelde retry bij 429.
+static bool ntfyStartupTestDeferredPending = false;
+static unsigned long ntfyStartupTestDeferredNextMs = 0;
+static bool ntfyStartupTestDeferredRetryAttempted = false;
+
 // NTFY test scheduling (optioneel)
 static bool ntfyStartupTestSent = false;
 static unsigned long ntfyPeriodicTestNextMs = 0;
@@ -894,6 +921,25 @@ WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 bool mqttConnected = false;
 unsigned long lastMqttReconnectAttempt = 0;
+
+// Boot-netwerk fasering: MQTT en WS iets uit fase om opstart-storm (connection refused) te verminderen.
+#ifndef CRYPTO_ALERT_BOOTNET_MQTT_DELAY_MS
+#define CRYPTO_ALERT_BOOTNET_MQTT_DELAY_MS 2500UL
+#endif
+#ifndef CRYPTO_ALERT_BOOTNET_WS_EXTRA_DELAY_MS
+#define CRYPTO_ALERT_BOOTNET_WS_EXTRA_DELAY_MS 2000UL
+#endif
+static unsigned long s_bootNetMqttGateUntilMs = 0; // 0 = geen gate (of al voorbij)
+static unsigned long s_bootNetWsGateUntilMs = 0;
+
+// API boot-settle: korte pauze vóór vroege Bitvavo/HTTP om connection refused te verminderen.
+#ifndef CRYPTO_ALERT_BOOTNET_API_SETTLE_MS
+#define CRYPTO_ALERT_BOOTNET_API_SETTLE_MS 1200UL
+#endif
+#ifndef CRYPTO_ALERT_BOOTNET_WARMSTART_API_DELAY_MS
+#define CRYPTO_ALERT_BOOTNET_WARMSTART_API_DELAY_MS 600UL
+#endif
+static unsigned long s_bootNetApiGateUntilMs = 0; // 0 = geen actieve gate
 
 // MQTT Message Queue - voorkomt message loss bij disconnect
 #define MQTT_QUEUE_SIZE 8  // Max aantal berichten in queue
@@ -1047,7 +1093,18 @@ int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit
     if (symbol == nullptr || interval == nullptr || prices == nullptr || maxCount == 0) {
         return -1;
     }
-    
+
+    // Vroege boot: geen candle-HTTP gelijk met MQTT-connect (zelfde netwerk-slot / connection refused).
+    if (s_bootNetMqttGateUntilMs != 0 && millis() < s_bootNetMqttGateUntilMs) {
+        static unsigned long s_lastBootNetCandleMqttGateLogMs = 0;
+        const unsigned long now = millis();
+        if (now - s_lastBootNetCandleMqttGateLogMs >= 4000UL) {
+            Serial.println(F("[BootNet] Candle fetch delayed due to MQTT boot gate"));
+            s_lastBootNetCandleMqttGateLogMs = now;
+        }
+        return 0;
+    }
+
     // M1: Heap telemetry vóór URL build
     logHeap("CANDLES_URL_BUILD");
     
@@ -1719,7 +1776,10 @@ static WarmStartMode performWarmStart()
     }
     
     warmStartStatus = WARMING_UP;
-    
+
+    bootNetArmApiGateMs(CRYPTO_ALERT_BOOTNET_WARMSTART_API_DELAY_MS, true);
+    bootNetWaitApiGateIfNeeded("warmStart");
+
     // Bereken dynamische candle limits (PSRAM-aware clamping)
     bool psramAvailable = hasPSRAM();
     uint16_t req1mCandles = warmStartSkip1m ? 0 : calculate1mCandles();  // PSRAM-aware (max 150 met PSRAM, 80 zonder)
@@ -2602,6 +2662,9 @@ static const char *ntfyPhaseForClientCode(int code) {
 static bool sendNtfyNotification(const char *title, const char *message, const char *colorTag = nullptr)
 {
     unsigned long nowMs = millis();
+    // Reset diagnose-vlag per send-actie (anders kan een eerdere 429 blijven hangen).
+    ntfyLastSendAttemptWas429 = false;
+    ntfyLastSendAttemptWasRateLimitedByBackoff = false;
     // NTFY netwerk-diagnose (rate-limited, 1x per 60s): DNS naar ntfy.sh
     static unsigned long lastNtfyNetLogMs = 0;
     if (nowMs - lastNtfyNetLogMs >= 60000UL) {
@@ -2627,6 +2690,7 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
                           (unsigned long)(ntfyNextAllowedMs - nowMs));
             lastBackoffLogMs = nowMs;
         }
+        ntfyLastSendAttemptWasRateLimitedByBackoff = true;
         return false;
     }
     if (WiFi.status() != WL_CONNECTED) {
@@ -2717,6 +2781,15 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
             static const char *ntfyResponseHeaderKeys[] = {"Retry-After"};
             http.collectHeaders(ntfyResponseHeaderKeys, 1);
 
+            // Bearer auth (optioneel) volgens ntfy docs.
+            // Belangrijk: token wordt nooit gelogd.
+            if (NTFY_ACCESS_TOKEN[0] != '\0') {
+                Serial_println(F("[NTFY] auth: bearer token enabled"));
+                char authHeader[160];
+                snprintf(authHeader, sizeof(authHeader), "Bearer %s", NTFY_ACCESS_TOKEN);
+                http.addHeader(F("Authorization"), authHeader);
+            }
+
             http.addHeader("Title", title);
             http.addHeader("Priority", "high");
             if (colorTag != nullptr && strlen(colorTag) > 0 && strlen(colorTag) <= 64) {
@@ -2728,6 +2801,8 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
             String err = HTTPClient().errorToString(code);
 
             if (code == 200 || code == 201) {
+                ntfyLastSendAttemptWas429 = false;
+                ntfyLastSendAttemptWasRateLimitedByBackoff = false;
                 WiFiClient *stream = http.getStreamPtr();
                 size_t totalLen = 0;
                 if (stream != nullptr) {
@@ -2762,6 +2837,8 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
                 ok = true;
             } else if (code == 429) {
                 // Rate limit: geen snelle in-loop retry; wacht minstens 60 s of Retry-After van server.
+                ntfyLastSendAttemptWas429 = true;
+                ntfyLastSendAttemptWasRateLimitedByBackoff = false;
                 bool usedRa = false;
                 uint32_t waitMs = ntfy429WaitMs(http, &usedRa);
                 unsigned long t = millis();
@@ -3784,20 +3861,23 @@ static void ntfyStartupTestIfEnabled()
     }
 
     const char *tag = "☑️";
-    bool sent = false;
-#if CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND
-    (void)ntfyDisconnectWsBeforeNtfySendIfNeeded();
-    Serial_println(F("[NTFY] sending NTFY while WS fully disconnected"));
-    sent = sendNotification(text, text, tag);
-    ntfyRestoreWsAfterNtfySend();
-#else
-    (void)ntfyPauseWsBeforeNtfySendIfNeeded();
-    Serial_println(F("[NTFY] sending NTFY while WS paused"));
-    sent = sendNotification(text, text, tag);
-    ntfyRestoreWsAfterNtfySendPausedStrategy();
-#endif
+    bool sent = sendNotification(text, text, tag);
     if (sent) {
         Serial_println(F("[NTFY][test] startup test sent ok"));
+    } else if (ntfyLastSendAttemptWas429 &&
+               !ntfyStartupTestDeferredPending &&
+               !ntfyStartupTestDeferredRetryAttempted) {
+        ntfyStartupTestDeferredPending = true;
+        ntfyStartupTestDeferredRetryAttempted = false;
+        ntfyStartupTestDeferredNextMs = ntfyNextAllowedMs;
+        if (ntfyStartupTestDeferredNextMs == 0) {
+            ntfyStartupTestDeferredNextMs = millis() + 60000UL;  // fallback
+        }
+        const unsigned long msLeft = (ntfyStartupTestDeferredNextMs > millis())
+            ? (ntfyStartupTestDeferredNextMs - millis())
+            : 0UL;
+        Serial_printf(F("[NTFY][test] startup test got 429 rate_limited -> deferred retry in %lu ms\n"),
+                      (unsigned long)msLeft);
     } else {
         Serial_println(F("[NTFY][test] startup test sent failed"));
     }
@@ -3862,6 +3942,52 @@ static void ntfyPeriodicTestIfEnabled()
         desiredNext = ntfyNextAllowedMs;
     }
     ntfyPeriodicTestNextMs = desiredNext;
+#else
+    (void)0;
+#endif
+}
+
+// Deferred retry voor startup NTFY wanneer de server rate-limited (HTTP 429) terugstuurt.
+static void ntfyDeferredStartupTestIfPending()
+{
+#if CRYPTO_ALERT_NTFY_STARTUP_TEST
+    if (!ntfyStartupTestDeferredPending) return;
+    if (ntfyStartupTestDeferredRetryAttempted) return;
+    const unsigned long now = millis();
+
+    // Gebruik de meest recente backoff-duur (kan door andere NTFY fails zijn verlengd).
+    unsigned long dueMs = ntfyStartupTestDeferredNextMs;
+    if (ntfyNextAllowedMs != 0 && ntfyNextAllowedMs > dueMs) dueMs = ntfyNextAllowedMs;
+    if (now < dueMs) return;
+
+    Serial_println(F("[NTFY][test] deferred startup retry due"));
+
+    char hhmmss[10] = {0};
+    (void)formatLocalTimeHHMMSS(hhmmss, sizeof(hhmmss));
+
+    char text[96];
+    snprintf(text, sizeof(text), "[%s] Reboot - Setup compleet", hhmmss);
+
+    const char *tag = "☑️";
+    bool sent = sendNotification(text, text, tag);
+
+    if (sent) {
+        ntfyStartupTestDeferredRetryAttempted = true;
+        ntfyStartupTestDeferredPending = false;
+        Serial_println(F("[NTFY][test] deferred startup test sent ok"));
+    } else if (ntfyLastSendAttemptWas429) {
+        ntfyStartupTestDeferredRetryAttempted = true;
+        ntfyStartupTestDeferredPending = false;
+        Serial_println(F("[NTFY][test] deferred startup retry got 429 rate_limited -> giving up"));
+    } else if (ntfyLastSendAttemptWasRateLimitedByBackoff) {
+        // Backoff is alsnog verlengd tussen due-check en echte send; consumeer de deferred retry niet.
+        ntfyStartupTestDeferredNextMs = ntfyNextAllowedMs;
+        return;
+    } else {
+        ntfyStartupTestDeferredRetryAttempted = true;
+        ntfyStartupTestDeferredPending = false;
+        Serial_println(F("[NTFY][test] deferred startup test retry failed"));
+    }
 #else
     (void)0;
 #endif
@@ -5536,7 +5662,15 @@ void publishMqttDiscovery() {
 // MQTT connect functie (niet-blokkerend)
 void connectMQTT() {
     if (mqttConnected) return;
-    
+    // Eerste MQTT-connect uitstellen tot na warmstart/setup (loop + WiFi-reconnect pad).
+    if (s_bootNetMqttGateUntilMs != 0 && millis() < s_bootNetMqttGateUntilMs) {
+        return;
+    }
+    if (s_bootNetMqttGateUntilMs != 0) {
+        Serial.println(F("[BootNet] MQTT start now"));
+        s_bootNetMqttGateUntilMs = 0;
+    }
+
     mqttClient.setServer(mqttHost, mqttPort);
     mqttClient.setCallback(mqttCallback);
     // Geef MQTT meer ademruimte bij lange API-calls
@@ -7408,6 +7542,33 @@ static void updateLatestKlineMetricsIfNeeded()
     }
 }
 
+// Korte API boot-gate: wacht tot TCP/DNS rustiger is vóór Bitvavo HTTP (fetchPrice + warmstart candles).
+static void bootNetArmApiGateMs(unsigned long ms, bool logWarmStartLine) {
+    s_bootNetApiGateUntilMs = millis() + ms;
+    if (logWarmStartLine) {
+        Serial.printf(F("[BootNet] WarmStart API gate active +%lums\n"), (unsigned long)ms);
+    }
+}
+
+static void bootNetWaitApiGateIfNeeded(const char *reason) {
+    if (s_bootNetApiGateUntilMs == 0) {
+        return;
+    }
+    const unsigned long now = millis();
+    if (now >= s_bootNetApiGateUntilMs) {
+        s_bootNetApiGateUntilMs = 0;
+        return;
+    }
+    Serial.printf(F("[BootNet] API delayed start (%s, wait ~%lu ms)\n"), reason ? reason : "?",
+                  (unsigned long)(s_bootNetApiGateUntilMs - now));
+    while (millis() < s_bootNetApiGateUntilMs) {
+        lv_timer_handler();
+        delay(10);
+    }
+    Serial.println(F("[BootNet] API start now"));
+    s_bootNetApiGateUntilMs = 0;
+}
+
 void fetchPrice()
 {
     // Controleer eerst of WiFi verbonden is
@@ -7417,7 +7578,9 @@ void fetchPrice()
         #endif
         return;
     }
-    
+
+    bootNetWaitApiGateIfNeeded("fetchPrice");
+
     unsigned long fetchStart = millis();
     float fetched = prices[0]; // Start met huidige waarde als fallback
     bool ok = false;
@@ -8765,6 +8928,16 @@ void setup()
     // Warm-start heeft exclusieve toegang tijdens setup (geen race conditions mogelijk)
     startFreeRTOSTasks();
     logBootStage("after tasks");
+
+    {
+        const unsigned long t = millis();
+        s_bootNetMqttGateUntilMs = t + CRYPTO_ALERT_BOOTNET_MQTT_DELAY_MS;
+        s_bootNetWsGateUntilMs = t + CRYPTO_ALERT_BOOTNET_MQTT_DELAY_MS + CRYPTO_ALERT_BOOTNET_WS_EXTRA_DELAY_MS;
+        Serial.printf(
+            F("[BootNet] staged startup: MQTT +%lums, WS +%lums (extra) after setup\n"),
+            (unsigned long)CRYPTO_ALERT_BOOTNET_MQTT_DELAY_MS,
+            (unsigned long)(CRYPTO_ALERT_BOOTNET_MQTT_DELAY_MS + CRYPTO_ALERT_BOOTNET_WS_EXTRA_DELAY_MS));
+    }
 }
 
 // Toon verbindingsinfo (SSID en IP-adres) en "Opening Bitvavo Session" op het scherm
@@ -9078,10 +9251,14 @@ void wifiConnectionAndFetchPrice()
     bool connected = setupWiFiConnection();
     
     if (connected) {
+        s_bootNetApiGateUntilMs = millis() + CRYPTO_ALERT_BOOTNET_API_SETTLE_MS;
+        Serial.printf(
+            F("[BootNet] API delayed start +%lums (settle before first fetch)\n"),
+            (unsigned long)CRYPTO_ALERT_BOOTNET_API_SETTLE_MS);
         // Toon verbindingsinfo (SSID en IP) en "Opening Bitvavo Session"
         showConnectionInfo();
-        
-        // Haal eerste prijs op
+
+        // Haal eerste prijs op (fetchPrice wacht intern op API-gate indien actief)
         fetchInitialPrice();
     }
 
@@ -9143,10 +9320,24 @@ void apiTask(void *parameter)
             // Voer 1 API call uit
             fetchPrice();
 
-            // WS init pas na eerste succesvolle API-prijs (en warm-start klaar)
+            // WS init pas na eerste succesvolle API-prijs (en warm-start klaar), en na boot-net gate (na MQTT-fase).
             if (!wsInitAttempted && lastApiMs > 0) {
-                maybeInitWebSocketAfterWarmStart();
-                wsInitAttempted = true;
+                if (s_bootNetWsGateUntilMs != 0 && millis() < s_bootNetWsGateUntilMs) {
+                    static bool s_bootNetWsHoldLogged = false;
+                    if (!s_bootNetWsHoldLogged) {
+                        Serial.printf(
+                            F("[BootNet] WS delayed start (wait ~%lu ms)\n"),
+                            (unsigned long)(s_bootNetWsGateUntilMs - millis()));
+                        s_bootNetWsHoldLogged = true;
+                    }
+                } else {
+                    if (s_bootNetWsGateUntilMs != 0) {
+                        Serial.println(F("[BootNet] WS start now"));
+                        s_bootNetWsGateUntilMs = 0;
+                    }
+                    maybeInitWebSocketAfterWarmStart();
+                    wsInitAttempted = true;
+                }
             }
             updateLatestKlineMetricsIfNeeded();
             
@@ -9370,6 +9561,9 @@ void loop()
     // Geef tijd aan andere tasks
     vTaskDelay(pdMS_TO_TICKS(10));
 
+    // Afhandeling: uitgestelde startup NTFY retry (optioneel, max 1 extra poging)
+    ntfyDeferredStartupTestIfPending();
+
     // NTFY periodieke test onder netwerkbelasting (optioneel)
     ntfyPeriodicTestIfEnabled();
     
@@ -9398,22 +9592,32 @@ void loop()
             processMqttQueue();
         }
     } else if (WiFi.status() == WL_CONNECTED) {
-        // Probeer MQTT reconnect als WiFi verbonden is (met exponential backoff)
         unsigned long now = millis();
-        
-        // Bereken reconnect interval met exponential backoff
-        unsigned long reconnectInterval = MQTT_RECONNECT_INTERVAL;
-        if (mqttReconnectAttemptCount >= MAX_MQTT_RECONNECT_ATTEMPTS) {
-            // Exponential backoff: interval verdubbelt bij elke mislukte poging
-            // Max backoff: 8x het basis interval (3 extra pogingen = 2^3 = 8x)
-            uint8_t backoffMultiplier = 1 << min((mqttReconnectAttemptCount - MAX_MQTT_RECONNECT_ATTEMPTS), 3);
-            reconnectInterval = MQTT_RECONNECT_INTERVAL * backoffMultiplier;
-        }
-        
-        if (lastMqttReconnectAttempt == 0 || (now - lastMqttReconnectAttempt >= reconnectInterval)) {
-            lastMqttReconnectAttempt = now;
-            mqttReconnectAttemptCount++;
-            connectMQTT();
+        // Boot: MQTT-connect nog niet — wacht tot gate voorbij is (geen reconnect-teller verhogen).
+        if (s_bootNetMqttGateUntilMs != 0 && now < s_bootNetMqttGateUntilMs) {
+            static bool s_bootNetMqttHoldLogged = false;
+            if (!s_bootNetMqttHoldLogged) {
+                Serial.printf(
+                    F("[BootNet] MQTT delayed start (wait ~%lu ms)\n"),
+                    (unsigned long)(s_bootNetMqttGateUntilMs - now));
+                s_bootNetMqttHoldLogged = true;
+            }
+        } else {
+            // Probeer MQTT reconnect als WiFi verbonden is (met exponential backoff)
+            // Bereken reconnect interval met exponential backoff
+            unsigned long reconnectInterval = MQTT_RECONNECT_INTERVAL;
+            if (mqttReconnectAttemptCount >= MAX_MQTT_RECONNECT_ATTEMPTS) {
+                // Exponential backoff: interval verdubbelt bij elke mislukte poging
+                // Max backoff: 8x het basis interval (3 extra pogingen = 2^3 = 8x)
+                uint8_t backoffMultiplier = 1 << min((mqttReconnectAttemptCount - MAX_MQTT_RECONNECT_ATTEMPTS), 3);
+                reconnectInterval = MQTT_RECONNECT_INTERVAL * backoffMultiplier;
+            }
+
+            if (lastMqttReconnectAttempt == 0 || (now - lastMqttReconnectAttempt >= reconnectInterval)) {
+                lastMqttReconnectAttempt = now;
+                mqttReconnectAttemptCount++;
+                connectMQTT();
+            }
         }
     }
 

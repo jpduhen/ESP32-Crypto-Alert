@@ -46,5 +46,14 @@ private:
     uint8_t trans_buf_toggle_ = 0;
     SemaphoreHandle_t trans_done_sem_ = nullptr;
     bool transport_ready_ = false;
+
+#if defined(PLATFORM_ESP32S3_JC3248W535) && CRYPTO_ALERT_AXS15231B_USE_TE_SYNC
+    // TE (tearing effect) sync: GPIO-ISR geeft semaphore op TE-flank; vóór draw wachten op volgende edge
+    // (vergelijkbaar met vendor draw_wait_cb / bsp_display_sync_cb, zonder volledige BSP).
+    SemaphoreHandle_t te_sync_sem_ = nullptr;
+    bool te_sync_ready_ = false;
+    bool teSyncInit();
+    void teSyncWaitBeforeDraw(const char *reason_tag);
+#endif
 };
 

@@ -17,3 +17,6 @@ Thumbs.db
 # User-specific settings (niet committen)
 # platform_config.h kan worden gecommit, maar gebruikers moeten hun eigen platform selecteren
 
+# Lokale secrets (niet committen)
+secrets_local.h
+
