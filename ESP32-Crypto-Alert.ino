@@ -2193,7 +2193,6 @@ static WarmStartMode performWarmStart()
             warmStart2hMax = max2h;
             warmStart2hAvg = sum2h / (float)valid2h;
             warmStart2hValid = true;
-            averagePrices[3] = warmStart2hAvg;
         } else {
             warmStart2hValid = false;
         }
@@ -2241,6 +2240,7 @@ static WarmStartMode performWarmStart()
     }
     #endif
     
+#if SYMBOL_COUNT > 3
     // Bereken 2h gemiddelde na warm-start (voor UI weergave)
     if (hasRet2h && (minuteArrayFilled || minuteIndex > 0)) {
         uint8_t availableMinutes = minuteArrayFilled ? MINUTES_FOR_30MIN_CALC : minuteIndex;
@@ -2269,6 +2269,7 @@ static WarmStartMode performWarmStart()
             }
         }
     }
+#endif
     if (hasRet30m) {
         prices[2] = ret_30m;  // Zet 30m return direct na warm-start
     }
