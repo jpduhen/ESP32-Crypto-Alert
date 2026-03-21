@@ -2,10 +2,14 @@
 // Platform-specifieke configuratie
 // Selecteer je platform door een van de onderstaande defines te activeren:
 
+// Legacy boards (uitgefaseerd in actieve branch; alleen tijdelijk aanzetten via
+// CRYPTO_ALERT_ENABLE_LEGACY_BOARDS als je nog bewust een oude build wilt doen)
 //#define PLATFORM_CYD24
 //#define PLATFORM_CYD28_1USB  // 1USB variant: geen kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
 //#define PLATFORM_CYD28_2USB  // 2USB variant: met kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
 //#define PLATFORM_TTGO
+
+// Actief ondersteunde boards
 //#define PLATFORM_ESP32S3_SUPERMINI
 //#define PLATFORM_ESP32S3_GEEK
 //#define PLATFORM_ESP32S3_LCDWIKI_28
@@ -13,10 +17,24 @@
 //#define PLATFORM_ESP32S3_4848S040
 //#define PLATFORM_ESP32S3_AMOLED_206
 
+// Stap 1 opschonen:
+// legacy boards blijven nog fysiek aanwezig in de codebasis, maar zijn standaard
+// niet meer selecteerbaar voor normale builds. Dit voorkomt dat oude paden
+// onbedoeld mee blijven compileren/testen.
+#ifndef CRYPTO_ALERT_ENABLE_LEGACY_BOARDS
+#define CRYPTO_ALERT_ENABLE_LEGACY_BOARDS 0
+#endif
+
+#if !CRYPTO_ALERT_ENABLE_LEGACY_BOARDS
+  #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28_1USB) || defined(PLATFORM_CYD28_2USB) || defined(PLATFORM_TTGO)
+    #error "Legacy board geselecteerd, maar CRYPTO_ALERT_ENABLE_LEGACY_BOARDS=0. Gebruik een ondersteund ESP32-S3 board of zet deze gate tijdelijk op 1."
+  #endif
+#endif
+
 // Automatisch PLATFORM_CYD28 definiëren als een CYD28 variant is gekozen
 #if defined(PLATFORM_CYD28_1USB) || defined(PLATFORM_CYD28_2USB)
 #define PLATFORM_CYD28
-#endif 
+#endif
 
 // --- Version Configuration ---
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
