@@ -50,7 +50,6 @@ Controleer in Apparaatbeheer (Windows) of de COM-poort verschijnt wanneer je het
 
 4. **Board selecteren** (Tools → Board):
    - Cheap Yellow Display: **ESP32 Dev Module**
-   - TTGO T-Display: **TTGO T-Display**
    - T-Display S3 / Waveshare ESP32-S3-GEEK: **ESP32S3 Dev Module**
 
 ![Board selectie](img/board-selection.jpg)  
@@ -60,10 +59,10 @@ Controleer in Apparaatbeheer (Windows) of de COM-poort verschijnt wanneer je het
    - Upload Speed: 921600 (verlaag naar 115200 bij problemen)
    - Flash Mode: QIO
    - Partition Scheme: "Default 4MB with spiffs" of "Huge APP"
-   - PSRAM: **Disabled** voor CYD24/CYD28 en TTGO, **Enabled** voor S3-boards met PSRAM
+   - PSRAM: **Disabled** voor CYD24/CYD28, **Enabled** voor S3-boards met PSRAM
 
 6. **Board-specifieke define**:
-   - In `platform_config.h` kies je het juiste board (`PLATFORM_CYD24`, `PLATFORM_CYD28`, `PLATFORM_TTGO`, `PLATFORM_ESP32S3_GEEK`, `PLATFORM_ESP32S3_SUPERMINI`, `PLATFORM_ESP32S3_4848S040`).
+   - In `platform_config.h` kies je het juiste board (`PLATFORM_CYD24`, `PLATFORM_CYD28`, `PLATFORM_ESP32S3_GEEK`, `PLATFORM_ESP32S3_SUPERMINI`, `PLATFORM_ESP32S3_JC3248W535`, …).
    - Laat slechts één platform actief.
 
 ![Code defines](img/code-defines.jpg)  

@@ -14,10 +14,7 @@ PLATFORM_NAME="Unknown Platform"
 PARTITION_SCHEME="huge_app"  # Beide platforms gebruiken huge_app
 
 if [ -f "$PLATFORM_CONFIG" ]; then
-    if grep -q "^#define PLATFORM_TTGO" "$PLATFORM_CONFIG"; then
-        PLATFORM_NAME="TTGO T-Display"
-        PARTITION_SCHEME="huge_app"  # TTGO: huge_app met 4MB flash
-    elif grep -q "^#define PLATFORM_CYD24" "$PLATFORM_CONFIG"; then
+    if grep -q "^#define PLATFORM_CYD24" "$PLATFORM_CONFIG"; then
         PLATFORM_NAME="CYD ESP32-2432S024"
         PARTITION_SCHEME="huge_app"  # CYD24: huge_app met 4MB flash
     elif grep -q "^#define PLATFORM_CYD28" "$PLATFORM_CONFIG"; then
@@ -30,10 +27,7 @@ if [ -f "$PLATFORM_CONFIG" ]; then
 fi
 
 # Bepaal FQBN op basis van platform
-if [ "$PLATFORM_NAME" = "TTGO T-Display" ]; then
-    # TTGO: gebruik esp32 board met huge_app partition scheme en expliciet 4MB flash
-    FQBN="esp32:esp32:esp32:UploadSpeed=460800,CPUFreq=240,FlashFreq=80,FlashMode=qio,FlashSize=4M,PartitionScheme=${PARTITION_SCHEME},DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=none"
-elif [ "$PLATFORM_NAME" = "ESP32-S3 Super Mini" ]; then
+if [ "$PLATFORM_NAME" = "ESP32-S3 Super Mini" ]; then
     # ESP32-S3: gebruik esp32s3 board (FlashFreq optie niet beschikbaar voor ESP32-S3)
     FQBN="esp32:esp32:esp32s3:UploadSpeed=460800,CPUFreq=240,FlashMode=qio,FlashSize=4M,PartitionScheme=${PARTITION_SCHEME},DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=none"
 else

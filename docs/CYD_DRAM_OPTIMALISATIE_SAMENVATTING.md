@@ -103,7 +103,7 @@ DataSource *savedFiveMinutePricesSource = nullptr;
 float *savedMinuteAverages = nullptr;
 DataSource *savedMinuteAveragesSource = nullptr;
 
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
+#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
 savedFiveMinutePrices = fiveMinutePrices;
 savedFiveMinutePricesSource = fiveMinutePricesSource;
 savedMinuteAverages = minuteAverages;
@@ -111,7 +111,7 @@ savedMinuteAveragesSource = minuteAveragesSource;
 #endif
 
 // Na wifiConnectionAndFetchPrice():
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
+#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
 if (fiveMinutePrices != savedFiveMinutePrices || 
     (uint32_t)fiveMinutePrices < 0x1000 || 
     (uint32_t)fiveMinutePricesSource < 0x1000) {

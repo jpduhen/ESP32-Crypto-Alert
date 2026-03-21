@@ -7,14 +7,12 @@
 //#define PLATFORM_CYD24
 //#define PLATFORM_CYD28_1USB  // 1USB variant: geen kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
 //#define PLATFORM_CYD28_2USB  // 2USB variant: met kleurinversie, PLATFORM_CYD28 wordt automatisch gedefinieerd
-//#define PLATFORM_TTGO
 
 // Actief ondersteunde boards
 //#define PLATFORM_ESP32S3_SUPERMINI
 //#define PLATFORM_ESP32S3_GEEK
 //#define PLATFORM_ESP32S3_LCDWIKI_28
 #define PLATFORM_ESP32S3_JC3248W535  // JC3248W535CIY 3.5" QSPI (AXS15231B), 320x480
-//#define PLATFORM_ESP32S3_4848S040  // alleen met CRYPTO_ALERT_ENABLE_4848_BOARD 1 (zie gate hieronder)
 //#define PLATFORM_ESP32S3_AMOLED_206
 
 // Stap 1 opschonen:
@@ -26,20 +24,8 @@
 #endif
 
 #if !CRYPTO_ALERT_ENABLE_LEGACY_BOARDS
-  #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28_1USB) || defined(PLATFORM_CYD28_2USB) || defined(PLATFORM_TTGO)
+  #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28_1USB) || defined(PLATFORM_CYD28_2USB)
     #error "Legacy board geselecteerd, maar CRYPTO_ALERT_ENABLE_LEGACY_BOARDS=0. Gebruik een ondersteund ESP32-S3 board of zet deze gate tijdelijk op 1."
-  #endif
-#endif
-
-// 4848S040: buiten actieve refactorscope; code blijft in tree. Standaard niet selecteerbaar
-// voor normale builds — zet CRYPTO_ALERT_ENABLE_4848_BOARD op 1 (hieronder of -D) voor een bewuste 4848-build.
-#ifndef CRYPTO_ALERT_ENABLE_4848_BOARD
-#define CRYPTO_ALERT_ENABLE_4848_BOARD 0
-#endif
-
-#if !CRYPTO_ALERT_ENABLE_4848_BOARD
-  #if defined(PLATFORM_ESP32S3_4848S040)
-    #error "PLATFORM_ESP32S3_4848S040 geselecteerd, maar CRYPTO_ALERT_ENABLE_4848_BOARD=0. Zet de gate op 1 in platform_config.h of via -DCRYPTO_ALERT_ENABLE_4848_BOARD=1 voor een 4848-build."
   #endif
 #endif
 
@@ -52,8 +38,8 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 5
-#define VERSION_MINOR 55
-#define VERSION_STRING "5.55"
+#define VERSION_MINOR 56
+#define VERSION_STRING "5.56"
 #endif
 
 // --- Debug Configuration ---
@@ -78,13 +64,13 @@
 // WAARSCHUWING: DEBUG_CALCULATIONS gebruikt ~2808 bytes DRAM voor debug strings
 // 
 // TEST MODE: Zet op 1 om debug logging te activeren (voor verificatie/testen)
-// PRODUCTIE: Zet op 0 om DRAM te besparen (vooral belangrijk voor CYD/TTGO zonder PSRAM)
+// PRODUCTIE: Zet op 0 om DRAM te besparen (vooral belangrijk voor CYD zonder PSRAM)
 //
-// Automatische configuratie: CYD/TTGO krijgen automatisch 0 (geen PSRAM, DRAM besparing)
+// Automatische configuratie: CYD krijgt automatisch 0 (geen PSRAM, DRAM besparing)
 // ESP32-S3 kan handmatig op 1 worden gezet voor testen (heeft PSRAM)
 #ifndef DEBUG_CALCULATIONS
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_TTGO)
-        #define DEBUG_CALCULATIONS 0  // UIT voor CYD/TTGO (geen PSRAM, DRAM besparing)
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
+        #define DEBUG_CALCULATIONS 0  // UIT voor CYD (geen PSRAM, DRAM besparing)
     #else
         #define DEBUG_CALCULATIONS 0  // UIT voor ESP32-S3 (standaard productie)
     #endif
@@ -100,37 +86,7 @@
 // Platform-specifieke instellingen
 // PINS files worden alleen geïncludeerd vanuit de main .ino file, niet vanuit modules
 // Dit voorkomt multiple definition errors voor bus en gfx
-#ifdef PLATFORM_TTGO
-    #if !defined(UICONTROLLER_INCLUDE) && !defined(MODULE_INCLUDE)
-    #include "PINS_TTGO_T_Display.h"
-    #endif
-    #define MQTT_TOPIC_PREFIX "ttgo_crypto"
-    #define DEVICE_NAME "TTGO T-Display Crypto Monitor"
-    #define DEVICE_MODEL "ESP32 TTGO T-Display"
-    #define HAS_TOUCHSCREEN false
-    #define HAS_PHYSICAL_BUTTON true
-    #define BUTTON_PIN 0
-    #define SYMBOL_1MIN_LABEL "1m"
-    #define SYMBOL_30MIN_LABEL "30m"
-    #define STATUS_LED_PIN 2
-    #define CHART_WIDTH 135
-    #define CHART_HEIGHT 60
-    #define CHART_ALIGN_Y 26
-    #define PRICE_BOX_Y_START 85  // Terug naar originele waarde
-    #define FONT_SIZE_TITLE_BTCEUR &lv_font_montserrat_14
-    #define FONT_SIZE_TITLE_OTHER &lv_font_montserrat_12
-    #define FONT_SIZE_PRICE_BTCEUR &lv_font_montserrat_12
-    #define FONT_SIZE_PRICE_OTHER &lv_font_montserrat_12
-    #define FONT_SIZE_ANCHOR &lv_font_montserrat_10  // 1 stapje kleiner (was 12)
-    #define FONT_SIZE_TREND_VOLATILITY &lv_font_montserrat_12
-    #define FONT_SIZE_FOOTER &lv_font_montserrat_12
-    #define FONT_SIZE_IP_PREFIX &lv_font_montserrat_14
-    #define FONT_SIZE_IP &lv_font_montserrat_12
-    #define FONT_SIZE_CHART_DATE_TIME &lv_font_montserrat_10
-    #define FONT_SIZE_CHART_VERSION &lv_font_montserrat_10
-    #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_10
-    #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
-#elif defined(PLATFORM_CYD24)
+#if defined(PLATFORM_CYD24)
     #if !defined(UICONTROLLER_INCLUDE) && !defined(MODULE_INCLUDE)
     #include "PINS_CYD-ESP32-2432S024.h"
     #endif
@@ -230,7 +186,7 @@
     #define FONT_SIZE_CHART_VERSION &lv_font_montserrat_10
     #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_10
     #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
-    #define SYMBOL_COUNT 3  // TTGO/ESP32-S3: BTCEUR, 1m, 30m
+    #define SYMBOL_COUNT 3  // ESP32-S3 Super Mini: BTCEUR, 1m, 30m
 #elif defined(PLATFORM_ESP32S3_GEEK)
     #if !defined(UICONTROLLER_INCLUDE) && !defined(MODULE_INCLUDE)
     #include "PINS_ESP32S3_GEEK_ST7789_114.h"
@@ -373,40 +329,6 @@
     #define SYMBOL_COUNT 4  // JC3248W535: BTCEUR, 1m, 30m, 2h
     #define LVGL_SCREEN_WIDTH 320
     #define LVGL_SCREEN_HEIGHT 480
-#elif defined(PLATFORM_ESP32S3_4848S040)
-    #if !defined(UICONTROLLER_INCLUDE) && !defined(MODULE_INCLUDE)
-    #include "PINS_ESP32S3_4848S040_ST7701_480.h"
-    #endif
-    #define MQTT_TOPIC_PREFIX "esp32s3_4848s040_crypto"
-    #define DEVICE_NAME "ESP32-S3 4848S040 Crypto Monitor"
-    #define DEVICE_MODEL "ESP32-S3 4848S040"
-    #define HAS_TOUCHSCREEN false
-    #define HAS_PHYSICAL_BUTTON false
-    #define SYMBOL_1MIN_LABEL "1m"
-    #define SYMBOL_30MIN_LABEL "30m"
-    #define SYMBOL_2H_LABEL "2h"
-    #define SYMBOL_1D_LABEL "1d"
-    #define SYMBOL_7D_LABEL "7d"
-    #define CHART_WIDTH 240
-    #define CHART_HEIGHT 60
-    #define CHART_ALIGN_Y 26
-    #define PRICE_BOX_Y_START 85
-    #define FONT_SIZE_TITLE_BTCEUR &lv_font_montserrat_16
-    #define FONT_SIZE_TITLE_OTHER &lv_font_montserrat_14
-    #define FONT_SIZE_PRICE_BTCEUR &lv_font_montserrat_16
-    #define FONT_SIZE_PRICE_OTHER &lv_font_montserrat_14
-    #define FONT_SIZE_ANCHOR &lv_font_montserrat_12
-    #define FONT_SIZE_TREND_VOLATILITY &lv_font_montserrat_12
-    #define FONT_SIZE_FOOTER &lv_font_montserrat_14
-    #define FONT_SIZE_IP_PREFIX &lv_font_montserrat_16
-    #define FONT_SIZE_IP &lv_font_montserrat_14
-    #define FONT_SIZE_CHART_DATE_TIME &lv_font_montserrat_12
-    #define FONT_SIZE_CHART_VERSION &lv_font_montserrat_12
-    #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_12
-    #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_14
-    #define SYMBOL_COUNT 6  // 4848S040: BTCEUR, 1m, 30m, 2h, 1d, 7d
-    #define LVGL_SCREEN_WIDTH 480
-    #define LVGL_SCREEN_HEIGHT 480
 #elif defined(PLATFORM_ESP32S3_AMOLED_206)
     #if !defined(UICONTROLLER_INCLUDE) && !defined(MODULE_INCLUDE)
     #include "PINS_ESP32S3_AMOLED_206_CO5300.h"
@@ -441,7 +363,7 @@
     #define LVGL_SCREEN_WIDTH 410
     #define LVGL_SCREEN_HEIGHT 502
 #else
-    #error "Please define PLATFORM_TTGO, PLATFORM_CYD24, PLATFORM_CYD28, PLATFORM_ESP32S3_SUPERMINI, PLATFORM_ESP32S3_GEEK, PLATFORM_ESP32S3_LCDWIKI_28, PLATFORM_ESP32S3_JC3248W535, PLATFORM_ESP32S3_4848S040 or PLATFORM_ESP32S3_AMOLED_206 in platform_config.h"
+    #error "Please define PLATFORM_CYD24, PLATFORM_CYD28, PLATFORM_ESP32S3_SUPERMINI, PLATFORM_ESP32S3_GEEK, PLATFORM_ESP32S3_LCDWIKI_28, PLATFORM_ESP32S3_JC3248W535 or PLATFORM_ESP32S3_AMOLED_206 in platform_config.h"
 #endif
 
 // Fallback: als SYMBOL_COUNT nog niet gedefinieerd is, gebruik default 3

@@ -60,7 +60,7 @@ Arduino_DataBus *bus = new Arduino_ESP32SPI(TFT_DC, TFT_CS, TFT_SCLK, TFT_MOSI, 
 
 // Create display instance (ST7789)
 // Rotation 0 = portrait, true = IPS
-// ST7789 voor GEEK: 135x240, col offset 52, row offset 40 (vergelijkbaar met TTGO)
+// ST7789 voor GEEK: 135x240, col offset 52, row offset 40 (klassiek 1.14" ST7789-venster)
 // Pas COL_OFFSET_2 aan om ruis aan rechterkant bij rotatie 2 weg te werken
 #ifndef GEEK_COL_OFFSET_2
 #define GEEK_COL_OFFSET_2 53

@@ -605,7 +605,7 @@ void UIController::createChart() {
     lv_label_set_text(longTermTrendLabel, "--");
     
     // Platform-specifieke layout voor chart title
-    #if !defined(PLATFORM_TTGO) && !defined(PLATFORM_ESP32S3_SUPERMINI) && !defined(PLATFORM_ESP32S3_GEEK) && !defined(PLATFORM_ESP32S3_4848S040)
+    #if !defined(PLATFORM_ESP32S3_SUPERMINI) && !defined(PLATFORM_ESP32S3_GEEK) && !defined(PLATFORM_ESP32S3_4848S040)
     chartTitle = lv_label_create(lv_scr_act());
     ::chartTitle = chartTitle;  // Fase 8.4.3: Synchroniseer met globale pointer
     lv_obj_set_style_text_font(chartTitle, &lv_font_montserrat_16, 0);
@@ -619,8 +619,8 @@ void UIController::createChart() {
 
 // Fase 8.3.2: createHeaderLabels() verplaatst naar UIController module (parallel implementatie)
 void UIController::createHeaderLabels() {
-    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
-    // TTGO/GEEK: Compacte layout met datum op regel 1, beginletters/versie/tijd op regel 2
+    #if defined(PLATFORM_ESP32S3_GEEK)
+    // GEEK: Compacte layout met datum op regel 1, beginletters/versie/tijd op regel 2
     chartDateLabel = lv_label_create(lv_scr_act());
     ::chartDateLabel = chartDateLabel;  // Fase 8.4.3: Synchroniseer met globale pointer
     lv_obj_set_style_text_font(chartDateLabel, &lv_font_montserrat_10, 0);
@@ -628,7 +628,7 @@ void UIController::createHeaderLabels() {
     lv_obj_set_style_text_align(chartDateLabel, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(chartDateLabel, "-- -- --");
     lv_obj_set_width(chartDateLabel, CHART_WIDTH);
-    lv_obj_set_pos(chartDateLabel, 0, 0); // TTGO: originele positie (geen aanpassing nodig)
+    lv_obj_set_pos(chartDateLabel, 0, 0); // GEEK: originele positie (geen aanpassing nodig)
     
     chartBeginLettersLabel = lv_label_create(lv_scr_act());
     ::chartBeginLettersLabel = chartBeginLettersLabel;  // Fase 8.4.3: Synchroniseer
@@ -803,7 +803,7 @@ void UIController::createPriceBoxes() {
             lv_obj_set_style_text_font(priceLbl[i], FONT_SIZE_PRICE_OTHER, 0);
         }
         
-        #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
+        #if defined(PLATFORM_ESP32S3_GEEK)
         if (i == 0) {
             lv_obj_set_style_text_align(priceLbl[i], LV_TEXT_ALIGN_LEFT, 0);
             lv_obj_set_style_text_color(priceLbl[i], getChartSeriesColor(), 0);
@@ -812,7 +812,7 @@ void UIController::createPriceBoxes() {
             lv_obj_align_to(priceLbl[i], priceTitle[i], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
         }
         
-        // Anchor labels alleen voor BTCEUR (i == 0) - TTGO layout
+        // Anchor labels alleen voor BTCEUR (i == 0) - compacte GEEK-layout
         if (i == 0) {
             anchorMaxLabel = lv_label_create(priceBox[i]);
             ::anchorMaxLabel = anchorMaxLabel;  // Fase 8.4.3: Synchroniseer
@@ -1071,8 +1071,8 @@ void UIController::updateDateTimeLabels()
         struct tm timeinfo;
         if (getLocalTime(&timeinfo))
         {
-            #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
-            // TTGO/GEEK: compact formaat dd-mm-yy voor lagere resolutie
+            #if defined(PLATFORM_ESP32S3_GEEK)
+            // GEEK: compact formaat dd-mm-yy voor lagere resolutie
             char dateStr[9]; // dd-mm-yy + null terminator = 9 karakters
             strftime(dateStr, sizeof(dateStr), "%d-%m-%y", &timeinfo);
             #else
@@ -1109,8 +1109,8 @@ void UIController::updateDateTimeLabels()
 
 // Fase 8.3.4: createFooter() verplaatst naar UIController module (parallel implementatie)
 void UIController::createFooter() {
-    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
-    // TTGO/GEEK: IP-adres links, versienummer rechts
+    #if defined(PLATFORM_ESP32S3_GEEK)
+    // GEEK: IP-adres links, versienummer rechts
     ipLabel = lv_label_create(lv_scr_act());
     ::ipLabel = ipLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(ipLabel, FONT_SIZE_FOOTER, 0);
@@ -1668,7 +1668,7 @@ void UIController::updateBTCEURCard(bool hasNewData)
         effAnchorUI = anchorSystem.calcEffectiveAnchor(anchorMaxLoss, anchorTakeProfit, currentTrend);
     }
     
-    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
+    #if defined(PLATFORM_ESP32S3_GEEK)
     if (::anchorMaxLabel != nullptr) {
         if (anchorDisplayActive) {
             // Gebruik dynamische take profit waarde
@@ -2247,8 +2247,8 @@ void UIController::updateChartSection(int32_t currentPrice, bool hasNewPriceData
         lv_label_set_text(::chartTitle, deviceIdBuffer);
     }
     
-    // Update chart begin letters label (TTGO displays)
-    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
+    // Update chart begin letters label (compacte header layouts)
+    #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     if (::chartBeginLettersLabel != nullptr) {
         char deviceIdBuffer[16];
         getDeviceIdFromTopic(ntfyTopic, deviceIdBuffer, sizeof(deviceIdBuffer));
@@ -2291,7 +2291,7 @@ void UIController::updateUI()
 }
 
 // Fase 8.9.1: checkButton() naar Module
-// Physical button check function (voor TTGO en CYD platforms)
+// Physical button check function (voor boards met HAS_PHYSICAL_BUTTON, o.a. CYD)
 void UIController::checkButton()
 {
     unsigned long now = millis();
@@ -2382,9 +2382,6 @@ void UIController::setupLVGL()
     #elif defined(PLATFORM_ESP32S3_JC3248W535)
         // JC3248W535 testmodus: expliciet single buffer.
         useDoubleBuffer = false;
-    #elif defined(PLATFORM_TTGO)
-        // TTGO: double buffer alleen als PSRAM beschikbaar is
-        useDoubleBuffer = psramAvailable;
     #else
         // Fallback: double buffer alleen met PSRAM
         useDoubleBuffer = psramAvailable;
@@ -2420,13 +2417,6 @@ void UIController::setupLVGL()
     #elif defined(PLATFORM_ESP32S3_JC3248W535)
         // Forceer full-frame buffer (320x480) voor veilige AXS15231B/QSPI testmodus.
         bufLines = screenHeight;
-    #elif defined(PLATFORM_TTGO)
-        // TTGO: 30 regels met PSRAM, 2 zonder
-        if (psramAvailable) {
-            bufLines = 30;
-        } else {
-            bufLines = 2;
-        }
     #else
         // Fallback
         bufLines = psramAvailable ? 30 : 2;
@@ -2469,8 +2459,6 @@ void UIController::setupLVGL()
         boardName = "ESP32-S3 GEEK";
     #elif defined(PLATFORM_ESP32S3_JC3248W535)
         boardName = "JC3248W535";
-    #elif defined(PLATFORM_TTGO)
-        boardName = "TTGO";
     #else
         boardName = "Unknown";
     #endif

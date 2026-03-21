@@ -50,7 +50,6 @@ Check in Device Manager (Windows) whether the COM port appears when you connect 
 
 4. **Select board** (Tools → Board):
    - Cheap Yellow Display: **ESP32 Dev Module**
-   - TTGO T-Display: **TTGO T-Display**
    - Waveshare ESP32-S3-GEEK: **ESP32S3 Dev Module**
 
 ![Board selection](img/board-selection.jpg)  
@@ -60,10 +59,10 @@ Check in Device Manager (Windows) whether the COM port appears when you connect 
    - Upload Speed: 921600 (lower to 115200 if issues occur)
    - Flash Mode: QIO
    - Partition Scheme: "Default 4MB with spiffs" or "Huge APP"
-   - PSRAM: **Disabled** for CYD24/CYD28 and TTGO, **Enabled** for S3 boards with PSRAM
+   - PSRAM: **Disabled** for CYD24/CYD28, **Enabled** for S3 boards with PSRAM
 
 6. **Board-specific define**:
-   - In `platform_config.h` select the right board (`PLATFORM_CYD24`, `PLATFORM_CYD28`, `PLATFORM_TTGO`, `PLATFORM_ESP32S3_GEEK`, `PLATFORM_ESP32S3_SUPERMINI`, `PLATFORM_ESP32S3_4848S040`).
+   - In `platform_config.h` select the right board (`PLATFORM_CYD24`, `PLATFORM_CYD28`, `PLATFORM_ESP32S3_GEEK`, `PLATFORM_ESP32S3_SUPERMINI`, `PLATFORM_ESP32S3_JC3248W535`, …).
    - Keep exactly one platform enabled.
 
 ![Code defines](img/code-defines.jpg)  

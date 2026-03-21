@@ -1,5 +1,5 @@
 // Tutorial : https://youtu.be/JqQEG0eipic
-// Unified Crypto Monitor - Supports TTGO T-Display and CYD 2.8
+// Unified Crypto Monitor - Supports CYD 2.4/2.8, ESP32-S3 boards, enz.
 // Select platform in platform_config.h
 
 #define LV_CONF_INCLUDE_SIMPLE // Use the lv_conf.h included in this project, to configure see https://docs.lvgl.io/master/get-started/platforms/arduino.html
@@ -127,7 +127,7 @@ DisplayBackend *g_displayBackend = nullptr;
     
     // DEBUG_CALCULATIONS logging werkt altijd, ongeacht DEBUG_BUTTON_ONLY
     // WAARSCHUWING: DEBUG_CALCULATIONS gebruikt DRAM voor debug strings
-    // Voor CYD/TTGO (geen PSRAM) wordt dit standaard UIT gezet in platform_config.h
+    // Voor CYD (geen PSRAM) wordt dit standaard UIT gezet in platform_config.h
     #if DEBUG_CALCULATIONS
         #undef Serial_printf
         #undef Serial_println
@@ -567,8 +567,8 @@ lv_obj_t *chartTitle;     // Label voor chart titel (symbool) - alleen voor CYD
 lv_obj_t *chartVersionLabel; // Label voor versienummer (rechts bovenste regel)
 lv_obj_t *chartDateLabel; // Label voor datum rechtsboven (vanaf pixel 180)
 lv_obj_t *chartTimeLabel; // Label voor tijd rechtsboven
-lv_obj_t *chartBeginLettersLabel; // Label voor beginletters (TTGO, links tweede regel)
-lv_obj_t *ipLabel; // IP-adres label (TTGO, onderin, gecentreerd)
+lv_obj_t *chartBeginLettersLabel; // Label voor beginletters (compacte layouts, o.a. GEEK)
+lv_obj_t *ipLabel; // IP-adres label (footer, platform-afhankelijk)
 lv_obj_t *price1MinMaxLabel; // Label voor max waarde in 1 min buffer
 lv_obj_t *price1MinMinLabel; // Label voor min waarde in 1 min buffer
 lv_obj_t *price1MinDiffLabel; // Label voor verschil tussen max en min in 1 min buffer
@@ -587,7 +587,7 @@ lv_obj_t *price7DDiffLabel = nullptr; // Label voor verschil tussen max en min i
 lv_obj_t *anchorLabel; // Label voor anchor price info (rechts midden, met percentage verschil)
 lv_obj_t *anchorMaxLabel; // Label voor "Pak winst" (rechts, groen, boven)
 lv_obj_t *anchorMinLabel; // Label voor "Stop loss" (rechts, rood, onder)
-static lv_obj_t *anchorDeltaLabel; // Label voor anchor delta % (TTGO, rechts)
+static lv_obj_t *anchorDeltaLabel; // Label voor anchor delta % (compacte layouts, rechts)
 lv_obj_t *trendLabel; // Label voor trend weergave
 lv_obj_t *warmStartStatusLabel; // Label voor warm-start status weergave (rechts bovenin chart)
 lv_obj_t *volatilityLabel; // Label voor volatiliteit weergave
@@ -702,7 +702,7 @@ bool secondArrayFilled = false;
 bool newPriceDataAvailable = false;  // Flag om aan te geven of er nieuwe prijsdata is voor grafiek update
 
 // Array van 300 posities voor laatste 300 seconden (5 minuten) - voor ret_5m berekening
-// Dynamisch gealloceerd: CYD/TTGO zonder PSRAM → INTERNAL; S3 e.d. met PSRAM → SPIRAM (bespaart DRAM)
+// Dynamisch gealloceerd: CYD zonder PSRAM → INTERNAL; S3 e.d. met PSRAM → SPIRAM (bespaart DRAM)
 float *fiveMinutePrices = nullptr;
 DataSource *fiveMinutePricesSource = nullptr;
 uint16_t fiveMinuteIndex = 0;
@@ -710,7 +710,7 @@ bool fiveMinuteArrayFilled = false;
 
 // Array van 120 posities voor laatste 120 minuten (2 uur)
 // Elke minuut wordt het gemiddelde van de 60 seconden opgeslagen
-// Dynamisch gealloceerd: CYD/TTGO zonder PSRAM → INTERNAL; S3 e.d. met PSRAM → SPIRAM (bespaart DRAM)
+// Dynamisch gealloceerd: CYD zonder PSRAM → INTERNAL; S3 e.d. met PSRAM → SPIRAM (bespaart DRAM)
 float *minuteAverages = nullptr;
 DataSource *minuteAveragesSource = nullptr;
 // Fase 4.2.9: static verwijderd zodat PriceData getters deze kunnen gebruiken
@@ -7630,8 +7630,8 @@ void fetchPrice()
         
         // Neem mutex voor data updates (timeout verhoogd om mutex conflicts te verminderen)
         // API task heeft prioriteit: verhoogde timeout om mutex te krijgen zelfs als UI bezig is
-        #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
-        const TickType_t apiMutexTimeout = pdMS_TO_TICKS(500); // TTGO/GEEK: 500ms
+        #if defined(PLATFORM_ESP32S3_GEEK)
+        const TickType_t apiMutexTimeout = pdMS_TO_TICKS(500); // GEEK: 500ms
         #else
         const TickType_t apiMutexTimeout = pdMS_TO_TICKS(400); // CYD/ESP32-S3: 400ms voor betere mutex acquisitie
         #endif
@@ -7960,7 +7960,7 @@ static char lastTimeText[9] = {0};   // Cache voor time label
 // Fase 8: updateFooter() gebruikt nog globale pointers (kan later naar UIController module verplaatst worden)
 void updateFooter()
 {
-    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_GEEK)
+    #if defined(PLATFORM_ESP32S3_GEEK)
     if (ipLabel != nullptr) {
         if (WiFi.status() == WL_CONNECTED) {
             // Geoptimaliseerd: gebruik char array i.p.v. String
@@ -7972,7 +7972,7 @@ void updateFooter()
         }
     }
     
-    // TTGO/GEEK: Update versie label (rechtsonder) - force update als cache leeg is
+    // GEEK: Update versie label (rechtsonder) - force update als cache leeg is
     if (chartVersionLabel != nullptr) {
         if (strlen(lastVersionText) == 0 || strcmp(lastVersionText, VERSION_STRING) != 0) {
             lv_label_set_text(chartVersionLabel, VERSION_STRING);
@@ -8127,7 +8127,7 @@ void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
     lv_disp_flush_ready(disp);
 }
 
-// Physical button check function (voor TTGO en CYD platforms)
+// Physical button check function (voor boards met HAS_PHYSICAL_BUTTON, o.a. CYD)
 #if HAS_PHYSICAL_BUTTON
 // Button debouncing - edge detection voor betere eerste-druk detectie
 // Fase 8.9.1: static verwijderd zodat UIController module deze kan gebruiken
@@ -8251,7 +8251,7 @@ static void setupSerialAndDevice()
     DEV_DEVICE_INIT();
     #endif
     
-    // Initialiseer fysieke reset button (voor TTGO en CYD platforms)
+    // Initialiseer fysieke reset button (boards met HAS_PHYSICAL_BUTTON)
     #if HAS_PHYSICAL_BUTTON
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     #endif
@@ -8298,10 +8298,10 @@ static void setupDisplay()
     // Alleen 0 en 2 zijn geldig voor 180 graden rotatie
     uint8_t rotation = (displayRotation == 2) ? 2 : 0;
     g_displayBackend->setRotation(rotation);
-    // TTGO/ESP32-S3: standaard geen inversie
+    // ESP32-S3 ST7789-boards: standaard geen inversie
     // CYD24/CYD28: standaard false, behalve wanneer INVERT_COLORS flag is gezet
-    #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
-    g_displayBackend->invertDisplay(false); // TTGO/ESP32-S3 T-Display/GEEK heeft geen inversie nodig (ST7789)
+    #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
+    g_displayBackend->invertDisplay(false); // Super Mini / GEEK: geen inversie nodig (ST7789)
     #elif defined(PLATFORM_ESP32S3_4848S040)
     g_displayBackend->invertDisplay(false); // 4848S040: geen inversie (basisinstelling)
     #elif defined(PLATFORM_LCDWIKI28_INVERT_COLORS)
@@ -8331,9 +8331,7 @@ static void setupDisplay()
     #endif
     
     // Geef display tijd om te stabiliseren na initialisatie (vooral belangrijk voor CYD displays en ESP32-S3)
-    #if !defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     delay(200); // ESP32-S3 heeft extra tijd nodig voor SPI stabilisatie
-    #endif
 }
 
 static void setupLVGL()
@@ -8380,9 +8378,6 @@ static void setupLVGL()
         useDoubleBuffer = psramAvailable;
     #elif defined(PLATFORM_ESP32S3_JC3248W535)
         useDoubleBuffer = false;
-    #elif defined(PLATFORM_TTGO)
-        // TTGO: double buffer alleen als PSRAM beschikbaar is
-        useDoubleBuffer = psramAvailable;
     #else
         // Fallback: double buffer alleen met PSRAM
         useDoubleBuffer = psramAvailable;
@@ -8410,13 +8405,6 @@ static void setupLVGL()
         }
     #elif defined(PLATFORM_ESP32S3_GEEK)
         // ESP32-S3 GEEK: 30 regels met PSRAM, 2 zonder
-        if (psramAvailable) {
-            bufLines = 30;
-        } else {
-            bufLines = 2;
-        }
-    #elif defined(PLATFORM_TTGO)
-        // TTGO: 30 regels met PSRAM, 2 zonder
         if (psramAvailable) {
             bufLines = 30;
         } else {
@@ -8459,8 +8447,6 @@ static void setupLVGL()
         boardName = "ESP32-S3 GEEK";
     #elif defined(PLATFORM_ESP32S3_JC3248W535)
         boardName = "JC3248W535";
-    #elif defined(PLATFORM_TTGO)
-        boardName = "TTGO";
     #else
         boardName = "Unknown";
     #endif
@@ -8543,7 +8529,7 @@ static void setupWatchdog()
         Serial.println("[WDT] Watchdog UITGESCHAKELD voor Core 0 (LVGL rendering) - CYD 2.4 work-around");
     }
     #else
-    // Standaard task watchdog (o.a. PLATFORM_CYD28, ESP32-S3, TTGO, …): timeout 10 seconden.
+    // Standaard task watchdog (o.a. PLATFORM_CYD28, ESP32-S3, …): timeout 10 seconden.
     // ESP32 Arduino core initialiseert de watchdog al, dus eerst deinit dan init
     esp_err_t deinit_err = esp_task_wdt_deinit();
     if (deinit_err != ESP_OK && deinit_err != ESP_ERR_NOT_FOUND) {
@@ -8635,7 +8621,7 @@ static void setupMutex()
     }
 }
 
-// Alloceer ringbuffer-arrays (alle platforms): met PSRAM in SPIRAM, zonder PSRAM in INTERNAL heap (o.a. CYD/TTGO)
+// Alloceer ringbuffer-arrays (alle platforms): met PSRAM in SPIRAM, zonder PSRAM in INTERNAL heap (o.a. CYD)
 static void allocateDynamicArrays()
 {
     if (fiveMinutePrices == nullptr) {
@@ -9433,11 +9419,7 @@ void uiTask(void *parameter)
     TickType_t lastWakeTime = xTaskGetTickCount();
     const TickType_t frequency = pdMS_TO_TICKS(UPDATE_UI_INTERVAL);
     // LVGL handler frequentie - CYD heeft meer rendering overhead, dus iets vaker aanroepen
-    #ifdef PLATFORM_TTGO
-    const TickType_t lvglFrequency = pdMS_TO_TICKS(5); // TTGO: elke 5ms
-    #else
     const TickType_t lvglFrequency = pdMS_TO_TICKS(3); // CYD/ESP32-S3: elke 3ms voor vloeiendere rendering
-    #endif
     TickType_t lastLvglTime = xTaskGetTickCount();
     
     Serial.println("[UI Task] Gestart op Core 0");
@@ -9473,11 +9455,7 @@ void uiTask(void *parameter)
         // Geoptimaliseerd: betere mutex timeout handling
         // UI task heeft lagere prioriteit: kortere timeout zodat API task voorrang krijgt
         // Als mutex niet beschikbaar is, skip deze update (UI kan volgende keer opnieuw proberen)
-        #ifdef PLATFORM_TTGO
-        const TickType_t mutexTimeout = pdMS_TO_TICKS(30); // TTGO: korte timeout
-        #else
         const TickType_t mutexTimeout = pdMS_TO_TICKS(50); // CYD/ESP32-S3: korte timeout zodat API task voorrang krijgt
-        #endif
         
         // UI mag niet lang in een mutex zitten (LVGL kan blocken).
         // We checken alleen kort of er geen writer actief is, en updaten daarna zonder lock.
@@ -9507,7 +9485,7 @@ void uiTask(void *parameter)
         
         // C1: Anchor verwerking verplaatst naar apiTask (network-safe: gebeurt waar HTTPS calls al zijn)
         
-        // Check physical button (alleen voor TTGO)
+        // Check physical button (boards met HAS_PHYSICAL_BUTTON)
         #if HAS_PHYSICAL_BUTTON
         // Fase 8.9.1: Gebruik module versie (parallel - oude functie blijft bestaan)
         uiController.checkButton();

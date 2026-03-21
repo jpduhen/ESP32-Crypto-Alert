@@ -1,7 +1,7 @@
 # Code Index - UNIFIED-LVGL9-Crypto_Monitor
 
 **Versie:** 4.27  
-**Platform:** ESP32 (TTGO T-Display, CYD 2.4/2.8, ESP32-S3 Super Mini)  
+**Platform:** ESP32 (CYD 2.4/2.8, ESP32-S3 Super Mini, GEEK, JC3248, …)  
 **Laatste update:** 2026-01-06 - Versie 4.27: Long-term trend detection (4h/1d), KT/ST trend labels, LT trend notifications, CYD 2.8 varianten, DRAM optimalisaties
 
 ---
@@ -357,7 +357,6 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 **Doel:** Platform-specifieke configuratie en versie management
 
 **Defines:**
-- `PLATFORM_TTGO` - TTGO T-Display
 - `PLATFORM_CYD24` - CYD 2.4 inch
 - `PLATFORM_CYD28_1USB` - CYD 2.8 inch (1 USB, geen kleurinversie)
 - `PLATFORM_CYD28_2USB` - CYD 2.8 inch (2 USB, met kleurinversie)
@@ -367,7 +366,6 @@ Dit project is een modulaire ESP32 crypto alert systeem dat:
 - `DEBUG_BUTTON_ONLY` - Debug logging configuratie
 
 ### Pin Configuratiebestanden
-- `PINS_TTGO_T_Display.h` - TTGO pin configuratie
 - `PINS_CYD-ESP32-2432S024.h` - CYD 2.4 pin configuratie
 - `PINS_CYD-ESP32-2432S028-1USB.h` - CYD 2.8 pin configuratie (1 USB, geen inversie)
 - `PINS_CYD-ESP32-2432S028-2USB.h` - CYD 2.8 pin configuratie (2 USB, met inversie via `PLATFORM_CYD28_INVERT_COLORS`)

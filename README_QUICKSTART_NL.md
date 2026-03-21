@@ -2,7 +2,7 @@
 
 ## Wat heb ik nodig?
 
-- ESP32 met display (CYD, ESP32-S3 SuperMini, ESP32-S3 GEEK, TTGO T-Display, of vergelijkbaar)
+- ESP32 met display (CYD, ESP32-S3 SuperMini, ESP32-S3 GEEK, of vergelijkbaar)
 - WiFi verbinding
 - NTFY.sh account (of publiek topic)
 - Bitvavo API (publieke endpoints, geen key vereist)
@@ -33,7 +33,7 @@
 - **Activeer eerst maar een paar alerts** om het gedrag te begrijpen
 - **Observeer een dag** voordat je instellingen aanscherpt of versoepelt
 - **Gebruik cooldowns** om alert spam te voorkomen
-- **PSRAM**: Uitschakelen op CYD/TTGO; alleen inschakelen op boards met PSRAM
+- **PSRAM**: Uitschakelen op CYD; alleen inschakelen op boards met PSRAM
 
 ---
 

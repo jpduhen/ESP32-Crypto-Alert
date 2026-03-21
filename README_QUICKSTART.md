@@ -2,7 +2,7 @@
 
 ## What do I need?
 
-- ESP32 with display (CYD, ESP32-S3 SuperMini, ESP32-S3 GEEK, TTGO T-Display, or similar)
+- ESP32 with display (CYD, ESP32-S3 SuperMini, ESP32-S3 GEEK, or similar)
 - WiFi connection
 - NTFY.sh account (or public topic)
 - Bitvavo API (public endpoints, no key required)
@@ -33,7 +33,7 @@
 - **Enable only a few alerts** at first to understand behavior
 - **Observe for a day** before tightening or loosening settings
 - **Use cooldowns** to prevent alert spam
-- **PSRAM**: Disable on CYD/TTGO; enable only on boards that actually have PSRAM
+- **PSRAM**: Disable on CYD; enable only on boards that actually have PSRAM
 
 ---
 

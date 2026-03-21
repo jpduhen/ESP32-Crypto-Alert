@@ -268,9 +268,7 @@ void WebServerModule::renderSettingsHTML() {
     
     // Bepaal platform naam
     const char* platformName = "";
-    #ifdef PLATFORM_TTGO
-        platformName = "TTGO";
-    #elif defined(PLATFORM_CYD24)
+    #if defined(PLATFORM_CYD24)
         platformName = "CYD24";
     #elif defined(PLATFORM_CYD28)
         platformName = "CYD28";
@@ -2097,7 +2095,7 @@ String WebServerModule::getOrBuildSettingsPage() {
         // CYD zonder PSRAM: geen reserve (cache nog niet geïmplementeerd anyway)
         sPageCache = "";
     #else
-        // ESP32-S3/TTGO met PSRAM: reserve memory
+        // ESP32-S3 e.d. met PSRAM: reserve memory
         sPageCache.reserve(16000);
         sPageCache = "";
     #endif

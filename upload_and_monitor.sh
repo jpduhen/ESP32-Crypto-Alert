@@ -15,9 +15,7 @@ PLATFORM_CONFIG="$SKETCH_DIR/platform_config.h"
 PLATFORM_NAME="Unknown Platform"
 
 if [ -f "$PLATFORM_CONFIG" ]; then
-    if grep -q "^#define PLATFORM_TTGO" "$PLATFORM_CONFIG"; then
-        PLATFORM_NAME="TTGO T-Display"
-    elif grep -q "^#define PLATFORM_CYD28" "$PLATFORM_CONFIG"; then
+    if grep -q "^#define PLATFORM_CYD28" "$PLATFORM_CONFIG"; then
         PLATFORM_NAME="CYD 2.8"
     fi
 fi
