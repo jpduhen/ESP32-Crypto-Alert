@@ -13,8 +13,8 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 5
-#define VERSION_MINOR 59
-#define VERSION_STRING "5.59"
+#define VERSION_MINOR 64
+#define VERSION_STRING "5.64"
 #endif
 
 // --- Debug Configuration ---
@@ -23,9 +23,9 @@
 #define DEBUG_BUTTON_ONLY 0
 #endif
 
-// --- WebSocket Configuration (stap-voor-stap migratie) ---
+// --- WebSocket Configuration ---
 #ifndef WS_ENABLED
-#define WS_ENABLED 1  // 0 = uit, 1 = aan (later inschakelen)
+#define WS_ENABLED 1  // 0 = uit, 1 = aan (standaard aan)
 #endif
 
 // --- OTA (Over-The-Air) updates via web UI ---

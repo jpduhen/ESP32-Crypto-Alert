@@ -125,8 +125,8 @@ extern bool getNotificationLogEntry(uint8_t index,
                                     uint8_t *sentOut);
 
 // WEB-PERF-3: Externe variabelen voor /status endpoint
-extern float ret_2h;  // 2-hour return (static in .ino, maar extern hier)
-extern float ret_30m;  // 30-minute return (static in .ino, maar extern hier)
+extern float ret_2h;  // 2-hour return (globaal in ESP32-Crypto-Alert.ino)
+extern float ret_30m;  // 30-minute return (globaal in ESP32-Crypto-Alert.ino)
 extern float ret_1d;  // 24-hour return (hourly buffer)
 extern float ret_7d;  // 7-day return (hourly buffer of warm-start)
 extern float averagePrices[];  // Array met gemiddelde prijzen (index 3 = avg2h)
