@@ -23,9 +23,11 @@
 // Fase 8.5.3: updateVolatilityLabel() dependencies
 #include "../VolatilityTracker/VolatilityTracker.h"  // Voor VolatilityState enum
 // Fase 8.6.x: volume/range UI indicators dependencies
-#include "../AlertEngine/AlertEngine.h"  // Voor VolumeRangeStatus
+#include "../AlertEngine/AlertEngine.h"  // Voor VolumeRangeStatus, TwoHMetrics
 // Fase 8.6.1: updateBTCEURCard() dependencies
 #include "../AnchorSystem/AnchorSystem.h"  // Voor AnchorConfigEffective struct
+
+extern TwoHMetrics computeTwoHMetrics();  // Definitie in ESP32-Crypto-Alert.ino (zelfde bron als /status)
 
 // Platform-specifieke constants (gedefinieerd in platform_config.h, maar we includen niet om dubbele definitie van gfx/bus te voorkomen)
 // Fase 8.3: createChart() dependencies - constants worden extern gebruikt
@@ -2053,11 +2055,26 @@ void UIController::updateAveragePriceCard(uint8_t index)
         if (ok) {
             averagePrices[3] = avg2h;
         }
+        #elif defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_LCDWIKI_28)
+        TwoHMetrics m = computeTwoHMetrics();
+        bool ok = m.valid;
+        if (ok) {
+            averagePrices[3] = m.avg2h;
+            minVal = m.low2h;
+            maxVal = m.high2h;
+        }
         #else
         bool ok = true;
         findMinMaxInLast2Hours(minVal, maxVal);
         #endif
         if (ok) {
+            #if defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_LCDWIKI_28)
+            float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
+            updateMinMaxDiffLabels(::price2HMaxLabel, ::price2HMinLabel, ::price2HDiffLabel,
+                                  price2HMaxLabelBuffer, price2HMinLabelBuffer, price2HDiffLabelBuffer,
+                                  maxVal, minVal, diff,
+                                  lastPrice2HMaxValue, lastPrice2HMinValue, lastPrice2HDiffValue);
+            #else
             applyLiveMinMax(minVal, maxVal);
             float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
             // Geoptimaliseerd: gebruik helper functie i.p.v. gedupliceerde code
@@ -2065,6 +2082,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
                                   price2HMaxLabelBuffer, price2HMinLabelBuffer, price2HDiffLabelBuffer,
                                   maxVal, minVal, diff,
                                   lastPrice2HMaxValue, lastPrice2HMinValue, lastPrice2HDiffValue);
+            #endif
         }
     }
     #endif
