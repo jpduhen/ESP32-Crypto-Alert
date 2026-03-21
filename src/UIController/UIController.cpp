@@ -720,43 +720,6 @@ void UIController::createHeaderLabels() {
     lv_label_set_text(chartTimeLabel, "--:--:--");
     lv_obj_set_width(chartTimeLabel, LV_SIZE_CONTENT);
     lv_obj_align(chartTimeLabel, LV_ALIGN_TOP_RIGHT, -4, 4);
-    #elif defined(PLATFORM_ESP32S3_4848S040)
-    // 4848S040: footer in twee kolommen (links info, rechts versie)
-    lblFooterLine1 = lv_label_create(lv_scr_act());
-    ::lblFooterLine1 = lblFooterLine1;  // Fase 8.4.3: Synchroniseer
-    lv_obj_set_style_text_font(lblFooterLine1, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(lblFooterLine1, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(lblFooterLine1, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_set_width(lblFooterLine1, 240);
-    lv_obj_set_pos(lblFooterLine1, 0, LV_VER_RES - 36);
-    lv_label_set_text(lblFooterLine1, "--dBm");
-    
-    ramLabel = lv_label_create(lv_scr_act());
-    ::ramLabel = ramLabel;  // Fase 8.4.3: Synchroniseer
-    lv_obj_set_style_text_font(ramLabel, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(ramLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(ramLabel, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_width(ramLabel, 240);
-    lv_obj_set_pos(ramLabel, 240, LV_VER_RES - 36);
-    lv_label_set_text(ramLabel, "--kB");
-    
-    lblFooterLine2 = lv_label_create(lv_scr_act());
-    ::lblFooterLine2 = lblFooterLine2;  // Fase 8.4.3: Synchroniseer
-    lv_obj_set_style_text_font(lblFooterLine2, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(lblFooterLine2, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(lblFooterLine2, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_set_width(lblFooterLine2, 240);
-    lv_obj_set_pos(lblFooterLine2, 0, LV_VER_RES - 18);
-    lv_label_set_text(lblFooterLine2, "--.--.--.--");
-    
-    chartVersionLabel = lv_label_create(lv_scr_act());
-    ::chartVersionLabel = chartVersionLabel;  // Fase 8.4.3: Synchroniseer
-    lv_obj_set_style_text_font(chartVersionLabel, FONT_SIZE_FOOTER, 0);
-    lv_obj_set_style_text_color(chartVersionLabel, lv_palette_main(LV_PALETTE_CYAN), 0);
-    lv_obj_set_style_text_align(chartVersionLabel, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_width(chartVersionLabel, 240);
-    lv_obj_set_pos(chartVersionLabel, 240, LV_VER_RES - 18);
-    lv_label_set_text(chartVersionLabel, VERSION_STRING);
     #else
     // CYD: Ruimere layout met datum/tijd op verschillende posities
     chartDateLabel = lv_label_create(lv_scr_act());
@@ -2287,13 +2250,9 @@ void UIController::updateChartSection(int32_t currentPrice, bool hasNewPriceData
     // Update chart begin letters label (TTGO displays)
     #if defined(PLATFORM_TTGO) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     if (::chartBeginLettersLabel != nullptr) {
-        #if defined(PLATFORM_ESP32S3_4848S040)
-        lv_label_set_text(::chartBeginLettersLabel, ntfyTopic);
-        #else
         char deviceIdBuffer[16];
         getDeviceIdFromTopic(ntfyTopic, deviceIdBuffer, sizeof(deviceIdBuffer));
         lv_label_set_text(::chartBeginLettersLabel, deviceIdBuffer);
-        #endif
     }
     #endif
 }
