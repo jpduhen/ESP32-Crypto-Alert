@@ -2379,7 +2379,7 @@ static WarmStartMode performWarmStart()
     #endif
     
     // Initialiseer prices array met warm-start waarden (voor directe UI weergave)
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
+    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040) || defined(PLATFORM_ESP32S3_JC3248W535)
     if (hasRet2h) {
         prices[3] = ret_2h;  // Zet 2h return direct na warm-start
     }
@@ -7869,7 +7869,7 @@ void fetchPrice()
             }
             
             // 2h return voor CYD platforms (index 3)
-            #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
+            #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040) || defined(PLATFORM_ESP32S3_JC3248W535)
             // ret_2h wordt nu altijd berekend in calculateReturn2Hours(), ook als er minder dan 120 minuten zijn
             // Het berekent een return op basis van beschikbare data (minimaal 2 minuten nodig)
             if (hasRet2h) {
