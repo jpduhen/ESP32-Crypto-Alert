@@ -14,24 +14,24 @@ PLATFORM_NAME="Unknown Platform"
 PARTITION_SCHEME="huge_app"  # Beide platforms gebruiken huge_app
 
 if [ -f "$PLATFORM_CONFIG" ]; then
-    if grep -q "^#define PLATFORM_CYD24" "$PLATFORM_CONFIG"; then
-        PLATFORM_NAME="CYD ESP32-2432S024"
-        PARTITION_SCHEME="huge_app"  # CYD24: huge_app met 4MB flash
-    elif grep -q "^#define PLATFORM_CYD28" "$PLATFORM_CONFIG"; then
-        PLATFORM_NAME="CYD ESP32-2432S028"
-        PARTITION_SCHEME="huge_app"  # CYD28: huge_app met 16MB flash
-    elif grep -q "^#define PLATFORM_ESP32S3_SUPERMINI" "$PLATFORM_CONFIG"; then
+    if grep -q "^#define PLATFORM_ESP32S3_SUPERMINI" "$PLATFORM_CONFIG"; then
         PLATFORM_NAME="ESP32-S3 Super Mini"
         PARTITION_SCHEME="huge_app"  # ESP32-S3: huge_app met 4MB flash
+    elif grep -q "^#define PLATFORM_ESP32S3_JC3248W535" "$PLATFORM_CONFIG"; then
+        PLATFORM_NAME="JC3248W535"
+        PARTITION_SCHEME="huge_app"
+    elif grep -q "^#define PLATFORM_ESP32S3_GEEK" "$PLATFORM_CONFIG"; then
+        PLATFORM_NAME="ESP32-S3 GEEK"
+        PARTITION_SCHEME="huge_app"
     fi
 fi
 
 # Bepaal FQBN op basis van platform
-if [ "$PLATFORM_NAME" = "ESP32-S3 Super Mini" ]; then
+if [ "$PLATFORM_NAME" = "ESP32-S3 Super Mini" ] || [ "$PLATFORM_NAME" = "JC3248W535" ] || [ "$PLATFORM_NAME" = "ESP32-S3 GEEK" ]; then
     # ESP32-S3: gebruik esp32s3 board (FlashFreq optie niet beschikbaar voor ESP32-S3)
     FQBN="esp32:esp32:esp32s3:UploadSpeed=460800,CPUFreq=240,FlashMode=qio,FlashSize=4M,PartitionScheme=${PARTITION_SCHEME},DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=none"
 else
-    # CYD24/CYD28: gebruik esp32 board met huge_app partition scheme
+    # Fallback: klassieke ESP32 (niet-S3)
     FQBN="esp32:esp32:esp32:UploadSpeed=460800,CPUFreq=240,FlashFreq=80,FlashMode=qio,FlashSize=4M,PartitionScheme=${PARTITION_SCHEME},DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=none"
 fi
 

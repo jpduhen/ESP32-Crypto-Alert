@@ -59,10 +59,10 @@ Check in Device Manager (Windows) whether the COM port appears when you connect 
    - Upload Speed: 921600 (lower to 115200 if issues occur)
    - Flash Mode: QIO
    - Partition Scheme: "Default 4MB with spiffs" or "Huge APP"
-   - PSRAM: **Disabled** for CYD24/CYD28, **Enabled** for S3 boards with PSRAM
+   - PSRAM: **Enabled** on boards with PSRAM (most ESP32-S3), **Disabled** if your board has no PSRAM
 
 6. **Board-specific define**:
-   - In `platform_config.h` select the right board (`PLATFORM_CYD24`, `PLATFORM_CYD28`, `PLATFORM_ESP32S3_GEEK`, `PLATFORM_ESP32S3_SUPERMINI`, `PLATFORM_ESP32S3_JC3248W535`, …).
+   - In `platform_config.h` select the right board (`PLATFORM_ESP32S3_GEEK`, `PLATFORM_ESP32S3_SUPERMINI`, `PLATFORM_ESP32S3_LCDWIKI_28`, `PLATFORM_ESP32S3_JC3248W535`, …).
    - Keep exactly one platform enabled.
 
 ![Code defines](img/code-defines.jpg)  

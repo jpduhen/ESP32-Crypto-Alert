@@ -196,7 +196,7 @@ extern uint8_t secondIndex;
 extern float averagePrices[];
 extern void findMinMaxInSecondPrices(float &minVal, float &maxVal);
 extern void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
-#if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
+#if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
 extern void findMinMaxInLast2Hours(float &minVal, float &maxVal);
 #endif
 extern bool computeStatsLast24Hours(float &avgVal, float &minVal, float &maxVal);
@@ -950,7 +950,7 @@ void UIController::createPriceBoxes() {
         }
         
         // Min/Max/Diff labels voor 2h blok (index 3) - alleen voor CYD platforms
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
+        #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
         if (i == 3)
         {
             // Initialiseer buffers
@@ -1849,7 +1849,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
     bool hasData1m = (index == 1) ? (secondArrayFilled || secondIndex >= 30) : true;
     // Voor 30m box: gebruik hasRet30m (inclusief warm-start) OF 30+ minuten live data
     bool hasData30m = (index == 2) ? (hasRet30m || (minuteArrayFilled || minuteIndex >= 30)) : true;
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
+    #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
     // Voor 2h box: gebruik warm-start data OF live data (minuteIndex >= 2 voor minimal, >= 120 voor volledig)
     bool hasData2h = (index == 3) ? (hasRet2h || (minuteArrayFilled || minuteIndex >= 120)) : true;
     bool hasData2hMinimal = (index == 3) ? (hasRet2h || (minuteArrayFilled || minuteIndex >= 2)) : true;  // Warm-start OF minimaal 2 minuten live data
@@ -1872,7 +1872,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
     
     // Debug voor 2h box: alleen loggen wanneer waarde verandert
     if (index == 3) {
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
+        #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
         #if !DEBUG_BUTTON_ONLY
         static float lastLoggedPct2h = -999.0f;
         static bool lastLoggedHasData2h = false;
@@ -1916,20 +1916,22 @@ void UIController::updateAveragePriceCard(uint8_t index)
 
     
     if (::priceTitle[index] != nullptr) {
-        #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_4848S040)
-        // Voor 2h box: toon percentage als er minimaal 2 minuten data zijn (hasData2hMinimal)
-        // Voor 30m box: toon percentage als er data is (hasRet30m of 30+ minuten)
-        // Voor 1m box: toon alleen als pct != 0.0f
+        #if defined(PLATFORM_ESP32S3_4848S040)
+        // 6-symbol 4848: 2h/1d/7d + 1m/30m
         bool shouldShowPct = (index == 3) ? (hasData2hMinimal) :
-                             #if defined(PLATFORM_ESP32S3_4848S040)
                              (index == 4) ? (hasData1dMinimal) :
                              (index == 5) ? (hasData7dMinimal) :
-                             #endif
                              (index == 2) ? (hasData30m) :
                              (hasData1m);
-        if (shouldShowPct) {  // Voor 2h en 30m box: toon percentage altijd als er data is (ook als 0.00%)
+        if (shouldShowPct) {
+        #elif defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
+        // 4-symbol boards met 2h-kaart
+        bool shouldShowPct = (index == 3) ? (hasData2hMinimal) :
+                             (index == 2) ? (hasData30m) :
+                             (hasData1m);
+        if (shouldShowPct) {
         #else
-        // Voor 30m box: toon percentage als er data is (hasRet30m of 30+ minuten)
+        // 3-symbol: alleen 1m/30m
         bool shouldShowPct = (index == 2) ? (hasData30m) : (hasData1m);
         if (shouldShowPct) {
         #endif
@@ -2007,7 +2009,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
                               lastPrice30MinMaxValue, lastPrice30MinMinValue, lastPrice30MinDiffValue);
     }
     
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
+    #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
     if (index == 3 && ::price2HMaxLabel != nullptr && ::price2HMinLabel != nullptr && ::price2HDiffLabel != nullptr)
     {
         float minVal = 0.0f;
@@ -2146,7 +2148,7 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
     }
     
     // Fase 8.6.3: Gebruik globale pointers (synchroniseert met module pointers)
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
+    #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
     // Voor 2h/1d box: gebruik warm-start data OF minimaal 2 minuten live data (2h) of ret_1d (1d)
     bool hasDataForColor = (index == 1) ? secondArrayFilled :
                            (index == 2) ? (minuteArrayFilled || minuteIndex >= 30) :
@@ -2161,7 +2163,7 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
     #endif
     
     // Voor 2h box: toon kleur ook als pct 0.0f is maar er wel data is
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28) || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
+    #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
     bool shouldShowColor = (index == 3
         #if defined(PLATFORM_ESP32S3_4848S040)
         || index == 4 || index == 5
@@ -2370,10 +2372,7 @@ void UIController::setupLVGL()
     
     // Bepaal useDoubleBuffer: board-aware
     bool useDoubleBuffer;
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-        // CYD zonder PSRAM: force single buffer (geen double buffering)
-        useDoubleBuffer = false;  // Altijd false voor CYD zonder PSRAM
-    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
+    #if defined(PLATFORM_ESP32S3_SUPERMINI)
         // ESP32-S3: double buffer alleen als PSRAM beschikbaar is
         useDoubleBuffer = psramAvailable;
     #elif defined(PLATFORM_ESP32S3_GEEK)
@@ -2387,20 +2386,9 @@ void UIController::setupLVGL()
         useDoubleBuffer = psramAvailable;
     #endif
     
-    // Bepaal buffer lines per board (compile-time instelbaar voor CYD)
+    // Bepaal buffer lines per board
     uint32_t bufLines;
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-        // CYD zonder PSRAM: compile-time instelbaar (default 4, kan 1/2/4 zijn voor testen)
-        // Na geheugenoptimalisaties kunnen we meer buffer gebruiken voor betere performance
-        #ifndef CYD_BUF_LINES_NO_PSRAM
-        #define CYD_BUF_LINES_NO_PSRAM 2  // Default: 2 regels (was 1->2->4, verlaagd voor extra DRAM ruimte op CYD)
-        #endif
-        if (psramAvailable) {
-            bufLines = 40;  // CYD met PSRAM: 40 regels
-        } else {
-            bufLines = CYD_BUF_LINES_NO_PSRAM;  // CYD zonder PSRAM: compile-time instelbaar
-        }
-    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
+    #if defined(PLATFORM_ESP32S3_SUPERMINI)
         // ESP32-S3 met PSRAM: 30 regels (of fallback kleiner als geen PSRAM)
         if (psramAvailable) {
             bufLines = 30;
@@ -2449,16 +2437,16 @@ void UIController::setupLVGL()
     
     // Bepaal board naam voor logging
     const char* boardName;
-    #if defined(PLATFORM_CYD24)
-        boardName = "CYD24";
-    #elif defined(PLATFORM_CYD28)
-        boardName = "CYD28";
-    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
+    #if defined(PLATFORM_ESP32S3_SUPERMINI)
         boardName = "ESP32-S3";
     #elif defined(PLATFORM_ESP32S3_GEEK)
         boardName = "ESP32-S3 GEEK";
+    #elif defined(PLATFORM_ESP32S3_LCDWIKI_28)
+        boardName = "LCDWIKI28";
     #elif defined(PLATFORM_ESP32S3_JC3248W535)
         boardName = "JC3248W535";
+    #elif defined(PLATFORM_ESP32S3_AMOLED_206)
+        boardName = "AMOLED206";
     #else
         boardName = "Unknown";
     #endif

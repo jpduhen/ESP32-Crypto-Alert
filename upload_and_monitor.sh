@@ -15,8 +15,10 @@ PLATFORM_CONFIG="$SKETCH_DIR/platform_config.h"
 PLATFORM_NAME="Unknown Platform"
 
 if [ -f "$PLATFORM_CONFIG" ]; then
-    if grep -q "^#define PLATFORM_CYD28" "$PLATFORM_CONFIG"; then
-        PLATFORM_NAME="CYD 2.8"
+    if grep -q "^#define PLATFORM_ESP32S3_JC3248W535" "$PLATFORM_CONFIG"; then
+        PLATFORM_NAME="JC3248W535"
+    elif grep -q "^#define PLATFORM_ESP32S3_GEEK" "$PLATFORM_CONFIG"; then
+        PLATFORM_NAME="ESP32-S3 GEEK"
     fi
 fi
 

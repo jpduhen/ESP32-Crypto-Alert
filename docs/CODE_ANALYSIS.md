@@ -534,15 +534,7 @@ DOWN → SIDEWAYS: ret_4h > -(longTermThreshold * 0.65) || ret_1d > 0
 - PSRAM beschikbaar (double buffering)
 - Betere performance dan ESP32
 
-**CYD 2.8 (ESP32):**
-- Geen PSRAM
-- Single buffer rendering
-- Memory constraints
-- **Varianten (Versie 4.27):**
-  - `PLATFORM_CYD28_1USB`: Geen kleurinversie
-  - `PLATFORM_CYD28_2USB`: Met kleurinversie (`gfx->invertDisplay(true)`)
-  - Automatische `PLATFORM_CYD28` definitie bij variant selectie
-  - Display inversie via `PLATFORM_CYD28_INVERT_COLORS` flag in PINS files
+**Historisch — CYD (Cheap Yellow Display):** niet meer ondersteund in de actieve codebase; focus op ESP32-S3 boards met `platform_config.h` + bijbehorende `PINS_*.h`.
 
 ---
 
@@ -611,10 +603,7 @@ DOWN → SIDEWAYS: ret_4h > -(longTermThreshold * 0.65) || ret_1d > 0
    - "ST" (Short Term) voor Engels
    - Zelfde notatie en kleuren als LT trend (+, =, -)
 
-3. **Platform Configuratie:**
-   - CYD 2.8 varianten: `PLATFORM_CYD28_1USB` en `PLATFORM_CYD28_2USB`
-   - Automatische `PLATFORM_CYD28` definitie
-   - Display inversie via PINS files (`PLATFORM_CYD28_INVERT_COLORS`)
+3. **Platform configuratie:** ESP32-S3 boards via `platform_config.h` (o.a. LCDWIKI 2.8, JC3248W535, GEEK, Super Mini).
 
 4. **DRAM Optimalisaties:**
    - Meerdere buffers verkleind om DRAM overflow te voorkomen

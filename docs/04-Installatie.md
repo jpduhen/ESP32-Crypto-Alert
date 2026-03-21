@@ -59,10 +59,10 @@ Controleer in Apparaatbeheer (Windows) of de COM-poort verschijnt wanneer je het
    - Upload Speed: 921600 (verlaag naar 115200 bij problemen)
    - Flash Mode: QIO
    - Partition Scheme: "Default 4MB with spiffs" of "Huge APP"
-   - PSRAM: **Disabled** voor CYD24/CYD28, **Enabled** voor S3-boards met PSRAM
+   - PSRAM: **Enabled** op boards met PSRAM (meeste ESP32-S3), **Disabled** als je board geen PSRAM heeft
 
 6. **Board-specifieke define**:
-   - In `platform_config.h` kies je het juiste board (`PLATFORM_CYD24`, `PLATFORM_CYD28`, `PLATFORM_ESP32S3_GEEK`, `PLATFORM_ESP32S3_SUPERMINI`, `PLATFORM_ESP32S3_JC3248W535`, …).
+   - In `platform_config.h` kies je het juiste board (`PLATFORM_ESP32S3_GEEK`, `PLATFORM_ESP32S3_SUPERMINI`, `PLATFORM_ESP32S3_LCDWIKI_28`, `PLATFORM_ESP32S3_JC3248W535`, …).
    - Laat slechts één platform actief.
 
 ![Code defines](img/code-defines.jpg)  

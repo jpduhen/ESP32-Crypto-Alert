@@ -268,12 +268,16 @@ void WebServerModule::renderSettingsHTML() {
     
     // Bepaal platform naam
     const char* platformName = "";
-    #if defined(PLATFORM_CYD24)
-        platformName = "CYD24";
-    #elif defined(PLATFORM_CYD28)
-        platformName = "CYD28";
-    #elif defined(PLATFORM_ESP32S3_SUPERMINI)
+    #if defined(PLATFORM_ESP32S3_SUPERMINI)
         platformName = "ESP32-S3";
+    #elif defined(PLATFORM_ESP32S3_GEEK)
+        platformName = "ESP32-S3 GEEK";
+    #elif defined(PLATFORM_ESP32S3_LCDWIKI_28)
+        platformName = "LCDWIKI28";
+    #elif defined(PLATFORM_ESP32S3_JC3248W535)
+        platformName = "JC3248W535";
+    #elif defined(PLATFORM_ESP32S3_AMOLED_206)
+        platformName = "AMOLED206";
     #else
         platformName = "Unknown";
     #endif
@@ -2089,16 +2093,9 @@ String WebServerModule::getOrBuildSettingsPage() {
     unsigned long buildStart = millis();
     #endif
     
-    // Reserve memory voor grote HTML pagina (alleen voor platforms met voldoende geheugen)
-    // CYD24/CYD28 zonder PSRAM: skip reserve om DRAM overflow te voorkomen
-    #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
-        // CYD zonder PSRAM: geen reserve (cache nog niet geïmplementeerd anyway)
-        sPageCache = "";
-    #else
-        // ESP32-S3 e.d. met PSRAM: reserve memory
-        sPageCache.reserve(16000);
-        sPageCache = "";
-    #endif
+    // Reserve memory voor grote HTML pagina (ESP32-S3 en vergelijkbare boards)
+    sPageCache.reserve(16000);
+    sPageCache = "";
     
     // Build HTML page (we moeten renderSettingsHTML() aanpassen om naar String te schrijven)
     // Voor nu: gebruik renderSettingsHTML() direct en cache de response niet
