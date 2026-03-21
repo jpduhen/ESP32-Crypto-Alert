@@ -1834,7 +1834,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
             
             // FASE 7.2: UI Average label update verificatie logging
             #if DEBUG_CALCULATIONS
-            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : ((index == 4) ? "1d" : "7d")));
+            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : "?"));
             Serial.printf(F("[UI][Average] %s label set to '--' (no data)\n"), timeframe);
             #endif
         }
@@ -1849,7 +1849,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
             
             // FASE 7.2: UI Average label update verificatie logging
             #if DEBUG_CALCULATIONS
-            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : ((index == 4) ? "1d" : "7d")));
+            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : "?"));
             Serial.printf(F("[UI][Average] %s label updated: %.0f\n"), timeframe, averagePrices[index]);
             #endif
         }
@@ -1865,7 +1865,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
             
             // FASE 7.2: UI Average label update verificatie logging
             #if DEBUG_CALCULATIONS
-            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : ((index == 4) ? "1d" : "7d")));
+            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : "?"));
             Serial.printf(F("[UI][Average] %s label set to '--' (no data)\n"), timeframe);
             #endif
         }
