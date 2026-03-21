@@ -13,8 +13,8 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 5
-#define VERSION_MINOR 57
-#define VERSION_STRING "5.57"
+#define VERSION_MINOR 59
+#define VERSION_STRING "5.59"
 #endif
 
 // --- Debug Configuration ---
@@ -66,7 +66,6 @@
     #define CHART_WIDTH 240
     #define CHART_HEIGHT 60
     #define CHART_ALIGN_Y 26
-    #define HEADER_WIDTH 480
     #define PRICE_BOX_Y_START 85
     #define FONT_SIZE_TITLE_BTCEUR &lv_font_montserrat_14
     #define FONT_SIZE_TITLE_OTHER &lv_font_montserrat_12
@@ -264,17 +263,4 @@
 // Fallback: als SYMBOL_COUNT nog niet gedefinieerd is, gebruik default 3
 #ifndef SYMBOL_COUNT
 #define SYMBOL_COUNT 3
-#endif
-
-// Helper macros voor conditional compilation
-#if HAS_TOUCHSCREEN
-    #define TOUCHSCREEN_CODE(code) code
-#else
-    #define TOUCHSCREEN_CODE(code)
-#endif
-
-#if HAS_PHYSICAL_BUTTON
-    #define PHYSICAL_BUTTON_CODE(code) code
-#else
-    #define PHYSICAL_BUTTON_CODE(code)
 #endif
