@@ -8529,6 +8529,8 @@ static void setupWatchdog()
 {
     // Watchdog configuratie - platform-specifiek
     #ifdef PLATFORM_CYD24
+    // Alleen PLATFORM_CYD24: afwijkende work-around. PLATFORM_CYD28 en alle andere boards
+    // vallen onder de #else-tak (standaard esp_task_wdt_init met timeout).
     // Schakel task watchdog UIT voor Core 0 (UI task met LVGL)
     // LVGL rendering gebruikt veel CPU tijd en kan de IDLE task blokkeren
     // Door de watchdog uit te schakelen voorkomen we crashes tijdens rendering
@@ -8541,7 +8543,7 @@ static void setupWatchdog()
         Serial.println("[WDT] Watchdog UITGESCHAKELD voor Core 0 (LVGL rendering) - CYD 2.4 work-around");
     }
     #else
-    // Configureer task watchdog timeout (10 seconden) voor andere platforms
+    // Standaard task watchdog (o.a. PLATFORM_CYD28, ESP32-S3, TTGO, …): timeout 10 seconden.
     // ESP32 Arduino core initialiseert de watchdog al, dus eerst deinit dan init
     esp_err_t deinit_err = esp_task_wdt_deinit();
     if (deinit_err != ESP_OK && deinit_err != ESP_ERR_NOT_FOUND) {
@@ -8633,7 +8635,7 @@ static void setupMutex()
     }
 }
 
-// Alloceer ringbuffer-arrays: op PSRAM-borden (S3 e.d.) in SPIRAM, anders in INTERNAL (CYD/TTGO)
+// Alloceer ringbuffer-arrays (alle platforms): met PSRAM in SPIRAM, zonder PSRAM in INTERNAL heap (o.a. CYD/TTGO)
 static void allocateDynamicArrays()
 {
     if (fiveMinutePrices == nullptr) {
@@ -8779,7 +8781,7 @@ void setup()
     setupMutex();  // Mutex moet vroeg aangemaakt worden, maar tasks starten later
     logBootStage("after mutex");
     
-    // Alloceer dynamische arrays voor CYD zonder PSRAM (moet voor initialisatie)
+    // Ringbuffers en gerelateerde heap-arrays voor alle platforms (vroeg in setup, vóór verdere init)
     allocateDynamicArrays();
     logBootStage("after arrays");
     
@@ -8890,8 +8892,7 @@ void setup()
     logBootStage("after buildUI");
     
     // Force LVGL to render immediately after UI creation
-    // CYD 2.4 en CYD 2.8 (zonder PSRAM, single buffering): gebruik lv_refr_now() voor directe rendering
-    // CYD boards hebben geen PSRAM, dus altijd single buffering
+    // CYD 2.4 / 2.8: eerste render via lv_refr_now() (typisch single buffer; PSRAM ontbreekt vaak op deze boards)
     #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
     if (disp != NULL) {
         lv_refr_now(disp);
@@ -8906,9 +8907,10 @@ void setup()
     #endif
     logBootStage("after first render");
     
-    // Fase 7.2b: Minimale guard: controleer arrays vóór tasks starten
+    // Fase 7.2b: Extra defensieve guard vóór task-start (alleen CYD24/CYD28 zonder PSRAM, zie #if).
+    // Allocatiefouten worden al in allocateDynamicArrays() afgevangen (oneindige wacht bij mislukte malloc);
+    // deze check vangt nullptr-pointers af voordat FreeRTOS-tasks starten (aanvullend, niet de primaire alloc-foutpad).
     // Warm-start is de enige schrijver tijdens setup (tasks bestaan nog niet)
-    // Deze check voorkomt dat tasks starten met ongeldige arrays
     #if defined(PLATFORM_CYD24) || defined(PLATFORM_CYD28)
     if (!hasPSRAM()) {
         if (fiveMinutePrices == nullptr || fiveMinutePricesSource == nullptr ||
