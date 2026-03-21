@@ -123,10 +123,6 @@ extern bool queueAnchorSetting(float value, bool useCurrentPrice);
 // VERSION_STRING wordt gedefinieerd in platform_config.h (beschikbaar voor alle modules)
 // Geen fallback nodig omdat platform_config.h altijd wordt geïncludeerd
 extern void formatIPAddress(IPAddress ip, char* buffer, size_t bufferSize);
-// Fase 8.11.1: createFooter() dependencies (2-regel footer: lblFooterLine*, ramLabel)
-extern lv_obj_t *lblFooterLine1;
-extern lv_obj_t *lblFooterLine2;
-extern lv_obj_t *ramLabel;
 
 // Fase 8.5.2: updateTrendLabel() dependencies
 extern TrendDetector trendDetector;
@@ -144,8 +140,6 @@ extern uint8_t language;
 extern bool minuteArrayFilled;
 extern uint8_t minuteIndex;
 extern float lastFetchedPrice;
-extern bool hourArrayFilled;
-extern uint16_t hourIndex;
 extern uint8_t calcLivePctMinuteAverages(uint16_t windowMinutes);
 extern const char* getText(const char* nlText, const char* enText);
 // MINUTES_FOR_30MIN_CALC is een #define, niet een variabele
@@ -161,7 +155,6 @@ extern WarmStartStats warmStartStats;
 extern lv_obj_t *warmStartStatusLabel;
 // Fase 8.6.1: updateBTCEURCard() dependencies
 #include "../AnchorSystem/AnchorSystem.h"  // Voor AnchorConfigEffective struct
-extern TrendDetector trendDetector;
 extern AnchorSystem anchorSystem;
 extern float prices[];
 extern bool anchorActive;
@@ -192,9 +185,6 @@ extern uint8_t secondIndex;
 extern float averagePrices[];
 extern void findMinMaxInSecondPrices(float &minVal, float &maxVal);
 extern void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
-#if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
-extern void findMinMaxInLast2Hours(float &minVal, float &maxVal);
-#endif
 extern lv_obj_t *price1MinMaxLabel;
 extern lv_obj_t *price1MinMinLabel;
 extern lv_obj_t *price1MinDiffLabel;
@@ -238,9 +228,6 @@ extern lv_obj_t *volumeConfirmLabel;
 extern lv_obj_t *mediumTrendLabel;
 extern lv_obj_t *longTermTrendLabel;
 extern lv_obj_t *warmStartStatusLabel;
-extern lv_obj_t *lblFooterLine1;
-extern lv_obj_t *lblFooterLine2;
-extern lv_obj_t *ramLabel;
 extern lv_obj_t *chartVersionLabel;
 extern lv_obj_t *priceBox[];
 extern lv_obj_t *priceTitle[];
