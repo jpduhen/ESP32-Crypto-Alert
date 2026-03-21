@@ -431,17 +431,14 @@ bool warmStart1dValid = false;
 float warmStart1dMin = 0.0f;
 float warmStart1dMax = 0.0f;
 float warmStart1dAvg = 0.0f;
-bool warmStart1dUsingFallback = false;
 bool warmStart2hValid = false;
 float warmStart2hMin = 0.0f;
 float warmStart2hMax = 0.0f;
 float warmStart2hAvg = 0.0f;
-bool warmStart2hUsingFallback = false;
 bool warmStart7dValid = false;
 float warmStart7dMin = 0.0f;
 float warmStart7dMax = 0.0f;
 float warmStart7dAvg = 0.0f;
-bool warmStart7dUsingFallback = false;
 
 // Warm-start buffers voor 7d (voorkomt grote stack-allocaties)
 static float warmStartTemp1h7dPrices[168];
