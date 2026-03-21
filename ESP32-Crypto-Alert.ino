@@ -349,10 +349,7 @@ SemaphoreHandle_t gNetMutex = NULL;
 
 // Symbols array - eerste element wordt dynamisch ingesteld via bitvavoSymbol
 // Fase 8: UI data - gebruikt door UIController module
-#if defined(PLATFORM_ESP32S3_4848S040)
-char symbol0[16] = "BTC-EUR";
-extern const char *const symbols[SYMBOL_COUNT] = {symbol0, SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL, SYMBOL_1D_LABEL, SYMBOL_7D_LABEL};
-#elif defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
+#if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
 char symbol0[16] = "BTC-EUR";
 extern const char *const symbols[SYMBOL_COUNT] = {symbol0, SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL};
 #else
@@ -2037,126 +2034,6 @@ static WarmStartMode performWarmStart()
         Serial_printf(F("[WarmStart] 1h fetch onvoldoende candles (%d)\n"), count1h);
     }
 
-    #if defined(PLATFORM_ESP32S3_4848S040)
-    // 4c. Haal 1h candles op voor 7d UI stats (min/max/avg + ret_7d)
-    float *temp1h7dPrices = warmStartTemp1h7dPrices;
-    unsigned long *temp1h7dTimes = warmStartTemp1h7dTimes;
-    int count1h7d = 0;
-    const int maxRetries1h7d = 2;
-    for (int retry = 0; retry < maxRetries1h7d; retry++) {
-        if (retry > 0) {
-            Serial_printf(F("[WarmStart] 1h(7d) retry %d/%d...\n"), retry, maxRetries1h7d - 1);
-            yield();
-            delay(500);
-            lv_timer_handler();
-        }
-        lv_timer_handler();
-        count1h7d = fetchBitvavoCandles(bitvavoSymbol, "1h", 168, temp1h7dPrices, temp1h7dTimes, 168);
-        lv_timer_handler();
-        if (count1h7d >= 2) {
-            break;
-        }
-    }
-
-    if (count1h7d >= 2) {
-        // Sorteer 1h candles op tijd (oudste -> nieuwste)
-        for (int i = 1; i < count1h7d; i++) {
-            unsigned long t = temp1h7dTimes[i];
-            float p = temp1h7dPrices[i];
-            int j = i - 1;
-            while (j >= 0 && temp1h7dTimes[j] > t) {
-                temp1h7dTimes[j + 1] = temp1h7dTimes[j];
-                temp1h7dPrices[j + 1] = temp1h7dPrices[j];
-                j--;
-            }
-            temp1h7dTimes[j + 1] = t;
-            temp1h7dPrices[j + 1] = p;
-        }
-        float sum7d = 0.0f;
-        int validCount7d = 0;
-        float min7d = 0.0f;
-        float max7d = 0.0f;
-        bool firstValid7d = false;
-        for (int i = 0; i < count1h7d; i++) {
-            float price = temp1h7dPrices[i];
-            if (!isValidPrice(price)) {
-                continue;
-            }
-            validCount7d++;
-            if (!firstValid7d) {
-                min7d = price;
-                max7d = price;
-                firstValid7d = true;
-            } else {
-                if (price < min7d) min7d = price;
-                if (price > max7d) max7d = price;
-            }
-            sum7d += price;
-        }
-        if (firstValid7d && validCount7d > 0) {
-            warmStart7dMin = min7d;
-            warmStart7dMax = max7d;
-            warmStart7dAvg = sum7d / (float)validCount7d;
-            warmStart7dValid = true;
-        } else {
-            warmStart7dValid = false;
-        }
-        float spanHours7d = (count1h7d > 1) ? (float)(count1h7d - 1) * 1.0f : 0.0f;
-        float totalHours7d = (spanHours7d > 168.0f || spanHours7d <= 0.0f) ? 168.0f : spanHours7d;
-        if (computeRegressionPctFromSeriesWithTimes(temp1h7dPrices, temp1h7dTimes, count1h7d, totalHours7d, ret_7d)) {
-            hasRet7dWarm = true;
-            Serial_printf(F("[WarmStart][1h7d] ret_7d=%.4f%% (regressie over 7d)\n"),
-                          ret_7d);
-        } else {
-            hasRet7dWarm = false;
-        }
-        Serial_printf(F("[WarmStart][1h7d] count=%d, valid=%d, min=%.2f, max=%.2f, avg=%.2f\n"),
-                      count1h7d, warmStart7dValid ? 1 : 0, warmStart7dMin, warmStart7dMax, warmStart7dAvg);
-
-        // Fallback: als 1d stats niet beschikbaar zijn, gebruik laatste 24 uur uit 1h7d data
-        if (!warmStart1dValid && count1h7d >= 2) {
-            int take = (count1h7d > 24) ? 24 : count1h7d;
-            int start = count1h7d - take;
-            float sum1d = 0.0f;
-            int valid1d = 0;
-            float min1d = 0.0f;
-            float max1d = 0.0f;
-            bool firstValid1d = false;
-            for (int i = start; i < count1h7d; i++) {
-                float price = temp1h7dPrices[i];
-                if (!isValidPrice(price)) {
-                    continue;
-                }
-                if (!firstValid1d) {
-                    min1d = price;
-                    max1d = price;
-                    firstValid1d = true;
-                } else {
-                    if (price < min1d) min1d = price;
-                    if (price > max1d) max1d = price;
-                }
-                sum1d += price;
-                valid1d++;
-            }
-            if (firstValid1d && valid1d > 0) {
-                warmStart1dMin = min1d;
-                warmStart1dMax = max1d;
-                warmStart1dAvg = sum1d / (float)valid1d;
-                warmStart1dValid = true;
-                float spanHours1d = (take > 1) ? (float)(take - 1) * 1.0f : 0.0f;
-                float totalHours1d = (spanHours1d > 24.0f || spanHours1d <= 0.0f) ? 24.0f : spanHours1d;
-                if (!hasRet1dWarm &&
-                    computeRegressionPctFromSeries(&temp1h7dPrices[start], take, 1.0f, totalHours1d, ret_1d)) {
-                    hasRet1dWarm = true;
-                }
-            }
-        }
-    } else {
-        warmStart7dValid = false;
-        Serial_printf(F("[WarmStart] 1h(7d) fetch onvoldoende candles (%d)\n"), count1h7d);
-    }
-    #endif
-
     // Warm-start 7d regressie op basis van 7 dagelijkse candles (betrouwbaarder dan 1W)
     if (count1d >= 7) {
         const int startIdx = count1d - 7;  // laatste 7 candles (oudste -> nieuwste)
@@ -2379,18 +2256,10 @@ static WarmStartMode performWarmStart()
     #endif
     
     // Initialiseer prices array met warm-start waarden (voor directe UI weergave)
-    #if defined(PLATFORM_ESP32S3_4848S040) || defined(PLATFORM_ESP32S3_JC3248W535)
+    #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
     if (hasRet2h) {
         prices[3] = ret_2h;  // Zet 2h return direct na warm-start
     }
-    #if defined(PLATFORM_ESP32S3_4848S040)
-    if (hasRet1d) {
-        prices[4] = ret_1d;  // Zet 1d return direct na warm-start
-    }
-    if (hasRet7d) {
-        prices[5] = ret_7d;  // Zet 7d return direct na warm-start
-    }
-    #endif
     #endif
     
     // Bereken 2h gemiddelde na warm-start (voor UI weergave)
@@ -3498,7 +3367,7 @@ void netMutexUnlock(const char* taskName)
 // Fase 6.1: AlertEngine module gebruikt deze functies (extern declarations in AlertEngine.cpp)
 void findMinMaxInSecondPrices(float &minVal, float &maxVal);
 void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
-#if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
+#if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
 void findMinMaxInLast2Hours(float &minVal, float &maxVal);
 #endif
 TwoHMetrics computeTwoHMetrics();  // Compute 2-hour metrics uniformly from existing state
@@ -6766,202 +6635,6 @@ static float calculateReturnFromHourly(uint16_t hoursBack)
     return calculatePercentageReturn(priceNow, priceAgo);
 }
 
-// Compute average/min/max over last 24 hours from hourly buffer
-// Returns true if at least 2 valid hourly samples are available
-bool computeStatsLast24Hours(float &avgVal, float &minVal, float &maxVal)
-{
-    avgVal = 0.0f;
-    minVal = 0.0f;
-    maxVal = 0.0f;
-    warmStart1dUsingFallback = false;
-    if (hourlyAverages == nullptr) {
-        if (warmStart1dValid) {
-            avgVal = warmStart1dAvg;
-            minVal = warmStart1dMin;
-            maxVal = warmStart1dMax;
-            warmStart1dUsingFallback = true;
-            return true;
-        }
-        return false;
-    }
-    uint16_t availableHours = calculateAvailableElements(hourArrayFilled, hourIndex, HOURS_FOR_7D);
-    if (availableHours < 24) {
-        if (warmStart1dValid) {
-            avgVal = warmStart1dAvg;
-            minVal = warmStart1dMin;
-            maxVal = warmStart1dMax;
-            warmStart1dUsingFallback = true;
-            return true;
-        }
-        if (availableHours < 2) {
-            return false;
-        }
-    }
-    uint16_t count = (availableHours < 24) ? availableHours : 24;
-    uint16_t lastHourIdx = getLastWrittenIndex(hourIndex, HOURS_FOR_7D);
-    bool firstValid = false;
-    float sum = 0.0f;
-    uint16_t validCount = 0;
-    for (uint16_t i = 0; i < count; i++) {
-        int32_t idx = (int32_t)lastHourIdx - (int32_t)i;
-        if (idx < 0) idx += HOURS_FOR_7D;
-        float price = hourlyAverages[idx];
-        if (!isValidPrice(price)) {
-            continue;
-        }
-        if (!firstValid) {
-            minVal = price;
-            maxVal = price;
-            firstValid = true;
-        } else {
-            if (price < minVal) minVal = price;
-            if (price > maxVal) maxVal = price;
-        }
-        sum += price;
-        validCount++;
-    }
-    if (!firstValid || validCount == 0) {
-        if (warmStart1dValid) {
-            avgVal = warmStart1dAvg;
-            minVal = warmStart1dMin;
-            maxVal = warmStart1dMax;
-            warmStart1dUsingFallback = true;
-            return true;
-        }
-        return false;
-    }
-    avgVal = sum / (float)validCount;
-    return true;
-}
-
-// Compute average/min/max over last 2 hours from minute buffer, fallback to warm-start
-bool computeStatsLast2Hours(float &avgVal, float &minVal, float &maxVal)
-{
-    avgVal = 0.0f;
-    minVal = 0.0f;
-    maxVal = 0.0f;
-    warmStart2hUsingFallback = false;
-    // Als live 2h nog niet betrouwbaar is, gebruik warm-start stats
-    if (!hasRet2hLive && warmStart2hValid) {
-        avgVal = warmStart2hAvg;
-        minVal = warmStart2hMin;
-        maxVal = warmStart2hMax;
-        warmStart2hUsingFallback = true;
-        return true;
-    }
-    uint8_t availableMinutes = minuteArrayFilled ? MINUTES_FOR_30MIN_CALC : minuteIndex;
-    if (availableMinutes < 2) {
-        if (warmStart2hValid) {
-            avgVal = warmStart2hAvg;
-            minVal = warmStart2hMin;
-            maxVal = warmStart2hMax;
-            warmStart2hUsingFallback = true;
-            return true;
-        }
-        return false;
-    }
-    uint8_t count = (availableMinutes < 120) ? availableMinutes : 120;
-    bool firstValid = false;
-    float sum = 0.0f;
-    uint16_t validCount = 0;
-    for (uint8_t i = 1; i <= count; i++) {
-        uint8_t idx = (minuteIndex - i + MINUTES_FOR_30MIN_CALC) % MINUTES_FOR_30MIN_CALC;
-        float price = minuteAverages[idx];
-        if (!isValidPrice(price)) {
-            continue;
-        }
-        if (!firstValid) {
-            minVal = price;
-            maxVal = price;
-            firstValid = true;
-        } else {
-            if (price < minVal) minVal = price;
-            if (price > maxVal) maxVal = price;
-        }
-        sum += price;
-        validCount++;
-    }
-    if (!firstValid || validCount == 0) {
-        if (warmStart2hValid) {
-            avgVal = warmStart2hAvg;
-            minVal = warmStart2hMin;
-            maxVal = warmStart2hMax;
-            warmStart2hUsingFallback = true;
-            return true;
-        }
-        return false;
-    }
-    avgVal = sum / (float)validCount;
-    return true;
-}
-
-// Compute average/min/max over last 7 days from hourly buffer, fallback to warm-start
-bool computeStatsLast7Days(float &avgVal, float &minVal, float &maxVal)
-{
-    avgVal = 0.0f;
-    minVal = 0.0f;
-    maxVal = 0.0f;
-    warmStart7dUsingFallback = false;
-    if (hourlyAverages == nullptr) {
-        if (warmStart7dValid) {
-            avgVal = warmStart7dAvg;
-            minVal = warmStart7dMin;
-            maxVal = warmStart7dMax;
-            warmStart7dUsingFallback = true;
-            return true;
-        }
-        return false;
-    }
-    uint16_t availableHours = calculateAvailableElements(hourArrayFilled, hourIndex, HOURS_FOR_7D);
-    if (availableHours < 168) {
-        if (warmStart7dValid) {
-            avgVal = warmStart7dAvg;
-            minVal = warmStart7dMin;
-            maxVal = warmStart7dMax;
-            warmStart7dUsingFallback = true;
-            return true;
-        }
-        if (availableHours < 2) {
-            return false;
-        }
-    }
-    uint16_t count = (availableHours < 168) ? availableHours : 168;
-    uint16_t lastHourIdx = getLastWrittenIndex(hourIndex, HOURS_FOR_7D);
-    bool firstValid = false;
-    float sum = 0.0f;
-    uint16_t validCount = 0;
-    for (uint16_t i = 0; i < count; i++) {
-        int32_t idx = (int32_t)lastHourIdx - (int32_t)i;
-        if (idx < 0) idx += HOURS_FOR_7D;
-        float price = hourlyAverages[idx];
-        if (!isValidPrice(price)) {
-            continue;
-        }
-        if (!firstValid) {
-            minVal = price;
-            maxVal = price;
-            firstValid = true;
-        } else {
-            if (price < minVal) minVal = price;
-            if (price > maxVal) maxVal = price;
-        }
-        sum += price;
-        validCount++;
-    }
-    if (!firstValid || validCount == 0) {
-        if (warmStart7dValid) {
-            avgVal = warmStart7dAvg;
-            minVal = warmStart7dMin;
-            maxVal = warmStart7dMax;
-            warmStart7dUsingFallback = true;
-            return true;
-        }
-        return false;
-    }
-    avgVal = sum / (float)validCount;
-    return true;
-}
-
 // Calculate linear trend over last 24 hours (1 day) using linear regression
 // Returns slope as percentage per day
 // Positive value = rising trend, negative value = falling trend
@@ -7206,9 +6879,9 @@ void findMinMaxInLast30Minutes(float &minVal, float &maxVal)
     bool result = findMinMaxInArray(minuteAverages, MINUTES_FOR_30MIN_CALC, minuteIndex, minuteArrayFilled, 30, true, minVal, maxVal);
 }
 
-#if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
+#if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
 // Find min and max values in last 2 hours (120 minutes) of minuteAverages array
-// Platforms met 2h-box (4-symbol LCDWIKI/JC3248; optioneel legacy 6-symbol define)
+// Platforms met 2h-box (LCDWIKI / JC3248)
 // Fase 2.1: Geoptimaliseerd: gebruikt generic findMinMaxInArray() helper
 void findMinMaxInLast2Hours(float &minVal, float &maxVal)
 {
@@ -7217,16 +6890,12 @@ void findMinMaxInLast2Hours(float &minVal, float &maxVal)
 #endif
 
 // Compute 2-hour metrics uniformly from existing state
-// Gebruikt averagePrices[3]+findMinMaxInLast2Hours (legacy 6-symbol) of minuteAverages (JC3248/LCDWIKI), hasRet2h
+// Gebruikt minuteAverages (JC3248/LCDWIKI), hasRet2h
 TwoHMetrics computeTwoHMetrics()
 {
     TwoHMetrics metrics;
     
-    #if defined(PLATFORM_ESP32S3_4848S040)
-    metrics.avg2h = averagePrices[3];
-    findMinMaxInLast2Hours(metrics.low2h, metrics.high2h);
-    #else
-    // JC3248 / LCDWIKI / andere: bereken 2h avg/min/max uit minuteAverages
+    // JC3248 / LCDWIKI: bereken 2h avg/min/max uit minuteAverages
     metrics.avg2h = 0.0f;
     metrics.low2h = 0.0f;
     metrics.high2h = 0.0f;
@@ -7268,7 +6937,6 @@ TwoHMetrics computeTwoHMetrics()
             metrics.avg2h = last120Sum / last120Count;
         }
     }
-    #endif
     
     // Valid check: avg2h > 0, high2h > 0, low2h > 0, high2h >= low2h, en hasRet2h
     metrics.valid = (metrics.avg2h > 0.0f) && 
@@ -7834,27 +7502,14 @@ void fetchPrice()
                 prices[2] = 0.0f; // Reset naar 0 om aan te geven dat er nog geen data is
             }
             
-            // 2h return op index 3 (4-/6-symbol platforms)
-            #if defined(PLATFORM_ESP32S3_4848S040) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_LCDWIKI_28)
+            // 2h return op index 3 (4-symbol platforms)
+            #if defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_LCDWIKI_28)
             // ret_2h wordt nu altijd berekend in calculateReturn2Hours(), ook als er minder dan 120 minuten zijn
             // Het berekent een return op basis van beschikbare data (minimaal 2 minuten nodig)
             if (hasRet2h) {
             prices[3] = ret_2h;
             } else {
                 prices[3] = 0.0f; // Reset naar 0 om aan te geven dat er nog geen data is
-            }
-            #endif
-            
-            #if defined(PLATFORM_ESP32S3_4848S040)
-            if (hasRet1d) {
-                prices[4] = ret_1d;
-            } else {
-                prices[4] = 0.0f;
-            }
-            if (hasRet7d) {
-                prices[5] = ret_7d;
-            } else {
-                prices[5] = 0.0f;
             }
             #endif
             
@@ -8177,7 +7832,7 @@ static void logBootStage(const char* stage)
 static void setupSerialAndDevice()
 {
     // ESP32-S3 fix: Serial moet als ALLER EERSTE worden geïnitialiseerd
-    #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK) || defined(PLATFORM_ESP32S3_4848S040) || defined(ARDUINO_ESP32S3_DEV)
+    #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK) || defined(ARDUINO_ESP32S3_DEV)
     Serial.begin(115200);
     delay(800); // ESP32-S3 heeft tijd nodig voor Serial stabilisatie
     Serial.println("\n\n=== ESP32-S3 Crypto Monitor Starting ===");
@@ -8267,8 +7922,6 @@ static void setupDisplay()
     // ESP32-S3 ST7789-boards: standaard geen inversie
     #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     g_displayBackend->invertDisplay(false); // Super Mini / GEEK: geen inversie nodig (ST7789)
-    #elif defined(PLATFORM_ESP32S3_4848S040)
-    g_displayBackend->invertDisplay(false); // Legacy 6-symbol build: geen kleurinversie (basis)
     #elif defined(PLATFORM_LCDWIKI28_INVERT_COLORS)
     g_displayBackend->invertDisplay(true); // LCDWIKI 2.8: kleurinversie nodig
     #else
@@ -9628,12 +9281,6 @@ void loop()
 // Set the brightness of the display to GFX_BRIGHTNESS
 void setDisplayBrigthness()
 {
-    #if defined(PLATFORM_ESP32S3_4848S040)
-    // Legacy 6-symbol build: backlight volledig aan (board-specifiek gedrag)
-    pinMode(GFX_BL, OUTPUT);
-    digitalWrite(GFX_BL, HIGH);
-    #else
     ledcAttachChannel(GFX_BL, 1000, 8, 1);
     ledcWrite(GFX_BL, SCREEN_BRIGHTNESS);
-    #endif
 }
