@@ -203,7 +203,7 @@
     #define SYMBOL_1MIN_LABEL "1 min"
     #define SYMBOL_30MIN_LABEL "30 min"
     #define SYMBOL_2H_LABEL "2h"
-    // 320px scherm: zelfde contentbreedte als prijskaarten (LV_PCT(100)), niet CYD 240-default.
+    // 320px scherm: zelfde contentbreedte als prijskaarten (LV_PCT(100)), niet de smalle 240px-fallback.
     #define CHART_WIDTH 320
     #define CHART_HEIGHT 72
     #define CHART_ALIGN_Y 24

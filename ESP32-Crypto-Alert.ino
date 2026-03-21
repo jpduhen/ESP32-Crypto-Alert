@@ -1,5 +1,5 @@
 // Tutorial : https://youtu.be/JqQEG0eipic
-// Unified Crypto Monitor - Supports CYD 2.4/2.8, ESP32-S3 boards, enz.
+// Unified Crypto Monitor — ESP32-S3 platforms (o.a. GEEK, Super Mini, LCDWIKI 2.8, JC3248W535, AMOLED)
 // Select platform in platform_config.h
 
 #define LV_CONF_INCLUDE_SIMPLE // Use the lv_conf.h included in this project, to configure see https://docs.lvgl.io/master/get-started/platforms/arduino.html
@@ -127,7 +127,7 @@ DisplayBackend *g_displayBackend = nullptr;
     
     // DEBUG_CALCULATIONS logging werkt altijd, ongeacht DEBUG_BUTTON_ONLY
     // WAARSCHUWING: DEBUG_CALCULATIONS gebruikt DRAM voor debug strings
-    // Voor CYD (geen PSRAM) wordt dit standaard UIT gezet in platform_config.h
+    // Bij gebrek aan PSRAM is uitgebreide debug meestal uit (DRAM); zie platform_config.h
     #if DEBUG_CALCULATIONS
         #undef Serial_printf
         #undef Serial_println
@@ -318,7 +318,7 @@ DisplayBackend *g_displayBackend = nullptr;
 // Global Variables
 // ============================================================================
 
-// Touchscreen functionaliteit volledig verwijderd - CYD's gebruiken nu fysieke boot knop (GPIO 0)
+// Touchscreen: niet gebruikt; fysieke boot-knop (GPIO 0) — zie ook comment bij includes.
 
 // LVGL Display global variables
 // Fase 8: Display state - gebruikt door UIController module
@@ -330,9 +330,9 @@ size_t disp_draw_buf_size = 0;  // Buffer grootte in bytes (voor logging)
 // Fase 8: UI object pointers - gebruikt door UIController module (zie src/UIController/UIController.h)
 lv_obj_t *chart;
 lv_chart_series_t *dataSeries;     // Blauwe serie voor alle punten
-lv_obj_t *lblFooterLine1; // Footer regel 1 (alleen voor CYD: dBm links, RAM rechts)
-lv_obj_t *lblFooterLine2; // Footer regel 2 (alleen voor CYD: IP links, versie rechts)
-lv_obj_t *ramLabel; // RAM label rechts op regel 1 (alleen voor CYD)
+lv_obj_t *lblFooterLine1; // Footer regel 1 (2-regel footer: RSSI links op regel 1)
+lv_obj_t *lblFooterLine2; // Footer regel 2 (IP op regel 2; versie via chartVersionLabel)
+lv_obj_t *ramLabel; // RAM rechts op regel 1 (2-regel footer-layout)
 
 // One card per symbol
 // Fase 8: UI object pointers - gebruikt door UIController module
@@ -563,7 +563,7 @@ uint32_t minRange;
 // chartMaxLabel verwijderd - niet meer nodig
 
 // Fase 8: UI object pointers - gebruikt door UIController module (zie src/UIController/UIController.h)
-lv_obj_t *chartTitle;     // Label voor chart titel (symbool) - alleen voor CYD
+lv_obj_t *chartTitle;     // Label voor chart titel / device-id (platforms met deze header)
 lv_obj_t *chartVersionLabel; // Label voor versienummer (rechts bovenste regel)
 lv_obj_t *chartDateLabel; // Label voor datum rechtsboven (vanaf pixel 180)
 lv_obj_t *chartTimeLabel; // Label voor tijd rechtsboven
@@ -575,15 +575,15 @@ lv_obj_t *price1MinDiffLabel; // Label voor verschil tussen max en min in 1 min 
 lv_obj_t *price30MinMaxLabel; // Label voor max waarde in 30 min buffer
 lv_obj_t *price30MinMinLabel; // Label voor min waarde in 30 min buffer
 lv_obj_t *price30MinDiffLabel; // Label voor verschil tussen max en min in 30 min buffer
-lv_obj_t *price2HMaxLabel = nullptr; // Label voor max waarde in 2h buffer (alleen CYD, nullptr voor andere platforms)
-lv_obj_t *price2HMinLabel = nullptr; // Label voor min waarde in 2h buffer (alleen CYD, nullptr voor andere platforms)
-lv_obj_t *price2HDiffLabel = nullptr; // Label voor verschil tussen max en min in 2h buffer (alleen CYD, nullptr voor andere platforms)
-lv_obj_t *price1DMaxLabel = nullptr; // Label voor max waarde in 1d buffer (4848S040)
-lv_obj_t *price1DMinLabel = nullptr; // Label voor min waarde in 1d buffer (4848S040)
-lv_obj_t *price1DDiffLabel = nullptr; // Label voor verschil tussen max en min in 1d buffer (4848S040)
-lv_obj_t *price7DMaxLabel = nullptr; // Label voor max waarde in 7d buffer (4848S040)
-lv_obj_t *price7DMinLabel = nullptr; // Label voor min waarde in 7d buffer (4848S040)
-lv_obj_t *price7DDiffLabel = nullptr; // Label voor verschil tussen max en min in 7d buffer (4848S040)
+lv_obj_t *price2HMaxLabel = nullptr; // 2h min/max/diff (LCDWIKI_28 / JC3248W535; nullptr op 3-symbol boards)
+lv_obj_t *price2HMinLabel = nullptr;
+lv_obj_t *price2HDiffLabel = nullptr;
+lv_obj_t *price1DMaxLabel = nullptr; // 1d/7d min/max/diff (alleen legacy 6-symbol build)
+lv_obj_t *price1DMinLabel = nullptr;
+lv_obj_t *price1DDiffLabel = nullptr;
+lv_obj_t *price7DMaxLabel = nullptr;
+lv_obj_t *price7DMinLabel = nullptr;
+lv_obj_t *price7DDiffLabel = nullptr;
 lv_obj_t *anchorLabel; // Label voor anchor price info (rechts midden, met percentage verschil)
 lv_obj_t *anchorMaxLabel; // Label voor "Pak winst" (rechts, groen, boven)
 lv_obj_t *anchorMinLabel; // Label voor "Stop loss" (rechts, rood, onder)
@@ -635,7 +635,7 @@ char anchorMaxLabelBuffer[18];  // Buffer voor anchor max label (max: "12345.67"
 char anchorLabelBuffer[24];  // Buffer voor anchor label (max: "12345.67" = ~8 chars)
 char anchorMinLabelBuffer[24];  // Buffer voor anchor min label (max: "12345.67" = ~8 chars)
 // Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
-char priceTitleBuffer[SYMBOL_COUNT][40];  // Buffers voor price titles (verkleind van 48 naar 40 bytes, bespaart 24 bytes voor CYD)
+char priceTitleBuffer[SYMBOL_COUNT][40];  // Buffers voor price titles (48→40 bytes om DRAM te sparen)
 char price1MinMaxLabelBuffer[18];  // Buffer voor 1m max label (max: "12345.67" = ~8 chars)
 char price1MinMinLabelBuffer[18];  // Buffer voor 1m min label (max: "12345.67" = ~8 chars)
 char price1MinDiffLabelBuffer[18];  // Buffer voor 1m diff label (max: "12345.67" = ~8 chars)
@@ -665,15 +665,15 @@ float lastPrice1MinDiffValue = -1.0f;  // Cache voor 1m diff
 float lastPrice30MinMaxValue = -1.0f;  // Cache voor 30m max
 float lastPrice30MinMinValue = -1.0f;  // Cache voor 30m min
 float lastPrice30MinDiffValue = -1.0f;  // Cache voor 30m diff
-float lastPrice2HMaxValue = -1.0f;  // Cache voor 2h max (alleen gebruikt voor CYD platforms)
-float lastPrice2HMinValue = -1.0f;  // Cache voor 2h min (alleen gebruikt voor CYD platforms)
-float lastPrice2HDiffValue = -1.0f;  // Cache voor 2h diff (alleen gebruikt voor CYD platforms)
-float lastPrice1DMaxValue = -1.0f;  // Cache voor 1d max (4848S040)
-float lastPrice1DMinValue = -1.0f;  // Cache voor 1d min (4848S040)
-float lastPrice1DDiffValue = -1.0f;  // Cache voor 1d diff (4848S040)
-float lastPrice7DMaxValue = -1.0f;  // Cache voor 7d max (4848S040)
-float lastPrice7DMinValue = -1.0f;  // Cache voor 7d min (4848S040)
-float lastPrice7DDiffValue = -1.0f;  // Cache voor 7d diff (4848S040)
+float lastPrice2HMaxValue = -1.0f;  // Cache voor 2h max (4-symbol boards met 2h-kaart)
+float lastPrice2HMinValue = -1.0f;
+float lastPrice2HDiffValue = -1.0f;
+float lastPrice1DMaxValue = -1.0f;  // Cache voor 1d/7d (legacy 6-symbol build)
+float lastPrice1DMinValue = -1.0f;
+float lastPrice1DDiffValue = -1.0f;
+float lastPrice7DMaxValue = -1.0f;
+float lastPrice7DMinValue = -1.0f;
+float lastPrice7DDiffValue = -1.0f;
 char lastPriceTitleText[SYMBOL_COUNT][32] = {""};  // Cache voor price titles (max: "30 min  +12.34%" = ~20 chars, verkleind van 48 naar 32 bytes)
 char priceLblBufferArray[SYMBOL_COUNT][24];  // Buffers voor average price labels (max: "12345.67" = ~8 chars)
 static char footerRssiBuffer[10];  // Buffer voor footer RSSI
@@ -702,7 +702,7 @@ bool secondArrayFilled = false;
 bool newPriceDataAvailable = false;  // Flag om aan te geven of er nieuwe prijsdata is voor grafiek update
 
 // Array van 300 posities voor laatste 300 seconden (5 minuten) - voor ret_5m berekening
-// Dynamisch gealloceerd: CYD zonder PSRAM → INTERNAL; S3 e.d. met PSRAM → SPIRAM (bespaart DRAM)
+// Dynamisch gealloceerd: zonder PSRAM → INTERNAL; met PSRAM → SPIRAM (bespaart DRAM)
 float *fiveMinutePrices = nullptr;
 DataSource *fiveMinutePricesSource = nullptr;
 uint16_t fiveMinuteIndex = 0;
@@ -710,7 +710,7 @@ bool fiveMinuteArrayFilled = false;
 
 // Array van 120 posities voor laatste 120 minuten (2 uur)
 // Elke minuut wordt het gemiddelde van de 60 seconden opgeslagen
-// Dynamisch gealloceerd: CYD zonder PSRAM → INTERNAL; S3 e.d. met PSRAM → SPIRAM (bespaart DRAM)
+// Dynamisch gealloceerd: zonder PSRAM → INTERNAL; met PSRAM → SPIRAM (bespaart DRAM)
 float *minuteAverages = nullptr;
 DataSource *minuteAveragesSource = nullptr;
 // Fase 4.2.9: static verwijderd zodat PriceData getters deze kunnen gebruiken
@@ -6672,7 +6672,7 @@ static float calculateLinearTrend2Hours()
         return 0.0f;
     }
     
-    // Calculate average price for display (update averagePrices[3]) — niet meer CYD-only; JC3248/LCDWIKI gebruiken computeTwoHMetrics-pad
+    // Calculate average price for display (update averagePrices[3]) — JC3248/LCDWIKI: computeTwoHMetrics-pad
     
     // Calculate slope (b)
     float n = (float)validPoints;
@@ -7208,7 +7208,7 @@ void findMinMaxInLast30Minutes(float &minVal, float &maxVal)
 
 #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
 // Find min and max values in last 2 hours (120 minutes) of minuteAverages array
-// Platforms met 2h-box (4- of 6-symbol)
+// Platforms met 2h-box (4-symbol LCDWIKI/JC3248; optioneel legacy 6-symbol define)
 // Fase 2.1: Geoptimaliseerd: gebruikt generic findMinMaxInArray() helper
 void findMinMaxInLast2Hours(float &minVal, float &maxVal)
 {
@@ -7217,7 +7217,7 @@ void findMinMaxInLast2Hours(float &minVal, float &maxVal)
 #endif
 
 // Compute 2-hour metrics uniformly from existing state
-// Gebruikt averagePrices[3]+findMinMaxInLast2Hours (4848) of minuteAverages (o.a. JC3248/LCDWIKI), hasRet2h
+// Gebruikt averagePrices[3]+findMinMaxInLast2Hours (legacy 6-symbol) of minuteAverages (JC3248/LCDWIKI), hasRet2h
 TwoHMetrics computeTwoHMetrics()
 {
     TwoHMetrics metrics;
@@ -7619,7 +7619,7 @@ void fetchPrice()
         #if defined(PLATFORM_ESP32S3_GEEK)
         const TickType_t apiMutexTimeout = pdMS_TO_TICKS(500); // GEEK: 500ms
         #else
-        const TickType_t apiMutexTimeout = pdMS_TO_TICKS(400); // CYD/ESP32-S3: 400ms voor betere mutex acquisitie
+        const TickType_t apiMutexTimeout = pdMS_TO_TICKS(400); // Standaard S3: 400ms voor betere mutex-acquisitie
         #endif
         
         // Geoptimaliseerd: betere mutex timeout handling met retry logica
@@ -7919,7 +7919,7 @@ static char lastDateText[11] = {0};  // Cache voor date label
 static char lastTimeText[9] = {0};   // Cache voor time label
 
 // ============================================================================
-// RGB LED Functions (alleen voor CYD platforms)
+// updateFooter() — IP / RSSI / RAM / versie in de footer (platform-afhankelijk)
 // ============================================================================
 
 // Helper functie om footer bij te werken
@@ -8015,7 +8015,7 @@ void updateFooter()
         lv_label_set_text(lblFooterLine2, ipStr);
     }
     
-    // CYD: Update versie label (rechtsonder, regel 2) - force update als cache leeg is
+    // 2-regel footer: versie label rechtsonder — force update als cache leeg is
     if (chartVersionLabel != nullptr) {
         if (strlen(lastVersionText) == 0 || strcmp(lastVersionText, VERSION_STRING) != 0) {
             lv_label_set_text(chartVersionLabel, VERSION_STRING);
@@ -8093,7 +8093,7 @@ void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
     lv_disp_flush_ready(disp);
 }
 
-// Physical button check function (voor boards met HAS_PHYSICAL_BUTTON, o.a. CYD)
+// Physical button check function (boards met HAS_PHYSICAL_BUTTON)
 #if HAS_PHYSICAL_BUTTON
 // Button debouncing - edge detection voor betere eerste-druk detectie
 // Fase 8.9.1: static verwijderd zodat UIController module deze kan gebruiken
@@ -8268,7 +8268,7 @@ static void setupDisplay()
     #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     g_displayBackend->invertDisplay(false); // Super Mini / GEEK: geen inversie nodig (ST7789)
     #elif defined(PLATFORM_ESP32S3_4848S040)
-    g_displayBackend->invertDisplay(false); // 4848S040: geen inversie (basisinstelling)
+    g_displayBackend->invertDisplay(false); // Legacy 6-symbol build: geen kleurinversie (basis)
     #elif defined(PLATFORM_LCDWIKI28_INVERT_COLORS)
     g_displayBackend->invertDisplay(true); // LCDWIKI 2.8: kleurinversie nodig
     #else
@@ -8291,7 +8291,7 @@ static void setupDisplay()
     setDisplayBrigthness();
     #endif
     
-    // Geef display tijd om te stabiliseren na initialisatie (vooral belangrijk voor CYD displays en ESP32-S3)
+    // Geef display tijd om te stabiliseren na initialisatie (ESP32-S3 / diverse panelen)
     delay(200); // ESP32-S3 heeft extra tijd nodig voor SPI stabilisatie
 }
 
@@ -9320,8 +9320,8 @@ void uiTask(void *parameter)
 {
     TickType_t lastWakeTime = xTaskGetTickCount();
     const TickType_t frequency = pdMS_TO_TICKS(UPDATE_UI_INTERVAL);
-    // LVGL handler frequentie - CYD heeft meer rendering overhead, dus iets vaker aanroepen
-    const TickType_t lvglFrequency = pdMS_TO_TICKS(3); // CYD/ESP32-S3: elke 3ms voor vloeiendere rendering
+    // LVGL task handler: vaker aanroepen voor vloeiende rendering op ESP32-S3
+    const TickType_t lvglFrequency = pdMS_TO_TICKS(3); // elke 3 ms
     TickType_t lastLvglTime = xTaskGetTickCount();
     
     Serial.println("[UI Task] Gestart op Core 0");
@@ -9349,7 +9349,7 @@ void uiTask(void *parameter)
         // Geoptimaliseerd: betere mutex timeout handling
         // UI task heeft lagere prioriteit: kortere timeout zodat API task voorrang krijgt
         // Als mutex niet beschikbaar is, skip deze update (UI kan volgende keer opnieuw proberen)
-        const TickType_t mutexTimeout = pdMS_TO_TICKS(50); // CYD/ESP32-S3: korte timeout zodat API task voorrang krijgt
+        const TickType_t mutexTimeout = pdMS_TO_TICKS(50); // Korte timeout: API-task heeft voorrang
         
         // UI mag niet lang in een mutex zitten (LVGL kan blocken).
         // We checken alleen kort of er geen writer actief is, en updaten daarna zonder lock.
@@ -9629,7 +9629,7 @@ void loop()
 void setDisplayBrigthness()
 {
     #if defined(PLATFORM_ESP32S3_4848S040)
-    // 4848S040: force backlight fully on (PWM kan dim uitvallen op GPIO38)
+    // Legacy 6-symbol build: backlight volledig aan (board-specifiek gedrag)
     pinMode(GFX_BL, OUTPUT);
     digitalWrite(GFX_BL, HIGH);
     #else

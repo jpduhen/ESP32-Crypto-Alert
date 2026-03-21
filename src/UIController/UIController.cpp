@@ -35,7 +35,7 @@ extern TwoHMetrics computeTwoHMetrics();  // Definitie in ESP32-Crypto-Alert.ino
 // We gebruiken ze via extern of via de .ino file die ze al heeft geïncludeerd
 // Als fallback definiëren we default waarden
 #ifndef CHART_WIDTH
-#define CHART_WIDTH 240  // Default voor CYD (wordt overschreven door platform_config.h als het later wordt gedefinieerd)
+#define CHART_WIDTH 240  // Fallback (wordt door platform_config.h overschreven)
 #endif
 #ifndef CHART_HEIGHT
 #define CHART_HEIGHT 60  // Default (wordt overschreven door platform_config.h als het later wordt gedefinieerd)
@@ -112,7 +112,7 @@ extern uint32_t maxRange;
 extern uint32_t minRange;
 extern char ntfyTopic[];
 extern void getDeviceIdFromTopic(const char* topic, char* buffer, size_t bufferSize);
-// Fase 8.11.1: createFooter() dependencies (CYD platforms)
+// Fase 8.11.1: createFooter() dependencies (2-regel footer: lblFooterLine*, ramLabel)
 extern lv_obj_t *lblFooterLine1;
 extern lv_obj_t *lblFooterLine2;
 extern lv_obj_t *ramLabel;
@@ -123,7 +123,7 @@ extern bool queueAnchorSetting(float value, bool useCurrentPrice);
 // VERSION_STRING wordt gedefinieerd in platform_config.h (beschikbaar voor alle modules)
 // Geen fallback nodig omdat platform_config.h altijd wordt geïncludeerd
 extern void formatIPAddress(IPAddress ip, char* buffer, size_t bufferSize);
-// Fase 8.11.1: createFooter() dependencies (CYD platforms)
+// Fase 8.11.1: createFooter() dependencies (2-regel footer: lblFooterLine*, ramLabel)
 extern lv_obj_t *lblFooterLine1;
 extern lv_obj_t *lblFooterLine2;
 extern lv_obj_t *ramLabel;
@@ -647,7 +647,7 @@ void UIController::createHeaderLabels() {
     lv_obj_set_width(chartTimeLabel, CHART_WIDTH);
     lv_obj_set_pos(chartTimeLabel, 0, 10);
     #elif defined(PLATFORM_ESP32S3_SUPERMINI)
-    // ESP32-S3: Ruimere layout met datum/tijd zoals CYD, maar met device ID links
+    // Super Mini: ruimere header met datum/tijd en device-id (beginletters)
     chartDateLabel = lv_label_create(lv_scr_act());
     ::chartDateLabel = chartDateLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(chartDateLabel, &lv_font_montserrat_12, 0);
@@ -702,7 +702,7 @@ void UIController::createHeaderLabels() {
     lv_obj_set_width(chartTimeLabel, 240);
     lv_obj_set_pos(chartTimeLabel, 240, 16);
     #elif defined(PLATFORM_ESP32S3_JC3248W535)
-    // JC3248 320×480: zelfde effectieve breedte als prijskaarten (geen 240px CYD-defaults).
+    // JC3248 320×480: zelfde effectieve breedte als prijskaarten (geen smalle 240px-fallback).
     chartDateLabel = lv_label_create(lv_scr_act());
     ::chartDateLabel = chartDateLabel;
     lv_obj_set_style_text_font(chartDateLabel, &lv_font_montserrat_12, 0);
@@ -721,7 +721,7 @@ void UIController::createHeaderLabels() {
     lv_obj_set_width(chartTimeLabel, LV_SIZE_CONTENT);
     lv_obj_align(chartTimeLabel, LV_ALIGN_TOP_RIGHT, -4, 4);
     #else
-    // CYD: Ruimere layout met datum/tijd op verschillende posities
+    // Standaard header: datum en tijd (o.a. LCDWIKI 2.8, AMOLED — geen GEEK/SuperMini/JC3248-tak)
     chartDateLabel = lv_label_create(lv_scr_act());
     ::chartDateLabel = chartDateLabel;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(chartDateLabel, &lv_font_montserrat_12, 0);
@@ -855,7 +855,7 @@ void UIController::createPriceBoxes() {
             lv_obj_align_to(priceLbl[i], priceTitle[i], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
         }
         
-        // Anchor labels alleen voor BTCEUR (i == 0) - CYD/ESP32-S3 layout (met percentages)
+        // Anchor labels alleen voor BTCEUR (i == 0) — standaard kaartlayout met percentages
         if (i == 0) {
             anchorLabel = lv_label_create(priceBox[i]);
             ::anchorLabel = anchorLabel;  // Fase 8.4.3: Synchroniseer
@@ -949,7 +949,7 @@ void UIController::createPriceBoxes() {
             lv_obj_align(price30MinMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
         }
         
-        // Min/Max/Diff labels voor 2h blok (index 3) - alleen voor CYD platforms
+        // Min/Max/Diff labels voor 2h blok (index 3) — LCDWIKI_28 / JC3248W535 (+ optioneel legacy 6-symbol)
         #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_4848S040)
         if (i == 3)
         {
@@ -984,7 +984,7 @@ void UIController::createPriceBoxes() {
         }
         #endif
         
-        // Min/Max/Diff labels voor 1d blok (index 4) - alleen voor 4848S040
+        // Min/Max/Diff labels voor 1d blok (index 4) — alleen legacy 6-symbol build
         #if defined(PLATFORM_ESP32S3_4848S040)
         if (i == 4)
         {
@@ -1076,7 +1076,7 @@ void UIController::updateDateTimeLabels()
             char dateStr[9]; // dd-mm-yy + null terminator = 9 karakters
             strftime(dateStr, sizeof(dateStr), "%d-%m-%y", &timeinfo);
             #else
-            // CYD/ESP32-S3: volledig formaat dd-mm-yyyy voor hogere resolutie
+            // Niet-GEEK: volledig formaat dd-mm-yyyy
             char dateStr[11]; // dd-mm-yyyy + null terminator = 11 karakters
             strftime(dateStr, sizeof(dateStr), "%d-%m-%Y", &timeinfo);
             #endif
@@ -1169,7 +1169,7 @@ void UIController::createFooter() {
     snprintf(versionBuffer, sizeof(versionBuffer), "%ukB     %s", freeRAM, VERSION_STRING); // 5 spaties
     lv_label_set_text(chartVersionLabel, versionBuffer);
     #else
-    // CYD: Footer met 2 regels
+    // 2-regel footer (RSSI/RAM regel 1, IP regel 2; versie via chartVersionLabel)
     lblFooterLine1 = lv_label_create(lv_scr_act());
     ::lblFooterLine1 = lblFooterLine1;  // Fase 8.4.3: Synchroniseer
     lv_obj_set_style_text_font(lblFooterLine1, FONT_SIZE_FOOTER, 0);
@@ -1917,7 +1917,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
     
     if (::priceTitle[index] != nullptr) {
         #if defined(PLATFORM_ESP32S3_4848S040)
-        // 6-symbol 4848: 2h/1d/7d + 1m/30m
+        // Legacy 6-symbol layout: 2h/1d/7d + 1m/30m
         bool shouldShowPct = (index == 3) ? (hasData2hMinimal) :
                              (index == 4) ? (hasData1dMinimal) :
                              (index == 5) ? (hasData7dMinimal) :
@@ -2232,7 +2232,7 @@ void UIController::updateChartSection(int32_t currentPrice, bool hasNewPriceData
     // Update chart range
     this->updateChartRange(currentPrice);
     
-    // Update chart title (CYD displays)
+    // Update chart title (device-id in titel waar van toepassing)
     if (::chartTitle != nullptr) {
         char deviceIdBuffer[16] = {0};
         const char* alertPos = strstr(ntfyTopic, "-alert");
@@ -2293,7 +2293,7 @@ void UIController::updateUI()
 }
 
 // Fase 8.9.1: checkButton() naar Module
-// Physical button check function (voor boards met HAS_PHYSICAL_BUTTON, o.a. CYD)
+// Physical button check function (boards met HAS_PHYSICAL_BUTTON)
 void UIController::checkButton()
 {
     unsigned long now = millis();
