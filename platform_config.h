@@ -4,17 +4,17 @@
 
 // Actief ondersteunde boards
 //#define PLATFORM_ESP32S3_SUPERMINI
-//#define PLATFORM_ESP32S3_GEEK
+#define PLATFORM_ESP32S3_GEEK
 //#define PLATFORM_ESP32S3_LCDWIKI_28
-#define PLATFORM_ESP32S3_JC3248W535  // JC3248W535CIY 3.5" QSPI (AXS15231B), 320x480
+//#define PLATFORM_ESP32S3_JC3248W535  // JC3248W535CIY 3.5" QSPI (AXS15231B), 320x480
 //#define PLATFORM_ESP32S3_AMOLED_206
 
 // --- Version Configuration ---
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 5
-#define VERSION_MINOR 66
-#define VERSION_STRING "5.66"
+#define VERSION_MINOR 67
+#define VERSION_STRING "5.67"
 #endif
 
 // --- Debug Configuration ---

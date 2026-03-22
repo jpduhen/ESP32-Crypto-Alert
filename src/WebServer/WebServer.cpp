@@ -1826,11 +1826,9 @@ void WebServerModule::handleStatus() {
     float high2h = 0.0f;
     float low2h = 0.0f;
     float range2hPct = 0.0f;
-    bool hasRet2hFlag = false;
-    bool hasRet30mFlag = false;
     bool apiFresh = false;
     uint32_t apiAgeMs = 0;
-    unsigned long currentTime = millis();
+    const unsigned long nowMs = millis();
     
     // Neem kort de dataMutex om globale waarden te kopiëren
     if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "handleStatus")) {
@@ -1855,8 +1853,6 @@ void WebServerModule::handleStatus() {
                 anchorDeltaPct = ((price - anchorPrice) / anchorPrice) * 100.0f;
             }
         }
-        hasRet2hFlag = ::hasRet2h;
-        hasRet30mFlag = ::hasRet30m;
         
         // Bereken 2h metrics (binnen mutex voor thread-safety)
         TwoHMetrics metrics = computeTwoHMetrics();
@@ -1866,7 +1862,7 @@ void WebServerModule::handleStatus() {
         range2hPct = metrics.rangePct;
         
         if (lastApiMs > 0) {
-            apiAgeMs = (currentTime >= lastApiMs) ? (currentTime - lastApiMs) : (ULONG_MAX - lastApiMs + currentTime);
+            apiAgeMs = (nowMs >= lastApiMs) ? (nowMs - lastApiMs) : (ULONG_MAX - lastApiMs + nowMs);
             apiFresh = (apiAgeMs < 3000);
         }
         
@@ -1933,7 +1929,7 @@ void WebServerModule::handleStatus() {
         range2hPct,
         apiFresh ? "true" : "false",
         static_cast<unsigned long>(apiAgeMs),
-        millis() / 1000,
+        nowMs / 1000,
         ESP.getFreeHeap(),
         heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)
     );

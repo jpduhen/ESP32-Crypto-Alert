@@ -406,11 +406,15 @@ float downtrendTakeProfitMultiplier = DOWNTREND_TAKE_PROFIT_MULTIPLIER_DEFAULT;
 // Fase 5.2: EffectiveThresholds struct verplaatst naar VolatilityTracker.h (al geïncludeerd boven)
 
 // WEB-PERF-3: static verwijderd zodat WebServerModule deze variabelen extern kan gebruiken
+// Langere returns: semantiek is verspreid over warm-start en live buffers.
+// ret_2h: trend-% (2h-candles of minuteAverages); niet hetzelfde als EUR avg/high/low/range in computeTwoHMetrics.
+// ret_1d: bij warm-start kan het eindigen op het 1h/24h-regressiepad (na een eerste 1d-candlepad).
+// ret_7d: bij warm-start kan de waarde van 1W-regressie naar 7× daily gaan als dat beschikbaar is.
 float ret_2h = 0.0f;  // 2-hour return percentage
 float ret_30m = 0.0f;  // 30-minute return percentage (calculated from minuteAverages or warm-start data)
 float ret_4h = 0.0f;  // 4-hour return percentage (calculated from API during warm-start)
-float ret_1d = 0.0f;  // 1-day return percentage (calculated from API during warm-start)
-float ret_7d = 0.0f;  // 7-day return percentage (calculated from API during warm-start or hourly buffer)
+float ret_1d = 0.0f;  // 1-day return percentage (warm-start en/of live 24h-buffer)
+float ret_7d = 0.0f;  // 7-day return percentage (warm-start en/of live hourly buffer)
 // Fase 8: UI state - gebruikt door UIController module
 bool hasRet2hWarm = false;  // Flag: ret_2h beschikbaar vanuit warm-start (minimaal 2 candles)
 bool hasRet30mWarm = false;  // Flag: ret_30m beschikbaar vanuit warm-start (minimaal 2 candles)
@@ -424,7 +428,7 @@ bool hasRet4hLive = false;  // Flag: ret_4h kan worden berekend uit live data (h
 bool hasRet2h = false;  // hasRet2hWarm || hasRet2hLive
 bool hasRet30m = false;  // hasRet30mWarm || hasRet30mLive
 bool hasRet4h = false;  // hasRet4hWarm || hasRet4hLive
-bool hasRet1d = false;  // hasRet1dWarm (1d alleen via warm-start, geen live berekening)
+bool hasRet1d = false;  // hasRet1dWarm || live 24h-ret wanneer buffer genoeg uren heeft (≥24)
 bool hasRet7d = false;  // hasRet7dWarm (warm-start) of live hourly buffer
 // Warm-start 1d stats voor vroege UI weergave (tot hourly buffer gevuld is)
 bool warmStart1dValid = false;
@@ -1860,6 +1864,7 @@ static WarmStartMode performWarmStart()
         }
     }
 
+    // Provenance ret_7d (warm-start): eerste waarde uit 1W-regressie; kan later vervangen worden door 7d daily (bewuste volgorde).
     if (count1w >= 2) {
         float spanHours = (float)(count1w - 1) * 168.0f;
         float totalHours = (spanHours > 168.0f || spanHours <= 0.0f) ? 168.0f : spanHours;
@@ -1915,6 +1920,7 @@ static WarmStartMode performWarmStart()
         }
     }
 
+    // Provenance ret_1d (warm-start): eerste schrijf via 1d-candles; kan worden overschreven door 1h/24h-blok hieronder.
     if (count1d >= 2) {
         float spanHours = (float)(count1d - 1) * 24.0f;
         float totalHours = (spanHours > 24.0f || spanHours <= 0.0f) ? 24.0f : spanHours;
@@ -1997,7 +2003,7 @@ static WarmStartMode performWarmStart()
         } else {
             warmStart1dValid = false;
         }
-        // Ret_1d: regressie over 24 uur (1h candles)
+        // Definitieve warm-start ret_1d als beide paden slagen: deze 1h/24h-regressie (overschrijft 1d-candlepad hierboven).
         float spanHours1d = (count1h > 1) ? (float)(count1h - 1) * 1.0f : 0.0f;
         float totalHours1d = (spanHours1d > 24.0f || spanHours1d <= 0.0f) ? 24.0f : spanHours1d;
         if (computeRegressionPctFromSeriesWithTimes(temp1hPrices, temp1hTimes, count1h, totalHours1d, ret_1d)) {
@@ -2013,6 +2019,7 @@ static WarmStartMode performWarmStart()
         Serial_printf(F("[WarmStart] 1h fetch onvoldoende candles (%d)\n"), count1h);
     }
 
+    // Vervangt 1W-ret_7d indien count1d>=7 en regressie slaagt (bewuste downstream-volgorde).
     // Warm-start 7d regressie op basis van 7 dagelijkse candles (betrouwbaarder dan 1W)
     if (count1d >= 7) {
         const int startIdx = count1d - 7;  // laatste 7 candles (oudste -> nieuwste)
@@ -2198,6 +2205,7 @@ static WarmStartMode performWarmStart()
         }
         float spanHours = (float)(count2h - 1) * 2.0f;
         float totalHours = (spanHours > 2.0f || spanHours <= 0.0f) ? 2.0f : spanHours;
+        // Warm-start ret_2h: globaal 2h-trend-% (API 2h candles); los van computeTwoHMetrics (EUR avg/high/low).
         if (computeRegressionPctFromSeriesWithTimes(temp2hPrices, temp2hTimes, count2h, totalHours, ret_2h)) {
             hasRet2hWarm = true;
             warmStartStats.loaded2h = count2h;
@@ -6655,8 +6663,8 @@ void findMinMaxInLast2Hours(float &minVal, float &maxVal)
 }
 #endif
 
-// Compute 2-hour metrics uniformly from existing state
-// Gebruikt minuteAverages (JC3248/LCDWIKI), hasRet2h
+// Compute 2-hour metrics: EUR avg/high/low/range uit minuteAverages; hasRet2h alleen voor metrics.valid.
+// Schrijft globale ret_2h niet (ret_2h = apart % uit warm-start/fetch -> calculateReturn2Hours).
 TwoHMetrics computeTwoHMetrics()
 {
     TwoHMetrics metrics;
@@ -7135,6 +7143,7 @@ void fetchPrice()
             // Update hasRet30m: beschikbaar als warm-start OF live OF 30+ minuten data beschikbaar
             hasRet30m = hasRet30mWarm || hasRet30mLive || (availableMinutes >= 30);
             
+            // Live ret_2h: globaal % uit calculateReturn2Hours() (minuteAverages); computeTwoHMetrics schrijft ret_2h niet.
             // Bereken ret_2h: herbereken wanneer live 2h-data beschikbaar is; anders warm-start behouden
             if (hasRet2hLive) {
                 ret_2h = calculateReturn2Hours();
