@@ -55,6 +55,10 @@ The complete English user guide is split into separate chapters for better reada
 10. [Chapter 10: Advanced Usage and Customization](docs/10-Advanced-Usage-and-Customization.md)  
     Modifying code, custom thresholds, OTA updates, and more
 
+## Developer notes
+
+- [Metric contract](docs/METRICS_CONTRACT.md) — firmware vs JSON vs MQTT names, regression/trend % vs classic returns, warm/mixed/live semantics, 2h trend vs 2h price stats.
+
 ## Quick Start
 1. Choose a compatible board (e.g., Cheap Yellow Display).
 2. Follow [Chapter 4: Installation](docs/04-Installation.md).

@@ -166,11 +166,13 @@ DisplayBackend *g_displayBackend = nullptr;
 
 // --- Chart Configuration ---
 #define PRICE_RANGE 200         // The range of price for the chart, adjust as needed
-#define POINTS_TO_CHART 60      // Number of points on the chart (60 points = 2 minutes at 2000ms API interval)
+#define POINTS_TO_CHART 60      // Number of points on the chart (60 points = 4 minutes at 4000ms API interval)
 
 // --- Timing Configuration ---
 #define UPDATE_UI_INTERVAL 1000   // UI update in ms (elke seconde)
-#define UPDATE_API_INTERVAL 2000   // API update in ms (verhoogd naar 2000ms voor betere stabiliteit bij retries en langzame netwerken)
+#define UPDATE_API_INTERVAL 4000   // API poll in ms (afgestemd op typische HTTPS-duur; connect/read timeouts ongewijzigd)
+// 1 Hz sampler voor korte horizons (secondPrices / fiveMinutePrices); los van API-poll
+#define PRICE_SAMPLE_INTERVAL_MS 1000
 #define UPDATE_WEB_INTERVAL 5000  // Web interface update in ms (elke 5 seconden)
 #define RECONNECT_INTERVAL 60000  // WiFi reconnect interval (60 seconden tussen reconnect pogingen)
 #define MQTT_RECONNECT_INTERVAL 5000  // MQTT reconnect interval (5 seconden)
@@ -304,9 +306,9 @@ DisplayBackend *g_displayBackend = nullptr;
 #define HOURS_FOR_7D 168
 
 // --- Return Calculation Configuration ---
-// Aantal waarden nodig voor return berekeningen gebaseerd op UPDATE_API_INTERVAL (2000ms)
-// 1 minuut = 60000ms / 2000ms = 30 waarden
-// 5 minuten = 300000ms / 2000ms = 150 waarden
+// Aantal waarden nodig voor return berekeningen gebaseerd op UPDATE_API_INTERVAL (4000ms)
+// 1 minuut = 60000ms / 4000ms = 15 waarden
+// 5 minuten = 300000ms / 4000ms = 75 waarden
 #define VALUES_FOR_1MIN_RETURN ((60000UL) / (UPDATE_API_INTERVAL))
 #define VALUES_FOR_5MIN_RETURN ((300000UL) / (UPDATE_API_INTERVAL))
 
@@ -423,6 +425,8 @@ bool hasRet1dWarm = false;  // Flag: ret_1d beschikbaar vanuit warm-start (minim
 bool hasRet7dWarm = false;  // Flag: ret_7d beschikbaar vanuit warm-start (minimaal 2 candles)
 bool hasRet2hLive = false;  // Flag: ret_2h kan worden berekend uit live data (minuteIndex >= 120)
 bool hasRet30mLive = false;  // Flag: ret_30m kan worden berekend uit live data (minuteIndex >= 30)
+uint8_t livePct5m = 0;  // % SOURCE_LIVE in actief 5m-secondenvenster (fiveMinutePrices)
+bool hasRet5mLive = false;  // true als 5m-ring gevuld en ≥80% van samples SOURCE_LIVE
 bool hasRet4hLive = false;  // Flag: ret_4h kan worden berekend uit live data (hourly buffer >= 4)
 // Combined flags: beschikbaar vanuit warm-start OF live data
 bool hasRet2h = false;  // hasRet2hWarm || hasRet2hLive
@@ -589,9 +593,15 @@ lv_obj_t *longTermTrendLabel; // Label voor lange termijn trend weergave (7d)
 // Fase 8: UI state - gebruikt door UIController module
 uint32_t lastApiMs = 0; // Time of last api call
 
-// Variabelen voor periodieke prijs herhaling (elke 2 seconden in ring buffer)
-// Dit zorgt voor exacte 1m en 5m berekeningen, ook als API calls langzaam zijn
-float lastFetchedPrice = 0.0f; // Laatste succesvol opgehaalde prijs
+// latestKnownPrice + 1 Hz sampler vullen secondPrices/fiveMinutePrices; API-poll blijft onafhankelijk
+float lastFetchedPrice = 0.0f; // Laatste succesvol opgehaalde prijs (UI + samplerbron-sync)
+// Optie B: gedeelde staat — alleen bijgewerkt door REST/WS; 1 Hz sampler schrijft buffers
+float latestKnownPrice = 0.0f;
+unsigned long latestKnownPriceMs = 0;
+#define LKP_SRC_NONE 0
+#define LKP_SRC_REST 1
+#define LKP_SRC_WS   2
+uint8_t latestKnownPriceSource = LKP_SRC_NONE;
 unsigned long lastPriceRepeatMs = 0; // Timestamp van laatste prijs herhaling
 
 // CPU usage measurement (alleen voor web interface)
@@ -714,7 +724,7 @@ VolumeRangeStatus lastVolumeRange5m;
 // Fase 9.1.4: static verwijderd zodat WebServerModule deze variabelen kan gebruiken
 bool warmStartEnabled = WARM_START_ENABLED_DEFAULT;
 uint8_t warmStart1mExtraCandles = WARM_START_1M_EXTRA_CANDLES_DEFAULT;
-uint8_t warmStart5mCandles = WARM_START_5M_CANDLES_DEFAULT;
+uint8_t warmStart5mCandles = WARM_START_5M_CANDLES_DEFAULT;  // UI/MQTT/telemetry; performWarmStart gebruikt dit niet meer (5m-seed uit 1m)
 uint8_t warmStart30mCandles = WARM_START_30M_CANDLES_DEFAULT;
 uint8_t warmStart2hCandles = WARM_START_2H_CANDLES_DEFAULT;
 bool warmStartSkip1m = WARM_START_SKIP_1M_DEFAULT;
@@ -904,7 +914,7 @@ unsigned long lastMqttReconnectAttempt = 0;
 
 // Boot-netwerk fasering: MQTT en WS iets uit fase om opstart-storm (connection refused) te verminderen.
 #ifndef CRYPTO_ALERT_BOOTNET_MQTT_DELAY_MS
-#define CRYPTO_ALERT_BOOTNET_MQTT_DELAY_MS 2500UL
+#define CRYPTO_ALERT_BOOTNET_MQTT_DELAY_MS 4000UL
 #endif
 #ifndef CRYPTO_ALERT_BOOTNET_WS_EXTRA_DELAY_MS
 #define CRYPTO_ALERT_BOOTNET_WS_EXTRA_DELAY_MS 2000UL
@@ -1763,20 +1773,19 @@ static WarmStartMode performWarmStart()
     // Bereken dynamische candle limits (PSRAM-aware clamping)
     bool psramAvailable = hasPSRAM();
     uint16_t req1mCandles = warmStartSkip1m ? 0 : calculate1mCandles();  // PSRAM-aware (max 150 met PSRAM, 80 zonder)
-    uint16_t max5m = psramAvailable ? 24 : 12;  // Met PSRAM: 24, zonder: 12
     uint16_t max30m = psramAvailable ? 12 : 6;  // Met PSRAM: 12, zonder: 6
     uint16_t max2h = psramAvailable ? 8 : 4;  // Met PSRAM: 8, zonder: 4
     #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
         if (psramAvailable) {
-            max5m = 60;
             max30m = 24;
             max2h = 12;
         }
     #endif
-    uint16_t req5mCandles = warmStartSkip5m ? 0 : clampUint16(warmStart5mCandles, 2, max5m);
     uint16_t req30mCandles = clampUint16(warmStart30mCandles, 2, max30m);
     uint16_t req2hCandles = clampUint16(warmStart2hCandles, 2, max2h);
     
+    float temp1mPrices[SECONDS_PER_MINUTE];
+    int count1m = 0;
     
     // 1. Vul 1m buffer voor volatiliteit (returns-only: alleen laatste closes nodig)
     if (warmStartSkip1m) {
@@ -1785,9 +1794,8 @@ static WarmStartMode performWarmStart()
         Serial.println(F("[WarmStart][1m] SKIPPED (warmStartSkip1m=1)"));
     } else {
     // Memory efficient: alleen laatste SECONDS_PER_MINUTE closes bewaren
-    float temp1mPrices[SECONDS_PER_MINUTE];  // Alleen laatste 60 nodig
     lv_timer_handler();  // Update spinner animatie vóór fetch
-    int count1m = fetchBitvavoCandles(bitvavoSymbol, "1m", req1mCandles, temp1mPrices, nullptr, SECONDS_PER_MINUTE);
+    count1m = fetchBitvavoCandles(bitvavoSymbol, "1m", req1mCandles, temp1mPrices, nullptr, SECONDS_PER_MINUTE);
     lv_timer_handler();  // Update spinner animatie na fetch
     if (count1m > 0) {
         // Vul secondPrices buffer (gebruik laatste count1m candles, max SECONDS_PER_MINUTE)
@@ -1812,33 +1820,33 @@ static WarmStartMode performWarmStart()
         }
     }
     
-    // 2. Vul 5m buffer (returns-only: alleen laatste 2 closes nodig)
+    // 2. Vul 5m-buffer: 300s uit laatste 5 opeenvolgende 1m-closes — per minuut lineair tussen vorige close en huidige close (geen echte OHLC open; geen aparte 5m API)
     if (warmStartSkip5m) {
         warmStartStats.loaded5m = 0;
         warmStartStats.warmStartOk5m = true;  // Skip is OK
         Serial.println(F("[WarmStart][5m] SKIPPED (warmStartSkip5m=1)"));
-    } else {
-    float temp5mPrices[2];
-    lv_timer_handler();  // Update spinner animatie vóór fetch
-    int count5m = fetchBitvavoCandles(bitvavoSymbol, "5m", req5mCandles, temp5mPrices, nullptr, 2);
-    lv_timer_handler();  // Update spinner animatie na fetch
-    if (count5m >= 2) {
-        // Interpoleer laatste 2 candles naar fiveMinutePrices buffer
-        // Elke 5m candle = 300 seconden, gebruik laatste candle voor hele buffer
-        float lastPrice = temp5mPrices[count5m - 1];
-        for (int s = 0; s < SECONDS_PER_5MINUTES; s++) {
-            fiveMinutePrices[s] = lastPrice;
-            fiveMinutePricesSource[s] = SOURCE_BINANCE;
+    } else if (count1m >= 5 && fiveMinutePrices != nullptr && fiveMinutePricesSource != nullptr) {
+        const int base = count1m - 5;
+        int outIdx = 0;
+        for (int j = 0; j < 5; j++) {
+            float closeVal = temp1mPrices[base + j];
+            float prevCloseVal = (base + j > 0) ? temp1mPrices[base + j - 1] : closeVal;
+            for (int s = 0; s < 60; s++) {
+                float tt = (float)s / 59.0f;
+                float p = prevCloseVal + (closeVal - prevCloseVal) * tt;
+                fiveMinutePrices[outIdx] = p;
+                fiveMinutePricesSource[outIdx] = SOURCE_BINANCE;
+                outIdx++;
+            }
         }
-            fiveMinuteIndex = SECONDS_PER_5MINUTES;
-            fiveMinuteArrayFilled = true;
-            // Fase 4.2.5: Synchroniseer PriceData state na warm-start
-            priceData.syncStateFromGlobals();
-        warmStartStats.loaded5m = count5m;
+        fiveMinuteIndex = 0;
+        fiveMinuteArrayFilled = true;
+        priceData.syncStateFromGlobals();
+        warmStartStats.loaded5m = 5;
         warmStartStats.warmStartOk5m = true;
     } else {
+        warmStartStats.loaded5m = 0;
         warmStartStats.warmStartOk5m = false;
-        }
     }
     
     yield();
@@ -2066,7 +2074,7 @@ static WarmStartMode performWarmStart()
         hasRet4hWarm = false;
     }
     
-    // 6. Vul 30m buffer via minuteAverages (returns-only: alleen laatste 2 closes nodig)
+    // 6. Warme ret_30m uit 30m API; minuutbuffer uit 1m-closes (geen platte 30m-close over 120 slots)
     // Retry-logica: probeer maximaal 3 keer als eerste poging faalt
     float temp30mPrices[2];
     unsigned long temp30mTimes[2];
@@ -2109,15 +2117,33 @@ static WarmStartMode performWarmStart()
             hasRet30mWarm = false;
         }
         
-        float lastPrice = temp30mPrices[count30m - 1];
-        for (int m = 0; m < MINUTES_FOR_30MIN_CALC; m++) {
-            minuteAverages[m] = lastPrice;
-            minuteAveragesSource[m] = SOURCE_BINANCE;
+        // Minuutbuffer: seed uit bestaande 1m-closes (chronologisch), geen platte vulling met 30m-close
+        if (minuteAverages != nullptr && minuteAveragesSource != nullptr) {
+            if (count1m > 0) {
+                int seedCount = (count1m < MINUTES_FOR_30MIN_CALC) ? count1m : MINUTES_FOR_30MIN_CALC;
+                int startIdx = count1m - seedCount;
+                for (int m = 0; m < MINUTES_FOR_30MIN_CALC; m++) {
+                    if (m < seedCount) {
+                        minuteAverages[m] = temp1mPrices[startIdx + m];
+                        minuteAveragesSource[m] = SOURCE_BINANCE;
+                    } else {
+                        minuteAverages[m] = 0.0f;
+                        minuteAveragesSource[m] = SOURCE_BINANCE;
+                    }
+                }
+                minuteIndex = (uint8_t)seedCount;
+                minuteArrayFilled = (seedCount == MINUTES_FOR_30MIN_CALC);
+                firstMinuteAverage = (seedCount > 0) ? minuteAverages[0] : 0.0f;
+            } else {
+                for (int m = 0; m < MINUTES_FOR_30MIN_CALC; m++) {
+                    minuteAverages[m] = 0.0f;
+                    minuteAveragesSource[m] = SOURCE_BINANCE;
+                }
+                minuteIndex = 0;
+                minuteArrayFilled = false;
+                firstMinuteAverage = 0.0f;
+            }
         }
-        // Array is nu vol (alle 120 posities gevuld), volgende write moet naar index 0
-        minuteIndex = 0;  // Reset naar 0 voor wraparound (niet MINUTES_FOR_30MIN_CALC wat 120 is!)
-        minuteArrayFilled = true;
-        firstMinuteAverage = minuteAverages[0];
         warmStartStats.loaded30m = count30m;
         warmStartStats.warmStartOk30m = true;
     } else {
@@ -3044,6 +3070,14 @@ static void processWsTextMessage(const char* wsBuf, size_t length)
         if (safeAtof(valBuf, parsed) && parsed > 0.0f) {
             wsLastPrice = roundToEuro(parsed);
             wsLastPriceMs = millis();
+            // Alleen gedeelde prijsstaat — geen directe buffer-write (sampler schrijft 1 Hz)
+            if (dataMutex != nullptr && safeMutexTake(dataMutex, pdMS_TO_TICKS(50), "WS latestKnownPrice")) {
+                latestKnownPrice = wsLastPrice;
+                latestKnownPriceMs = wsLastPriceMs;
+                latestKnownPriceSource = LKP_SRC_WS;
+                lastFetchedPrice = wsLastPrice;
+                safeMutexGive(dataMutex, "WS latestKnownPrice");
+            }
         }
     }
 
@@ -5873,6 +5907,28 @@ uint8_t calcLivePctMinuteAverages(uint16_t windowMinutes)
     return (liveCount * 100) / windowMinutes;
 }
 
+// Percentage SOURCE_LIVE in het actieve fiveMinutePrices-venster (zelfde count als calculateReturn5Minutes)
+uint8_t calcLivePctFiveMinuteWindow()
+{
+    DataSource* sources = priceData.getFiveMinutePricesSource();
+    if (sources == nullptr) {
+        return 0;
+    }
+    bool filled = priceData.getFiveMinuteArrayFilled();
+    uint16_t idx = priceData.getFiveMinuteIndex();
+    uint16_t count = filled ? (uint16_t)SECONDS_PER_5MINUTES : idx;
+    if (count == 0) {
+        return 0;
+    }
+    uint16_t liveCount = 0;
+    for (uint16_t i = 0; i < count; i++) {
+        if (sources[i] == SOURCE_LIVE) {
+            liveCount++;
+        }
+    }
+    return (uint8_t)((liveCount * 100U) / count);
+}
+
 // ============================================================================
 // Generic Min/Max Finding Helper (Fase 2.1: Geconsolideerde Min/Max Finding)
 // ============================================================================
@@ -6745,8 +6801,7 @@ TwoHMetrics computeTwoHMetrics()
 
 // Add price to second array (called every second)
 // Geoptimaliseerd: bounds checking toegevoegd voor robuustheid
-// Fase 4.2.11: Oude addPriceToSecondArray() functie verwijderd
-// Gebruik nu priceData.addPriceToSecondArray() in plaats daarvan
+// Korte buffers: priceData.addPriceToSecondArray() alleen vanuit priceRepeatTask (1 Hz sampler)
 
 // Update minute averages (called every minute)
 // Geoptimaliseerd: bounds checking en validatie toegevoegd
@@ -6858,6 +6913,10 @@ static void checkLiveMinuteBuffer()
 
 static void updateMinuteAverage()
 {
+    // Boot: geen WARN — eerste fetch kan vóór 1 Hz-sampler nog geen second-samples hebben
+    if (priceData.getSecondIndex() == 0 && !priceData.getSecondArrayFilled()) {
+        return;
+    }
     // Fase 4.2.7: Gebruik PriceData getters (parallel, arrays blijven globaal)
     // Bereken gemiddelde van de 60 seconden
     // FIX: Geef secondIndex door voor correcte ring buffer iteratie
@@ -7085,15 +7144,12 @@ void fetchPrice()
                 anchorSystem.updateAnchorMinMax(fetched);
             }
             
-            // Add price to second array (nieuwe prijs van API)
-            // Fase 4.2.4: Gebruik PriceData::addPriceToSecondArray() (inline implementatie)
-            priceData.addPriceToSecondArray(fetched);
-            
-            // Update laatste prijs voor periodieke herhaling
-            // Simpel: update alleen de globale variabele, timer task zorgt voor periodieke herhaling
-            extern float lastFetchedPrice;
+            // Korte buffers: alleen priceRepeatTask (1 Hz) roept addPriceToSecondArray aan — hier alleen latestKnownPrice
+            latestKnownPrice = fetched;
+            latestKnownPriceMs = millis();
+            latestKnownPriceSource = usedWs ? (uint8_t)LKP_SRC_WS : (uint8_t)LKP_SRC_REST;
             if (fetched > 0.0f) {
-                lastFetchedPrice = fetched; // Timer task gebruikt deze waarde elke 2 seconden
+                lastFetchedPrice = fetched;
             }
             
             // Update minute average every minute
@@ -7118,6 +7174,9 @@ void fetchPrice()
             // hasRet2hLive: true zodra er minimaal 120 minuten data is EN ≥80% daarvan SOURCE_LIVE is
             uint8_t livePct120 = calcLivePctMinuteAverages(120);
             hasRet2hLive = (availableMinutes >= 120 && livePct120 >= 80);
+            
+            livePct5m = calcLivePctFiveMinuteWindow();
+            hasRet5mLive = (priceData.getFiveMinuteArrayFilled() && livePct5m >= 80);
             
             // Update combined flags: beschikbaar vanuit warm-start OF live data
             hasRet2h = hasRet2hWarm || hasRet2hLive;
@@ -8598,7 +8657,7 @@ void wifiConnectionAndFetchPrice()
 // FreeRTOS Tasks
 // ============================================================================
 
-// FreeRTOS Task: API calls op Core 1 (elke 1.3 seconde)
+// FreeRTOS Task: API calls op Core 1 (interval = UPDATE_API_INTERVAL)
 void apiTask(void *parameter)
 {
     const uint32_t apiIntervalMs = UPDATE_API_INTERVAL;
@@ -8710,36 +8769,28 @@ void apiTask(void *parameter)
     }
 }
 
-// FreeRTOS Task: Periodieke prijs herhaling (elke 2 seconden)
-// Simpel en robuust: onafhankelijke task die elke 2000ms de laatste prijs in ring buffer zet
+// FreeRTOS Task: 1 Hz sampler — enige schrijver naar secondPrices/fiveMinutePrices (addPriceToSecondArray)
+// Bron: latestKnownPrice (REST of WS); API-poll blijft UPDATE_API_INTERVAL
 void priceRepeatTask(void *parameter)
 {
-    const uint32_t PRICE_REPEAT_INTERVAL_MS = UPDATE_API_INTERVAL; // 2000ms
-    
     // Wacht tot WiFi verbonden is
     while (WiFi.status() != WL_CONNECTED) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
     
-    Serial.println("[PriceRepeat] Task gestart");
+    Serial.println(F("[PriceSample] 1 Hz task gestart (PRICE_SAMPLE_INTERVAL_MS)"));
     
     for (;;)
     {
-        extern float lastFetchedPrice;
-        
-        // Voeg laatste prijs toe aan ring buffer elke 2 seconden
-        if (lastFetchedPrice > 0.0f) {
-            if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "priceRepeatTask")) {
-                priceData.addPriceToSecondArray(lastFetchedPrice);
-                safeMutexGive(dataMutex, "priceRepeatTask");
-                
-                // Log alleen bij belangrijke momenten (niet elke 2 seconden)
-                // Wraparound logging gebeurt al in addPriceToSecondArray()
+        if (dataMutex != nullptr && safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "priceRepeatTask")) {
+            float p = latestKnownPrice;
+            if (p > 0.0f) {
+                priceData.addPriceToSecondArray(p);
             }
+            safeMutexGive(dataMutex, "priceRepeatTask");
         }
         
-        // Wacht exact 2 seconden
-        vTaskDelay(pdMS_TO_TICKS(PRICE_REPEAT_INTERVAL_MS));
+        vTaskDelay(pdMS_TO_TICKS(PRICE_SAMPLE_INTERVAL_MS));
     }
 }
 

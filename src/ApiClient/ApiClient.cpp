@@ -561,7 +561,10 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
             #if !DEBUG_BUTTON_ONLY
             Serial.printf(F("[API] Fetching price from: %s\n"), url);
             #endif
+            // [BOOT] Minimale timing rond eerste HTTPS (hang/assert-diagnose; geen TCPIP-lock)
+            Serial.printf(F("[API][BOOT] before http.begin t=%lu ms\n"), (unsigned long)millis());
             if (!http.begin(url)) {
+                Serial.printf(F("[API][BOOT] http.begin failed t=%lu ms\n"), (unsigned long)millis());
                 #if !DEBUG_BUTTON_ONLY
                 if (attempt == MAX_RETRIES) {
                     Serial.printf(F("[API] http.begin() gefaald voor URL: %s\n"), url);
@@ -570,8 +573,9 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
                 shouldRetry = (attempt < MAX_RETRIES);
                 break;
             }
-            
+            Serial.printf(F("[API][BOOT] before GET t=%lu ms\n"), (unsigned long)millis());
             int code = http.GET();
+            Serial.printf(F("[API][BOOT] after GET code=%d t=%lu ms\n"), code, (unsigned long)millis());
             unsigned long requestTime = millis() - requestStart;
             lastCode = code;
             
