@@ -14,6 +14,7 @@
 #undef UICONTROLLER_INCLUDE
 
 #include "UIController.h"
+#include <math.h>  // fabsf — vlakke return-kleur in updatePriceCardColor()
 #include <lvgl.h>
 #include "../display/DisplayBackend.h"
 #include <WiFi.h>
@@ -1992,15 +1993,21 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
     
     if (shouldShowColor)
     {
-        lv_obj_set_style_text_color(::priceLbl[index],
-                                    pct >= 0 ? lv_palette_lighten(LV_PALETTE_GREEN, 4)
-                                             : lv_palette_lighten(LV_PALETTE_RED, 3),
-                                    0);
-        
-        lv_color_t bg = pct >= 0
-                            ? lv_color_mix(lv_palette_main(LV_PALETTE_GREEN), lv_color_black(), 127)
-                            : lv_color_mix(lv_palette_main(LV_PALETTE_RED), lv_color_black(), 127);
-        lv_obj_set_style_bg_color(::priceBox[index], bg, 0);
+        // ~0.00% return: data wel geldig, maar visueel neutraal (geen groen bij exacte nul)
+        static const float kFlatReturnPctEps = 0.005f;
+        const bool isFlatReturn = (fabsf(pct) < kFlatReturnPctEps);
+        if (isFlatReturn) {
+            lv_obj_set_style_text_color(::priceLbl[index], lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_bg_color(::priceBox[index], lv_color_black(), 0);
+        } else if (pct > 0.0f) {
+            lv_obj_set_style_text_color(::priceLbl[index], lv_palette_lighten(LV_PALETTE_GREEN, 4), 0);
+            lv_color_t bg = lv_color_mix(lv_palette_main(LV_PALETTE_GREEN), lv_color_black(), 127);
+            lv_obj_set_style_bg_color(::priceBox[index], bg, 0);
+        } else {
+            lv_obj_set_style_text_color(::priceLbl[index], lv_palette_lighten(LV_PALETTE_RED, 3), 0);
+            lv_color_t bg = lv_color_mix(lv_palette_main(LV_PALETTE_RED), lv_color_black(), 127);
+            lv_obj_set_style_bg_color(::priceBox[index], bg, 0);
+        }
     }
     else
     {
