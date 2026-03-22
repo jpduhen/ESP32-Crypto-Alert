@@ -14,6 +14,7 @@
 #undef UICONTROLLER_INCLUDE
 
 #include "UIController.h"
+#include <math.h>  // fabsf — vlakke return-kleur in updatePriceCardColor()
 #include <lvgl.h>
 #include "../display/DisplayBackend.h"
 #include <WiFi.h>
@@ -210,6 +211,39 @@ extern float lastPrice30MinDiffValue;
 extern float lastPrice2HMaxValue;
 extern float lastPrice2HMinValue;
 extern float lastPrice2HDiffValue;
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+extern void findMinMaxInFiveMinutePrices(float &minVal, float &maxVal);
+extern void findMinMaxInLast24Hours(float &minVal, float &maxVal);
+extern bool uiFiveMinuteHasMinimalData(void);
+extern lv_obj_t *price5mMaxLabel;
+extern lv_obj_t *price5mMinLabel;
+extern lv_obj_t *price5mDiffLabel;
+extern char price5mMaxLabelBuffer[20];
+extern char price5mMinLabelBuffer[20];
+extern char price5mDiffLabelBuffer[20];
+extern float lastPrice5mMaxValue;
+extern float lastPrice5mMinValue;
+extern float lastPrice5mDiffValue;
+extern lv_obj_t *price1dMaxLabel;
+extern lv_obj_t *price1dMinLabel;
+extern lv_obj_t *price1dDiffLabel;
+extern char price1dMaxLabelBuffer[20];
+extern char price1dMinLabelBuffer[20];
+extern char price1dDiffLabelBuffer[20];
+extern float lastPrice1dMaxValue;
+extern float lastPrice1dMinValue;
+extern float lastPrice1dDiffValue;
+extern void findMinMaxInLast7Days(float &minVal, float &maxVal);
+extern lv_obj_t *price7dMaxLabel;
+extern lv_obj_t *price7dMinLabel;
+extern lv_obj_t *price7dDiffLabel;
+extern char price7dMaxLabelBuffer[20];
+extern char price7dMinLabelBuffer[20];
+extern char price7dDiffLabelBuffer[20];
+extern float lastPrice7dMaxValue;
+extern float lastPrice7dMinValue;
+extern float lastPrice7dDiffValue;
+#endif
 extern char lastPriceTitleText[SYMBOL_COUNT][32];  // Verkleind van 48 naar 32 bytes
 extern char priceLblBufferArray[SYMBOL_COUNT][24];
 extern float lastPriceLblValueArray[SYMBOL_COUNT];
@@ -671,65 +705,84 @@ void UIController::createHeaderLabels() {
 
 // Fase 8.3.3: createPriceBoxes() verplaatst naar UIController module (parallel implementatie)
 void UIController::createPriceBoxes() {
-    for (uint8_t i = 0; i < SYMBOL_COUNT; ++i)
+    // JC3248: visuele volgorde spot → 1m → 5m → 30m → 2h → 1d → 7d; data-indexen 0..6
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+    static const uint8_t kJcDisplayOrder[] = {0, 1, 4, 2, 3, 5, 6};  // moet SYMBOL_COUNT entries hebben
+    lv_obj_t *prevVisBox = nullptr;
+#endif
+    for (uint8_t slot = 0; slot < SYMBOL_COUNT; ++slot)
     {
-        priceBox[i] = lv_obj_create(lv_scr_act());
-        ::priceBox[i] = priceBox[i];  // Fase 8.4.3: Synchroniseer met globale pointer
-        lv_obj_set_size(priceBox[i], LV_PCT(100), LV_SIZE_CONTENT);
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+        const uint8_t dataIndex = kJcDisplayOrder[slot];
+#else
+        const uint8_t dataIndex = slot;
+#endif
+        priceBox[dataIndex] = lv_obj_create(lv_scr_act());
+        ::priceBox[dataIndex] = priceBox[dataIndex];  // Fase 8.4.3: Synchroniseer met globale pointer
+        lv_obj_set_size(priceBox[dataIndex], LV_PCT(100), LV_SIZE_CONTENT);
 
-        if (i == 0) {
-            lv_obj_align(priceBox[i], LV_ALIGN_TOP_LEFT, 0, PRICE_BOX_Y_START);
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+        if (slot == 0) {
+            lv_obj_align(priceBox[dataIndex], LV_ALIGN_TOP_LEFT, 0, PRICE_BOX_Y_START);
+        } else {
+            lv_obj_align_to(priceBox[dataIndex], prevVisBox, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 3);
+        }
+        prevVisBox = priceBox[dataIndex];
+#else
+        if (dataIndex == 0) {
+            lv_obj_align(priceBox[dataIndex], LV_ALIGN_TOP_LEFT, 0, PRICE_BOX_Y_START);
         }
         else {
-            lv_obj_align_to(priceBox[i], priceBox[i - 1], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 3);
+            lv_obj_align_to(priceBox[dataIndex], priceBox[dataIndex - 1], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 3);
         }
+#endif
 
-    lv_obj_set_style_radius(priceBox[i], 6, 0);
-    lv_obj_set_style_pad_all(priceBox[i], 4, 0);
-    lv_obj_set_style_border_width(priceBox[i], 1, 0);
-    lv_obj_set_style_border_color(priceBox[i], lv_palette_main(LV_PALETTE_GREY), 0);
-    disableScroll(priceBox[i]);
+        lv_obj_set_style_radius(priceBox[dataIndex], 6, 0);
+        lv_obj_set_style_pad_all(priceBox[dataIndex], 4, 0);
+        lv_obj_set_style_border_width(priceBox[dataIndex], 1, 0);
+        lv_obj_set_style_border_color(priceBox[dataIndex], lv_palette_main(LV_PALETTE_GREY), 0);
+        disableScroll(priceBox[dataIndex]);
 
         // Symbol caption
-        priceTitle[i] = lv_label_create(priceBox[i]);
-        ::priceTitle[i] = priceTitle[i];  // Fase 8.4.3: Synchroniseer
-        if (i == 0) {
-            lv_obj_set_style_text_font(priceTitle[i], FONT_SIZE_TITLE_BTCEUR, 0);
+        priceTitle[dataIndex] = lv_label_create(priceBox[dataIndex]);
+        ::priceTitle[dataIndex] = priceTitle[dataIndex];  // Fase 8.4.3: Synchroniseer
+        if (dataIndex == 0) {
+            lv_obj_set_style_text_font(priceTitle[dataIndex], FONT_SIZE_TITLE_BTCEUR, 0);
         } else {
-            lv_obj_set_style_text_font(priceTitle[i], FONT_SIZE_TITLE_OTHER, 0);
+            lv_obj_set_style_text_font(priceTitle[dataIndex], FONT_SIZE_TITLE_OTHER, 0);
         }
-        if (i == 0) {
-            lv_obj_set_style_text_color(priceTitle[i], lv_color_white(), 0);
+        if (dataIndex == 0) {
+            lv_obj_set_style_text_color(priceTitle[dataIndex], lv_color_white(), 0);
         } else {
-            lv_obj_set_style_text_color(priceTitle[i], lv_color_white(), 0);
+            lv_obj_set_style_text_color(priceTitle[dataIndex], lv_color_white(), 0);
         }
-        lv_label_set_text(priceTitle[i], symbols[i]);
-        lv_obj_align(priceTitle[i], LV_ALIGN_TOP_LEFT, 0, 0);
-        if (i == 0) {
+        lv_label_set_text(priceTitle[dataIndex], symbols[dataIndex]);
+        lv_obj_align(priceTitle[dataIndex], LV_ALIGN_TOP_LEFT, 0, 0);
+        if (dataIndex == 0) {
             setBtcTitleLabel();
         }
         
         // Live price - platform-specifieke layout
-        priceLbl[i] = lv_label_create(priceBox[i]);
-        ::priceLbl[i] = priceLbl[i];  // Fase 8.4.3: Synchroniseer
-        if (i == 0) {
-            lv_obj_set_style_text_font(priceLbl[i], FONT_SIZE_PRICE_BTCEUR, 0);
+        priceLbl[dataIndex] = lv_label_create(priceBox[dataIndex]);
+        ::priceLbl[dataIndex] = priceLbl[dataIndex];  // Fase 8.4.3: Synchroniseer
+        if (dataIndex == 0) {
+            lv_obj_set_style_text_font(priceLbl[dataIndex], FONT_SIZE_PRICE_BTCEUR, 0);
         } else {
-            lv_obj_set_style_text_font(priceLbl[i], FONT_SIZE_PRICE_OTHER, 0);
+            lv_obj_set_style_text_font(priceLbl[dataIndex], FONT_SIZE_PRICE_OTHER, 0);
         }
         
         #if defined(PLATFORM_ESP32S3_GEEK)
-        if (i == 0) {
-            lv_obj_set_style_text_align(priceLbl[i], LV_TEXT_ALIGN_LEFT, 0);
-            lv_obj_set_style_text_color(priceLbl[i], getChartSeriesColor(), 0);
-            lv_obj_align_to(priceLbl[i], priceTitle[i], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
+        if (dataIndex == 0) {
+            lv_obj_set_style_text_align(priceLbl[dataIndex], LV_TEXT_ALIGN_LEFT, 0);
+            lv_obj_set_style_text_color(priceLbl[dataIndex], getChartSeriesColor(), 0);
+            lv_obj_align_to(priceLbl[dataIndex], priceTitle[dataIndex], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
         } else {
-            lv_obj_align_to(priceLbl[i], priceTitle[i], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
+            lv_obj_align_to(priceLbl[dataIndex], priceTitle[dataIndex], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
         }
         
-        // Anchor labels alleen voor BTCEUR (i == 0) - compacte GEEK-layout
-        if (i == 0) {
-            anchorMaxLabel = lv_label_create(priceBox[i]);
+        // Anchor labels alleen voor BTCEUR (dataIndex == 0) - compacte GEEK-layout
+        if (dataIndex == 0) {
+            anchorMaxLabel = lv_label_create(priceBox[dataIndex]);
             ::anchorMaxLabel = anchorMaxLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(anchorMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(anchorMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
@@ -737,7 +790,7 @@ void UIController::createPriceBoxes() {
             lv_obj_align(anchorMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14);
             lv_label_set_text(anchorMaxLabel, "");
             
-            anchorLabel = lv_label_create(priceBox[i]);
+            anchorLabel = lv_label_create(priceBox[dataIndex]);
             ::anchorLabel = anchorLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(anchorLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(anchorLabel, lv_palette_main(LV_PALETTE_GREY), 0);
@@ -745,7 +798,7 @@ void UIController::createPriceBoxes() {
             lv_obj_align(anchorLabel, LV_ALIGN_RIGHT_MID, 0, 0);
             lv_label_set_text(anchorLabel, "");
             
-            anchorMinLabel = lv_label_create(priceBox[i]);
+            anchorMinLabel = lv_label_create(priceBox[dataIndex]);
             ::anchorMinLabel = anchorMinLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(anchorMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(anchorMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
@@ -762,17 +815,17 @@ void UIController::createPriceBoxes() {
             anchorMinLabelBuffer[0] = '\0';
         }
         #else
-        if (i == 0) {
-            lv_obj_set_style_text_align(priceLbl[i], LV_TEXT_ALIGN_LEFT, 0);
-            lv_obj_set_style_text_color(priceLbl[i], getChartSeriesColor(), 0);
-            lv_obj_align_to(priceLbl[i], priceTitle[i], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
+        if (dataIndex == 0) {
+            lv_obj_set_style_text_align(priceLbl[dataIndex], LV_TEXT_ALIGN_LEFT, 0);
+            lv_obj_set_style_text_color(priceLbl[dataIndex], getChartSeriesColor(), 0);
+            lv_obj_align_to(priceLbl[dataIndex], priceTitle[dataIndex], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
         } else {
-            lv_obj_align_to(priceLbl[i], priceTitle[i], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
+            lv_obj_align_to(priceLbl[dataIndex], priceTitle[dataIndex], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
         }
         
-        // Anchor labels alleen voor BTCEUR (i == 0) — standaard kaartlayout met percentages
-        if (i == 0) {
-            anchorLabel = lv_label_create(priceBox[i]);
+        // Anchor labels alleen voor BTCEUR (dataIndex == 0) — standaard kaartlayout met percentages
+        if (dataIndex == 0) {
+            anchorLabel = lv_label_create(priceBox[dataIndex]);
             ::anchorLabel = anchorLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(anchorLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(anchorLabel, lv_palette_main(LV_PALETTE_GREY), 0);
@@ -780,7 +833,7 @@ void UIController::createPriceBoxes() {
             lv_obj_align(anchorLabel, LV_ALIGN_RIGHT_MID, 0, 0);
             lv_label_set_text(anchorLabel, "");
             
-            anchorMaxLabel = lv_label_create(priceBox[i]);
+            anchorMaxLabel = lv_label_create(priceBox[dataIndex]);
             ::anchorMaxLabel = anchorMaxLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(anchorMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(anchorMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
@@ -788,7 +841,7 @@ void UIController::createPriceBoxes() {
             lv_obj_align(anchorMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14);
             lv_label_set_text(anchorMaxLabel, "");
             
-            anchorMinLabel = lv_label_create(priceBox[i]);
+            anchorMinLabel = lv_label_create(priceBox[dataIndex]);
             ::anchorMinLabel = anchorMinLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(anchorMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(anchorMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
@@ -806,12 +859,12 @@ void UIController::createPriceBoxes() {
         }
         #endif
         
-        lv_label_set_text(priceLbl[i], "--");
+        lv_label_set_text(priceLbl[dataIndex], "--");
         
         // Min/Max/Diff labels voor 1 min blok
-        if (i == 1)
+        if (dataIndex == 1)
         {
-            price1MinMaxLabel = lv_label_create(priceBox[i]);
+            price1MinMaxLabel = lv_label_create(priceBox[dataIndex]);
             ::price1MinMaxLabel = price1MinMaxLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(price1MinMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(price1MinMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
@@ -819,7 +872,7 @@ void UIController::createPriceBoxes() {
             lv_label_set_text(price1MinMaxLabel, "--");
             lv_obj_align(price1MinMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14);
             
-            price1MinDiffLabel = lv_label_create(priceBox[i]);
+            price1MinDiffLabel = lv_label_create(priceBox[dataIndex]);
             ::price1MinDiffLabel = price1MinDiffLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(price1MinDiffLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(price1MinDiffLabel, lv_palette_main(LV_PALETTE_GREY), 0);
@@ -827,7 +880,7 @@ void UIController::createPriceBoxes() {
             lv_label_set_text(price1MinDiffLabel, "--");
             lv_obj_align(price1MinDiffLabel, LV_ALIGN_RIGHT_MID, 0, 0);
             
-            price1MinMinLabel = lv_label_create(priceBox[i]);
+            price1MinMinLabel = lv_label_create(priceBox[dataIndex]);
             ::price1MinMinLabel = price1MinMinLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(price1MinMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(price1MinMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
@@ -837,9 +890,9 @@ void UIController::createPriceBoxes() {
         }
         
         // Min/Max/Diff labels voor 30 min blok (index 2)
-        if (i == 2)
+        if (dataIndex == 2)
         {
-            price30MinMaxLabel = lv_label_create(priceBox[i]);
+            price30MinMaxLabel = lv_label_create(priceBox[dataIndex]);
             ::price30MinMaxLabel = price30MinMaxLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(price30MinMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(price30MinMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
@@ -847,7 +900,7 @@ void UIController::createPriceBoxes() {
             lv_label_set_text(price30MinMaxLabel, "--");
             lv_obj_align(price30MinMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14);
             
-            price30MinDiffLabel = lv_label_create(priceBox[i]);
+            price30MinDiffLabel = lv_label_create(priceBox[dataIndex]);
             ::price30MinDiffLabel = price30MinDiffLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(price30MinDiffLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(price30MinDiffLabel, lv_palette_main(LV_PALETTE_GREY), 0);
@@ -855,7 +908,7 @@ void UIController::createPriceBoxes() {
             lv_label_set_text(price30MinDiffLabel, "--");
             lv_obj_align(price30MinDiffLabel, LV_ALIGN_RIGHT_MID, 0, 0);
             
-            price30MinMinLabel = lv_label_create(priceBox[i]);
+            price30MinMinLabel = lv_label_create(priceBox[dataIndex]);
             ::price30MinMinLabel = price30MinMinLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(price30MinMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(price30MinMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
@@ -866,14 +919,14 @@ void UIController::createPriceBoxes() {
         
         // Min/Max/Diff labels voor 2h blok (index 3) — LCDWIKI_28 / JC3248W535
         #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
-        if (i == 3)
+        if (dataIndex == 3)
         {
             // Initialiseer buffers
             strcpy(price2HMaxLabelBuffer, "--");
             strcpy(price2HDiffLabelBuffer, "--");
             strcpy(price2HMinLabelBuffer, "--");
             
-            price2HMaxLabel = lv_label_create(priceBox[i]);
+            price2HMaxLabel = lv_label_create(priceBox[dataIndex]);
             ::price2HMaxLabel = price2HMaxLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(price2HMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(price2HMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
@@ -881,7 +934,7 @@ void UIController::createPriceBoxes() {
             lv_label_set_text(price2HMaxLabel, price2HMaxLabelBuffer);
             lv_obj_align(price2HMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14);
             
-            price2HDiffLabel = lv_label_create(priceBox[i]);
+            price2HDiffLabel = lv_label_create(priceBox[dataIndex]);
             ::price2HDiffLabel = price2HDiffLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(price2HDiffLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(price2HDiffLabel, lv_palette_main(LV_PALETTE_GREY), 0);
@@ -889,13 +942,107 @@ void UIController::createPriceBoxes() {
             lv_label_set_text(price2HDiffLabel, price2HDiffLabelBuffer);
             lv_obj_align(price2HDiffLabel, LV_ALIGN_RIGHT_MID, 0, 0);
             
-            price2HMinLabel = lv_label_create(priceBox[i]);
+            price2HMinLabel = lv_label_create(priceBox[dataIndex]);
             ::price2HMinLabel = price2HMinLabel;  // Fase 8.4.3: Synchroniseer
             lv_obj_set_style_text_font(price2HMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
             lv_obj_set_style_text_color(price2HMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
             lv_obj_set_style_text_align(price2HMinLabel, LV_TEXT_ALIGN_RIGHT, 0);
             lv_label_set_text(price2HMinLabel, price2HMinLabelBuffer);
             lv_obj_align(price2HMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
+        }
+        #endif
+        #if defined(PLATFORM_ESP32S3_JC3248W535)
+        // Min/Max/Diff labels voor 5m blok (index 4) — alleen JC3248 5-kaart UI
+        if (dataIndex == 4)
+        {
+            strcpy(price5mMaxLabelBuffer, "--");
+            strcpy(price5mDiffLabelBuffer, "--");
+            strcpy(price5mMinLabelBuffer, "--");
+            
+            price5mMaxLabel = lv_label_create(priceBox[dataIndex]);
+            ::price5mMaxLabel = price5mMaxLabel;
+            lv_obj_set_style_text_font(price5mMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price5mMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
+            lv_obj_set_style_text_align(price5mMaxLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price5mMaxLabel, price5mMaxLabelBuffer);
+            lv_obj_align(price5mMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14);
+            
+            price5mDiffLabel = lv_label_create(priceBox[dataIndex]);
+            ::price5mDiffLabel = price5mDiffLabel;
+            lv_obj_set_style_text_font(price5mDiffLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price5mDiffLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_text_align(price5mDiffLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price5mDiffLabel, price5mDiffLabelBuffer);
+            lv_obj_align(price5mDiffLabel, LV_ALIGN_RIGHT_MID, 0, 0);
+            
+            price5mMinLabel = lv_label_create(priceBox[dataIndex]);
+            ::price5mMinLabel = price5mMinLabel;
+            lv_obj_set_style_text_font(price5mMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price5mMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
+            lv_obj_set_style_text_align(price5mMinLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price5mMinLabel, price5mMinLabelBuffer);
+            lv_obj_align(price5mMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
+        }
+        // Min/Max/Diff labels voor 1d blok (data-index 5) — alleen JC3248
+        if (dataIndex == 5)
+        {
+            strcpy(price1dMaxLabelBuffer, "--");
+            strcpy(price1dDiffLabelBuffer, "--");
+            strcpy(price1dMinLabelBuffer, "--");
+
+            price1dMaxLabel = lv_label_create(priceBox[dataIndex]);
+            ::price1dMaxLabel = price1dMaxLabel;
+            lv_obj_set_style_text_font(price1dMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price1dMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
+            lv_obj_set_style_text_align(price1dMaxLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price1dMaxLabel, price1dMaxLabelBuffer);
+            lv_obj_align(price1dMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14);
+
+            price1dDiffLabel = lv_label_create(priceBox[dataIndex]);
+            ::price1dDiffLabel = price1dDiffLabel;
+            lv_obj_set_style_text_font(price1dDiffLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price1dDiffLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_text_align(price1dDiffLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price1dDiffLabel, price1dDiffLabelBuffer);
+            lv_obj_align(price1dDiffLabel, LV_ALIGN_RIGHT_MID, 0, 0);
+
+            price1dMinLabel = lv_label_create(priceBox[dataIndex]);
+            ::price1dMinLabel = price1dMinLabel;
+            lv_obj_set_style_text_font(price1dMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price1dMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
+            lv_obj_set_style_text_align(price1dMinLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price1dMinLabel, price1dMinLabelBuffer);
+            lv_obj_align(price1dMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
+        }
+        if (dataIndex == 6)
+        {
+            strcpy(price7dMaxLabelBuffer, "--");
+            strcpy(price7dDiffLabelBuffer, "--");
+            strcpy(price7dMinLabelBuffer, "--");
+
+            price7dMaxLabel = lv_label_create(priceBox[dataIndex]);
+            ::price7dMaxLabel = price7dMaxLabel;
+            lv_obj_set_style_text_font(price7dMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price7dMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
+            lv_obj_set_style_text_align(price7dMaxLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price7dMaxLabel, price7dMaxLabelBuffer);
+            lv_obj_align(price7dMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14);
+
+            price7dDiffLabel = lv_label_create(priceBox[dataIndex]);
+            ::price7dDiffLabel = price7dDiffLabel;
+            lv_obj_set_style_text_font(price7dDiffLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price7dDiffLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_text_align(price7dDiffLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price7dDiffLabel, price7dDiffLabelBuffer);
+            lv_obj_align(price7dDiffLabel, LV_ALIGN_RIGHT_MID, 0, 0);
+
+            price7dMinLabel = lv_label_create(priceBox[dataIndex]);
+            ::price7dMinLabel = price7dMinLabel;
+            lv_obj_set_style_text_font(price7dMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price7dMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
+            lv_obj_set_style_text_align(price7dMinLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price7dMinLabel, price7dMinLabelBuffer);
+            lv_obj_align(price7dMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
         }
         #endif
     }
@@ -1074,6 +1221,17 @@ static void resetUiPointers() {
     price2HMaxLabel = nullptr;
     price2HDiffLabel = nullptr;
     price2HMinLabel = nullptr;
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+    price5mMaxLabel = nullptr;
+    price5mDiffLabel = nullptr;
+    price5mMinLabel = nullptr;
+    price1dMaxLabel = nullptr;
+    price1dDiffLabel = nullptr;
+    price1dMinLabel = nullptr;
+    price7dMaxLabel = nullptr;
+    price7dDiffLabel = nullptr;
+    price7dMinLabel = nullptr;
+#endif
     ipLabel = nullptr;
     chartVersionLabel = nullptr;
     lblFooterLine1 = nullptr;
@@ -1104,6 +1262,14 @@ static void resetUiPointers() {
     ::price2HMaxLabel = nullptr;
     ::price2HDiffLabel = nullptr;
     ::price2HMinLabel = nullptr;
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+    ::price5mMaxLabel = nullptr;
+    ::price5mDiffLabel = nullptr;
+    ::price5mMinLabel = nullptr;
+    ::price1dMaxLabel = nullptr;
+    ::price1dDiffLabel = nullptr;
+    ::price1dMinLabel = nullptr;
+#endif
     ::ipLabel = nullptr;
     ::chartVersionLabel = nullptr;
     ::lblFooterLine1 = nullptr;
@@ -1700,10 +1866,19 @@ void UIController::updateAveragePriceCard(uint8_t index)
     // Voor 2h box: gebruik warm-start data OF live data (minuteIndex >= 2 voor minimal, >= 120 voor volledig)
     bool hasData2h = (index == 3) ? (hasRet2h || (minuteArrayFilled || minuteIndex >= 120)) : true;
     bool hasData2hMinimal = (index == 3) ? (hasRet2h || (minuteArrayFilled || minuteIndex >= 2)) : true;  // Warm-start OF minimaal 2 minuten live data
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+    bool hasData = (index == 1) ? hasData1m :
+                   (index == 2) ? hasData30m :
+                   (index == 3) ? hasData2hMinimal :
+                   (index == 4) ? uiFiveMinuteHasMinimalData() :
+                   (index == 5) ? hasRet1d :
+                   (index == 6) ? hasRet7d : true;
+#else
     bool hasData = (index == 1) ? hasData1m :
                    (index == 2) ? hasData30m :
                    (index == 3) ? hasData2hMinimal :
                    true;
+#endif
     
     // Debug voor 2h box: alleen loggen wanneer waarde verandert
     if (index == 3) {
@@ -1730,7 +1905,15 @@ void UIController::updateAveragePriceCard(uint8_t index)
 
     
     if (::priceTitle[index] != nullptr) {
-        #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
+        #if defined(PLATFORM_ESP32S3_JC3248W535)
+        bool shouldShowPct = (index == 4) ? uiFiveMinuteHasMinimalData() :
+                             (index == 5) ? hasRet1d :
+                             (index == 6) ? hasRet7d :
+                             (index == 3) ? (hasData2hMinimal) :
+                             (index == 2) ? (hasData30m) :
+                             (hasData1m);
+        if (shouldShowPct) {
+        #elif defined(PLATFORM_ESP32S3_LCDWIKI_28)
         // 4-symbol boards met 2h-kaart
         bool shouldShowPct = (index == 3) ? (hasData2hMinimal) :
                              (index == 2) ? (hasData30m) :
@@ -1744,7 +1927,11 @@ void UIController::updateAveragePriceCard(uint8_t index)
             // Format nieuwe tekst
             char newText[32];  // Verkleind van 48 naar 32 bytes (max: "30 min  +12.34%" = ~20 chars)
             const char* label = symbols[index];
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+            if (pct == 0.0f && (index == 3 || index == 2 || index == 4 || index == 5 || index == 6)) {
+#else
             if (pct == 0.0f && (index == 3 || index == 2)) {
+#endif
                 // Voor 2h/30m/1d box: toon 0.00% als de return 0 is
                 snprintf(newText, sizeof(newText), "%s  0.00%%", label);
             } else {
@@ -1815,6 +2002,63 @@ void UIController::updateAveragePriceCard(uint8_t index)
         }
     }
     #endif
+    #if defined(PLATFORM_ESP32S3_JC3248W535)
+    if (index == 4 && ::price5mMaxLabel != nullptr && ::price5mMinLabel != nullptr && ::price5mDiffLabel != nullptr)
+    {
+        float minVal, maxVal;
+        findMinMaxInFiveMinutePrices(minVal, maxVal);
+        applyLiveMinMax(minVal, maxVal);
+        float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
+        updateMinMaxDiffLabels(::price5mMaxLabel, ::price5mMinLabel, ::price5mDiffLabel,
+                              price5mMaxLabelBuffer, price5mMinLabelBuffer, price5mDiffLabelBuffer,
+                              maxVal, minVal, diff,
+                              lastPrice5mMaxValue, lastPrice5mMinValue, lastPrice5mDiffValue);
+    }
+    if (index == 5 && ::price1dMaxLabel != nullptr && ::price1dMinLabel != nullptr && ::price1dDiffLabel != nullptr)
+    {
+        if (hasRet1d) {
+            float minVal, maxVal;
+            findMinMaxInLast24Hours(minVal, maxVal);
+            float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
+            updateMinMaxDiffLabels(::price1dMaxLabel, ::price1dMinLabel, ::price1dDiffLabel,
+                                  price1dMaxLabelBuffer, price1dMinLabelBuffer, price1dDiffLabelBuffer,
+                                  maxVal, minVal, diff,
+                                  lastPrice1dMaxValue, lastPrice1dMinValue, lastPrice1dDiffValue);
+        } else {
+            lastPrice1dMaxValue = -1.0f;
+            lastPrice1dMinValue = -1.0f;
+            lastPrice1dDiffValue = -1.0f;
+            strcpy(price1dMaxLabelBuffer, "--");
+            strcpy(price1dMinLabelBuffer, "--");
+            strcpy(price1dDiffLabelBuffer, "--");
+            lv_label_set_text(::price1dMaxLabel, "--");
+            lv_label_set_text(::price1dMinLabel, "--");
+            lv_label_set_text(::price1dDiffLabel, "--");
+        }
+    }
+    if (index == 6 && ::price7dMaxLabel != nullptr && ::price7dMinLabel != nullptr && ::price7dDiffLabel != nullptr)
+    {
+        if (hasRet7d) {
+            float minVal, maxVal;
+            findMinMaxInLast7Days(minVal, maxVal);
+            float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
+            updateMinMaxDiffLabels(::price7dMaxLabel, ::price7dMinLabel, ::price7dDiffLabel,
+                                  price7dMaxLabelBuffer, price7dMinLabelBuffer, price7dDiffLabelBuffer,
+                                  maxVal, minVal, diff,
+                                  lastPrice7dMaxValue, lastPrice7dMinValue, lastPrice7dDiffValue);
+        } else {
+            lastPrice7dMaxValue = -1.0f;
+            lastPrice7dMinValue = -1.0f;
+            lastPrice7dDiffValue = -1.0f;
+            strcpy(price7dMaxLabelBuffer, "--");
+            strcpy(price7dMinLabelBuffer, "--");
+            strcpy(price7dDiffLabelBuffer, "--");
+            lv_label_set_text(::price7dMaxLabel, "--");
+            lv_label_set_text(::price7dMinLabel, "--");
+            lv_label_set_text(::price7dDiffLabel, "--");
+        }
+    }
+    #endif
     
     if (!hasData)
     {
@@ -1826,7 +2070,11 @@ void UIController::updateAveragePriceCard(uint8_t index)
             
             // FASE 7.2: UI Average label update verificatie logging
             #if DEBUG_CALCULATIONS
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : ((index == 4) ? "5m" : ((index == 5) ? "1d" : ((index == 6) ? "7d" : "?")))));
+#else
             const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : "?"));
+#endif
             Serial.printf(F("[UI][Average] %s label set to '--' (no data)\n"), timeframe);
             #endif
         }
@@ -1841,7 +2089,11 @@ void UIController::updateAveragePriceCard(uint8_t index)
             
             // FASE 7.2: UI Average label update verificatie logging
             #if DEBUG_CALCULATIONS
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : ((index == 4) ? "5m" : ((index == 5) ? "1d" : ((index == 6) ? "7d" : "?")))));
+#else
             const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : "?"));
+#endif
             Serial.printf(F("[UI][Average] %s label updated: %.0f\n"), timeframe, averagePrices[index]);
             #endif
         }
@@ -1857,7 +2109,11 @@ void UIController::updateAveragePriceCard(uint8_t index)
             
             // FASE 7.2: UI Average label update verificatie logging
             #if DEBUG_CALCULATIONS
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : ((index == 4) ? "5m" : ((index == 5) ? "1d" : ((index == 6) ? "7d" : "?")))));
+#else
             const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : "?"));
+#endif
             Serial.printf(F("[UI][Average] %s label set to '--' (no data)\n"), timeframe);
             #endif
         }
@@ -1874,34 +2130,43 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
     }
     
     // Fase 8.6.3: Gebruik globale pointers (synchroniseert met module pointers)
-    #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
-    // Voor 2h box: gebruik warm-start data OF minimaal 2 minuten live data (2h)
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+    bool hasDataForColor = (index == 1) ? secondArrayFilled :
+                           (index == 2) ? (minuteArrayFilled || minuteIndex >= 30) :
+                           (index == 3) ? (hasRet2h || (minuteArrayFilled || minuteIndex >= 2)) :
+                           (index == 4) ? uiFiveMinuteHasMinimalData() :
+                           (index == 5) ? hasRet1d :
+                           (index == 6) ? hasRet7d :
+                           false;
+    bool shouldShowColor = (index == 3 || index == 4 || index == 5 || index == 6) ? (hasDataForColor) : (hasDataForColor && pct != 0.0f);
+#elif defined(PLATFORM_ESP32S3_LCDWIKI_28)
     bool hasDataForColor = (index == 1) ? secondArrayFilled :
                            (index == 2) ? (minuteArrayFilled || minuteIndex >= 30) :
                            (index == 3) ? (hasRet2h || (minuteArrayFilled || minuteIndex >= 2)) :
                            false;
-    #else
-    bool hasDataForColor = (index == 1) ? secondArrayFilled : (minuteArrayFilled || minuteIndex >= 30);
-    #endif
-    
-    // Voor 2h box: toon kleur ook als pct 0.0f is maar er wel data is
-    #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
     bool shouldShowColor = (index == 3) ? (hasDataForColor) : (hasDataForColor && pct != 0.0f);
-    #else
+#else
+    bool hasDataForColor = (index == 1) ? secondArrayFilled : (minuteArrayFilled || minuteIndex >= 30);
     bool shouldShowColor = hasDataForColor && pct != 0.0f;
-    #endif
+#endif
     
     if (shouldShowColor)
     {
-        lv_obj_set_style_text_color(::priceLbl[index],
-                                    pct >= 0 ? lv_palette_lighten(LV_PALETTE_GREEN, 4)
-                                             : lv_palette_lighten(LV_PALETTE_RED, 3),
-                                    0);
-        
-        lv_color_t bg = pct >= 0
-                            ? lv_color_mix(lv_palette_main(LV_PALETTE_GREEN), lv_color_black(), 127)
-                            : lv_color_mix(lv_palette_main(LV_PALETTE_RED), lv_color_black(), 127);
-        lv_obj_set_style_bg_color(::priceBox[index], bg, 0);
+        // ~0.00% return: data wel geldig, maar visueel neutraal (geen groen bij exacte nul)
+        static const float kFlatReturnPctEps = 0.005f;
+        const bool isFlatReturn = (fabsf(pct) < kFlatReturnPctEps);
+        if (isFlatReturn) {
+            lv_obj_set_style_text_color(::priceLbl[index], lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_bg_color(::priceBox[index], lv_color_black(), 0);
+        } else if (pct > 0.0f) {
+            lv_obj_set_style_text_color(::priceLbl[index], lv_palette_lighten(LV_PALETTE_GREEN, 4), 0);
+            lv_color_t bg = lv_color_mix(lv_palette_main(LV_PALETTE_GREEN), lv_color_black(), 127);
+            lv_obj_set_style_bg_color(::priceBox[index], bg, 0);
+        } else {
+            lv_obj_set_style_text_color(::priceLbl[index], lv_palette_lighten(LV_PALETTE_RED, 3), 0);
+            lv_color_t bg = lv_color_mix(lv_palette_main(LV_PALETTE_RED), lv_color_black(), 127);
+            lv_obj_set_style_bg_color(::priceBox[index], bg, 0);
+        }
     }
     else
     {

@@ -351,7 +351,10 @@ SemaphoreHandle_t gNetMutex = NULL;
 
 // Symbols array - eerste element wordt dynamisch ingesteld via bitvavoSymbol
 // Fase 8: UI data - gebruikt door UIController module
-#if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+char symbol0[16] = "BTC-EUR";
+extern const char *const symbols[SYMBOL_COUNT] = {symbol0, SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL, SYMBOL_5M_LABEL, SYMBOL_1D_LABEL, SYMBOL_7D_LABEL};
+#elif defined(PLATFORM_ESP32S3_LCDWIKI_28)
 char symbol0[16] = "BTC-EUR";
 extern const char *const symbols[SYMBOL_COUNT] = {symbol0, SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL};
 #else
@@ -580,6 +583,17 @@ lv_obj_t *price30MinDiffLabel; // Label voor verschil tussen max en min in 30 mi
 lv_obj_t *price2HMaxLabel = nullptr; // 2h min/max/diff (LCDWIKI_28 / JC3248W535; nullptr op 3-symbol boards)
 lv_obj_t *price2HMinLabel = nullptr;
 lv_obj_t *price2HDiffLabel = nullptr;
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+lv_obj_t *price5mMaxLabel = nullptr; // 5m min/max/diff (alleen JC3248 5-kaart UI)
+lv_obj_t *price5mMinLabel = nullptr;
+lv_obj_t *price5mDiffLabel = nullptr;
+lv_obj_t *price1dMaxLabel = nullptr; // 1d min/max/diff (JC3248, index 5)
+lv_obj_t *price1dMinLabel = nullptr;
+lv_obj_t *price1dDiffLabel = nullptr;
+lv_obj_t *price7dMaxLabel = nullptr; // 7d min/max/diff (JC3248, data-index 6)
+lv_obj_t *price7dMinLabel = nullptr;
+lv_obj_t *price7dDiffLabel = nullptr;
+#endif
 lv_obj_t *anchorLabel; // Label voor anchor price info (rechts midden, met percentage verschil)
 lv_obj_t *anchorMaxLabel; // Label voor "Pak winst" (rechts, groen, boven)
 lv_obj_t *anchorMinLabel; // Label voor "Stop loss" (rechts, rood, onder)
@@ -647,6 +661,17 @@ char price30MinDiffLabelBuffer[20];  // Buffer voor 30m diff label (max: "12345.
 char price2HMaxLabelBuffer[20];  // Buffer voor 2h max label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
 char price2HMinLabelBuffer[20];  // Buffer voor 2h min label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
 char price2HDiffLabelBuffer[20];  // Buffer voor 2h diff label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+char price5mMaxLabelBuffer[20];
+char price5mMinLabelBuffer[20];
+char price5mDiffLabelBuffer[20];
+char price1dMaxLabelBuffer[20];
+char price1dMinLabelBuffer[20];
+char price1dDiffLabelBuffer[20];
+char price7dMaxLabelBuffer[20];
+char price7dMinLabelBuffer[20];
+char price7dDiffLabelBuffer[20];
+#endif
 
 // Cache laatste waarden (alleen updaten als veranderd)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
@@ -664,6 +689,17 @@ float lastPrice30MinDiffValue = -1.0f;  // Cache voor 30m diff
 float lastPrice2HMaxValue = -1.0f;  // Cache voor 2h max (4-symbol boards met 2h-kaart)
 float lastPrice2HMinValue = -1.0f;
 float lastPrice2HDiffValue = -1.0f;
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+float lastPrice5mMaxValue = -1.0f;
+float lastPrice5mMinValue = -1.0f;
+float lastPrice5mDiffValue = -1.0f;
+float lastPrice1dMaxValue = -1.0f;
+float lastPrice1dMinValue = -1.0f;
+float lastPrice1dDiffValue = -1.0f;
+float lastPrice7dMaxValue = -1.0f;
+float lastPrice7dMinValue = -1.0f;
+float lastPrice7dDiffValue = -1.0f;
+#endif
 char lastPriceTitleText[SYMBOL_COUNT][32] = {""};  // Cache voor price titles (max: "30 min  +12.34%" = ~20 chars, verkleind van 48 naar 32 bytes)
 char priceLblBufferArray[SYMBOL_COUNT][24];  // Buffers voor average price labels (max: "12345.67" = ~8 chars)
 static char footerRssiBuffer[10];  // Buffer voor footer RSSI
@@ -2028,9 +2064,41 @@ static WarmStartMode performWarmStart()
     }
 
     // Vervangt 1W-ret_7d indien count1d>=7 en regressie slaagt (bewuste downstream-volgorde).
-    // Warm-start 7d regressie op basis van 7 dagelijkse candles (betrouwbaarder dan 1W)
+    // Warm-start 7d: zelfde 7× daily venster als live fill168HourlyStatsFor7dUi / ret_7d-daily — min/max/gem. voor JC3248-fallback.
     if (count1d >= 7) {
         const int startIdx = count1d - 7;  // laatste 7 candles (oudste -> nieuwste)
+        float sum7d = 0.0f;
+        float min7d = 0.0f;
+        float max7d = 0.0f;
+        bool first7d = false;
+        uint16_t cnt7d = 0;
+        for (int i = 0; i < 7; i++) {
+            float price = temp1dPrices[startIdx + i];
+            if (!isValidPrice(price)) {
+                continue;
+            }
+            sum7d += price;
+            cnt7d++;
+            if (!first7d) {
+                min7d = max7d = price;
+                first7d = true;
+            } else {
+                if (price < min7d) {
+                    min7d = price;
+                }
+                if (price > max7d) {
+                    max7d = price;
+                }
+            }
+        }
+        if (first7d && cnt7d > 0) {
+            warmStart7dMin = min7d;
+            warmStart7dMax = max7d;
+            warmStart7dAvg = sum7d / (float)cnt7d;
+            warmStart7dValid = true;
+        } else {
+            warmStart7dValid = false;
+        }
         const float stepHours = 24.0f;
         const float totalHours = 168.0f;
         float ret7dDaily = 0.0f;
@@ -2041,6 +2109,9 @@ static WarmStartMode performWarmStart()
             Serial_printf(F("[WarmStart][7d] ret_7d=%.4f%% (regressie over 7d daily)\n"), ret_7d);
             #endif
         }
+        Serial_printf(F("[WarmStart][7d] daily window: valid=%u, min=%.2f, max=%.2f, avg=%.2f (warmValid=%d)\n"),
+                      (unsigned)cnt7d, warmStart7dMin, warmStart7dMax, warmStart7dAvg,
+                      warmStart7dValid ? 1 : 0);
     }
     
     // 5. Haal 4h candles op voor lange termijn trend
@@ -2307,6 +2378,20 @@ static WarmStartMode performWarmStart()
     if (hasRet30m) {
         prices[2] = ret_30m;  // Zet 30m return direct na warm-start
     }
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+    if (hasRet1d) {
+        prices[5] = ret_1d;  // 1d-return op data-index 5 (zelfde semantiek als ret_1d elders)
+    }
+    if (warmStart1dValid) {
+        averagePrices[5] = warmStart1dAvg;  // 24h gemiddelde uit warm-start 1h-candles (sluit aan op hasRet1d / warmStart1d*)
+    }
+    if (hasRet7d) {
+        prices[6] = ret_7d;
+    }
+    if (warmStart7dValid) {
+        averagePrices[6] = warmStart7dAvg;
+    }
+#endif
     
     // Fase 5.1: Bepaal trend state op basis van warm-start data (gebruik TrendDetector module)
     if (hasRet2h && hasRet30m) {
@@ -3389,6 +3474,12 @@ void netMutexUnlock(const char* taskName)
 // Fase 6.1: AlertEngine module gebruikt deze functies (extern declarations in AlertEngine.cpp)
 void findMinMaxInSecondPrices(float &minVal, float &maxVal);
 void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+void findMinMaxInFiveMinutePrices(float &minVal, float &maxVal);
+bool uiFiveMinuteHasMinimalData(void);
+void findMinMaxInLast24Hours(float &minVal, float &maxVal);
+void findMinMaxInLast7Days(float &minVal, float &maxVal);
+#endif
 #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
 void findMinMaxInLast2Hours(float &minVal, float &maxVal);
 #endif
@@ -6025,6 +6116,46 @@ void findMinMaxInSecondPrices(float &minVal, float &maxVal)
     bool result = findMinMaxInArray(prices, SECONDS_PER_MINUTE, index, arrayFilled, 0, false, minVal, maxVal);
 }
 
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+// 5m-venster: zelfde ringbuffer als calculateReturn5Minutes() / ret_5m
+void findMinMaxInFiveMinutePrices(float &minVal, float &maxVal)
+{
+    const float* arr = priceData.getFiveMinutePrices();
+    if (arr == nullptr) {
+        minVal = maxVal = 0.0f;
+        return;
+    }
+    uint16_t idx = priceData.getFiveMinuteIndex();
+    bool filled = priceData.getFiveMinuteArrayFilled();
+    findMinMaxInArray(arr, SECONDS_PER_5MINUTES, idx, filled, 0, true, minVal, maxVal);
+}
+
+bool uiFiveMinuteHasMinimalData(void)
+{
+    return priceData.getFiveMinuteArrayFilled() || priceData.getFiveMinuteIndex() >= 2;
+}
+
+static void refreshAveragePrice5mForUi(void)
+{
+    float* arr = priceData.getFiveMinutePrices();
+    if (arr == nullptr) {
+        averagePrices[4] = 0.0f;
+        return;
+    }
+    uint16_t idx = priceData.getFiveMinuteIndex();
+    bool filled = priceData.getFiveMinuteArrayFilled();
+    uint16_t avail = calculateAvailableElements(filled, idx, SECONDS_PER_5MINUTES);
+    if (avail == 0) {
+        averagePrices[4] = 0.0f;
+        return;
+    }
+    float sum = 0.0f;
+    uint16_t validCount = 0;
+    accumulateValidPricesFromRingBuffer(arr, filled, idx, SECONDS_PER_5MINUTES, 1, avail, sum, validCount);
+    averagePrices[4] = (validCount > 0) ? (sum / (float)validCount) : 0.0f;
+}
+#endif
+
 // ============================================================================
 // Price Calculation Functions
 // ============================================================================
@@ -6415,6 +6546,190 @@ static inline uint16_t getAvailableHours()
     }
     return calculateAvailableElements(hourArrayFilled, hourIndex, HOURS_FOR_7D);
 }
+
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+// 1d-kaart (index 5): 24h gemiddelde + min/max — zelfde uurvenster als calculateLinearTrend1d / ret_1d; fallback naar warmStart1d*
+static bool fill24HourlyStatsFor1dUi(float &outMin, float &outMax, float &outAvg)
+{
+    outMin = outMax = outAvg = 0.0f;
+    if (hourlyAverages == nullptr) {
+        return false;
+    }
+    uint16_t availableHours = getAvailableHours();
+    uint16_t hoursToUse = (availableHours < 24) ? availableHours : 24;
+    if (hoursToUse < 6) {
+        return false;  // zelfde minimum als calculateLinearTrend1Day()
+    }
+    uint16_t lastHourIdx;
+    if (!hourArrayFilled) {
+        if (hourIndex == 0) {
+            return false;
+        }
+        lastHourIdx = hourIndex - 1;
+    } else {
+        lastHourIdx = getLastWrittenIndex(hourIndex, HOURS_FOR_7D);
+    }
+    bool first = false;
+    float sum = 0.0f;
+    uint16_t cnt = 0;
+    for (uint16_t k = 0; k < hoursToUse; k++) {
+        uint16_t idx;
+        if (!hourArrayFilled) {
+            if (hourIndex < hoursToUse) {
+                return false;
+            }
+            idx = (hourIndex - hoursToUse) + k;
+        } else {
+            uint16_t positionsAgo = (hoursToUse - 1 - k);
+            int32_t idx_temp = getRingBufferIndexAgo(lastHourIdx, positionsAgo, HOURS_FOR_7D);
+            if (idx_temp < 0) {
+                return false;
+            }
+            idx = (uint16_t)idx_temp;
+        }
+        float price = hourlyAverages[idx];
+        if (isValidPrice(price)) {
+            sum += price;
+            cnt++;
+            if (!first) {
+                outMin = outMax = price;
+                first = true;
+            } else {
+                if (price < outMin) {
+                    outMin = price;
+                }
+                if (price > outMax) {
+                    outMax = price;
+                }
+            }
+        }
+    }
+    if (cnt == 0 || !first) {
+        return false;
+    }
+    outAvg = sum / (float)cnt;
+    return true;
+}
+
+static void refreshAveragePrice1dForUi(void)
+{
+    float mn, mx, av;
+    if (fill24HourlyStatsFor1dUi(mn, mx, av)) {
+        averagePrices[5] = av;
+        return;
+    }
+    if (warmStart1dValid) {
+        averagePrices[5] = warmStart1dAvg;
+    } else {
+        averagePrices[5] = 0.0f;
+    }
+}
+
+void findMinMaxInLast24Hours(float &minVal, float &maxVal)
+{
+    float av;
+    if (fill24HourlyStatsFor1dUi(minVal, maxVal, av)) {
+        return;
+    }
+    if (warmStart1dValid) {
+        minVal = warmStart1dMin;
+        maxVal = warmStart1dMax;
+    } else {
+        minVal = maxVal = 0.0f;
+    }
+}
+
+// 7d-kaart (index 6): gemiddelde + min/max over hetzelfde uurvenster als calculateLinearTrend7Days / ret_7d; fallback warmStart7d*
+static bool fill168HourlyStatsFor7dUi(float &outMin, float &outMax, float &outAvg)
+{
+    outMin = outMax = outAvg = 0.0f;
+    if (hourlyAverages == nullptr) {
+        return false;
+    }
+    uint16_t availableHours = getAvailableHours();
+    uint16_t hoursToUse = (availableHours < HOURS_FOR_7D) ? availableHours : HOURS_FOR_7D;
+    if (hoursToUse < 24) {
+        return false;  // zelfde minimum als calculateLinearTrend7Days()
+    }
+    uint16_t lastHourIdx;
+    if (!hourArrayFilled) {
+        if (hourIndex == 0) {
+            return false;
+        }
+        lastHourIdx = hourIndex - 1;
+    } else {
+        lastHourIdx = getLastWrittenIndex(hourIndex, HOURS_FOR_7D);
+    }
+    bool first = false;
+    float sum = 0.0f;
+    uint16_t cnt = 0;
+    for (uint16_t k = 0; k < hoursToUse; k++) {
+        uint16_t idx;
+        if (!hourArrayFilled) {
+            if (hourIndex < hoursToUse) {
+                return false;
+            }
+            idx = (hourIndex - hoursToUse) + k;
+        } else {
+            uint16_t positionsAgo = (hoursToUse - 1 - k);
+            int32_t idx_temp = getRingBufferIndexAgo(lastHourIdx, positionsAgo, HOURS_FOR_7D);
+            if (idx_temp < 0) {
+                return false;
+            }
+            idx = (uint16_t)idx_temp;
+        }
+        float price = hourlyAverages[idx];
+        if (isValidPrice(price)) {
+            sum += price;
+            cnt++;
+            if (!first) {
+                outMin = outMax = price;
+                first = true;
+            } else {
+                if (price < outMin) {
+                    outMin = price;
+                }
+                if (price > outMax) {
+                    outMax = price;
+                }
+            }
+        }
+    }
+    if (cnt == 0 || !first) {
+        return false;
+    }
+    outAvg = sum / (float)cnt;
+    return true;
+}
+
+static void refreshAveragePrice7dForUi(void)
+{
+    float mn, mx, av;
+    if (fill168HourlyStatsFor7dUi(mn, mx, av)) {
+        averagePrices[6] = av;
+        return;
+    }
+    if (warmStart7dValid) {
+        averagePrices[6] = warmStart7dAvg;
+    } else {
+        averagePrices[6] = 0.0f;
+    }
+}
+
+void findMinMaxInLast7Days(float &minVal, float &maxVal)
+{
+    float av;
+    if (fill168HourlyStatsFor7dUi(minVal, maxVal, av)) {
+        return;
+    }
+    if (warmStart7dValid) {
+        minVal = warmStart7dMin;
+        maxVal = warmStart7dMax;
+    } else {
+        minVal = maxVal = 0.0f;
+    }
+}
+#endif
 
 // Calculate return based on hourly buffer
 static float calculateReturnFromHourly(uint16_t hoursBack)
@@ -7345,6 +7660,26 @@ void fetchPrice()
             } else {
                 prices[3] = 0.0f; // Reset naar 0 om aan te geven dat er nog geen data is
             }
+            #endif
+            #if defined(PLATFORM_ESP32S3_JC3248W535)
+            if (uiFiveMinuteHasMinimalData()) {
+                prices[4] = ret_5m;
+            } else {
+                prices[4] = 0.0f;
+            }
+            refreshAveragePrice5mForUi();
+            if (hasRet1d) {
+                prices[5] = ret_1d;
+            } else {
+                prices[5] = 0.0f;
+            }
+            refreshAveragePrice1dForUi();
+            if (hasRet7d) {
+                prices[6] = ret_7d;
+            } else {
+                prices[6] = 0.0f;
+            }
+            refreshAveragePrice7dForUi();
             #endif
             
             // Zet flag voor nieuwe data (voor grafiek update)

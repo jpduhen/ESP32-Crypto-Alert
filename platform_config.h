@@ -4,17 +4,17 @@
 
 // Actief ondersteunde boards
 //#define PLATFORM_ESP32S3_SUPERMINI
-#define PLATFORM_ESP32S3_GEEK
+//#define PLATFORM_ESP32S3_GEEK
 //#define PLATFORM_ESP32S3_LCDWIKI_28
-//#define PLATFORM_ESP32S3_JC3248W535  // JC3248W535CIY 3.5" QSPI (AXS15231B), 320x480
+#define PLATFORM_ESP32S3_JC3248W535  // JC3248W535CIY 3.5" QSPI (AXS15231B), 320x480
 //#define PLATFORM_ESP32S3_AMOLED_206
 
 // --- Version Configuration ---
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 5
-#define VERSION_MINOR 73
-#define VERSION_STRING "5.73"
+#define VERSION_MINOR 75
+#define VERSION_STRING "5.75"
 #endif
 
 // --- Debug Configuration ---
@@ -202,11 +202,14 @@
     #define SYMBOL_1MIN_LABEL "1 min"
     #define SYMBOL_30MIN_LABEL "30 min"
     #define SYMBOL_2H_LABEL "2h"
+    #define SYMBOL_5M_LABEL "5 min"
+    #define SYMBOL_1D_LABEL "1d"
+    #define SYMBOL_7D_LABEL "7d"
     // 320px scherm: zelfde contentbreedte als prijskaarten (LV_PCT(100)), niet de smalle 240px-fallback.
     #define CHART_WIDTH 320
-    #define CHART_HEIGHT 72
+    #define CHART_HEIGHT 102  // was 72: +30 px grafiekhoogte
     #define CHART_ALIGN_Y 24
-    #define PRICE_BOX_Y_START 99
+    #define PRICE_BOX_Y_START 129  // was 99: prijskaarten +30 px naar beneden (Y)
     #define FONT_SIZE_TITLE_BTCEUR &lv_font_montserrat_14
     #define FONT_SIZE_TITLE_OTHER &lv_font_montserrat_12
     #define FONT_SIZE_PRICE_BTCEUR &lv_font_montserrat_12
@@ -220,7 +223,7 @@
     #define FONT_SIZE_CHART_VERSION &lv_font_montserrat_10
     #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_10
     #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
-    #define SYMBOL_COUNT 4  // JC3248W535: BTCEUR, 1m, 30m, 2h
+    #define SYMBOL_COUNT 7  // JC3248W535: data-index 0 spot, 1=1m, 2=30m, 3=2h, 4=5m, 5=1d, 6=7d (visuele volgorde via display-order mapping)
     #define LVGL_SCREEN_WIDTH 320
     #define LVGL_SCREEN_HEIGHT 480
 #elif defined(PLATFORM_ESP32S3_AMOLED_206)
