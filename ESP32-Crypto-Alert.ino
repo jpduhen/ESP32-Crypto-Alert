@@ -590,6 +590,9 @@ lv_obj_t *price5mDiffLabel = nullptr;
 lv_obj_t *price1dMaxLabel = nullptr; // 1d min/max/diff (JC3248, index 5)
 lv_obj_t *price1dMinLabel = nullptr;
 lv_obj_t *price1dDiffLabel = nullptr;
+lv_obj_t *price7dMaxLabel = nullptr; // 7d min/max/diff (JC3248, data-index 6)
+lv_obj_t *price7dMinLabel = nullptr;
+lv_obj_t *price7dDiffLabel = nullptr;
 #endif
 lv_obj_t *anchorLabel; // Label voor anchor price info (rechts midden, met percentage verschil)
 lv_obj_t *anchorMaxLabel; // Label voor "Pak winst" (rechts, groen, boven)
@@ -693,6 +696,9 @@ float lastPrice5mDiffValue = -1.0f;
 float lastPrice1dMaxValue = -1.0f;
 float lastPrice1dMinValue = -1.0f;
 float lastPrice1dDiffValue = -1.0f;
+float lastPrice7dMaxValue = -1.0f;
+float lastPrice7dMinValue = -1.0f;
+float lastPrice7dDiffValue = -1.0f;
 #endif
 char lastPriceTitleText[SYMBOL_COUNT][32] = {""};  // Cache voor price titles (max: "30 min  +12.34%" = ~20 chars, verkleind van 48 naar 32 bytes)
 char priceLblBufferArray[SYMBOL_COUNT][24];  // Buffers voor average price labels (max: "12345.67" = ~8 chars)
@@ -2058,9 +2064,41 @@ static WarmStartMode performWarmStart()
     }
 
     // Vervangt 1W-ret_7d indien count1d>=7 en regressie slaagt (bewuste downstream-volgorde).
-    // Warm-start 7d regressie op basis van 7 dagelijkse candles (betrouwbaarder dan 1W)
+    // Warm-start 7d: zelfde 7× daily venster als live fill168HourlyStatsFor7dUi / ret_7d-daily — min/max/gem. voor JC3248-fallback.
     if (count1d >= 7) {
         const int startIdx = count1d - 7;  // laatste 7 candles (oudste -> nieuwste)
+        float sum7d = 0.0f;
+        float min7d = 0.0f;
+        float max7d = 0.0f;
+        bool first7d = false;
+        uint16_t cnt7d = 0;
+        for (int i = 0; i < 7; i++) {
+            float price = temp1dPrices[startIdx + i];
+            if (!isValidPrice(price)) {
+                continue;
+            }
+            sum7d += price;
+            cnt7d++;
+            if (!first7d) {
+                min7d = max7d = price;
+                first7d = true;
+            } else {
+                if (price < min7d) {
+                    min7d = price;
+                }
+                if (price > max7d) {
+                    max7d = price;
+                }
+            }
+        }
+        if (first7d && cnt7d > 0) {
+            warmStart7dMin = min7d;
+            warmStart7dMax = max7d;
+            warmStart7dAvg = sum7d / (float)cnt7d;
+            warmStart7dValid = true;
+        } else {
+            warmStart7dValid = false;
+        }
         const float stepHours = 24.0f;
         const float totalHours = 168.0f;
         float ret7dDaily = 0.0f;
@@ -2071,6 +2109,9 @@ static WarmStartMode performWarmStart()
             Serial_printf(F("[WarmStart][7d] ret_7d=%.4f%% (regressie over 7d daily)\n"), ret_7d);
             #endif
         }
+        Serial_printf(F("[WarmStart][7d] daily window: valid=%u, min=%.2f, max=%.2f, avg=%.2f (warmValid=%d)\n"),
+                      (unsigned)cnt7d, warmStart7dMin, warmStart7dMax, warmStart7dAvg,
+                      warmStart7dValid ? 1 : 0);
     }
     
     // 5. Haal 4h candles op voor lange termijn trend
