@@ -148,11 +148,7 @@ extern const char* getText(const char* nlText, const char* enText);
 #endif
 // Fase 8.5.3: updateVolatilityLabel() dependencies
 extern VolatilityTracker volatilityTracker;
-// Fase 8.5.4: updateWarmStartStatusLabel() dependencies
-#include "../WarmStart/WarmStart.h"  // Voor WarmStartStatus enum en WarmStartStats struct
-extern WarmStartStatus warmStartStatus;
-extern WarmStartStats warmStartStats;
-extern lv_obj_t *warmStartStatusLabel;
+// Fase 8.5.4: updateWarmStartStatusLabel() — grafiekbadge (zie forward decl. warmStartStatusLabel)
 // Fase 8.6.1: updateBTCEURCard() dependencies
 #include "../AnchorSystem/AnchorSystem.h"  // Voor AnchorConfigEffective struct
 extern AnchorSystem anchorSystem;
@@ -1653,24 +1649,33 @@ void UIController::updateBTCEURCard(bool hasNewData)
 }
 
 // Fase 8.5.4: updateWarmStartStatusLabel() naar Module
-// Helper functie om warm-start status label bij te werken
+// Grafiekbadge: 30m-live-status (hasRet30mLive / minuutbuffer), niet de algemene warmStartStatus-enum
 void UIController::updateWarmStartStatusLabel()
 {
     // Fase 8.5.4: Gebruik globale pointer (synchroniseert met module pointer)
     if (::warmStartStatusLabel == nullptr) return;
     
     char warmStartText[16];
-    if (warmStartStatus == WARMING_UP) {
-        snprintf(warmStartText, sizeof(warmStartText), "DATA%u%%", warmStartStats.warmUpProgress);
-    } else if (warmStartStatus == LIVE_COLD) {
-        snprintf(warmStartText, sizeof(warmStartText), "COLD");
-    } else {
+    lv_color_t statusColor;
+    if (hasRet30mLive) {
         snprintf(warmStartText, sizeof(warmStartText), "LIVE");
+        statusColor = lv_palette_main(LV_PALETTE_GREEN);
+    } else {
+        uint8_t availableMinutes = minuteArrayFilled ? MINUTES_FOR_30MIN_CALC : minuteIndex;
+        if (availableMinutes < 30) {
+            unsigned int progress = (unsigned int)availableMinutes * 100U / 30U;
+            if (progress > 99U) {
+                progress = 99U;
+            }
+            snprintf(warmStartText, sizeof(warmStartText), "DATA%u%%", progress);
+            statusColor = lv_palette_main(LV_PALETTE_ORANGE);
+        } else {
+            uint8_t livePct30 = calcLivePctMinuteAverages(30);
+            snprintf(warmStartText, sizeof(warmStartText), "DATA%u%%", (unsigned)livePct30);
+            statusColor = lv_palette_main(LV_PALETTE_ORANGE);
+        }
     }
     lv_label_set_text(::warmStartStatusLabel, warmStartText);
-    lv_color_t statusColor = (warmStartStatus == WARMING_UP) ? lv_palette_main(LV_PALETTE_ORANGE) :
-                              (warmStartStatus == LIVE_COLD) ? lv_palette_main(LV_PALETTE_BLUE) :
-                              lv_palette_main(LV_PALETTE_BLUE);
     lv_obj_set_style_text_color(::warmStartStatusLabel, statusColor, 0);
 }
 
