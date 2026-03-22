@@ -213,6 +213,7 @@ extern float lastPrice2HMinValue;
 extern float lastPrice2HDiffValue;
 #if defined(PLATFORM_ESP32S3_JC3248W535)
 extern void findMinMaxInFiveMinutePrices(float &minVal, float &maxVal);
+extern void findMinMaxInLast24Hours(float &minVal, float &maxVal);
 extern bool uiFiveMinuteHasMinimalData(void);
 extern lv_obj_t *price5mMaxLabel;
 extern lv_obj_t *price5mMinLabel;
@@ -223,6 +224,15 @@ extern char price5mDiffLabelBuffer[20];
 extern float lastPrice5mMaxValue;
 extern float lastPrice5mMinValue;
 extern float lastPrice5mDiffValue;
+extern lv_obj_t *price1dMaxLabel;
+extern lv_obj_t *price1dMinLabel;
+extern lv_obj_t *price1dDiffLabel;
+extern char price1dMaxLabelBuffer[20];
+extern char price1dMinLabelBuffer[20];
+extern char price1dDiffLabelBuffer[20];
+extern float lastPrice1dMaxValue;
+extern float lastPrice1dMinValue;
+extern float lastPrice1dDiffValue;
 #endif
 extern char lastPriceTitleText[SYMBOL_COUNT][32];  // Verkleind van 48 naar 32 bytes
 extern char priceLblBufferArray[SYMBOL_COUNT][24];
@@ -685,9 +695,9 @@ void UIController::createHeaderLabels() {
 
 // Fase 8.3.3: createPriceBoxes() verplaatst naar UIController module (parallel implementatie)
 void UIController::createPriceBoxes() {
-    // JC3248: visuele volgorde 1m → 5m → 30m → 2h; data-indexen priceBox[i] blijven 0..4 ongewijzigd
+    // JC3248: visuele volgorde spot → 1m → 5m → 30m → 2h → 1d; data-indexen 0..5
 #if defined(PLATFORM_ESP32S3_JC3248W535)
-    static const uint8_t kJcDisplayOrder[] = {0, 1, 4, 2, 3};  // moet SYMBOL_COUNT (5) entries hebben
+    static const uint8_t kJcDisplayOrder[] = {0, 1, 4, 2, 3, 5};  // moet SYMBOL_COUNT entries hebben
     lv_obj_t *prevVisBox = nullptr;
 #endif
     for (uint8_t slot = 0; slot < SYMBOL_COUNT; ++slot)
@@ -963,6 +973,37 @@ void UIController::createPriceBoxes() {
             lv_label_set_text(price5mMinLabel, price5mMinLabelBuffer);
             lv_obj_align(price5mMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
         }
+        // Min/Max/Diff labels voor 1d blok (data-index 5) — alleen JC3248
+        if (dataIndex == 5)
+        {
+            strcpy(price1dMaxLabelBuffer, "--");
+            strcpy(price1dDiffLabelBuffer, "--");
+            strcpy(price1dMinLabelBuffer, "--");
+
+            price1dMaxLabel = lv_label_create(priceBox[dataIndex]);
+            ::price1dMaxLabel = price1dMaxLabel;
+            lv_obj_set_style_text_font(price1dMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price1dMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
+            lv_obj_set_style_text_align(price1dMaxLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price1dMaxLabel, price1dMaxLabelBuffer);
+            lv_obj_align(price1dMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14);
+
+            price1dDiffLabel = lv_label_create(priceBox[dataIndex]);
+            ::price1dDiffLabel = price1dDiffLabel;
+            lv_obj_set_style_text_font(price1dDiffLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price1dDiffLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_text_align(price1dDiffLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price1dDiffLabel, price1dDiffLabelBuffer);
+            lv_obj_align(price1dDiffLabel, LV_ALIGN_RIGHT_MID, 0, 0);
+
+            price1dMinLabel = lv_label_create(priceBox[dataIndex]);
+            ::price1dMinLabel = price1dMinLabel;
+            lv_obj_set_style_text_font(price1dMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price1dMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
+            lv_obj_set_style_text_align(price1dMinLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price1dMinLabel, price1dMinLabelBuffer);
+            lv_obj_align(price1dMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
+        }
         #endif
     }
 }
@@ -1144,6 +1185,9 @@ static void resetUiPointers() {
     price5mMaxLabel = nullptr;
     price5mDiffLabel = nullptr;
     price5mMinLabel = nullptr;
+    price1dMaxLabel = nullptr;
+    price1dDiffLabel = nullptr;
+    price1dMinLabel = nullptr;
 #endif
     ipLabel = nullptr;
     chartVersionLabel = nullptr;
@@ -1179,6 +1223,9 @@ static void resetUiPointers() {
     ::price5mMaxLabel = nullptr;
     ::price5mDiffLabel = nullptr;
     ::price5mMinLabel = nullptr;
+    ::price1dMaxLabel = nullptr;
+    ::price1dDiffLabel = nullptr;
+    ::price1dMinLabel = nullptr;
 #endif
     ::ipLabel = nullptr;
     ::chartVersionLabel = nullptr;
@@ -1780,7 +1827,8 @@ void UIController::updateAveragePriceCard(uint8_t index)
     bool hasData = (index == 1) ? hasData1m :
                    (index == 2) ? hasData30m :
                    (index == 3) ? hasData2hMinimal :
-                   (index == 4) ? uiFiveMinuteHasMinimalData() : true;
+                   (index == 4) ? uiFiveMinuteHasMinimalData() :
+                   (index == 5) ? hasRet1d : true;
 #else
     bool hasData = (index == 1) ? hasData1m :
                    (index == 2) ? hasData30m :
@@ -1815,6 +1863,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
     if (::priceTitle[index] != nullptr) {
         #if defined(PLATFORM_ESP32S3_JC3248W535)
         bool shouldShowPct = (index == 4) ? uiFiveMinuteHasMinimalData() :
+                             (index == 5) ? hasRet1d :
                              (index == 3) ? (hasData2hMinimal) :
                              (index == 2) ? (hasData30m) :
                              (hasData1m);
@@ -1834,7 +1883,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
             char newText[32];  // Verkleind van 48 naar 32 bytes (max: "30 min  +12.34%" = ~20 chars)
             const char* label = symbols[index];
 #if defined(PLATFORM_ESP32S3_JC3248W535)
-            if (pct == 0.0f && (index == 3 || index == 2 || index == 4)) {
+            if (pct == 0.0f && (index == 3 || index == 2 || index == 4 || index == 5)) {
 #else
             if (pct == 0.0f && (index == 3 || index == 2)) {
 #endif
@@ -1920,6 +1969,28 @@ void UIController::updateAveragePriceCard(uint8_t index)
                               maxVal, minVal, diff,
                               lastPrice5mMaxValue, lastPrice5mMinValue, lastPrice5mDiffValue);
     }
+    if (index == 5 && ::price1dMaxLabel != nullptr && ::price1dMinLabel != nullptr && ::price1dDiffLabel != nullptr)
+    {
+        if (hasRet1d) {
+            float minVal, maxVal;
+            findMinMaxInLast24Hours(minVal, maxVal);
+            float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
+            updateMinMaxDiffLabels(::price1dMaxLabel, ::price1dMinLabel, ::price1dDiffLabel,
+                                  price1dMaxLabelBuffer, price1dMinLabelBuffer, price1dDiffLabelBuffer,
+                                  maxVal, minVal, diff,
+                                  lastPrice1dMaxValue, lastPrice1dMinValue, lastPrice1dDiffValue);
+        } else {
+            lastPrice1dMaxValue = -1.0f;
+            lastPrice1dMinValue = -1.0f;
+            lastPrice1dDiffValue = -1.0f;
+            strcpy(price1dMaxLabelBuffer, "--");
+            strcpy(price1dMinLabelBuffer, "--");
+            strcpy(price1dDiffLabelBuffer, "--");
+            lv_label_set_text(::price1dMaxLabel, "--");
+            lv_label_set_text(::price1dMinLabel, "--");
+            lv_label_set_text(::price1dDiffLabel, "--");
+        }
+    }
     #endif
     
     if (!hasData)
@@ -1933,7 +2004,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
             // FASE 7.2: UI Average label update verificatie logging
             #if DEBUG_CALCULATIONS
 #if defined(PLATFORM_ESP32S3_JC3248W535)
-            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : ((index == 4) ? "5m" : "?")));
+            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : ((index == 4) ? "5m" : ((index == 5) ? "1d" : "?"))));
 #else
             const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : "?"));
 #endif
@@ -1952,7 +2023,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
             // FASE 7.2: UI Average label update verificatie logging
             #if DEBUG_CALCULATIONS
 #if defined(PLATFORM_ESP32S3_JC3248W535)
-            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : ((index == 4) ? "5m" : "?")));
+            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : ((index == 4) ? "5m" : ((index == 5) ? "1d" : "?"))));
 #else
             const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : "?"));
 #endif
@@ -1972,7 +2043,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
             // FASE 7.2: UI Average label update verificatie logging
             #if DEBUG_CALCULATIONS
 #if defined(PLATFORM_ESP32S3_JC3248W535)
-            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : ((index == 4) ? "5m" : "?")));
+            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : ((index == 4) ? "5m" : ((index == 5) ? "1d" : "?"))));
 #else
             const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : "?"));
 #endif
@@ -1997,8 +2068,9 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
                            (index == 2) ? (minuteArrayFilled || minuteIndex >= 30) :
                            (index == 3) ? (hasRet2h || (minuteArrayFilled || minuteIndex >= 2)) :
                            (index == 4) ? uiFiveMinuteHasMinimalData() :
+                           (index == 5) ? hasRet1d :
                            false;
-    bool shouldShowColor = (index == 3 || index == 4) ? (hasDataForColor) : (hasDataForColor && pct != 0.0f);
+    bool shouldShowColor = (index == 3 || index == 4 || index == 5) ? (hasDataForColor) : (hasDataForColor && pct != 0.0f);
 #elif defined(PLATFORM_ESP32S3_LCDWIKI_28)
     bool hasDataForColor = (index == 1) ? secondArrayFilled :
                            (index == 2) ? (minuteArrayFilled || minuteIndex >= 30) :

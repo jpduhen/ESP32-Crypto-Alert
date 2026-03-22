@@ -203,6 +203,7 @@
     #define SYMBOL_30MIN_LABEL "30 min"
     #define SYMBOL_2H_LABEL "2h"
     #define SYMBOL_5M_LABEL "5 min"
+    #define SYMBOL_1D_LABEL "1d"
     // 320px scherm: zelfde contentbreedte als prijskaarten (LV_PCT(100)), niet de smalle 240px-fallback.
     #define CHART_WIDTH 320
     #define CHART_HEIGHT 72
@@ -221,7 +222,7 @@
     #define FONT_SIZE_CHART_VERSION &lv_font_montserrat_10
     #define FONT_SIZE_CHART_MAX_LABEL &lv_font_montserrat_10
     #define FONT_SIZE_PRICE_MIN_MAX_DIFF &lv_font_montserrat_12
-    #define SYMBOL_COUNT 5  // JC3248W535: BTCEUR, 1m, 30m, 2h, 5m (5m tijdelijk onderaan; volgorde kan later)
+    #define SYMBOL_COUNT 6  // JC3248W535: data-index 0 spot, 1=1m, 2=30m, 3=2h, 4=5m, 5=1d (visuele volgorde via display-order mapping)
     #define LVGL_SCREEN_WIDTH 320
     #define LVGL_SCREEN_HEIGHT 480
 #elif defined(PLATFORM_ESP32S3_AMOLED_206)
