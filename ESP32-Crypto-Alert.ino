@@ -6071,6 +6071,12 @@ float calculateReturn1Minute()
     return priceData.calculateReturn1Minute(averagePrices);
 }
 
+// Read-only: geen update van averagePrices[1] (o.a. /status)
+float calculateReturn1MinuteReadOnly()
+{
+    return priceData.calculateReturn1Minute(nullptr);
+}
+
 // Calculate 5-minute return: price now vs 5 minutes ago
 // Fase 4.2.9: Gebruik PriceData getters (parallel, arrays blijven globaal)
 // Fase 9.1.4: static verwijderd zodat WebServerModule deze functie kan aanroepen
@@ -6094,18 +6100,27 @@ float calculateReturn5Minutes()
     return 0.0f;
 }
 
+// Forward decl: definitie volgt na calculateReturn30Minutes-read-only wrapper
+static float calculateLinearTrend30Minutes(bool updateAveragePriceCache);
+
 // Calculate 30-minute return: price now vs 30 minutes ago (using minute averages)
 // Fase 4.2.9: Gebruik PriceData getters (parallel, arrays blijven globaal)
 // Fase 9.1.4: static verwijderd zodat WebServerModule deze functie kan aanroepen
 float calculateReturn30Minutes()
 {
-    return calculateLinearTrend30Minutes();
+    return calculateLinearTrend30Minutes(true);
+}
+
+// Read-only: geen update van averagePrices[2] (o.a. /status)
+float calculateReturn30MinutesReadOnly()
+{
+    return calculateLinearTrend30Minutes(false);
 }
 
 // Bereken lineaire regressie (trend) over de laatste 30 minuten
 // Retourneert de helling (slope) als percentage per 30 minuten
 // Positieve waarde = stijgende trend, negatieve waarde = dalende trend
-static float calculateLinearTrend30Minutes()
+static float calculateLinearTrend30Minutes(bool updateAveragePriceCache)
 {
     // Tel aantal beschikbare minuten
     uint8_t availableMinutes = 0;
@@ -6121,7 +6136,9 @@ static float calculateLinearTrend30Minutes()
     // We hebben minimaal 30 minuten nodig voor een betrouwbare trend
     if (availableMinutes < 30)
     {
-        averagePrices[2] = 0.0f;
+        if (updateAveragePriceCache) {
+            averagePrices[2] = 0.0f;
+        }
         return 0.0f;
     }
     
@@ -6169,13 +6186,17 @@ static float calculateLinearTrend30Minutes()
     
     if (validPoints < 2)
     {
-        averagePrices[2] = 0.0f;
+        if (updateAveragePriceCache) {
+            averagePrices[2] = 0.0f;
+        }
         return 0.0f;
     }
     
     // Bereken gemiddelde prijs voor weergave
     float last30Avg = last30Sum / last30Count;
-    averagePrices[2] = last30Avg;
+    if (updateAveragePriceCache) {
+        averagePrices[2] = last30Avg;
+    }
     
     // Bereken slope (b)
     float n = (float)validPoints;

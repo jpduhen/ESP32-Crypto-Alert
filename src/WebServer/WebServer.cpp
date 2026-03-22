@@ -112,9 +112,9 @@ extern void requestMqttReconnect();
 static inline bool isClientConnected(WebServer* srv) {
     return (srv != nullptr) && srv->client().connected();
 }
-extern float calculateReturn1Minute();
+extern float calculateReturn1MinuteReadOnly();
 extern float calculateReturn5Minutes();
-extern float calculateReturn30Minutes();
+extern float calculateReturn30MinutesReadOnly();
 extern bool sendNotification(const char* title, const char* message, const char* colorTag);
 extern uint8_t getNotificationLogCount(void);
 extern bool getNotificationLogEntry(uint8_t index,
@@ -260,9 +260,9 @@ void WebServerModule::renderSettingsHTML() {
             }
         }
         // Bereken returns binnen dezelfde mutex lock
-        currentRet1m = calculateReturn1Minute();
+        currentRet1m = calculateReturn1MinuteReadOnly();
         currentRet5m = calculateReturn5Minutes();
-        currentRet30m = calculateReturn30Minutes();
+        currentRet30m = calculateReturn30MinutesReadOnly();
         safeMutexGive(dataMutex, "getSettingsHTML status");
     }
     
@@ -1837,9 +1837,9 @@ void WebServerModule::handleStatus() {
         if (isValidPrice(prices[0])) {
             price = prices[0];
         }
-        ret1m = calculateReturn1Minute();
+        ret1m = calculateReturn1MinuteReadOnly();
         ret5m = calculateReturn5Minutes();
-        ret30m = calculateReturn30Minutes();
+        ret30m = calculateReturn30MinutesReadOnly();
         ret2h = ::ret_2h;  // Gebruik globale ret_2h
         ret1d = ::ret_1d;
         ret7d = ::ret_7d;
