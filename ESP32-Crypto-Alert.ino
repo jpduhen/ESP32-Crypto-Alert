@@ -351,7 +351,10 @@ SemaphoreHandle_t gNetMutex = NULL;
 
 // Symbols array - eerste element wordt dynamisch ingesteld via bitvavoSymbol
 // Fase 8: UI data - gebruikt door UIController module
-#if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+char symbol0[16] = "BTC-EUR";
+extern const char *const symbols[SYMBOL_COUNT] = {symbol0, SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL, SYMBOL_5M_LABEL};
+#elif defined(PLATFORM_ESP32S3_LCDWIKI_28)
 char symbol0[16] = "BTC-EUR";
 extern const char *const symbols[SYMBOL_COUNT] = {symbol0, SYMBOL_1MIN_LABEL, SYMBOL_30MIN_LABEL, SYMBOL_2H_LABEL};
 #else
@@ -580,6 +583,11 @@ lv_obj_t *price30MinDiffLabel; // Label voor verschil tussen max en min in 30 mi
 lv_obj_t *price2HMaxLabel = nullptr; // 2h min/max/diff (LCDWIKI_28 / JC3248W535; nullptr op 3-symbol boards)
 lv_obj_t *price2HMinLabel = nullptr;
 lv_obj_t *price2HDiffLabel = nullptr;
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+lv_obj_t *price5mMaxLabel = nullptr; // 5m min/max/diff (alleen JC3248 5-kaart UI)
+lv_obj_t *price5mMinLabel = nullptr;
+lv_obj_t *price5mDiffLabel = nullptr;
+#endif
 lv_obj_t *anchorLabel; // Label voor anchor price info (rechts midden, met percentage verschil)
 lv_obj_t *anchorMaxLabel; // Label voor "Pak winst" (rechts, groen, boven)
 lv_obj_t *anchorMinLabel; // Label voor "Stop loss" (rechts, rood, onder)
@@ -647,6 +655,11 @@ char price30MinDiffLabelBuffer[20];  // Buffer voor 30m diff label (max: "12345.
 char price2HMaxLabelBuffer[20];  // Buffer voor 2h max label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
 char price2HMinLabelBuffer[20];  // Buffer voor 2h min label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
 char price2HDiffLabelBuffer[20];  // Buffer voor 2h diff label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+char price5mMaxLabelBuffer[20];
+char price5mMinLabelBuffer[20];
+char price5mDiffLabelBuffer[20];
+#endif
 
 // Cache laatste waarden (alleen updaten als veranderd)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
@@ -664,6 +677,11 @@ float lastPrice30MinDiffValue = -1.0f;  // Cache voor 30m diff
 float lastPrice2HMaxValue = -1.0f;  // Cache voor 2h max (4-symbol boards met 2h-kaart)
 float lastPrice2HMinValue = -1.0f;
 float lastPrice2HDiffValue = -1.0f;
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+float lastPrice5mMaxValue = -1.0f;
+float lastPrice5mMinValue = -1.0f;
+float lastPrice5mDiffValue = -1.0f;
+#endif
 char lastPriceTitleText[SYMBOL_COUNT][32] = {""};  // Cache voor price titles (max: "30 min  +12.34%" = ~20 chars, verkleind van 48 naar 32 bytes)
 char priceLblBufferArray[SYMBOL_COUNT][24];  // Buffers voor average price labels (max: "12345.67" = ~8 chars)
 static char footerRssiBuffer[10];  // Buffer voor footer RSSI
@@ -3389,6 +3407,10 @@ void netMutexUnlock(const char* taskName)
 // Fase 6.1: AlertEngine module gebruikt deze functies (extern declarations in AlertEngine.cpp)
 void findMinMaxInSecondPrices(float &minVal, float &maxVal);
 void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+void findMinMaxInFiveMinutePrices(float &minVal, float &maxVal);
+bool uiFiveMinuteHasMinimalData(void);
+#endif
 #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
 void findMinMaxInLast2Hours(float &minVal, float &maxVal);
 #endif
@@ -6025,6 +6047,46 @@ void findMinMaxInSecondPrices(float &minVal, float &maxVal)
     bool result = findMinMaxInArray(prices, SECONDS_PER_MINUTE, index, arrayFilled, 0, false, minVal, maxVal);
 }
 
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+// 5m-venster: zelfde ringbuffer als calculateReturn5Minutes() / ret_5m
+void findMinMaxInFiveMinutePrices(float &minVal, float &maxVal)
+{
+    const float* arr = priceData.getFiveMinutePrices();
+    if (arr == nullptr) {
+        minVal = maxVal = 0.0f;
+        return;
+    }
+    uint16_t idx = priceData.getFiveMinuteIndex();
+    bool filled = priceData.getFiveMinuteArrayFilled();
+    findMinMaxInArray(arr, SECONDS_PER_5MINUTES, idx, filled, 0, true, minVal, maxVal);
+}
+
+bool uiFiveMinuteHasMinimalData(void)
+{
+    return priceData.getFiveMinuteArrayFilled() || priceData.getFiveMinuteIndex() >= 2;
+}
+
+static void refreshAveragePrice5mForUi(void)
+{
+    float* arr = priceData.getFiveMinutePrices();
+    if (arr == nullptr) {
+        averagePrices[4] = 0.0f;
+        return;
+    }
+    uint16_t idx = priceData.getFiveMinuteIndex();
+    bool filled = priceData.getFiveMinuteArrayFilled();
+    uint16_t avail = calculateAvailableElements(filled, idx, SECONDS_PER_5MINUTES);
+    if (avail == 0) {
+        averagePrices[4] = 0.0f;
+        return;
+    }
+    float sum = 0.0f;
+    uint16_t validCount = 0;
+    accumulateValidPricesFromRingBuffer(arr, filled, idx, SECONDS_PER_5MINUTES, 1, avail, sum, validCount);
+    averagePrices[4] = (validCount > 0) ? (sum / (float)validCount) : 0.0f;
+}
+#endif
+
 // ============================================================================
 // Price Calculation Functions
 // ============================================================================
@@ -7345,6 +7407,14 @@ void fetchPrice()
             } else {
                 prices[3] = 0.0f; // Reset naar 0 om aan te geven dat er nog geen data is
             }
+            #endif
+            #if defined(PLATFORM_ESP32S3_JC3248W535)
+            if (uiFiveMinuteHasMinimalData()) {
+                prices[4] = ret_5m;
+            } else {
+                prices[4] = 0.0f;
+            }
+            refreshAveragePrice5mForUi();
             #endif
             
             // Zet flag voor nieuwe data (voor grafiek update)

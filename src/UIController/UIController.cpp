@@ -210,6 +210,19 @@ extern float lastPrice30MinDiffValue;
 extern float lastPrice2HMaxValue;
 extern float lastPrice2HMinValue;
 extern float lastPrice2HDiffValue;
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+extern void findMinMaxInFiveMinutePrices(float &minVal, float &maxVal);
+extern bool uiFiveMinuteHasMinimalData(void);
+extern lv_obj_t *price5mMaxLabel;
+extern lv_obj_t *price5mMinLabel;
+extern lv_obj_t *price5mDiffLabel;
+extern char price5mMaxLabelBuffer[20];
+extern char price5mMinLabelBuffer[20];
+extern char price5mDiffLabelBuffer[20];
+extern float lastPrice5mMaxValue;
+extern float lastPrice5mMinValue;
+extern float lastPrice5mDiffValue;
+#endif
 extern char lastPriceTitleText[SYMBOL_COUNT][32];  // Verkleind van 48 naar 32 bytes
 extern char priceLblBufferArray[SYMBOL_COUNT][24];
 extern float lastPriceLblValueArray[SYMBOL_COUNT];
@@ -898,6 +911,39 @@ void UIController::createPriceBoxes() {
             lv_obj_align(price2HMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
         }
         #endif
+        #if defined(PLATFORM_ESP32S3_JC3248W535)
+        // Min/Max/Diff labels voor 5m blok (index 4) — alleen JC3248 5-kaart UI
+        if (i == 4)
+        {
+            strcpy(price5mMaxLabelBuffer, "--");
+            strcpy(price5mDiffLabelBuffer, "--");
+            strcpy(price5mMinLabelBuffer, "--");
+            
+            price5mMaxLabel = lv_label_create(priceBox[i]);
+            ::price5mMaxLabel = price5mMaxLabel;
+            lv_obj_set_style_text_font(price5mMaxLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price5mMaxLabel, lv_palette_main(LV_PALETTE_GREEN), 0);
+            lv_obj_set_style_text_align(price5mMaxLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price5mMaxLabel, price5mMaxLabelBuffer);
+            lv_obj_align(price5mMaxLabel, LV_ALIGN_RIGHT_MID, 0, -14);
+            
+            price5mDiffLabel = lv_label_create(priceBox[i]);
+            ::price5mDiffLabel = price5mDiffLabel;
+            lv_obj_set_style_text_font(price5mDiffLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price5mDiffLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+            lv_obj_set_style_text_align(price5mDiffLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price5mDiffLabel, price5mDiffLabelBuffer);
+            lv_obj_align(price5mDiffLabel, LV_ALIGN_RIGHT_MID, 0, 0);
+            
+            price5mMinLabel = lv_label_create(priceBox[i]);
+            ::price5mMinLabel = price5mMinLabel;
+            lv_obj_set_style_text_font(price5mMinLabel, FONT_SIZE_PRICE_MIN_MAX_DIFF, 0);
+            lv_obj_set_style_text_color(price5mMinLabel, lv_palette_main(LV_PALETTE_RED), 0);
+            lv_obj_set_style_text_align(price5mMinLabel, LV_TEXT_ALIGN_RIGHT, 0);
+            lv_label_set_text(price5mMinLabel, price5mMinLabelBuffer);
+            lv_obj_align(price5mMinLabel, LV_ALIGN_RIGHT_MID, 0, 14);
+        }
+        #endif
     }
 }
 
@@ -1074,6 +1120,11 @@ static void resetUiPointers() {
     price2HMaxLabel = nullptr;
     price2HDiffLabel = nullptr;
     price2HMinLabel = nullptr;
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+    price5mMaxLabel = nullptr;
+    price5mDiffLabel = nullptr;
+    price5mMinLabel = nullptr;
+#endif
     ipLabel = nullptr;
     chartVersionLabel = nullptr;
     lblFooterLine1 = nullptr;
@@ -1104,6 +1155,11 @@ static void resetUiPointers() {
     ::price2HMaxLabel = nullptr;
     ::price2HDiffLabel = nullptr;
     ::price2HMinLabel = nullptr;
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+    ::price5mMaxLabel = nullptr;
+    ::price5mDiffLabel = nullptr;
+    ::price5mMinLabel = nullptr;
+#endif
     ::ipLabel = nullptr;
     ::chartVersionLabel = nullptr;
     ::lblFooterLine1 = nullptr;
@@ -1700,10 +1756,17 @@ void UIController::updateAveragePriceCard(uint8_t index)
     // Voor 2h box: gebruik warm-start data OF live data (minuteIndex >= 2 voor minimal, >= 120 voor volledig)
     bool hasData2h = (index == 3) ? (hasRet2h || (minuteArrayFilled || minuteIndex >= 120)) : true;
     bool hasData2hMinimal = (index == 3) ? (hasRet2h || (minuteArrayFilled || minuteIndex >= 2)) : true;  // Warm-start OF minimaal 2 minuten live data
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+    bool hasData = (index == 1) ? hasData1m :
+                   (index == 2) ? hasData30m :
+                   (index == 3) ? hasData2hMinimal :
+                   (index == 4) ? uiFiveMinuteHasMinimalData() : true;
+#else
     bool hasData = (index == 1) ? hasData1m :
                    (index == 2) ? hasData30m :
                    (index == 3) ? hasData2hMinimal :
                    true;
+#endif
     
     // Debug voor 2h box: alleen loggen wanneer waarde verandert
     if (index == 3) {
@@ -1730,7 +1793,13 @@ void UIController::updateAveragePriceCard(uint8_t index)
 
     
     if (::priceTitle[index] != nullptr) {
-        #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
+        #if defined(PLATFORM_ESP32S3_JC3248W535)
+        bool shouldShowPct = (index == 4) ? uiFiveMinuteHasMinimalData() :
+                             (index == 3) ? (hasData2hMinimal) :
+                             (index == 2) ? (hasData30m) :
+                             (hasData1m);
+        if (shouldShowPct) {
+        #elif defined(PLATFORM_ESP32S3_LCDWIKI_28)
         // 4-symbol boards met 2h-kaart
         bool shouldShowPct = (index == 3) ? (hasData2hMinimal) :
                              (index == 2) ? (hasData30m) :
@@ -1744,7 +1813,11 @@ void UIController::updateAveragePriceCard(uint8_t index)
             // Format nieuwe tekst
             char newText[32];  // Verkleind van 48 naar 32 bytes (max: "30 min  +12.34%" = ~20 chars)
             const char* label = symbols[index];
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+            if (pct == 0.0f && (index == 3 || index == 2 || index == 4)) {
+#else
             if (pct == 0.0f && (index == 3 || index == 2)) {
+#endif
                 // Voor 2h/30m/1d box: toon 0.00% als de return 0 is
                 snprintf(newText, sizeof(newText), "%s  0.00%%", label);
             } else {
@@ -1815,6 +1888,19 @@ void UIController::updateAveragePriceCard(uint8_t index)
         }
     }
     #endif
+    #if defined(PLATFORM_ESP32S3_JC3248W535)
+    if (index == 4 && ::price5mMaxLabel != nullptr && ::price5mMinLabel != nullptr && ::price5mDiffLabel != nullptr)
+    {
+        float minVal, maxVal;
+        findMinMaxInFiveMinutePrices(minVal, maxVal);
+        applyLiveMinMax(minVal, maxVal);
+        float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
+        updateMinMaxDiffLabels(::price5mMaxLabel, ::price5mMinLabel, ::price5mDiffLabel,
+                              price5mMaxLabelBuffer, price5mMinLabelBuffer, price5mDiffLabelBuffer,
+                              maxVal, minVal, diff,
+                              lastPrice5mMaxValue, lastPrice5mMinValue, lastPrice5mDiffValue);
+    }
+    #endif
     
     if (!hasData)
     {
@@ -1826,7 +1912,11 @@ void UIController::updateAveragePriceCard(uint8_t index)
             
             // FASE 7.2: UI Average label update verificatie logging
             #if DEBUG_CALCULATIONS
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : ((index == 4) ? "5m" : "?")));
+#else
             const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : "?"));
+#endif
             Serial.printf(F("[UI][Average] %s label set to '--' (no data)\n"), timeframe);
             #endif
         }
@@ -1841,7 +1931,11 @@ void UIController::updateAveragePriceCard(uint8_t index)
             
             // FASE 7.2: UI Average label update verificatie logging
             #if DEBUG_CALCULATIONS
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : ((index == 4) ? "5m" : "?")));
+#else
             const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : "?"));
+#endif
             Serial.printf(F("[UI][Average] %s label updated: %.0f\n"), timeframe, averagePrices[index]);
             #endif
         }
@@ -1857,7 +1951,11 @@ void UIController::updateAveragePriceCard(uint8_t index)
             
             // FASE 7.2: UI Average label update verificatie logging
             #if DEBUG_CALCULATIONS
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+            const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : ((index == 4) ? "5m" : "?")));
+#else
             const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : "?"));
+#endif
             Serial.printf(F("[UI][Average] %s label set to '--' (no data)\n"), timeframe);
             #endif
         }
@@ -1874,22 +1972,23 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
     }
     
     // Fase 8.6.3: Gebruik globale pointers (synchroniseert met module pointers)
-    #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
-    // Voor 2h box: gebruik warm-start data OF minimaal 2 minuten live data (2h)
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+    bool hasDataForColor = (index == 1) ? secondArrayFilled :
+                           (index == 2) ? (minuteArrayFilled || minuteIndex >= 30) :
+                           (index == 3) ? (hasRet2h || (minuteArrayFilled || minuteIndex >= 2)) :
+                           (index == 4) ? uiFiveMinuteHasMinimalData() :
+                           false;
+    bool shouldShowColor = (index == 3 || index == 4) ? (hasDataForColor) : (hasDataForColor && pct != 0.0f);
+#elif defined(PLATFORM_ESP32S3_LCDWIKI_28)
     bool hasDataForColor = (index == 1) ? secondArrayFilled :
                            (index == 2) ? (minuteArrayFilled || minuteIndex >= 30) :
                            (index == 3) ? (hasRet2h || (minuteArrayFilled || minuteIndex >= 2)) :
                            false;
-    #else
-    bool hasDataForColor = (index == 1) ? secondArrayFilled : (minuteArrayFilled || minuteIndex >= 30);
-    #endif
-    
-    // Voor 2h box: toon kleur ook als pct 0.0f is maar er wel data is
-    #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
     bool shouldShowColor = (index == 3) ? (hasDataForColor) : (hasDataForColor && pct != 0.0f);
-    #else
+#else
+    bool hasDataForColor = (index == 1) ? secondArrayFilled : (minuteArrayFilled || minuteIndex >= 30);
     bool shouldShowColor = hasDataForColor && pct != 0.0f;
-    #endif
+#endif
     
     if (shouldShowColor)
     {
