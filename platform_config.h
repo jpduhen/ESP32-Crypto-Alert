@@ -13,8 +13,8 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 5
-#define VERSION_MINOR 74
-#define VERSION_STRING "5.74"
+#define VERSION_MINOR 75
+#define VERSION_STRING "5.75"
 #endif
 
 // --- Debug Configuration ---
@@ -207,9 +207,9 @@
     #define SYMBOL_7D_LABEL "7d"
     // 320px scherm: zelfde contentbreedte als prijskaarten (LV_PCT(100)), niet de smalle 240px-fallback.
     #define CHART_WIDTH 320
-    #define CHART_HEIGHT 72
+    #define CHART_HEIGHT 102  // was 72: +30 px grafiekhoogte
     #define CHART_ALIGN_Y 24
-    #define PRICE_BOX_Y_START 99
+    #define PRICE_BOX_Y_START 129  // was 99: prijskaarten +30 px naar beneden (Y)
     #define FONT_SIZE_TITLE_BTCEUR &lv_font_montserrat_14
     #define FONT_SIZE_TITLE_OTHER &lv_font_montserrat_12
     #define FONT_SIZE_PRICE_BTCEUR &lv_font_montserrat_12
