@@ -137,10 +137,19 @@ extern bool hasRet2hWarm;
 extern bool hasRet30mWarm;
 extern bool hasRet2hLive;
 extern bool hasRet30mLive;
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+extern uint8_t g_uiLastMinMaxSource1d;
+extern uint8_t g_uiLastMinMaxSource7d;
+extern bool hasRet1dWarm;
+extern bool hasRet7dWarm;
+#endif
 extern uint8_t language;
 extern bool minuteArrayFilled;
 extern uint8_t minuteIndex;
 extern float lastFetchedPrice;
+extern unsigned long latestKnownPriceMs;
+extern uint32_t lastApiMs;
+extern uint8_t latestKnownPriceSource;
 extern uint8_t calcLivePctMinuteAverages(uint16_t windowMinutes);
 extern const char* getText(const char* nlText, const char* enText);
 // MINUTES_FOR_30MIN_CALC is een #define, niet een variabele
@@ -1845,6 +1854,48 @@ void UIController::updateWarmStartStatusLabel()
     lv_obj_set_style_text_color(::warmStartStatusLabel, statusColor, 0);
 }
 
+#if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
+// Min/max live-merge UI: invariant-warnings (throttled; onafhankelijk van DEBUG_UI_TIMEFRAME_MINMAX)
+static constexpr uint32_t kUiTfInvWarnMs = 30000;
+static uint32_t s_uiTfLastInvWarnMs[7] = {0};
+
+static void uiTfMaybeWarnInvariant(uint8_t cardIdx, const char* tfTag,
+    float rawMin, float rawMax, float curPrice, bool dataOk) {
+    if (cardIdx >= 7) return;
+    uint32_t now = millis();
+    if (now - s_uiTfLastInvWarnMs[cardIdx] < kUiTfInvWarnMs) return;
+    if (!dataOk) {
+        s_uiTfLastInvWarnMs[cardIdx] = now;
+        Serial.printf("[UI][minmax] WARN %s data invalid/empty\n", tfTag);
+        return;
+    }
+    if (curPrice > 0.0f && rawMin > 0.0f && rawMax > 0.0f && rawMax >= rawMin) {
+        if (curPrice < rawMin || curPrice > rawMax) {
+            s_uiTfLastInvWarnMs[cardIdx] = now;
+            Serial.printf("[UI][minmax] WARN %s cur=%.2f outside raw [%.2f,%.2f] (before live-merge)\n",
+                          tfTag, curPrice, rawMin, rawMax);
+        }
+    }
+}
+
+#if DEBUG_UI_TIMEFRAME_MINMAX
+static constexpr uint32_t kUiTfDbgLogMs = 3000;
+static uint32_t s_uiTfLastDbgMs[7] = {0};
+
+static void uiTfDebugLog(uint8_t cardIdx, const char* tfTag, const char* src, const char* readiness,
+    float rawMin, float rawMax, float curPrice, float finMin, float finMax, int sampleCount,
+    unsigned long liveAgeMs, uint8_t lkpSrc, int mergeSkippedStale) {
+    if (cardIdx >= 7) return;
+    uint32_t now = millis();
+    if (now - s_uiTfLastDbgMs[cardIdx] < kUiTfDbgLogMs) return;
+    s_uiTfLastDbgMs[cardIdx] = now;
+    Serial.printf("[UI][tfmin] %s src=%s rd=%s raw=%.0f/%.0f cur=%.0f fin=%.0f/%.0f n=%d ageMs=%lu lkp=%u skip=%d\n",
+                  tfTag, src, readiness, rawMin, rawMax, curPrice, finMin, finMax, sampleCount,
+                  (unsigned long)liveAgeMs, (unsigned)lkpSrc, mergeSkippedStale);
+}
+#endif
+#endif
+
 // Fase 8.6.2: updateAveragePriceCard() naar Module
 // Helper functie om average price cards (1min/30min) bij te werken
 void UIController::updateAveragePriceCard(uint8_t index)
@@ -1852,7 +1903,41 @@ void UIController::updateAveragePriceCard(uint8_t index)
     // Fase 8.6.2: Gebruik globale pointers (synchroniseert met module pointers)
     float pct = prices[index];
     float currentPrice = (lastFetchedPrice > 0.0f) ? lastFetchedPrice : prices[0];
+    // Versheid live koers: lastFetchedPrice wordt samen met latestKnownPriceMs gezet; fallback prices[0] ~ lastApiMs
+    const unsigned long uiLiveRefMs = (lastFetchedPrice > 0.0f)
+        ? latestKnownPriceMs
+        : (unsigned long)lastApiMs;
+    const unsigned long uiLiveAgeMs = (uiLiveRefMs > 0UL)
+        ? (millis() - uiLiveRefMs)
+        : 0UL;
+    const bool uiLiveStale = (UI_APPLY_LIVE_MINMAX_MAX_STALE_MS > 0UL) &&
+        (uiLiveRefMs == 0UL || uiLiveAgeMs > UI_APPLY_LIVE_MINMAX_MAX_STALE_MS);
+#if DEBUG_UI_TIMEFRAME_MINMAX
+    static uint32_t s_uiTfLiveMetaLogMs = 0;
+    {
+        uint32_t nowMeta = millis();
+        if (nowMeta - s_uiTfLiveMetaLogMs >= 3000) {
+            s_uiTfLiveMetaLogMs = nowMeta;
+            Serial.printf("[UI][tfmin] live meta ageMs=%lu refMs=%lu LKP=%u stale=%d maxStaleMs=%lu\n",
+                          (unsigned long)uiLiveAgeMs, (unsigned long)uiLiveRefMs,
+                          (unsigned)latestKnownPriceSource, uiLiveStale ? 1 : 0,
+                          (unsigned long)UI_APPLY_LIVE_MINMAX_MAX_STALE_MS);
+        }
+    }
+#endif
     auto applyLiveMinMax = [&](float &minVal, float &maxVal) {
+        if (uiLiveStale) {
+            static uint32_t s_lastStaleMergeWarnMs = 0;
+            uint32_t now = millis();
+            if (now - s_lastStaleMergeWarnMs >= 30000UL) {
+                s_lastStaleMergeWarnMs = now;
+                Serial.printf("[UI][minmax] WARN merge skipped: stale live price ageMs=%lu (maxStaleMs=%lu refMs=%lu)\n",
+                              (unsigned long)uiLiveAgeMs,
+                              (unsigned long)UI_APPLY_LIVE_MINMAX_MAX_STALE_MS,
+                              (unsigned long)uiLiveRefMs);
+            }
+            return;
+        }
         if (currentPrice > 0.0f) {
             if (minVal <= 0.0f || currentPrice < minVal) minVal = currentPrice;
             if (maxVal <= 0.0f || currentPrice > maxVal) maxVal = currentPrice;
@@ -1990,10 +2075,31 @@ void UIController::updateAveragePriceCard(uint8_t index)
     {
         TwoHMetrics m = computeTwoHMetrics();
         bool ok = m.valid;
-        if (ok) {
+        if (!ok) {
+            if (hasData2hMinimal) {
+                uiTfMaybeWarnInvariant(3, "2h", 0.0f, 0.0f, currentPrice, false);
+            }
+        } else {
             averagePrices[3] = m.avg2h;
             float minVal = m.low2h;
             float maxVal = m.high2h;
+            uiTfMaybeWarnInvariant(3, "2h", minVal, maxVal, currentPrice, true);
+            #if DEBUG_UI_TIMEFRAME_MINMAX
+            float rawMin2h = minVal;
+            float rawMax2h = maxVal;
+            const char* src2h = "minute";
+            const char* rd2h = hasRet2hLive ? (hasRet2hWarm ? "mixed" : "live")
+                                           : (hasRet2hWarm ? "warm" : "--");
+            uint16_t win2h = minuteArrayFilled ? MINUTES_FOR_30MIN_CALC : minuteIndex;
+            if (win2h > 120) {
+                win2h = 120;
+            }
+            applyLiveMinMax(minVal, maxVal);
+            uiTfDebugLog(3, "2h", src2h, rd2h, rawMin2h, rawMax2h, currentPrice, minVal, maxVal, (int)win2h,
+                          uiLiveAgeMs, latestKnownPriceSource, uiLiveStale ? 1 : 0);
+            #else
+            applyLiveMinMax(minVal, maxVal);
+            #endif
             float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
             updateMinMaxDiffLabels(::price2HMaxLabel, ::price2HMinLabel, ::price2HDiffLabel,
                                   price2HMaxLabelBuffer, price2HMinLabelBuffer, price2HDiffLabelBuffer,
@@ -2019,6 +2125,22 @@ void UIController::updateAveragePriceCard(uint8_t index)
         if (hasRet1d) {
             float minVal, maxVal;
             findMinMaxInLast24Hours(minVal, maxVal);
+            bool dataOk1d = (minVal > 0.0f && maxVal > 0.0f && maxVal >= minVal);
+            uiTfMaybeWarnInvariant(5, "1d", minVal, maxVal, currentPrice, dataOk1d);
+            #if DEBUG_UI_TIMEFRAME_MINMAX
+            float rawMin1d = minVal;
+            float rawMax1d = maxVal;
+            const char* src1d = (g_uiLastMinMaxSource1d == 1) ? "hourly"
+                                : (g_uiLastMinMaxSource1d == 2) ? "warmStart" : "?";
+            const char* rd1d = (g_uiLastMinMaxSource1d == 1) ? (hasRet1dWarm ? "mixed" : "live")
+                                : (g_uiLastMinMaxSource1d == 2) ? "warm" : "?";
+            int sc1d = (g_uiLastMinMaxSource1d == 1) ? 24 : (g_uiLastMinMaxSource1d == 2) ? 0 : -1;
+            applyLiveMinMax(minVal, maxVal);
+            uiTfDebugLog(5, "1d", src1d, rd1d, rawMin1d, rawMax1d, currentPrice, minVal, maxVal, sc1d,
+                          uiLiveAgeMs, latestKnownPriceSource, uiLiveStale ? 1 : 0);
+            #else
+            applyLiveMinMax(minVal, maxVal);
+            #endif
             float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
             updateMinMaxDiffLabels(::price1dMaxLabel, ::price1dMinLabel, ::price1dDiffLabel,
                                   price1dMaxLabelBuffer, price1dMinLabelBuffer, price1dDiffLabelBuffer,
@@ -2041,6 +2163,22 @@ void UIController::updateAveragePriceCard(uint8_t index)
         if (hasRet7d) {
             float minVal, maxVal;
             findMinMaxInLast7Days(minVal, maxVal);
+            bool dataOk7d = (minVal > 0.0f && maxVal > 0.0f && maxVal >= minVal);
+            uiTfMaybeWarnInvariant(6, "7d", minVal, maxVal, currentPrice, dataOk7d);
+            #if DEBUG_UI_TIMEFRAME_MINMAX
+            float rawMin7d = minVal;
+            float rawMax7d = maxVal;
+            const char* src7d = (g_uiLastMinMaxSource7d == 1) ? "hourly"
+                                : (g_uiLastMinMaxSource7d == 2) ? "warmStart" : "?";
+            const char* rd7d = (g_uiLastMinMaxSource7d == 1) ? (hasRet7dWarm ? "mixed" : "live")
+                                : (g_uiLastMinMaxSource7d == 2) ? "warm" : "?";
+            int sc7d = (g_uiLastMinMaxSource7d == 1) ? 168 : (g_uiLastMinMaxSource7d == 2) ? 0 : -1;
+            applyLiveMinMax(minVal, maxVal);
+            uiTfDebugLog(6, "7d", src7d, rd7d, rawMin7d, rawMax7d, currentPrice, minVal, maxVal, sc7d,
+                          uiLiveAgeMs, latestKnownPriceSource, uiLiveStale ? 1 : 0);
+            #else
+            applyLiveMinMax(minVal, maxVal);
+            #endif
             float diff = (minVal > 0.0f && maxVal > 0.0f) ? (maxVal - minVal) : 0.0f;
             updateMinMaxDiffLabels(::price7dMaxLabel, ::price7dMinLabel, ::price7dDiffLabel,
                                   price7dMaxLabelBuffer, price7dMinLabelBuffer, price7dDiffLabelBuffer,

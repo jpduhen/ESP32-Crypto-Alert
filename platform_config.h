@@ -13,8 +13,8 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 5
-#define VERSION_MINOR 75
-#define VERSION_STRING "5.75"
+#define VERSION_MINOR 76
+#define VERSION_STRING "5.76"
 #endif
 
 // --- Debug Configuration ---
@@ -39,6 +39,17 @@
 // WAARSCHUWING: DEBUG_CALCULATIONS gebruikt ~2808 bytes DRAM voor debug strings
 #ifndef DEBUG_CALCULATIONS
 #define DEBUG_CALCULATIONS 0  // Standaard uit (productie)
+#endif
+
+// UI: compacte Serial-log per timeframe-min/max (raw vs live-merge); los van DEBUG_CALCULATIONS om DRAM te sparen
+#ifndef DEBUG_UI_TIMEFRAME_MINMAX
+#define DEBUG_UI_TIMEFRAME_MINMAX 0  // Standaard uit (productie)
+#endif
+
+// applyLiveMinMax: skip merge als laatste live-prijs ouder is dan dit (ms). 0 = geen guard (alleen logging mogelijk).
+// Typisch: 2–3× UPDATE_API_INTERVAL (4s) is "vers"; default ruim voor netwerk-stops.
+#ifndef UI_APPLY_LIVE_MINMAX_MAX_STALE_MS
+#define UI_APPLY_LIVE_MINMAX_MAX_STALE_MS 120000UL
 #endif
 
 // Standaard taal instelling (0 = Nederlands, 1 = English)

@@ -6625,13 +6625,20 @@ static void refreshAveragePrice1dForUi(void)
     }
 }
 
+// UI-debug (JC3248): welke bron vormde laatste 1d/7d min/max (0=geen, 1=hourly, 2=warmStart)
+uint8_t g_uiLastMinMaxSource1d = 0;
+uint8_t g_uiLastMinMaxSource7d = 0;
+
 void findMinMaxInLast24Hours(float &minVal, float &maxVal)
 {
     float av;
+    g_uiLastMinMaxSource1d = 0;
     if (fill24HourlyStatsFor1dUi(minVal, maxVal, av)) {
+        g_uiLastMinMaxSource1d = 1;
         return;
     }
     if (warmStart1dValid) {
+        g_uiLastMinMaxSource1d = 2;
         minVal = warmStart1dMin;
         maxVal = warmStart1dMax;
     } else {
@@ -6719,10 +6726,13 @@ static void refreshAveragePrice7dForUi(void)
 void findMinMaxInLast7Days(float &minVal, float &maxVal)
 {
     float av;
+    g_uiLastMinMaxSource7d = 0;
     if (fill168HourlyStatsFor7dUi(minVal, maxVal, av)) {
+        g_uiLastMinMaxSource7d = 1;
         return;
     }
     if (warmStart7dValid) {
+        g_uiLastMinMaxSource7d = 2;
         minVal = warmStart7dMin;
         maxVal = warmStart7dMax;
     } else {
