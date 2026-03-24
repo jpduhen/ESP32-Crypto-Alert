@@ -72,6 +72,7 @@ DisplayBackend *g_displayBackend = nullptr;
 
 // AlertEngine module (Fase 6.1: voor alert detection en notificaties)
 #include "src/AlertEngine/AlertEngine.h"
+#include "src/RegimeEngine/RegimeEngine.h"
 
 // Memory module (M1: heap telemetry voor geheugenfragmentatie audit)
 #include "src/Memory/HeapMon.h"
@@ -472,6 +473,23 @@ bool volatilityArrayFilled = false;  // Flag om aan te geven of array gevuld is
 VolatilityState volatilityState = VOLATILITY_MEDIUM;  // Current volatility state (backward compatibility)
 float volatilityLowThreshold = VOLATILITY_LOW_THRESHOLD_DEFAULT;  // Low threshold (%)
 float volatilityHighThreshold = VOLATILITY_HIGH_THRESHOLD_DEFAULT;  // High threshold (%)
+
+// Regime-engine (Fase A: snapshot; instellingen gesynchroniseerd in loadSettings/saveSettings)
+bool regimeEngineEnabled = false;
+uint32_t regimeMinDwellSec = 180u;
+float regimeEnergeticEnter = 0.95f;
+float regimeEnergeticExit = 0.78f;
+float regimeSlapEnter = 0.38f;
+float regimeSlapExit = 0.52f;
+float regimeLoadedFloor = 0.45f;
+float regimeLoadedDrop = 0.35f;
+float regimeDirDeadband1mPct = 0.05f;
+float regimeDirDeadband5mPct = 0.10f;
+float regimeDirDeadband30mPct = 0.15f;
+float regimeDirDeadband2hPct = 0.25f;
+float regime2hCompressMinPct = 0.35f;
+float regime2hCompressMaxPct = 1.10f;
+
 unsigned long lastTrendChangeNotification = 0;  // Timestamp van laatste trend change notificatie (backward compatibility)
 
 // Smart Confluence Mode state
@@ -4250,6 +4268,22 @@ static void loadSettings()
     trendThreshold = settings.trendThreshold;
     volatilityLowThreshold = settings.volatilityLowThreshold;
     volatilityHighThreshold = settings.volatilityHighThreshold;
+
+    // Regime-engine (Fase A)
+    regimeEngineEnabled = settings.regimeEngineEnabled;
+    regimeMinDwellSec = settings.regimeMinDwellSec;
+    regimeEnergeticEnter = settings.regimeEnergeticEnter;
+    regimeEnergeticExit = settings.regimeEnergeticExit;
+    regimeSlapEnter = settings.regimeSlapEnter;
+    regimeSlapExit = settings.regimeSlapExit;
+    regimeLoadedFloor = settings.regimeLoadedFloor;
+    regimeLoadedDrop = settings.regimeLoadedDrop;
+    regimeDirDeadband1mPct = settings.regimeDirDeadband1mPct;
+    regimeDirDeadband5mPct = settings.regimeDirDeadband5mPct;
+    regimeDirDeadband30mPct = settings.regimeDirDeadband30mPct;
+    regimeDirDeadband2hPct = settings.regimeDirDeadband2hPct;
+    regime2hCompressMinPct = settings.regime2hCompressMinPct;
+    regime2hCompressMaxPct = settings.regime2hCompressMaxPct;
     
     Serial_printf(F("[Settings] Loaded: topic=%s, symbol=%s, 1min trend=%.2f/%.2f%%/min, 30min trend=%.2f/%.2f%%/uur, cooldown=%lu/%lu ms\n"),
                   ntfyTopic, bitvavoSymbol, threshold1MinUp, threshold1MinDown, threshold30MinUp, threshold30MinDown,
@@ -4328,6 +4362,22 @@ void saveSettings()
     settings.trendThreshold = trendThreshold;
     settings.volatilityLowThreshold = volatilityLowThreshold;
     settings.volatilityHighThreshold = volatilityHighThreshold;
+
+    // Regime-engine (Fase A)
+    settings.regimeEngineEnabled = regimeEngineEnabled;
+    settings.regimeMinDwellSec = regimeMinDwellSec;
+    settings.regimeEnergeticEnter = regimeEnergeticEnter;
+    settings.regimeEnergeticExit = regimeEnergeticExit;
+    settings.regimeSlapEnter = regimeSlapEnter;
+    settings.regimeSlapExit = regimeSlapExit;
+    settings.regimeLoadedFloor = regimeLoadedFloor;
+    settings.regimeLoadedDrop = regimeLoadedDrop;
+    settings.regimeDirDeadband1mPct = regimeDirDeadband1mPct;
+    settings.regimeDirDeadband5mPct = regimeDirDeadband5mPct;
+    settings.regimeDirDeadband30mPct = regimeDirDeadband30mPct;
+    settings.regimeDirDeadband2hPct = regimeDirDeadband2hPct;
+    settings.regime2hCompressMinPct = regime2hCompressMinPct;
+    settings.regime2hCompressMaxPct = regime2hCompressMaxPct;
     
     // Save using SettingsStore
     settingsStore.save(settings);
@@ -7725,6 +7775,11 @@ void fetchPrice()
             float ret5mLocal = ret_5m;
             float ret30mLocal = ret_30m;
             float manualAnchorLocal = anchorActive ? anchorPrice : 0.0f;
+
+            // Fase A regime-engine: na return-berekening, vóór alertEngine (geen wijziging aan alertlogica)
+            TwoHMetrics regimeTwoH = computeTwoHMetrics();
+            regimeEngineTick(millis(), ret_1m, ret_5m, ret_30m, ret_2h,
+                             regimeTwoH.rangePct, regimeTwoH.valid);
             
             // Phase 1: Auto-anchor uitgeschakeld (alleen manual anchor)
             safeMutexGive(dataMutex, "fetchPrice");  // MUTEX EERST VRIJGEVEN!

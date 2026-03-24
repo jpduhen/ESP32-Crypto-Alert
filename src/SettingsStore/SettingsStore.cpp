@@ -217,6 +217,21 @@ const char* SettingsStore::PREF_KEY_TREND_TH = "trendTh";
 const char* SettingsStore::PREF_KEY_VOL_LOW = "volLow";
 const char* SettingsStore::PREF_KEY_VOL_HIGH = "volHigh";
 
+const char* SettingsStore::PREF_KEY_REGIME_EN = "rgEn";
+const char* SettingsStore::PREF_KEY_REGIME_DWELL = "rgDwll";
+const char* SettingsStore::PREF_KEY_REGIME_EG_IN = "rgEgIn";
+const char* SettingsStore::PREF_KEY_REGIME_EG_OUT = "rgEgOut";
+const char* SettingsStore::PREF_KEY_REGIME_SL_IN = "rgSlIn";
+const char* SettingsStore::PREF_KEY_REGIME_SL_OUT = "rgSlOut";
+const char* SettingsStore::PREF_KEY_REGIME_LD_FLR = "rgLdFl";
+const char* SettingsStore::PREF_KEY_REGIME_LD_DR = "rgLdDr";
+const char* SettingsStore::PREF_KEY_REGIME_DD_1M = "rgDb1";
+const char* SettingsStore::PREF_KEY_REGIME_DD_5M = "rgDb5";
+const char* SettingsStore::PREF_KEY_REGIME_DD_30M = "rgDb30";
+const char* SettingsStore::PREF_KEY_REGIME_DD_2H = "rgDb2h";
+const char* SettingsStore::PREF_KEY_REGIME_2H_CMIN = "rg2hMn";
+const char* SettingsStore::PREF_KEY_REGIME_2H_CMAX = "rg2hMx";
+
 // 2-hour alert threshold keys
 const char* SettingsStore::PREF_KEY_2H_BREAK_MARGIN = "2hBreakMargin";
 const char* SettingsStore::PREF_KEY_2H_BREAK_RESET = "2hBreakReset";
@@ -420,6 +435,22 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     trendThreshold = TREND_THRESHOLD_DEFAULT;
     volatilityLowThreshold = VOLATILITY_LOW_THRESHOLD_DEFAULT;
     volatilityHighThreshold = VOLATILITY_HIGH_THRESHOLD_DEFAULT;
+
+    // Regime-engine defaults (Fase A)
+    regimeEngineEnabled = false;
+    regimeMinDwellSec = 180u;
+    regimeEnergeticEnter = 0.95f;
+    regimeEnergeticExit = 0.78f;
+    regimeSlapEnter = 0.38f;
+    regimeSlapExit = 0.52f;
+    regimeLoadedFloor = 0.45f;
+    regimeLoadedDrop = 0.35f;
+    regimeDirDeadband1mPct = 0.05f;
+    regimeDirDeadband5mPct = 0.10f;
+    regimeDirDeadband30mPct = 0.15f;
+    regimeDirDeadband2hPct = 0.25f;
+    regime2hCompressMinPct = 0.35f;
+    regime2hCompressMaxPct = 1.10f;
     
     // 2-hour alert thresholds defaults (van Alert2HThresholds namespace)
     alert2HThresholds.breakMarginPct = 0.15f;
@@ -575,6 +606,28 @@ CryptoMonitorSettings SettingsStore::load() {
     settings.trendThreshold = prefs.getFloat(PREF_KEY_TREND_TH, TREND_THRESHOLD_DEFAULT);
     settings.volatilityLowThreshold = prefs.getFloat(PREF_KEY_VOL_LOW, VOLATILITY_LOW_THRESHOLD_DEFAULT);
     settings.volatilityHighThreshold = prefs.getFloat(PREF_KEY_VOL_HIGH, VOLATILITY_HIGH_THRESHOLD_DEFAULT);
+
+    // Load regime-engine settings
+    settings.regimeEngineEnabled = prefs.getBool(PREF_KEY_REGIME_EN, false);
+    settings.regimeMinDwellSec = prefs.getUInt(PREF_KEY_REGIME_DWELL, 180u);
+    if (settings.regimeMinDwellSec < 1u) {
+        settings.regimeMinDwellSec = 1u;
+    }
+    if (settings.regimeMinDwellSec > 86400u) {
+        settings.regimeMinDwellSec = 86400u;
+    }
+    settings.regimeEnergeticEnter = prefs.getFloat(PREF_KEY_REGIME_EG_IN, 0.95f);
+    settings.regimeEnergeticExit = prefs.getFloat(PREF_KEY_REGIME_EG_OUT, 0.78f);
+    settings.regimeSlapEnter = prefs.getFloat(PREF_KEY_REGIME_SL_IN, 0.38f);
+    settings.regimeSlapExit = prefs.getFloat(PREF_KEY_REGIME_SL_OUT, 0.52f);
+    settings.regimeLoadedFloor = prefs.getFloat(PREF_KEY_REGIME_LD_FLR, 0.45f);
+    settings.regimeLoadedDrop = prefs.getFloat(PREF_KEY_REGIME_LD_DR, 0.35f);
+    settings.regimeDirDeadband1mPct = prefs.getFloat(PREF_KEY_REGIME_DD_1M, 0.05f);
+    settings.regimeDirDeadband5mPct = prefs.getFloat(PREF_KEY_REGIME_DD_5M, 0.10f);
+    settings.regimeDirDeadband30mPct = prefs.getFloat(PREF_KEY_REGIME_DD_30M, 0.15f);
+    settings.regimeDirDeadband2hPct = prefs.getFloat(PREF_KEY_REGIME_DD_2H, 0.25f);
+    settings.regime2hCompressMinPct = prefs.getFloat(PREF_KEY_REGIME_2H_CMIN, 0.35f);
+    settings.regime2hCompressMaxPct = prefs.getFloat(PREF_KEY_REGIME_2H_CMAX, 1.10f);
     
     // Load 2-hour alert thresholds
     settings.alert2HThresholds.breakMarginPct = prefs.getFloat(PREF_KEY_2H_BREAK_MARGIN, 0.15f);
@@ -759,6 +812,22 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     prefs.putFloat(PREF_KEY_TREND_TH, settings.trendThreshold);
     prefs.putFloat(PREF_KEY_VOL_LOW, settings.volatilityLowThreshold);
     prefs.putFloat(PREF_KEY_VOL_HIGH, settings.volatilityHighThreshold);
+
+    // Save regime-engine settings
+    prefs.putBool(PREF_KEY_REGIME_EN, settings.regimeEngineEnabled);
+    prefs.putUInt(PREF_KEY_REGIME_DWELL, settings.regimeMinDwellSec);
+    prefs.putFloat(PREF_KEY_REGIME_EG_IN, settings.regimeEnergeticEnter);
+    prefs.putFloat(PREF_KEY_REGIME_EG_OUT, settings.regimeEnergeticExit);
+    prefs.putFloat(PREF_KEY_REGIME_SL_IN, settings.regimeSlapEnter);
+    prefs.putFloat(PREF_KEY_REGIME_SL_OUT, settings.regimeSlapExit);
+    prefs.putFloat(PREF_KEY_REGIME_LD_FLR, settings.regimeLoadedFloor);
+    prefs.putFloat(PREF_KEY_REGIME_LD_DR, settings.regimeLoadedDrop);
+    prefs.putFloat(PREF_KEY_REGIME_DD_1M, settings.regimeDirDeadband1mPct);
+    prefs.putFloat(PREF_KEY_REGIME_DD_5M, settings.regimeDirDeadband5mPct);
+    prefs.putFloat(PREF_KEY_REGIME_DD_30M, settings.regimeDirDeadband30mPct);
+    prefs.putFloat(PREF_KEY_REGIME_DD_2H, settings.regimeDirDeadband2hPct);
+    prefs.putFloat(PREF_KEY_REGIME_2H_CMIN, settings.regime2hCompressMinPct);
+    prefs.putFloat(PREF_KEY_REGIME_2H_CMAX, settings.regime2hCompressMaxPct);
     
     // Save Auto Anchor settings (gebruik config-blob)
     AutoAnchorPersist blob;

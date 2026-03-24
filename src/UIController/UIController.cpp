@@ -25,6 +25,7 @@
 #include "../VolatilityTracker/VolatilityTracker.h"  // Voor VolatilityState enum
 // Fase 8.6.x: volume/range UI indicators dependencies
 #include "../AlertEngine/AlertEngine.h"  // Voor VolumeRangeStatus, TwoHMetrics
+#include "../RegimeEngine/RegimeEngine.h"
 // Fase 8.6.1: updateBTCEURCard() dependencies
 #include "../AnchorSystem/AnchorSystem.h"  // Voor AnchorConfigEffective struct
 
@@ -137,6 +138,7 @@ extern bool hasRet2hWarm;
 extern bool hasRet30mWarm;
 extern bool hasRet2hLive;
 extern bool hasRet30mLive;
+extern bool regimeEngineEnabled;
 #if defined(PLATFORM_ESP32S3_JC3248W535)
 extern uint8_t g_uiLastMinMaxSource1d;
 extern uint8_t g_uiLastMinMaxSource7d;
@@ -1320,6 +1322,20 @@ void UIController::buildUI() {
     }
 }
 
+// Alleen displaytekst; enum-waarden REGIME_* blijven in RegimeEngine.
+static const char* regimeDisplayLabelText(RegimeKind k)
+{
+    switch (k) {
+        case REGIME_SLAP:
+            return getText("RUSTIG", "CALM");
+        case REGIME_ENERGIEK:
+            return getText("ENERGIEK", "ENERGETIC");
+        case REGIME_GELADEN:
+        default:
+            return getText("GELADEN", "LOADED");
+    }
+}
+
 // Fase 8.5.2: updateTrendLabel() naar Module
 // Helper functie om trend label bij te werken
 void UIController::updateTrendLabel()
@@ -1448,6 +1464,14 @@ void UIController::updateVolatilityLabel()
 {
     // Fase 8.5.3: Gebruik globale pointer (synchroniseert met module pointer)
     if (::volatilityLabel == nullptr) return;
+
+    // Regime op dezelfde plek als volatility (rechtsonder chart); bij uit: bestaande VLAK/GOLVEND/GRILLIG
+    if (regimeEngineEnabled) {
+        const RegimeSnapshot& rs = regimeEngineGetSnapshot();
+        lv_label_set_text(::volatilityLabel, regimeDisplayLabelText(rs.committedRegime));
+        lv_obj_set_style_text_color(::volatilityLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+        return;
+    }
     
     const char* volText = "";
     lv_color_t volColor = lv_palette_main(LV_PALETTE_GREY);

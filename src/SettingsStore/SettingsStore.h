@@ -191,6 +191,22 @@ struct CryptoMonitorSettings {
     float trendThreshold;
     float volatilityLowThreshold;
     float volatilityHighThreshold;
+
+    // Regime-engine (Fase A: snapshot; geen alert-gating)
+    bool regimeEngineEnabled;
+    uint32_t regimeMinDwellSec;
+    float regimeEnergeticEnter;
+    float regimeEnergeticExit;
+    float regimeSlapEnter;
+    float regimeSlapExit;
+    float regimeLoadedFloor;
+    float regimeLoadedDrop;
+    float regimeDirDeadband1mPct;
+    float regimeDirDeadband5mPct;
+    float regimeDirDeadband30mPct;
+    float regimeDirDeadband2hPct;
+    float regime2hCompressMinPct;
+    float regime2hCompressMaxPct;
     
     // Constructor met defaults
     CryptoMonitorSettings();
@@ -272,6 +288,22 @@ private:
     static const char* PREF_KEY_TREND_TH;
     static const char* PREF_KEY_VOL_LOW;
     static const char* PREF_KEY_VOL_HIGH;
+
+    // Regime-engine keys
+    static const char* PREF_KEY_REGIME_EN;
+    static const char* PREF_KEY_REGIME_DWELL;
+    static const char* PREF_KEY_REGIME_EG_IN;
+    static const char* PREF_KEY_REGIME_EG_OUT;
+    static const char* PREF_KEY_REGIME_SL_IN;
+    static const char* PREF_KEY_REGIME_SL_OUT;
+    static const char* PREF_KEY_REGIME_LD_FLR;
+    static const char* PREF_KEY_REGIME_LD_DR;
+    static const char* PREF_KEY_REGIME_DD_1M;
+    static const char* PREF_KEY_REGIME_DD_5M;
+    static const char* PREF_KEY_REGIME_DD_30M;
+    static const char* PREF_KEY_REGIME_DD_2H;
+    static const char* PREF_KEY_REGIME_2H_CMIN;
+    static const char* PREF_KEY_REGIME_2H_CMAX;
     
     // 2-hour alert threshold keys
     static const char* PREF_KEY_2H_BREAK_MARGIN;
