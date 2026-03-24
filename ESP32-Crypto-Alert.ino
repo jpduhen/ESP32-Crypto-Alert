@@ -5217,6 +5217,25 @@ void publishMqttValues(float price, float ret_1m, float ret_5m, float ret_30m) {
 
 // Publiceer MQTT Discovery berichten voor Home Assistant
 // Geoptimaliseerd: gebruik char arrays i.p.v. String om geheugenfragmentatie te voorkomen
+static void jsonEscapeString(const char* input, char* output, size_t outputSize) {
+    if (output == nullptr || outputSize == 0) return;
+    output[0] = '\0';
+    if (input == nullptr) return;
+
+    size_t out = 0;
+    for (size_t i = 0; input[i] != '\0' && out + 1 < outputSize; ++i) {
+        char c = input[i];
+        if (c == '"' || c == '\\') {
+            if (out + 2 >= outputSize) break;
+            output[out++] = '\\';
+            output[out++] = c;
+        } else {
+            output[out++] = c;
+        }
+    }
+    output[out] = '\0';
+}
+
 void publishMqttDiscovery() {
     if (!mqttConnected) return;
     
@@ -5228,10 +5247,15 @@ void publishMqttDiscovery() {
     char mqttPrefix[64];
     getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
     
+    char escapedDeviceName[96];
+    char escapedDeviceModel[96];
+    jsonEscapeString(DEVICE_NAME, escapedDeviceName, sizeof(escapedDeviceName));
+    jsonEscapeString(DEVICE_MODEL, escapedDeviceModel, sizeof(escapedDeviceModel));
+
     char deviceJson[256];
     snprintf(deviceJson, sizeof(deviceJson), 
         "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"%s\",\"manufacturer\":\"JanP\",\"model\":\"%s\"}",
-        deviceId, DEVICE_NAME, DEVICE_MODEL);
+        deviceId, escapedDeviceName, escapedDeviceModel);
     
     // Buffers voor topic en payload
     char topicBuffer[128];
