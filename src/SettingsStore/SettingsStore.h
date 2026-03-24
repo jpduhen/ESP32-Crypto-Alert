@@ -207,6 +207,26 @@ struct CryptoMonitorSettings {
     float regimeDirDeadband2hPct;
     float regime2hCompressMinPct;
     float regime2hCompressMaxPct;
+
+    // Regime-engine Fase B: alert threshold/cooldown multipliers (geen gating — alleen schaling)
+    float regimeSlapSpike1mMult;
+    float regimeSlapMove5mAlertMult;
+    float regimeSlapMove30mMult;
+    float regimeSlapCooldown1mMult;
+    float regimeSlapCooldown5mMult;
+    float regimeSlapCooldown30mMult;
+    float regimeGeladenSpike1mMult;
+    float regimeGeladenMove5mAlertMult;
+    float regimeGeladenMove30mMult;
+    float regimeGeladenCooldown1mMult;
+    float regimeGeladenCooldown5mMult;
+    float regimeGeladenCooldown30mMult;
+    float regimeEnergiekSpike1mMult;
+    float regimeEnergiekMove5mAlertMult;
+    float regimeEnergiekMove30mMult;
+    float regimeEnergiekCooldown1mMult;
+    float regimeEnergiekCooldown5mMult;
+    float regimeEnergiekCooldown30mMult;
     
     // Constructor met defaults
     CryptoMonitorSettings();
@@ -304,6 +324,26 @@ private:
     static const char* PREF_KEY_REGIME_DD_2H;
     static const char* PREF_KEY_REGIME_2H_CMIN;
     static const char* PREF_KEY_REGIME_2H_CMAX;
+
+    // Regime Fase B multiplier keys
+    static const char* PREF_KEY_RG_SL_S1;
+    static const char* PREF_KEY_RG_SL_M5;
+    static const char* PREF_KEY_RG_SL_M30;
+    static const char* PREF_KEY_RG_SL_C1;
+    static const char* PREF_KEY_RG_SL_C5;
+    static const char* PREF_KEY_RG_SL_C30;
+    static const char* PREF_KEY_RG_GE_S1;
+    static const char* PREF_KEY_RG_GE_M5;
+    static const char* PREF_KEY_RG_GE_M30;
+    static const char* PREF_KEY_RG_GE_C1;
+    static const char* PREF_KEY_RG_GE_C5;
+    static const char* PREF_KEY_RG_GE_C30;
+    static const char* PREF_KEY_RG_EN_S1;
+    static const char* PREF_KEY_RG_EN_M5;
+    static const char* PREF_KEY_RG_EN_M30;
+    static const char* PREF_KEY_RG_EN_C1;
+    static const char* PREF_KEY_RG_EN_C5;
+    static const char* PREF_KEY_RG_EN_C30;
     
     // 2-hour alert threshold keys
     static const char* PREF_KEY_2H_BREAK_MARGIN;

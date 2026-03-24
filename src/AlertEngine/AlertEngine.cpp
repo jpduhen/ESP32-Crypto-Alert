@@ -1,6 +1,9 @@
 #include "AlertEngine.h"
 #include <WiFi.h>
 #include <time.h>  // Voor getLocalTime()
+#include <math.h>
+
+#include "../RegimeEngine/RegimeEngine.h"
 
 // SettingsStore module (Fase 6.1.10: voor AlertThresholds en NotificationCooldowns structs)
 #include "../SettingsStore/SettingsStore.h"
@@ -69,6 +72,85 @@ extern float *fiveMinutePrices;
 // We gebruiken de structs direct i.p.v. de macro namen
 extern AlertThresholds alertThresholds;
 extern NotificationCooldowns notificationCooldowns;
+
+// Regime Fase B: multipliers uit settings (gesynchroniseerd via loadSettings)
+extern bool regimeEngineEnabled;
+extern float regimeSlapSpike1mMult;
+extern float regimeSlapMove5mAlertMult;
+extern float regimeSlapMove30mMult;
+extern float regimeSlapCooldown1mMult;
+extern float regimeSlapCooldown5mMult;
+extern float regimeSlapCooldown30mMult;
+extern float regimeGeladenSpike1mMult;
+extern float regimeGeladenMove5mAlertMult;
+extern float regimeGeladenMove30mMult;
+extern float regimeGeladenCooldown1mMult;
+extern float regimeGeladenCooldown5mMult;
+extern float regimeGeladenCooldown30mMult;
+extern float regimeEnergiekSpike1mMult;
+extern float regimeEnergiekMove5mAlertMult;
+extern float regimeEnergiekMove30mMult;
+extern float regimeEnergiekCooldown1mMult;
+extern float regimeEnergiekCooldown5mMult;
+extern float regimeEnergiekCooldown30mMult;
+
+namespace {
+
+// Lokale helper (Fase B: schaling — geen gating)
+struct RegimeRuntimeMultipliers {
+    float spike1m;
+    float move5mAlert;
+    float move30m;
+    float cooldown1m;
+    float cooldown5m;
+    float cooldown30m;
+};
+
+static RegimeRuntimeMultipliers selectRegimeRuntimeMultipliers()
+{
+    RegimeRuntimeMultipliers m;
+    m.spike1m = 1.0f;
+    m.move5mAlert = 1.0f;
+    m.move30m = 1.0f;
+    m.cooldown1m = 1.0f;
+    m.cooldown5m = 1.0f;
+    m.cooldown30m = 1.0f;
+    if (!regimeEngineEnabled) {
+        return m;
+    }
+    // Alleen committed regime (geen proposed / transient)
+    const RegimeKind committedRegime = regimeEngineGetSnapshot().committedRegime;
+    switch (committedRegime) {
+        case REGIME_SLAP:
+            m.spike1m = regimeSlapSpike1mMult;
+            m.move5mAlert = regimeSlapMove5mAlertMult;
+            m.move30m = regimeSlapMove30mMult;
+            m.cooldown1m = regimeSlapCooldown1mMult;
+            m.cooldown5m = regimeSlapCooldown5mMult;
+            m.cooldown30m = regimeSlapCooldown30mMult;
+            break;
+        case REGIME_ENERGIEK:
+            m.spike1m = regimeEnergiekSpike1mMult;
+            m.move5mAlert = regimeEnergiekMove5mAlertMult;
+            m.move30m = regimeEnergiekMove30mMult;
+            m.cooldown1m = regimeEnergiekCooldown1mMult;
+            m.cooldown5m = regimeEnergiekCooldown5mMult;
+            m.cooldown30m = regimeEnergiekCooldown30mMult;
+            break;
+        case REGIME_GELADEN:
+        default:
+            m.spike1m = regimeGeladenSpike1mMult;
+            m.move5mAlert = regimeGeladenMove5mAlertMult;
+            m.move30m = regimeGeladenMove30mMult;
+            m.cooldown1m = regimeGeladenCooldown1mMult;
+            m.cooldown5m = regimeGeladenCooldown5mMult;
+            m.cooldown30m = regimeGeladenCooldown30mMult;
+            break;
+    }
+    return m;
+}
+
+}  // namespace
 
 // Constants
 #define CONFLUENCE_TIME_WINDOW_MS 300000UL  // 5 minuten tijdshorizon voor confluence
@@ -711,6 +793,41 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         autoVolatilityMinMultiplier = autoVolMinOriginal;
         autoVolatilityMaxMultiplier = autoVolMaxOriginal;
     }
+
+    // Fase B: regime-multipliers op effThresh (na auto-vol + nachtstand); geen gating wijziging
+    const auto rm = selectRegimeRuntimeMultipliers();
+    const float finalSpike1mThreshold = fmaxf(effThresh.spike1m * rm.spike1m, 0.05f);
+    const float finalMove5mThreshold = fmaxf(effThresh.move5m * rm.move5mAlert, 0.05f);
+    const float finalMove30mThreshold = fmaxf(effThresh.move30m * rm.move30m, 0.10f);
+    static const float kMinCooldown1mMs = 30000.0f;
+    static const float kMinCooldown5mMs = 60000.0f;
+    static const float kMinCooldown30mMs = 120000.0f;
+    const uint32_t finalCooldown1mMs = (uint32_t)fmaxf(
+        (float)notificationCooldowns.cooldown1MinMs * rm.cooldown1m, kMinCooldown1mMs);
+    const uint32_t finalCooldown5mMs =
+        (uint32_t)fmaxf((float)cooldown5mMs * rm.cooldown5m, kMinCooldown5mMs);
+    const uint32_t finalCooldown30mMs = (uint32_t)fmaxf(
+        (float)notificationCooldowns.cooldown30MinMs * rm.cooldown30m, kMinCooldown30mMs);
+
+    #if !DEBUG_BUTTON_ONLY
+    static unsigned long s_lastRegimePhaseBLogMs = 0;
+    if (regimeEngineEnabled) {
+        if (now - s_lastRegimePhaseBLogMs >= 60000UL) {
+            s_lastRegimePhaseBLogMs = now;
+            // Finale regime-geschaalde drempels/cooldowns (niet effThresh); committed alleen
+            const RegimeSnapshot snap = regimeEngineGetSnapshot();
+            Serial.printf(
+                "[RegimeB] committed=%u sp1=%.3f m5=%.3f m30=%.3f cd1=%lu cd5=%lu cd30=%lu\n",
+                (unsigned)snap.committedRegime,
+                finalSpike1mThreshold,
+                finalMove5mThreshold,
+                finalMove30mThreshold,
+                (unsigned long)finalCooldown1mMs,
+                (unsigned long)finalCooldown5mMs,
+                (unsigned long)finalCooldown30mMs);
+        }
+    }
+    #endif
     
     // Log volatility status (voor debug) - alleen als DEBUG_BUTTON_ONLY niet actief is
     #if !DEBUG_BUTTON_ONLY
@@ -741,7 +858,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         float absRet5m = cachedAbsRet5m;
         
         // Early return: check thresholds eerst (sneller)
-        if (absRet1m < effThresh.spike1m || absRet5m < spike5mThreshold) {
+        if (absRet1m < finalSpike1mThreshold || absRet5m < spike5mThreshold) {
             // Thresholds niet gehaald, skip rest
         } else {
         // Check of beide in dezelfde richting zijn (beide positief of beide negatief)
@@ -755,7 +872,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         
             // Update 1m event state voor Smart Confluence Mode (alleen bij volume/range confirmatie)
             if (spikeDetected && volumeRangeOk1m) {
-            update1mEvent(ret_1m, now, effThresh.spike1m);
+            update1mEvent(ret_1m, now, finalSpike1mThreshold);
         }
         
         // Debug logging alleen bij spike detectie
@@ -826,11 +943,11 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             }
                             appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange1m);
                     
-                    const char* colorTag = determineColorTag(ret_1m, effThresh.spike1m, effThresh.spike1m * 1.5f);
+                    const char* colorTag = determineColorTag(ret_1m, finalSpike1mThreshold, finalSpike1mThreshold * 1.5f);
                             snprintf(titleBuffer, sizeof(titleBuffer), "%s 1m %s", bitvavoSymbol, getText("Spike", "Spike"));
                     
                     // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
-                    if (checkAlertConditions(now, lastNotification1Min, notificationCooldowns.cooldown1MinMs, 
+                    if (checkAlertConditions(now, lastNotification1Min, finalCooldown1mMs, 
                                              alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR, "1m spike")) {
                                 bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
                                 if (sent) {
@@ -858,7 +975,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         float absRet5m = cachedAbsRet5m;
         
         // Early return: check thresholds eerst (sneller)
-        if (absRet30m < effThresh.move30m || absRet5m < alertThresholds.move5m) {
+        if (absRet30m < finalMove30mThreshold || absRet5m < alertThresholds.move5m) {
             // Thresholds niet gehaald, skip rest
         } else {
         // Check of beide in dezelfde richting zijn
@@ -908,7 +1025,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                     }
                     appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange5m);
             
-            const char* colorTag = determineColorTag(ret_30m, effThresh.move30m, effThresh.move30m * 1.5f);
+            const char* colorTag = determineColorTag(ret_30m, finalMove30mThreshold, finalMove30mThreshold * 1.5f);
                     snprintf(titleBuffer, sizeof(titleBuffer), "%s 30m %s", bitvavoSymbol, getText("Move", "Move"));
             
             // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
@@ -916,7 +1033,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                         #if !DEBUG_BUTTON_ONLY
                         Serial_printf(F("[Notify] 30m move onderdrukt (volume-event cooldown)\n"));
                         #endif
-                    } else if (checkAlertConditions(now, lastNotification30Min, notificationCooldowns.cooldown30MinMs, 
+                    } else if (checkAlertConditions(now, lastNotification30Min, finalCooldown30mMs, 
                                      alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR, "30m move")) {
                         bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
                         if (sent) {
@@ -941,7 +1058,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         float absRet5m = cachedAbsRet5m;
         
         // Early return: check threshold eerst (sneller)
-        if (absRet5m < effThresh.move5m) {
+        if (absRet5m < finalMove5mThreshold) {
             // Threshold niet gehaald, skip rest
         } else {
         // Threshold check: ret_5m >= effectiveMove5mThreshold
@@ -951,7 +1068,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         
             // Update 5m event state voor Smart Confluence Mode (alleen bij volume/range confirmatie)
             if (volumeRangeOk5m) {
-            update5mEvent(ret_5m, now, effThresh.move5m);
+            update5mEvent(ret_5m, now, finalMove5mThreshold);
         }
         
         // Debug logging alleen bij move detectie
@@ -1026,7 +1143,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                                      getText("Move", "Move"));
                     
                     // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
-                    if (checkAlertConditions(now, lastNotification5Min, cooldown5mMs, 
+                    if (checkAlertConditions(now, lastNotification5Min, finalCooldown5mMs, 
                                              alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR, "5m move")) {
                                 bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
                                 if (sent) {

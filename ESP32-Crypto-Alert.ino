@@ -490,6 +490,26 @@ float regimeDirDeadband2hPct = 0.25f;
 float regime2hCompressMinPct = 0.35f;
 float regime2hCompressMaxPct = 1.10f;
 
+// Regime Fase B: alert threshold/cooldown multipliers (AlertEngine)
+float regimeSlapSpike1mMult = 1.18f;
+float regimeSlapMove5mAlertMult = 1.10f;
+float regimeSlapMove30mMult = 1.08f;
+float regimeSlapCooldown1mMult = 1.50f;
+float regimeSlapCooldown5mMult = 1.20f;
+float regimeSlapCooldown30mMult = 1.10f;
+float regimeGeladenSpike1mMult = 0.98f;
+float regimeGeladenMove5mAlertMult = 0.95f;
+float regimeGeladenMove30mMult = 1.00f;
+float regimeGeladenCooldown1mMult = 1.00f;
+float regimeGeladenCooldown5mMult = 0.95f;
+float regimeGeladenCooldown30mMult = 1.00f;
+float regimeEnergiekSpike1mMult = 0.85f;
+float regimeEnergiekMove5mAlertMult = 0.88f;
+float regimeEnergiekMove30mMult = 1.05f;
+float regimeEnergiekCooldown1mMult = 0.70f;
+float regimeEnergiekCooldown5mMult = 0.80f;
+float regimeEnergiekCooldown30mMult = 1.20f;
+
 unsigned long lastTrendChangeNotification = 0;  // Timestamp van laatste trend change notificatie (backward compatibility)
 
 // Smart Confluence Mode state
@@ -4284,6 +4304,25 @@ static void loadSettings()
     regimeDirDeadband2hPct = settings.regimeDirDeadband2hPct;
     regime2hCompressMinPct = settings.regime2hCompressMinPct;
     regime2hCompressMaxPct = settings.regime2hCompressMaxPct;
+
+    regimeSlapSpike1mMult = settings.regimeSlapSpike1mMult;
+    regimeSlapMove5mAlertMult = settings.regimeSlapMove5mAlertMult;
+    regimeSlapMove30mMult = settings.regimeSlapMove30mMult;
+    regimeSlapCooldown1mMult = settings.regimeSlapCooldown1mMult;
+    regimeSlapCooldown5mMult = settings.regimeSlapCooldown5mMult;
+    regimeSlapCooldown30mMult = settings.regimeSlapCooldown30mMult;
+    regimeGeladenSpike1mMult = settings.regimeGeladenSpike1mMult;
+    regimeGeladenMove5mAlertMult = settings.regimeGeladenMove5mAlertMult;
+    regimeGeladenMove30mMult = settings.regimeGeladenMove30mMult;
+    regimeGeladenCooldown1mMult = settings.regimeGeladenCooldown1mMult;
+    regimeGeladenCooldown5mMult = settings.regimeGeladenCooldown5mMult;
+    regimeGeladenCooldown30mMult = settings.regimeGeladenCooldown30mMult;
+    regimeEnergiekSpike1mMult = settings.regimeEnergiekSpike1mMult;
+    regimeEnergiekMove5mAlertMult = settings.regimeEnergiekMove5mAlertMult;
+    regimeEnergiekMove30mMult = settings.regimeEnergiekMove30mMult;
+    regimeEnergiekCooldown1mMult = settings.regimeEnergiekCooldown1mMult;
+    regimeEnergiekCooldown5mMult = settings.regimeEnergiekCooldown5mMult;
+    regimeEnergiekCooldown30mMult = settings.regimeEnergiekCooldown30mMult;
     
     Serial_printf(F("[Settings] Loaded: topic=%s, symbol=%s, 1min trend=%.2f/%.2f%%/min, 30min trend=%.2f/%.2f%%/uur, cooldown=%lu/%lu ms\n"),
                   ntfyTopic, bitvavoSymbol, threshold1MinUp, threshold1MinDown, threshold30MinUp, threshold30MinDown,
@@ -4378,6 +4417,25 @@ void saveSettings()
     settings.regimeDirDeadband2hPct = regimeDirDeadband2hPct;
     settings.regime2hCompressMinPct = regime2hCompressMinPct;
     settings.regime2hCompressMaxPct = regime2hCompressMaxPct;
+
+    settings.regimeSlapSpike1mMult = regimeSlapSpike1mMult;
+    settings.regimeSlapMove5mAlertMult = regimeSlapMove5mAlertMult;
+    settings.regimeSlapMove30mMult = regimeSlapMove30mMult;
+    settings.regimeSlapCooldown1mMult = regimeSlapCooldown1mMult;
+    settings.regimeSlapCooldown5mMult = regimeSlapCooldown5mMult;
+    settings.regimeSlapCooldown30mMult = regimeSlapCooldown30mMult;
+    settings.regimeGeladenSpike1mMult = regimeGeladenSpike1mMult;
+    settings.regimeGeladenMove5mAlertMult = regimeGeladenMove5mAlertMult;
+    settings.regimeGeladenMove30mMult = regimeGeladenMove30mMult;
+    settings.regimeGeladenCooldown1mMult = regimeGeladenCooldown1mMult;
+    settings.regimeGeladenCooldown5mMult = regimeGeladenCooldown5mMult;
+    settings.regimeGeladenCooldown30mMult = regimeGeladenCooldown30mMult;
+    settings.regimeEnergiekSpike1mMult = regimeEnergiekSpike1mMult;
+    settings.regimeEnergiekMove5mAlertMult = regimeEnergiekMove5mAlertMult;
+    settings.regimeEnergiekMove30mMult = regimeEnergiekMove30mMult;
+    settings.regimeEnergiekCooldown1mMult = regimeEnergiekCooldown1mMult;
+    settings.regimeEnergiekCooldown5mMult = regimeEnergiekCooldown5mMult;
+    settings.regimeEnergiekCooldown30mMult = regimeEnergiekCooldown30mMult;
     
     // Save using SettingsStore
     settingsStore.save(settings);

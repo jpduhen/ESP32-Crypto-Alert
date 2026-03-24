@@ -232,6 +232,25 @@ const char* SettingsStore::PREF_KEY_REGIME_DD_2H = "rgDb2h";
 const char* SettingsStore::PREF_KEY_REGIME_2H_CMIN = "rg2hMn";
 const char* SettingsStore::PREF_KEY_REGIME_2H_CMAX = "rg2hMx";
 
+const char* SettingsStore::PREF_KEY_RG_SL_S1 = "rgSlS1";
+const char* SettingsStore::PREF_KEY_RG_SL_M5 = "rgSlM5";
+const char* SettingsStore::PREF_KEY_RG_SL_M30 = "rgSlM30";
+const char* SettingsStore::PREF_KEY_RG_SL_C1 = "rgSlC1";
+const char* SettingsStore::PREF_KEY_RG_SL_C5 = "rgSlC5";
+const char* SettingsStore::PREF_KEY_RG_SL_C30 = "rgSlC30";
+const char* SettingsStore::PREF_KEY_RG_GE_S1 = "rgGeS1";
+const char* SettingsStore::PREF_KEY_RG_GE_M5 = "rgGeM5";
+const char* SettingsStore::PREF_KEY_RG_GE_M30 = "rgGeM30";
+const char* SettingsStore::PREF_KEY_RG_GE_C1 = "rgGeC1";
+const char* SettingsStore::PREF_KEY_RG_GE_C5 = "rgGeC5";
+const char* SettingsStore::PREF_KEY_RG_GE_C30 = "rgGeC30";
+const char* SettingsStore::PREF_KEY_RG_EN_S1 = "rgEnS1";
+const char* SettingsStore::PREF_KEY_RG_EN_M5 = "rgEnM5";
+const char* SettingsStore::PREF_KEY_RG_EN_M30 = "rgEnM30";
+const char* SettingsStore::PREF_KEY_RG_EN_C1 = "rgEnC1";
+const char* SettingsStore::PREF_KEY_RG_EN_C5 = "rgEnC5";
+const char* SettingsStore::PREF_KEY_RG_EN_C30 = "rgEnC30";
+
 // 2-hour alert threshold keys
 const char* SettingsStore::PREF_KEY_2H_BREAK_MARGIN = "2hBreakMargin";
 const char* SettingsStore::PREF_KEY_2H_BREAK_RESET = "2hBreakReset";
@@ -451,6 +470,26 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     regimeDirDeadband2hPct = 0.25f;
     regime2hCompressMinPct = 0.35f;
     regime2hCompressMaxPct = 1.10f;
+
+    // Regime Fase B multiplier defaults
+    regimeSlapSpike1mMult = 1.18f;
+    regimeSlapMove5mAlertMult = 1.10f;
+    regimeSlapMove30mMult = 1.08f;
+    regimeSlapCooldown1mMult = 1.50f;
+    regimeSlapCooldown5mMult = 1.20f;
+    regimeSlapCooldown30mMult = 1.10f;
+    regimeGeladenSpike1mMult = 0.98f;
+    regimeGeladenMove5mAlertMult = 0.95f;
+    regimeGeladenMove30mMult = 1.00f;
+    regimeGeladenCooldown1mMult = 1.00f;
+    regimeGeladenCooldown5mMult = 0.95f;
+    regimeGeladenCooldown30mMult = 1.00f;
+    regimeEnergiekSpike1mMult = 0.85f;
+    regimeEnergiekMove5mAlertMult = 0.88f;
+    regimeEnergiekMove30mMult = 1.05f;
+    regimeEnergiekCooldown1mMult = 0.70f;
+    regimeEnergiekCooldown5mMult = 0.80f;
+    regimeEnergiekCooldown30mMult = 1.20f;
     
     // 2-hour alert thresholds defaults (van Alert2HThresholds namespace)
     alert2HThresholds.breakMarginPct = 0.15f;
@@ -628,6 +667,26 @@ CryptoMonitorSettings SettingsStore::load() {
     settings.regimeDirDeadband2hPct = prefs.getFloat(PREF_KEY_REGIME_DD_2H, 0.25f);
     settings.regime2hCompressMinPct = prefs.getFloat(PREF_KEY_REGIME_2H_CMIN, 0.35f);
     settings.regime2hCompressMaxPct = prefs.getFloat(PREF_KEY_REGIME_2H_CMAX, 1.10f);
+
+    // Load regime Fase B multipliers
+    settings.regimeSlapSpike1mMult = prefs.getFloat(PREF_KEY_RG_SL_S1, 1.18f);
+    settings.regimeSlapMove5mAlertMult = prefs.getFloat(PREF_KEY_RG_SL_M5, 1.10f);
+    settings.regimeSlapMove30mMult = prefs.getFloat(PREF_KEY_RG_SL_M30, 1.08f);
+    settings.regimeSlapCooldown1mMult = prefs.getFloat(PREF_KEY_RG_SL_C1, 1.50f);
+    settings.regimeSlapCooldown5mMult = prefs.getFloat(PREF_KEY_RG_SL_C5, 1.20f);
+    settings.regimeSlapCooldown30mMult = prefs.getFloat(PREF_KEY_RG_SL_C30, 1.10f);
+    settings.regimeGeladenSpike1mMult = prefs.getFloat(PREF_KEY_RG_GE_S1, 0.98f);
+    settings.regimeGeladenMove5mAlertMult = prefs.getFloat(PREF_KEY_RG_GE_M5, 0.95f);
+    settings.regimeGeladenMove30mMult = prefs.getFloat(PREF_KEY_RG_GE_M30, 1.00f);
+    settings.regimeGeladenCooldown1mMult = prefs.getFloat(PREF_KEY_RG_GE_C1, 1.00f);
+    settings.regimeGeladenCooldown5mMult = prefs.getFloat(PREF_KEY_RG_GE_C5, 0.95f);
+    settings.regimeGeladenCooldown30mMult = prefs.getFloat(PREF_KEY_RG_GE_C30, 1.00f);
+    settings.regimeEnergiekSpike1mMult = prefs.getFloat(PREF_KEY_RG_EN_S1, 0.85f);
+    settings.regimeEnergiekMove5mAlertMult = prefs.getFloat(PREF_KEY_RG_EN_M5, 0.88f);
+    settings.regimeEnergiekMove30mMult = prefs.getFloat(PREF_KEY_RG_EN_M30, 1.05f);
+    settings.regimeEnergiekCooldown1mMult = prefs.getFloat(PREF_KEY_RG_EN_C1, 0.70f);
+    settings.regimeEnergiekCooldown5mMult = prefs.getFloat(PREF_KEY_RG_EN_C5, 0.80f);
+    settings.regimeEnergiekCooldown30mMult = prefs.getFloat(PREF_KEY_RG_EN_C30, 1.20f);
     
     // Load 2-hour alert thresholds
     settings.alert2HThresholds.breakMarginPct = prefs.getFloat(PREF_KEY_2H_BREAK_MARGIN, 0.15f);
@@ -828,6 +887,26 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     prefs.putFloat(PREF_KEY_REGIME_DD_2H, settings.regimeDirDeadband2hPct);
     prefs.putFloat(PREF_KEY_REGIME_2H_CMIN, settings.regime2hCompressMinPct);
     prefs.putFloat(PREF_KEY_REGIME_2H_CMAX, settings.regime2hCompressMaxPct);
+
+    // Save regime Fase B multipliers
+    prefs.putFloat(PREF_KEY_RG_SL_S1, settings.regimeSlapSpike1mMult);
+    prefs.putFloat(PREF_KEY_RG_SL_M5, settings.regimeSlapMove5mAlertMult);
+    prefs.putFloat(PREF_KEY_RG_SL_M30, settings.regimeSlapMove30mMult);
+    prefs.putFloat(PREF_KEY_RG_SL_C1, settings.regimeSlapCooldown1mMult);
+    prefs.putFloat(PREF_KEY_RG_SL_C5, settings.regimeSlapCooldown5mMult);
+    prefs.putFloat(PREF_KEY_RG_SL_C30, settings.regimeSlapCooldown30mMult);
+    prefs.putFloat(PREF_KEY_RG_GE_S1, settings.regimeGeladenSpike1mMult);
+    prefs.putFloat(PREF_KEY_RG_GE_M5, settings.regimeGeladenMove5mAlertMult);
+    prefs.putFloat(PREF_KEY_RG_GE_M30, settings.regimeGeladenMove30mMult);
+    prefs.putFloat(PREF_KEY_RG_GE_C1, settings.regimeGeladenCooldown1mMult);
+    prefs.putFloat(PREF_KEY_RG_GE_C5, settings.regimeGeladenCooldown5mMult);
+    prefs.putFloat(PREF_KEY_RG_GE_C30, settings.regimeGeladenCooldown30mMult);
+    prefs.putFloat(PREF_KEY_RG_EN_S1, settings.regimeEnergiekSpike1mMult);
+    prefs.putFloat(PREF_KEY_RG_EN_M5, settings.regimeEnergiekMove5mAlertMult);
+    prefs.putFloat(PREF_KEY_RG_EN_M30, settings.regimeEnergiekMove30mMult);
+    prefs.putFloat(PREF_KEY_RG_EN_C1, settings.regimeEnergiekCooldown1mMult);
+    prefs.putFloat(PREF_KEY_RG_EN_C5, settings.regimeEnergiekCooldown5mMult);
+    prefs.putFloat(PREF_KEY_RG_EN_C30, settings.regimeEnergiekCooldown30mMult);
     
     // Save Auto Anchor settings (gebruik config-blob)
     AutoAnchorPersist blob;
