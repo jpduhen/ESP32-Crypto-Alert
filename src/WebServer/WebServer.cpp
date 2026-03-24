@@ -1555,9 +1555,8 @@ void WebServerModule::handleNotifications() {
                           "th:nth-child(1),td:nth-child(1){width:5%;white-space:nowrap;text-align:center;}"
                           "th:nth-child(2),td:nth-child(2){width:14%;white-space:nowrap;text-align:center;}"
                           "th:nth-child(3),td:nth-child(3){width:10%;white-space:nowrap;text-align:center;}"
-                          "th:nth-child(4),td:nth-child(4){width:8%;white-space:nowrap;text-align:center;}"
-                          "th:nth-child(5),td:nth-child(5){width:23%;overflow:hidden;text-overflow:ellipsis;text-align:left;}"
-                          "th:nth-child(6),td:nth-child(6){width:40%;word-wrap:break-word;word-break:break-word;text-align:left;}"
+                          "th:nth-child(4),td:nth-child(4){width:28%;overflow:hidden;text-overflow:ellipsis;text-align:left;}"
+                          "th:nth-child(5),td:nth-child(5){width:43%;word-wrap:break-word;word-break:break-word;text-align:left;}"
                           "</style></head><body>"));
     server->sendContent(F("<h2>"));
     server->sendContent(getText("Laatste notificaties", "Recent notifications"));
@@ -1581,8 +1580,6 @@ void WebServerModule::handleNotifications() {
     server->sendContent(F("</th><th>"));
     server->sendContent(getText("Resultaat", "Result"));
     server->sendContent(F("</th><th>"));
-    server->sendContent(getText("Tag", "Tag"));
-    server->sendContent(F("</th><th>"));
     server->sendContent(getText("Titel", "Title"));
     server->sendContent(F("</th><th>"));
     server->sendContent(getText("Bericht", "Message"));
@@ -1593,17 +1590,15 @@ void WebServerModule::handleNotifications() {
     // zolang ze maar kleiner of gelijk zijn.
     #define WEB_NOTIF_TITLE_MAX   48
     #define WEB_NOTIF_MSG_MAX    160
-    #define WEB_NOTIF_TAG_MAX     24
 
     for (uint8_t i = 0; i < count; ++i) {
         char title[WEB_NOTIF_TITLE_MAX];
         char message[WEB_NOTIF_MSG_MAX];
-        char tag[WEB_NOTIF_TAG_MAX];
         uint32_t timeMs = 0;
         uint8_t sent = 0;
         if (!getNotificationLogEntry(i, title, sizeof(title),
                                      message, sizeof(message),
-                                     tag, sizeof(tag),
+                                     nullptr, 0,
                                      &timeMs, &sent)) {
             continue;
         }
@@ -1611,11 +1606,11 @@ void WebServerModule::handleNotifications() {
         const char* txt = sent ? "OK" : "FAIL";
         snprintf(buf, sizeof(buf),
                  "<tr><td>%u</td><td>%lu</td><td class='%s'>%s</td>"
-                 "<td>%s</td><td>%s</td><td>%s</td></tr>",
+                 "<td>%s</td><td>%s</td></tr>",
                  static_cast<unsigned>(i),
                  static_cast<unsigned long>(timeMs),
                  cls, txt,
-                 tag, title, message);
+                 title, message);
         server->sendContent(buf);
     }
 

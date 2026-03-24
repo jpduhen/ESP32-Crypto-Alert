@@ -160,11 +160,10 @@ const char* AlertEngine::determineColorTag(float ret, float threshold, float str
 {
     float absRet = fabsf(ret);
     if (ret > 0) {
-        // Stijging: blauw voor normale (🔼), paars voor strong threshold (⏫️)
-        return (absRet >= strongThreshold) ? "purple_square,⏫️" : "blue_square,🔼";
+        // Alleen UTF-8 emoji (geen ntfy shortcodes — die zijn lelijk in web-UI log)
+        return (absRet >= strongThreshold) ? "\xE2\x8F\xAB" /* ⏫ */ : "\xF0\x9F\x94\xBC" /* 🔼 */;
     } else {
-        // Daling: oranje voor normale (🔽), rood voor strong threshold (⏬️)
-        return (absRet >= strongThreshold) ? "red_square,⏬️" : "orange_square,🔽";
+        return (absRet >= strongThreshold) ? "\xE2\x8F\xAC" /* ⏬ */ : "\xF0\x9F\x94\xBD" /* 🔽 */;
     }
 }
 
@@ -521,7 +520,7 @@ bool AlertEngine::checkAndSendConfluenceAlert(unsigned long now, float ret_30m)
     }
     appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange);
     
-    const char* colorTag = (direction == EVENT_UP) ? "green_square,📈" : "red_square,📉";
+    const char* colorTag = (direction == EVENT_UP) ? "\xF0\x9F\x93\x88" /* 📈 */ : "\xF0\x9F\x93\x89" /* 📉 */;
     bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
     if (sent) {
         lastVolumeEventMs = now;
@@ -1274,7 +1273,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                      getText("Gem", "Avg"), avgRounded,
                      getText("Dal", "Low"), lowRounded);
             // FASE X.2: Gebruik throttling wrapper
-            if (send2HNotification(ALERT2H_ANCHOR_CTX, title, msg, "purple_square,⚓")) {
+            if (send2HNotification(ALERT2H_ANCHOR_CTX, title, msg, "\xE2\x9A\x93" /* ⚓ */)) {
             gAlert2H.lastAnchorCtxMs = now;
             gAlert2H.setAnchorCtxArmed(false);
             }
