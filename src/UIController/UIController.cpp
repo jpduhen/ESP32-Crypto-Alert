@@ -1336,6 +1336,20 @@ static const char* regimeDisplayLabelText(RegimeKind k)
     }
 }
 
+// Alleen kleurmapping voor regime-weergave rechtsonder.
+static lv_color_t regimeDisplayLabelColor(RegimeKind k)
+{
+    switch (k) {
+        case REGIME_SLAP:
+            return lv_palette_main(LV_PALETTE_GREEN);
+        case REGIME_ENERGIEK:
+            return lv_palette_main(LV_PALETTE_RED);
+        case REGIME_GELADEN:
+        default:
+            return lv_palette_main(LV_PALETTE_ORANGE);  // Amber-achtig, consistent met DATAXX%-accenten.
+    }
+}
+
 // Fase 8.5.2: updateTrendLabel() naar Module
 // Helper functie om trend label bij te werken
 void UIController::updateTrendLabel()
@@ -1469,7 +1483,7 @@ void UIController::updateVolatilityLabel()
     if (regimeEngineEnabled) {
         const RegimeSnapshot& rs = regimeEngineGetSnapshot();
         lv_label_set_text(::volatilityLabel, regimeDisplayLabelText(rs.committedRegime));
-        lv_obj_set_style_text_color(::volatilityLabel, lv_palette_main(LV_PALETTE_GREY), 0);
+        lv_obj_set_style_text_color(::volatilityLabel, regimeDisplayLabelColor(rs.committedRegime), 0);
         return;
     }
     

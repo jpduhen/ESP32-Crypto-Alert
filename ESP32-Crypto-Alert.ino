@@ -475,7 +475,7 @@ float volatilityLowThreshold = VOLATILITY_LOW_THRESHOLD_DEFAULT;  // Low thresho
 float volatilityHighThreshold = VOLATILITY_HIGH_THRESHOLD_DEFAULT;  // High threshold (%)
 
 // Regime-engine (Fase A: snapshot; instellingen gesynchroniseerd in loadSettings/saveSettings)
-bool regimeEngineEnabled = false;
+bool regimeEngineEnabled = true;
 uint32_t regimeMinDwellSec = 180u;
 float regimeEnergeticEnter = 0.95f;
 float regimeEnergeticExit = 0.78f;

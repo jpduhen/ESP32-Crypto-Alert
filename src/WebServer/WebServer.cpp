@@ -14,6 +14,24 @@
 #include "../../platform_config.h"
 #undef MODULE_INCLUDE
 
+#include "../RegimeEngine/RegimeEngine.h"
+
+static const char* regimeStatusJsonString(bool enabled, RegimeKind k) {
+    if (!enabled) {
+        return "--";
+    }
+    switch (k) {
+        case REGIME_SLAP:
+            return "RUSTIG";
+        case REGIME_GELADEN:
+            return "GELADEN";
+        case REGIME_ENERGIEK:
+            return "ENERGIEK";
+        default:
+            return "GELADEN";
+    }
+}
+
 // Forward declarations voor dependencies
 extern WebServer server;  // Globale WebServer instance (gedefinieerd in .ino)
 extern TrendDetector trendDetector;
@@ -75,6 +93,39 @@ extern uint8_t autoVolatilityWindowMinutes;
 extern float autoVolatilityBaseline1mStdPct;
 extern float autoVolatilityMinMultiplier;
 extern float autoVolatilityMaxMultiplier;
+// Regime-engine (globals gesynchroniseerd via saveSettings in .ino)
+extern bool regimeEngineEnabled;
+extern uint32_t regimeMinDwellSec;
+extern float regimeEnergeticEnter;
+extern float regimeEnergeticExit;
+extern float regimeSlapEnter;
+extern float regimeSlapExit;
+extern float regimeLoadedFloor;
+extern float regimeLoadedDrop;
+extern float regimeDirDeadband1mPct;
+extern float regimeDirDeadband5mPct;
+extern float regimeDirDeadband30mPct;
+extern float regimeDirDeadband2hPct;
+extern float regime2hCompressMinPct;
+extern float regime2hCompressMaxPct;
+extern float regimeSlapSpike1mMult;
+extern float regimeSlapMove5mAlertMult;
+extern float regimeSlapMove30mMult;
+extern float regimeSlapCooldown1mMult;
+extern float regimeSlapCooldown5mMult;
+extern float regimeSlapCooldown30mMult;
+extern float regimeGeladenSpike1mMult;
+extern float regimeGeladenMove5mAlertMult;
+extern float regimeGeladenMove30mMult;
+extern float regimeGeladenCooldown1mMult;
+extern float regimeGeladenCooldown5mMult;
+extern float regimeGeladenCooldown30mMult;
+extern float regimeEnergiekSpike1mMult;
+extern float regimeEnergiekMove5mAlertMult;
+extern float regimeEnergiekMove30mMult;
+extern float regimeEnergiekCooldown1mMult;
+extern float regimeEnergiekCooldown5mMult;
+extern float regimeEnergiekCooldown30mMult;
 // Note: notificationCooldown1MinMs, etc. zijn macro's (gedefinieerd hieronder)
 extern char symbol0[16];
 
@@ -332,6 +383,9 @@ void WebServerModule::renderSettingsHTML() {
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='volatility'>--</span></div>",
              getText("Volatiliteit", "Volatility"));
     server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='regimeStatus'>--</span></div>",
+             getText("Regime", "Regime"));
+    server->sendContent(tmpBuf);
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='volume'>--</span></div>",
              getText("Volume", "Volume"));
     server->sendContent(tmpBuf);
@@ -359,13 +413,10 @@ void WebServerModule::renderSettingsHTML() {
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='anchorDelta'>--</span></div>",
              getText("Anchor Delta", "Anchor Delta"));
     server->sendContent(tmpBuf);
-    // API state indicator (klein, onopvallend)
-    snprintf(tmpBuf, sizeof(tmpBuf), "<div style='margin-top:10px;font-size:11px;color:#666;' id='apiState'></div>");
-    server->sendContent(tmpBuf);
     server->sendContent(F("</div>"));
     
     // Basis & Connectiviteit sectie
-    sendSectionHeader(getText("Basis & Connectiviteit", "Basic & Connectivity"), "basic", true);
+    sendSectionHeader(getText("Basis & Connectiviteit", "Basic & Connectivity"), "basic", false);
     sendSectionDesc(getText("Basisinstellingen voor symbol, notificaties en connectiviteit", "Basic settings for symbol, notifications and connectivity"));
     
     // NTFY Topic met reset knop (onder input veld, net als anchor)
@@ -392,7 +443,7 @@ void WebServerModule::renderSettingsHTML() {
     sendSectionFooter();
     
     // Anchor & Risicokader sectie
-    sendSectionHeader(getText("Anchor & Risicokader", "Anchor & Risk Framework"), "anchor", true);
+    sendSectionHeader(getText("Anchor & Risicokader", "Anchor & Risk Framework"), "anchor", false);
     sendSectionDesc(getText("Anchor prijs instellingen en risicobeheer", "Anchor price settings and risk management"));
     
     // 2h/2h Strategie dropdown
@@ -740,6 +791,148 @@ void WebServerModule::renderSettingsHTML() {
     sendInputRow(getText("30m Cooldown (sec)", "30m Cooldown (sec)"), "cd30min", "number", 
                  valueBuf, getText("Cooldown tussen 30m move alerts in seconden", "Cooldown between 30m move alerts in seconds"), 
                  1, 3600, 1);
+    
+    sendSectionFooter();
+    
+    // Regime Engine sectie (Fase A/B instellingen)
+    sendSectionHeader(getText("Regime Engine (experimenteel)", "Regime Engine (experimental)"), "regime", false);
+    sendSectionDesc(getText("Regime-classificatie en Fase B multipliers (experimenteel)", "Regime classification and Phase B multipliers (experimental)"));
+    
+    sendCheckboxRow(getText("Regime-engine ingeschakeld", "Regime engine enabled"), "regimeEngineEnabled", regimeEngineEnabled);
+    
+    sendSectionDesc(getText("Basis", "Basis"));
+    snprintf(valueBuf, sizeof(valueBuf), "%lu", static_cast<unsigned long>(regimeMinDwellSec));
+    sendInputRow(getText("Min. verblijf (sec)", "Min dwell (sec)"), "regimeMinDwellSec", "number",
+                 valueBuf, getText("Minimale duur voordat regime wisselt", "Minimum time before regime switches"),
+                 1.0f, 86400.0f, 1.0f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergeticEnter);
+    sendInputRow(getText("Energiek: enter", "Energetic: enter"), "regimeEnergeticEnter", "number",
+                 valueBuf, getText("Energiescore drempel om ENERGIEK te worden", "Energy score threshold to enter ENERGETIC"),
+                 0.01f, 1.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergeticExit);
+    sendInputRow(getText("Energiek: exit", "Energetic: exit"), "regimeEnergeticExit", "number",
+                 valueBuf, getText("Energiescore om ENERGIEK te verlaten", "Energy score to leave ENERGETIC"),
+                 0.01f, 1.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeSlapEnter);
+    sendInputRow(getText("Rustig: enter", "Calm: enter"), "regimeSlapEnter", "number",
+                 valueBuf, getText("Drempel om RUSTIG te worden", "Threshold to enter CALM"),
+                 0.01f, 1.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeSlapExit);
+    sendInputRow(getText("Rustig: exit", "Calm: exit"), "regimeSlapExit", "number",
+                 valueBuf, getText("Drempel om RUSTIG te verlaten", "Threshold to leave CALM"),
+                 0.01f, 1.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeLoadedFloor);
+    sendInputRow(getText("Geladen: vloer", "Loaded: floor"), "regimeLoadedFloor", "number",
+                 valueBuf, getText("Minimale loaded-score voor GELADEN", "Minimum loaded score for LOADED"),
+                 0.01f, 1.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeLoadedDrop);
+    sendInputRow(getText("Geladen: daling", "Loaded: drop"), "regimeLoadedDrop", "number",
+                 valueBuf, getText("Daling loaded-score om GELADEN te verlaten", "Loaded score drop to leave LOADED"),
+                 0.01f, 1.0f, 0.01f);
+    
+    sendSectionDesc(getText("Richting / compressie", "Direction / compression"));
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeDirDeadband1mPct);
+    sendInputRow(getText("Richting deadband 1m (%)", "Direction deadband 1m (%)"), "regimeDirDeadband1mPct", "number",
+                 valueBuf, getText("1m richting deadband (%)", "1m direction deadband (%)"),
+                 0.0f, 2.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeDirDeadband5mPct);
+    sendInputRow(getText("Richting deadband 5m (%)", "Direction deadband 5m (%)"), "regimeDirDeadband5mPct", "number",
+                 valueBuf, getText("5m richting deadband (%)", "5m direction deadband (%)"),
+                 0.0f, 2.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeDirDeadband30mPct);
+    sendInputRow(getText("Richting deadband 30m (%)", "Direction deadband 30m (%)"), "regimeDirDeadband30mPct", "number",
+                 valueBuf, getText("30m richting deadband (%)", "30m direction deadband (%)"),
+                 0.0f, 2.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeDirDeadband2hPct);
+    sendInputRow(getText("Richting deadband 2h (%)", "Direction deadband 2h (%)"), "regimeDirDeadband2hPct", "number",
+                 valueBuf, getText("2h richting deadband (%)", "2h direction deadband (%)"),
+                 0.0f, 2.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regime2hCompressMinPct);
+    sendInputRow(getText("2h compressie min (%)", "2h compression min (%)"), "regime2hCompressMinPct", "number",
+                 valueBuf, getText("Minimum 2h range voor compressie", "Minimum 2h range for compression"),
+                 0.01f, 5.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regime2hCompressMaxPct);
+    sendInputRow(getText("2h compressie max (%)", "2h compression max (%)"), "regime2hCompressMaxPct", "number",
+                 valueBuf, getText("Maximum 2h range voor compressie", "Maximum 2h range for compression"),
+                 0.01f, 5.0f, 0.01f);
+    
+    sendSectionDesc(getText("Multipliers RUSTIG", "Multipliers CALM (RUSTIG)"));
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeSlapSpike1mMult);
+    sendInputRow(getText("Rustig: 1m spike mult.", "Calm: 1m spike mult."), "regimeSlapSpike1mMult", "number",
+                 valueBuf, getText("Multiplier 1m spike in RUSTIG", "1m spike multiplier in CALM"),
+                 0.2f, 3.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeSlapMove5mAlertMult);
+    sendInputRow(getText("Rustig: 5m alert mult.", "Calm: 5m alert mult."), "regimeSlapMove5mAlertMult", "number",
+                 valueBuf, getText("Multiplier 5m move alert in RUSTIG", "5m move alert multiplier in CALM"),
+                 0.2f, 3.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeSlapMove30mMult);
+    sendInputRow(getText("Rustig: 30m move mult.", "Calm: 30m move mult."), "regimeSlapMove30mMult", "number",
+                 valueBuf, getText("Multiplier 30m move in RUSTIG", "30m move multiplier in CALM"),
+                 0.2f, 3.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeSlapCooldown1mMult);
+    sendInputRow(getText("Rustig: 1m cooldown mult.", "Calm: 1m cooldown mult."), "regimeSlapCooldown1mMult", "number",
+                 valueBuf, getText("Multiplier 1m cooldown in RUSTIG", "1m cooldown multiplier in CALM"),
+                 0.2f, 3.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeSlapCooldown5mMult);
+    sendInputRow(getText("Rustig: 5m cooldown mult.", "Calm: 5m cooldown mult."), "regimeSlapCooldown5mMult", "number",
+                 valueBuf, getText("Multiplier 5m cooldown in RUSTIG", "5m cooldown multiplier in CALM"),
+                 0.2f, 3.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeSlapCooldown30mMult);
+    sendInputRow(getText("Rustig: 30m cooldown mult.", "Calm: 30m cooldown mult."), "regimeSlapCooldown30mMult", "number",
+                 valueBuf, getText("Multiplier 30m cooldown in RUSTIG", "30m cooldown multiplier in CALM"),
+                 0.2f, 3.0f, 0.01f);
+    
+    sendSectionDesc(getText("Multipliers GELADEN", "Multipliers LOADED"));
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeGeladenSpike1mMult);
+    sendInputRow(getText("Geladen: 1m spike mult.", "Loaded: 1m spike mult."), "regimeGeladenSpike1mMult", "number",
+                 valueBuf, getText("Multiplier 1m spike in GELADEN", "1m spike multiplier in LOADED"),
+                 0.2f, 3.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeGeladenMove5mAlertMult);
+    sendInputRow(getText("Geladen: 5m alert mult.", "Loaded: 5m alert mult."), "regimeGeladenMove5mAlertMult", "number",
+                 valueBuf, getText("Multiplier 5m move alert in GELADEN", "5m move alert multiplier in LOADED"),
+                 0.2f, 3.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeGeladenMove30mMult);
+    sendInputRow(getText("Geladen: 30m move mult.", "Loaded: 30m move mult."), "regimeGeladenMove30mMult", "number",
+                 valueBuf, getText("Multiplier 30m move in GELADEN", "30m move multiplier in LOADED"),
+                 0.2f, 3.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeGeladenCooldown1mMult);
+    sendInputRow(getText("Geladen: 1m cooldown mult.", "Loaded: 1m cooldown mult."), "regimeGeladenCooldown1mMult", "number",
+                 valueBuf, getText("Multiplier 1m cooldown in GELADEN", "1m cooldown multiplier in LOADED"),
+                 0.2f, 3.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeGeladenCooldown5mMult);
+    sendInputRow(getText("Geladen: 5m cooldown mult.", "Loaded: 5m cooldown mult."), "regimeGeladenCooldown5mMult", "number",
+                 valueBuf, getText("Multiplier 5m cooldown in GELADEN", "5m cooldown multiplier in LOADED"),
+                 0.2f, 3.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeGeladenCooldown30mMult);
+    sendInputRow(getText("Geladen: 30m cooldown mult.", "Loaded: 30m cooldown mult."), "regimeGeladenCooldown30mMult", "number",
+                 valueBuf, getText("Multiplier 30m cooldown in GELADEN", "30m cooldown multiplier in LOADED"),
+                 0.2f, 3.0f, 0.01f);
+    
+    sendSectionDesc(getText("Multipliers ENERGIEK", "Multipliers ENERGETIC"));
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergiekSpike1mMult);
+    sendInputRow(getText("Energiek: 1m spike mult.", "Energetic: 1m spike mult."), "regimeEnergiekSpike1mMult", "number",
+                 valueBuf, getText("Multiplier 1m spike in ENERGIEK", "1m spike multiplier in ENERGETIC"),
+                 0.2f, 3.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergiekMove5mAlertMult);
+    sendInputRow(getText("Energiek: 5m alert mult.", "Energetic: 5m alert mult."), "regimeEnergiekMove5mAlertMult", "number",
+                 valueBuf, getText("Multiplier 5m move alert in ENERGIEK", "5m move alert multiplier in ENERGETIC"),
+                 0.2f, 3.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergiekMove30mMult);
+    sendInputRow(getText("Energiek: 30m move mult.", "Energetic: 30m move mult."), "regimeEnergiekMove30mMult", "number",
+                 valueBuf, getText("Multiplier 30m move in ENERGIEK", "30m move multiplier in ENERGETIC"),
+                 0.2f, 3.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergiekCooldown1mMult);
+    sendInputRow(getText("Energiek: 1m cooldown mult.", "Energetic: 1m cooldown mult."), "regimeEnergiekCooldown1mMult", "number",
+                 valueBuf, getText("Multiplier 1m cooldown in ENERGIEK", "1m cooldown multiplier in ENERGETIC"),
+                 0.2f, 3.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergiekCooldown5mMult);
+    sendInputRow(getText("Energiek: 5m cooldown mult.", "Energetic: 5m cooldown mult."), "regimeEnergiekCooldown5mMult", "number",
+                 valueBuf, getText("Multiplier 5m cooldown in ENERGIEK", "5m cooldown multiplier in ENERGETIC"),
+                 0.2f, 3.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergiekCooldown30mMult);
+    sendInputRow(getText("Energiek: 30m cooldown mult.", "Energetic: 30m cooldown mult."), "regimeEnergiekCooldown30mMult", "number",
+                 valueBuf, getText("Multiplier 30m cooldown in ENERGIEK", "30m cooldown multiplier in ENERGETIC"),
+                 0.2f, 3.0f, 0.01f);
     
     sendSectionFooter();
     
@@ -1255,6 +1448,102 @@ void WebServerModule::handleSave() {
     }
     if (parseFloatArg("autoVolMax", floatVal, 1.0f, 3.0f)) {
         autoVolatilityMaxMultiplier = floatVal;
+    }
+    
+    // Regime Engine settings
+    regimeEngineEnabled = server->hasArg("regimeEngineEnabled");
+    if (parseIntArg("regimeMinDwellSec", intVal, 1, 86400)) {
+        regimeMinDwellSec = static_cast<uint32_t>(intVal);
+    }
+    if (parseFloatArg("regimeEnergeticEnter", floatVal, 0.01f, 1.0f)) {
+        regimeEnergeticEnter = floatVal;
+    }
+    if (parseFloatArg("regimeEnergeticExit", floatVal, 0.01f, 1.0f)) {
+        regimeEnergeticExit = floatVal;
+    }
+    if (parseFloatArg("regimeSlapEnter", floatVal, 0.01f, 1.0f)) {
+        regimeSlapEnter = floatVal;
+    }
+    if (parseFloatArg("regimeSlapExit", floatVal, 0.01f, 1.0f)) {
+        regimeSlapExit = floatVal;
+    }
+    if (parseFloatArg("regimeLoadedFloor", floatVal, 0.01f, 1.0f)) {
+        regimeLoadedFloor = floatVal;
+    }
+    if (parseFloatArg("regimeLoadedDrop", floatVal, 0.01f, 1.0f)) {
+        regimeLoadedDrop = floatVal;
+    }
+    if (parseFloatArg("regimeDirDeadband1mPct", floatVal, 0.0f, 2.0f)) {
+        regimeDirDeadband1mPct = floatVal;
+    }
+    if (parseFloatArg("regimeDirDeadband5mPct", floatVal, 0.0f, 2.0f)) {
+        regimeDirDeadband5mPct = floatVal;
+    }
+    if (parseFloatArg("regimeDirDeadband30mPct", floatVal, 0.0f, 2.0f)) {
+        regimeDirDeadband30mPct = floatVal;
+    }
+    if (parseFloatArg("regimeDirDeadband2hPct", floatVal, 0.0f, 2.0f)) {
+        regimeDirDeadband2hPct = floatVal;
+    }
+    if (parseFloatArg("regime2hCompressMinPct", floatVal, 0.01f, 5.0f)) {
+        regime2hCompressMinPct = floatVal;
+    }
+    if (parseFloatArg("regime2hCompressMaxPct", floatVal, 0.01f, 5.0f)) {
+        regime2hCompressMaxPct = floatVal;
+    }
+    if (parseFloatArg("regimeSlapSpike1mMult", floatVal, 0.2f, 3.0f)) {
+        regimeSlapSpike1mMult = floatVal;
+    }
+    if (parseFloatArg("regimeSlapMove5mAlertMult", floatVal, 0.2f, 3.0f)) {
+        regimeSlapMove5mAlertMult = floatVal;
+    }
+    if (parseFloatArg("regimeSlapMove30mMult", floatVal, 0.2f, 3.0f)) {
+        regimeSlapMove30mMult = floatVal;
+    }
+    if (parseFloatArg("regimeSlapCooldown1mMult", floatVal, 0.2f, 3.0f)) {
+        regimeSlapCooldown1mMult = floatVal;
+    }
+    if (parseFloatArg("regimeSlapCooldown5mMult", floatVal, 0.2f, 3.0f)) {
+        regimeSlapCooldown5mMult = floatVal;
+    }
+    if (parseFloatArg("regimeSlapCooldown30mMult", floatVal, 0.2f, 3.0f)) {
+        regimeSlapCooldown30mMult = floatVal;
+    }
+    if (parseFloatArg("regimeGeladenSpike1mMult", floatVal, 0.2f, 3.0f)) {
+        regimeGeladenSpike1mMult = floatVal;
+    }
+    if (parseFloatArg("regimeGeladenMove5mAlertMult", floatVal, 0.2f, 3.0f)) {
+        regimeGeladenMove5mAlertMult = floatVal;
+    }
+    if (parseFloatArg("regimeGeladenMove30mMult", floatVal, 0.2f, 3.0f)) {
+        regimeGeladenMove30mMult = floatVal;
+    }
+    if (parseFloatArg("regimeGeladenCooldown1mMult", floatVal, 0.2f, 3.0f)) {
+        regimeGeladenCooldown1mMult = floatVal;
+    }
+    if (parseFloatArg("regimeGeladenCooldown5mMult", floatVal, 0.2f, 3.0f)) {
+        regimeGeladenCooldown5mMult = floatVal;
+    }
+    if (parseFloatArg("regimeGeladenCooldown30mMult", floatVal, 0.2f, 3.0f)) {
+        regimeGeladenCooldown30mMult = floatVal;
+    }
+    if (parseFloatArg("regimeEnergiekSpike1mMult", floatVal, 0.2f, 3.0f)) {
+        regimeEnergiekSpike1mMult = floatVal;
+    }
+    if (parseFloatArg("regimeEnergiekMove5mAlertMult", floatVal, 0.2f, 3.0f)) {
+        regimeEnergiekMove5mAlertMult = floatVal;
+    }
+    if (parseFloatArg("regimeEnergiekMove30mMult", floatVal, 0.2f, 3.0f)) {
+        regimeEnergiekMove30mMult = floatVal;
+    }
+    if (parseFloatArg("regimeEnergiekCooldown1mMult", floatVal, 0.2f, 3.0f)) {
+        regimeEnergiekCooldown1mMult = floatVal;
+    }
+    if (parseFloatArg("regimeEnergiekCooldown5mMult", floatVal, 0.2f, 3.0f)) {
+        regimeEnergiekCooldown5mMult = floatVal;
+    }
+    if (parseFloatArg("regimeEnergiekCooldown30mMult", floatVal, 0.2f, 3.0f)) {
+        regimeEnergiekCooldown30mMult = floatVal;
     }
     
     saveSettings();
@@ -1871,8 +2160,12 @@ void WebServerModule::handleStatus() {
     formatTrendLabel(trend1dText, sizeof(trend1dText), "1d", trendMedium);
     formatTrendLabel(trend7dText, sizeof(trend7dText), "7d", trendLong);
 
-    // JSON buffer (960 bytes voor extra trend/return velden)
-    char jsonBuf[960];
+    const bool regimeEnabledForJson = regimeEngineEnabled;
+    const RegimeSnapshot regimeSnap = regimeEngineGetSnapshot();
+    const char* regimeStrJson = regimeStatusJsonString(regimeEnabledForJson, regimeSnap.committedRegime);
+
+    // JSON buffer (inclusief regime-velden)
+    char jsonBuf[1280];
     size_t written = 0;
     
     // Bouw JSON zonder String-concatenaties (gebruik snprintf met offset)
@@ -1901,7 +2194,9 @@ void WebServerModule::handleStatus() {
         "\"apiAgeMs\":%lu,"
         "\"uptimeSec\":%lu,"
         "\"heapFree\":%u,"
-        "\"heapLargest\":%u"
+        "\"heapLargest\":%u,"
+        "\"regimeEnabled\":%s,"
+        "\"regime\":\"%s\""
         "}",
         bitvavoSymbol,
         price,
@@ -1926,7 +2221,9 @@ void WebServerModule::handleStatus() {
         static_cast<unsigned long>(apiAgeMs),
         nowMs / 1000,
         ESP.getFreeHeap(),
-        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)
+        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+        regimeEnabledForJson ? "true" : "false",
+        regimeStrJson
     );
     
     // Verstuur JSON response
@@ -2287,8 +2584,6 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(F("}"));
     server->sendContent(F("var basic=document.getElementById('icon-basic');"));
     server->sendContent(F("var anchor=document.getElementById('icon-anchor');"));
-    server->sendContent(F("if(basic)basic.innerHTML='&#9660;';"));
-    server->sendContent(F("if(anchor)anchor.innerHTML='&#9660;';"));
     server->sendContent(F("var anchorBtn=document.getElementById('anchorBtn');"));
     server->sendContent(F("if(anchorBtn){"));
     server->sendContent(F("anchorBtn.addEventListener('click',setAnchorBtn);"));
@@ -2312,6 +2607,7 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(F("el=document.getElementById('trend1d');if(el)el.textContent=d.trendMedium||'--';"));
     server->sendContent(F("el=document.getElementById('trend7d');if(el)el.textContent=d.trendLong||'--';"));
     server->sendContent(F("el=document.getElementById('volatility');if(el)el.textContent=d.volatility||'--';"));
+    server->sendContent(F("el=document.getElementById('regimeStatus');if(el)el.textContent=(d.regime!==undefined&&d.regime!==null)?d.regime:'--';"));
     server->sendContent(F("el=document.getElementById('volume');if(el)el.textContent=d.volume||'--';"));
     server->sendContent(F("el=document.getElementById('ret1m');if(el)el.textContent=d.ret1m!=0?d.ret1m.toFixed(2)+'%':'--';"));
     server->sendContent(F("el=document.getElementById('ret5m');if(el)el.textContent=d.ret5m!=0?d.ret5m.toFixed(2)+'%':'--';"));
@@ -2321,13 +2617,13 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(F("el=document.getElementById('ret7d');if(el)el.textContent=d.ret7d!=0?d.ret7d.toFixed(2)+'%':'--';"));
     server->sendContent(F("el=document.getElementById('anchor');if(el)el.textContent=d.anchor>0?d.anchor.toFixed(2)+' '+quote:'--';"));
     server->sendContent(F("el=document.getElementById('anchorDelta');if(el)el.textContent=d.anchorDeltaPct!=0?d.anchorDeltaPct.toFixed(2)+'%':'--';"));
-    server->sendContent(F("el=document.getElementById('apiState');if(el){"));
+    server->sendContent(F("el=document.getElementById('apiStateHeader');if(el){"));
     server->sendContent(F("if(d.apiFresh){el.textContent='';}else{"));
     server->sendContent(F("var age=(d.apiAgeMs?Math.round(d.apiAgeMs/1000):0);"));
     server->sendContent(F("el.textContent='STALE '+age+'s';"));
     server->sendContent(F("}}"));
     server->sendContent(F("}).catch(function(e){"));
-    server->sendContent(F("var el=document.getElementById('apiState');if(el)el.textContent='NET?';"));
+    server->sendContent(F("var el=document.getElementById('apiStateHeader');if(el)el.textContent='NET?';"));
     server->sendContent(F("});"));
     server->sendContent(F("}"));
     server->sendContent(F("refreshStatus();"));
@@ -2351,6 +2647,7 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(getText("Firmware-update (OTA)", "Firmware update (OTA)"));
     server->sendContent(F("</a>"));
 #endif
+    server->sendContent(F("<span id='apiStateHeader' style='margin-left:10px;font-size:11px;color:#666;'></span>"));
     server->sendContent(F("</div>"));
     
     // Title - gebruik bitvavoSymbol in plaats van platformName, voeg versie toe
