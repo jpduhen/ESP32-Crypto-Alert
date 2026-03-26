@@ -250,6 +250,9 @@ const char* SettingsStore::PREF_KEY_RG_EN_M30 = "rgEnM30";
 const char* SettingsStore::PREF_KEY_RG_EN_C1 = "rgEnC1";
 const char* SettingsStore::PREF_KEY_RG_EN_C5 = "rgEnC5";
 const char* SettingsStore::PREF_KEY_RG_EN_C30 = "rgEnC30";
+const char* SettingsStore::PREF_KEY_RG_EN_S1BR = "rgEnS1Br";
+const char* SettingsStore::PREF_KEY_RG_EN_S1FX = "rgEnS1Fx";
+const char* SettingsStore::PREF_KEY_RG_EN_DIR = "rgEnDir";
 
 // 2-hour alert threshold keys
 const char* SettingsStore::PREF_KEY_2H_BREAK_MARGIN = "2hBreakMargin";
@@ -490,6 +493,10 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     regimeEnergiekCooldown1mMult = 0.70f;
     regimeEnergiekCooldown5mMult = 0.80f;
     regimeEnergiekCooldown30mMult = 1.20f;
+
+    regimeEnergiekAllowStandalone1mBurst = true;
+    regimeEnergiekStandalone1mFactor = 1.20f;
+    regimeEnergiekMinDirectionStrength = 0.60f;
     
     // 2-hour alert thresholds defaults (van Alert2HThresholds namespace)
     alert2HThresholds.breakMarginPct = 0.15f;
@@ -687,6 +694,21 @@ CryptoMonitorSettings SettingsStore::load() {
     settings.regimeEnergiekCooldown1mMult = prefs.getFloat(PREF_KEY_RG_EN_C1, 0.70f);
     settings.regimeEnergiekCooldown5mMult = prefs.getFloat(PREF_KEY_RG_EN_C5, 0.80f);
     settings.regimeEnergiekCooldown30mMult = prefs.getFloat(PREF_KEY_RG_EN_C30, 1.20f);
+    settings.regimeEnergiekAllowStandalone1mBurst = prefs.getBool(PREF_KEY_RG_EN_S1BR, true);
+    settings.regimeEnergiekStandalone1mFactor = prefs.getFloat(PREF_KEY_RG_EN_S1FX, 1.20f);
+    settings.regimeEnergiekMinDirectionStrength = prefs.getFloat(PREF_KEY_RG_EN_DIR, 0.60f);
+    if (settings.regimeEnergiekStandalone1mFactor < 1.0f) {
+        settings.regimeEnergiekStandalone1mFactor = 1.0f;
+    }
+    if (settings.regimeEnergiekStandalone1mFactor > 3.0f) {
+        settings.regimeEnergiekStandalone1mFactor = 3.0f;
+    }
+    if (settings.regimeEnergiekMinDirectionStrength < 0.0f) {
+        settings.regimeEnergiekMinDirectionStrength = 0.0f;
+    }
+    if (settings.regimeEnergiekMinDirectionStrength > 1.0f) {
+        settings.regimeEnergiekMinDirectionStrength = 1.0f;
+    }
     
     // Load 2-hour alert thresholds
     settings.alert2HThresholds.breakMarginPct = prefs.getFloat(PREF_KEY_2H_BREAK_MARGIN, 0.15f);
@@ -907,6 +929,9 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     prefs.putFloat(PREF_KEY_RG_EN_C1, settings.regimeEnergiekCooldown1mMult);
     prefs.putFloat(PREF_KEY_RG_EN_C5, settings.regimeEnergiekCooldown5mMult);
     prefs.putFloat(PREF_KEY_RG_EN_C30, settings.regimeEnergiekCooldown30mMult);
+    prefs.putBool(PREF_KEY_RG_EN_S1BR, settings.regimeEnergiekAllowStandalone1mBurst);
+    prefs.putFloat(PREF_KEY_RG_EN_S1FX, settings.regimeEnergiekStandalone1mFactor);
+    prefs.putFloat(PREF_KEY_RG_EN_DIR, settings.regimeEnergiekMinDirectionStrength);
     
     // Save Auto Anchor settings (gebruik config-blob)
     AutoAnchorPersist blob;

@@ -62,6 +62,11 @@ TwoHMetrics computeTwoHMetrics();
 // Persistent runtime state voor 2h notificaties
 static Alert2HState gAlert2H;
 
+// Fase C: null-veilige C-string voor %s (snprintf/Serial); voorkomt LoadProhibited bij nullptr.
+static inline const char* safeFmtStr(const char* p) {
+    return (p != nullptr) ? p : "--";
+}
+
 // Fase 6.1.10: Forward declarations voor checkAndNotify dependencies
 void findMinMaxInSecondPrices(float &minVal, float &maxVal);
 void findMinMaxInLast30Minutes(float &minVal, float &maxVal);
@@ -93,6 +98,10 @@ extern float regimeEnergiekMove30mMult;
 extern float regimeEnergiekCooldown1mMult;
 extern float regimeEnergiekCooldown5mMult;
 extern float regimeEnergiekCooldown30mMult;
+extern bool regimeEnergiekAllowStandalone1mBurst;
+extern float regimeEnergiekStandalone1mFactor;
+extern float regimeEnergiekMinDirectionStrength;
+extern bool hasRet30m;
 
 namespace {
 
@@ -148,6 +157,29 @@ static RegimeRuntimeMultipliers selectRegimeRuntimeMultipliers()
             break;
     }
     return m;
+}
+
+// Fase C Patch 1: guards voor ENERGIEK standalone 1m (geen 5m confirm).
+// 30m-takken alleen als hasRet30mData true (geen impliciete flat bij ret_30m==0 zonder data).
+static bool energiekStandalone1mGuardsOk(float directionScore,
+                                        float minDirStrength,
+                                        bool hasRet30mData,
+                                        float ret_1m,
+                                        float ret_30m)
+{
+    if (fabsf(directionScore) >= minDirStrength) {
+        return true;
+    }
+    if (!hasRet30mData) {
+        return false;
+    }
+    if (fabsf(ret_30m) < 0.15f) {
+        return true;
+    }
+    if ((ret_1m > 0.0f && ret_30m > 0.0f) || (ret_1m < 0.0f && ret_30m < 0.0f)) {
+        return true;
+    }
+    return false;
 }
 
 }  // namespace
@@ -227,8 +259,8 @@ bool AlertEngine::checkAlertConditions(unsigned long now, unsigned long& lastNot
     // Check hourly limit
     if (alertsThisHour >= maxAlertsPerHour) {
         #if !DEBUG_BUTTON_ONLY
-        Serial_printf("[Notify] %s gedetecteerd maar max alerts per uur bereikt (%d/%d)\n", 
-                     alertType, alertsThisHour, maxAlertsPerHour);
+        Serial_printf("[Notify] %s gedetecteerd maar max alerts per uur bereikt (%d/%d)\n",
+                     safeFmtStr(alertType), alertsThisHour, maxAlertsPerHour);
         #endif
         return false;
     }
@@ -312,8 +344,8 @@ static void appendVolumeRangeInfo(char* msg, size_t msgSize, const VolumeRangeSt
         return;
     }
     
-    const char* vsAvgText = getText("vs gem", "vs avg");
-    const char* rangeText = getText("range", "range");
+    const char* vsAvgText = safeFmtStr(getText("vs gem", "vs avg"));
+    const char* rangeText = safeFmtStr(getText("range", "range"));
     char extra[72];
     snprintf(extra, sizeof(extra), "vol%+.0f%% %s | %s %.2f%%",
              status.volumeDeltaPct, vsAvgText, rangeText, status.rangePct);
@@ -958,6 +990,98 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                         Serial_printf(F("[Notify] 1m spike notificatie verstuurd (%d/%d dit uur)\n"), alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR);
                                     #endif
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // ===== Fase C Patch 1: ENERGIEK standalone 1m burst (geen 5m confirm) =====
+    if (regimeEngineEnabled && regimeEnergiekAllowStandalone1mBurst && ret_1m != 0.0f) {
+        const RegimeSnapshot snapEn = regimeEngineGetSnapshot();
+        if (snapEn.committedRegime == REGIME_ENERGIEK) {
+            const float standalone1mTh = fmaxf(finalSpike1mThreshold * regimeEnergiekStandalone1mFactor, 0.05f);
+            const float absRet1mStandalone = cachedAbsRet1m;
+            const bool normal1mSpikeDetected =
+                (ret_1m != 0.0f && ret_5m != 0.0f) &&
+                (cachedAbsRet1m >= finalSpike1mThreshold) && (cachedAbsRet5m >= spike5mThreshold) &&
+                (((ret_1m > 0.0f && ret_5m > 0.0f) || (ret_1m < 0.0f && ret_5m < 0.0f)));
+            bool volumeRangeOk1mS = (!volumeRange1m.valid) || (volumeRange1m.volumeOk && volumeRange1m.rangeOk);
+
+            if (absRet1mStandalone >= standalone1mTh) {
+                if (!volumeRangeOk1mS) {
+                    // zelfde volume/range policy als 1m spike
+                } else if (normal1mSpikeDetected && volumeRangeOk1mS) {
+                    // Standaard 1m+5m-spikepad hierboven heeft prioriteit (geen dubbele confluence/standalone).
+                } else {
+                    update1mEvent(ret_1m, now, standalone1mTh);
+                    bool confluenceFoundS = false;
+                    if (smartConfluenceEnabled) {
+                        confluenceFoundS = checkAndSendConfluenceAlert(now, ret_30m);
+                        if (confluenceFoundS) {
+                            confluenceSentThisRound = true;
+                        }
+                    }
+                    if (confluenceFoundS) {
+                        #if !DEBUG_BUTTON_ONLY
+                        Serial_printf(F("[Notify] 1m ENERGIEK standalone onderdrukt (confluence)\n"));
+                        #endif
+                    } else if (smartConfluenceEnabled && last1mEvent.usedInConfluence) {
+                        #if !DEBUG_BUTTON_ONLY
+                        Serial_printf(F("[Notify] 1m ENERGIEK standalone onderdrukt (confluence)\n"));
+                        #endif
+                    } else if (!volumeEventCooldownOk(now)) {
+                        #if !DEBUG_BUTTON_ONLY
+                        Serial_printf(F("[Notify] 1m ENERGIEK standalone onderdrukt (volume-event cooldown)\n"));
+                        #endif
+                    } else if (!energiekStandalone1mGuardsOk(snapEn.directionScore,
+                                                            regimeEnergiekMinDirectionStrength,
+                                                            hasRet30m,
+                                                            ret_1m,
+                                                            ret_30m)) {
+                        #if !DEBUG_BUTTON_ONLY
+                        Serial.println(F("[PhaseC] suppressed_energiek_1m_low_direction"));
+                        #endif
+                    } else {
+                        // Minimaal, self-contained bericht: geen ret_5m/min-max/appendVolumeRangeInfo
+                        // (minder stack en geen hergebruik van 5m-velden in de tekst).
+                        #if !DEBUG_BUTTON_ONLY
+                        Serial.println(F("[PhaseC] standalone_enter"));
+                        #endif
+                        getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
+                        const float spikePriceRoundedS = roundToEuroNotif(prices[0]);
+                        const char* lineStandalone = safeFmtStr(getText(
+                            "Standalone (geen 5m bevestiging)", "Standalone (no 5m confirmation)"));
+                        const char* tsS = safeFmtStr(timestampBuffer);
+                        const char* symS = safeFmtStr(bitvavoSymbol);
+                        const char* spikeLblS = safeFmtStr(getText("Spike", "Spike"));
+                        #if !DEBUG_BUTTON_ONLY
+                        Serial.println(F("[PhaseC] standalone_before_format"));
+                        #endif
+                        snprintf(msgBuffer, sizeof(msgBuffer),
+                                 "%.0f (%s)\n%s\n1m: %+.2f%%",
+                                 spikePriceRoundedS, tsS, lineStandalone, ret_1m);
+                        const char* colorTagS =
+                            determineColorTag(ret_1m, standalone1mTh, standalone1mTh * 1.5f);
+                        snprintf(titleBuffer, sizeof(titleBuffer), "%s 1m %s", symS, spikeLblS);
+                        if (checkAlertConditions(now, lastNotification1Min, finalCooldown1mMs,
+                                                alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR,
+                                                "1m spike ENERGIEK standalone")) {
+                            #if !DEBUG_BUTTON_ONLY
+                            Serial.println(F("[PhaseC] standalone_before_send"));
+                            #endif
+                            bool sentS = sendNotification(titleBuffer, msgBuffer, safeFmtStr(colorTagS));
+                            if (sentS) {
+                                lastNotification1Min = now;
+                                alerts1MinThisHour++;
+                                lastVolumeEventMs = now;
+                                #if !DEBUG_BUTTON_ONLY
+                                Serial_printf(
+                                    F("[Notify] 1m ENERGIEK standalone notificatie verstuurd (%d/%d dit uur)\n"),
+                                    alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR);
+                                #endif
                             }
                         }
                     }

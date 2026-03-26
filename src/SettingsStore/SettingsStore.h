@@ -227,6 +227,11 @@ struct CryptoMonitorSettings {
     float regimeEnergiekCooldown1mMult;
     float regimeEnergiekCooldown5mMult;
     float regimeEnergiekCooldown30mMult;
+
+    // Regime Fase C gating (Patch 1: ENERGIEK standalone 1m)
+    bool regimeEnergiekAllowStandalone1mBurst;
+    float regimeEnergiekStandalone1mFactor;
+    float regimeEnergiekMinDirectionStrength;
     
     // Constructor met defaults
     CryptoMonitorSettings();
@@ -344,6 +349,9 @@ private:
     static const char* PREF_KEY_RG_EN_C1;
     static const char* PREF_KEY_RG_EN_C5;
     static const char* PREF_KEY_RG_EN_C30;
+    static const char* PREF_KEY_RG_EN_S1BR;
+    static const char* PREF_KEY_RG_EN_S1FX;
+    static const char* PREF_KEY_RG_EN_DIR;
     
     // 2-hour alert threshold keys
     static const char* PREF_KEY_2H_BREAK_MARGIN;

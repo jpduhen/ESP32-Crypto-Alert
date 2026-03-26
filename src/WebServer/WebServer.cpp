@@ -126,6 +126,9 @@ extern float regimeEnergiekMove30mMult;
 extern float regimeEnergiekCooldown1mMult;
 extern float regimeEnergiekCooldown5mMult;
 extern float regimeEnergiekCooldown30mMult;
+extern bool regimeEnergiekAllowStandalone1mBurst;
+extern float regimeEnergiekStandalone1mFactor;
+extern float regimeEnergiekMinDirectionStrength;
 // Note: notificationCooldown1MinMs, etc. zijn macro's (gedefinieerd hieronder)
 extern char symbol0[16];
 
@@ -934,6 +937,20 @@ void WebServerModule::renderSettingsHTML() {
                  valueBuf, getText("Multiplier 30m cooldown in ENERGIEK", "30m cooldown multiplier in ENERGETIC"),
                  0.2f, 3.0f, 0.01f);
     
+    sendSectionDesc(getText("Standalone 1m in ENERGIEK (Fase C)", "Standalone 1m in ENERGIEK (Phase C)"));
+    sendCheckboxRow(getText("Standalone 1m-burst (geen 5m bevestiging)", "Standalone 1m burst (no 5m confirm)"),
+                      "regimeEnergiekAllowStandalone1mBurst", regimeEnergiekAllowStandalone1mBurst);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergiekStandalone1mFactor);
+    sendInputRow(getText("Standalone 1m factor (× finale 1m-drempel)", "Standalone 1m factor (× final 1m threshold)"),
+                 "regimeEnergiekStandalone1mFactor", "number",
+                 valueBuf, getText("Min. |1m| als factor op finale Fase B 1m-drempel", "Min. |1m| as factor on final Phase B 1m threshold"),
+                 1.0f, 3.0f, 0.01f);
+    snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergiekMinDirectionStrength);
+    sendInputRow(getText("Min. richtingsterkte (|directionScore|)", "Min. direction strength (|directionScore|)"),
+                 "regimeEnergiekMinDirectionStrength", "number",
+                 valueBuf, getText("Zonder 30m-context: alleen deze guard (0–1)", "Without 30m context: only this guard (0–1)"),
+                 0.0f, 1.0f, 0.01f);
+    
     sendSectionFooter();
     
     // Warm-Start sectie
@@ -1544,6 +1561,13 @@ void WebServerModule::handleSave() {
     }
     if (parseFloatArg("regimeEnergiekCooldown30mMult", floatVal, 0.2f, 3.0f)) {
         regimeEnergiekCooldown30mMult = floatVal;
+    }
+    regimeEnergiekAllowStandalone1mBurst = server->hasArg("regimeEnergiekAllowStandalone1mBurst");
+    if (parseFloatArg("regimeEnergiekStandalone1mFactor", floatVal, 1.0f, 3.0f)) {
+        regimeEnergiekStandalone1mFactor = floatVal;
+    }
+    if (parseFloatArg("regimeEnergiekMinDirectionStrength", floatVal, 0.0f, 1.0f)) {
+        regimeEnergiekMinDirectionStrength = floatVal;
     }
     
     saveSettings();

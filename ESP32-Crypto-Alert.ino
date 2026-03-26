@@ -18,6 +18,7 @@
 #include "atomic.h"                 // Included in this project
 #include <lvgl.h>                   // Install "lvgl" with the Library Manager (last tested on v9.2.2)
 #include "Arduino.h"
+#include <cstring>
 
 // Lokale secrets (optioneel, niet in git opnemen). Gebruikt om NTFY access token veilig in te laden.
 // Verwacht in secrets_local.h bijvoorbeeld:
@@ -509,6 +510,9 @@ float regimeEnergiekMove30mMult = 1.05f;
 float regimeEnergiekCooldown1mMult = 0.70f;
 float regimeEnergiekCooldown5mMult = 0.80f;
 float regimeEnergiekCooldown30mMult = 1.20f;
+bool regimeEnergiekAllowStandalone1mBurst = true;
+float regimeEnergiekStandalone1mFactor = 1.20f;
+float regimeEnergiekMinDirectionStrength = 0.60f;
 
 unsigned long lastTrendChangeNotification = 0;  // Timestamp van laatste trend change notificatie (backward compatibility)
 
@@ -587,7 +591,18 @@ static size_t wsPendingLen = 0;
 static char wsPendingBuf[360];
 
 // Diagnosetest: WS pauze tijdens NTFY-send om steady-state WS-verkeer te isoleren.
-static bool wsPauseForNtfySend = false;
+static volatile bool wsPauseForNtfySend = false;
+
+// NTFY: after WS disconnect/restore, tijdelijk REST price/candle fallbacks temperen
+static unsigned long lastNtfyWsRestoreMs = 0;
+static const unsigned long NTFY_WS_RESTORE_GRACE_PRICE_MS = 15000UL;
+static const unsigned long NTFY_WS_RESTORE_GRACE_CANDLES_MS = 30000UL;
+
+// NTFY extra health ping: eenmalig pas na de eerste echte WS live message (+ delay)
+static bool wsHasSeenFirstLiveMessage = false;
+static unsigned long wsLiveSinceMs = 0;
+static bool wsLiveNtfyTestSent = true;
+static const unsigned long WS_LIVE_NTFY_HEALTH_PING_DELAY_MS = 15000UL;
 
 // Diagnosetest: waarden om WS te kunnen herstarten na een test-disconnect.
 static const char* WS_HOST = "ws.bitvavo.com";
@@ -867,6 +882,12 @@ static unsigned long ntfyPeriodicTestNextMs = 0;
 // Candles backoff om connect errors te temperen
 static unsigned long candlesNextAllowedMs = 0;
 static uint8_t candlesFailStreak = 0;
+// REST-candles: reconnect-grace en connect-failure backoff (alleen updateLatestKlineMetricsIfNeeded / fetchBitvavoCandles)
+static unsigned long lastWsDisconnectMs = 0;
+static unsigned long lastWsReconnectMs = 0;
+static unsigned long lastCandleRestFailMs = 0;
+static const unsigned long WS_RECONNECT_GRACE_CANDLES_MS = 15000UL;
+static const unsigned long CANDLE_REST_CONNECT_BACKOFF_MS = 30000UL;
 // Fase 5.1: static verwijderd zodat TrendDetector module deze variabele kan gebruiken
 char bitvavoSymbol[16] = BITVAVO_SYMBOL_DEFAULT;  // Bitvavo symbool (max 15 karakters, bijv. BTC-EUR, ETH-EUR)
 
@@ -1205,6 +1226,7 @@ int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit
     
     if (!http.begin(url)) {
             Serial.println(F("[Candles] http.begin() gefaald"));
+            lastCandleRestFailMs = millis();
             if (candlesFailStreak < 6) candlesFailStreak++;
             uint32_t backoffMs = 5000UL << (candlesFailStreak - 1);
             if (backoffMs > 60000UL) backoffMs = 60000UL;
@@ -1222,6 +1244,14 @@ int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit
                 // Fase 6.2: Geconsolideerde error logging - gebruik ApiClient helpers
                 const char* phase = ApiClient::detectHttpErrorPhase(code);
             ApiClient::logHttpError(code, phase, requestTime, 0, 1, "[Candles]");
+                const bool connectFail =
+                    (code < 0) ||
+                    (phase != nullptr && strcmp(phase, "connect") == 0) ||
+                    (code == HTTPC_ERROR_CONNECTION_REFUSED) ||
+                    (code == HTTPC_ERROR_CONNECTION_LOST);
+                if (connectFail) {
+                    lastCandleRestFailMs = millis();
+                }
                 if (candlesFailStreak < 6) candlesFailStreak++;
                 uint32_t backoffMs = 5000UL << (candlesFailStreak - 1);
                 if (backoffMs > 60000UL) backoffMs = 60000UL;
@@ -1514,6 +1544,7 @@ parse_done:
     // Reset backoff bij succesvolle parse
     candlesFailStreak = 0;
     candlesNextAllowedMs = 0;
+    lastCandleRestFailMs = 0;
     
         // Bereken resultaat
         int storedCount = bufferFilled ? (int)maxCount : writeIdx;
@@ -2802,6 +2833,9 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
                 http.addHeader(F("Tags"), colorTag);
             }
 
+            // Avoid lingering sockets for improved NTFY reliability.
+            http.addHeader(F("Connection"), F("close"));
+
             int code = http.POST(message);
             lastCode = code;
             String err = HTTPClient().errorToString(code);
@@ -2973,11 +3007,13 @@ static void maybeInitWebSocketAfterWarmStart()
                     wsClientPtr->sendTXT(payloadBuf);
                     Serial.println(F("[WS] Subscribe sent"));
                 }
+                lastWsReconnectMs = millis();
                 break;
             case WStype_DISCONNECTED:
                 Serial.println(F("[WS] Disconnected"));
                 wsConnected = false;
                 wsConnecting = false;
+                lastWsDisconnectMs = millis();
                 break;
             case WStype_ERROR:
                 Serial.println(F("[WS] Error"));
@@ -3106,13 +3142,29 @@ static void processWsTextMessage(const char* wsBuf, size_t length)
                 if (strcmp(intervalBuf, "1m") == 0) {
                     lastKline1m = kline;
                     wsLastCandle1mMs = millis();
+                    if (!wsHasSeenFirstLiveMessage) {
+                        wsHasSeenFirstLiveMessage = true;
+                        wsLiveSinceMs = wsLastCandle1mMs;
+                    }
                 } else if (strcmp(intervalBuf, "5m") == 0) {
                     lastKline5m = kline;
                     wsLastCandle5mMs = millis();
+                    if (!wsHasSeenFirstLiveMessage) {
+                        wsHasSeenFirstLiveMessage = true;
+                        wsLiveSinceMs = wsLastCandle5mMs;
+                    }
                 } else if (strcmp(intervalBuf, "4h") == 0) {
                     wsLastCandle4hMs = millis();
+                    if (!wsHasSeenFirstLiveMessage) {
+                        wsHasSeenFirstLiveMessage = true;
+                        wsLiveSinceMs = wsLastCandle4hMs;
+                    }
                 } else if (strcmp(intervalBuf, "1d") == 0) {
                     wsLastCandle1dMs = millis();
+                    if (!wsHasSeenFirstLiveMessage) {
+                        wsHasSeenFirstLiveMessage = true;
+                        wsLiveSinceMs = wsLastCandle1dMs;
+                    }
                 }
 
                 // Rate-limited log om WS candle flow te verifiëren
@@ -3200,6 +3252,12 @@ static void processWsTextMessage(const char* wsBuf, size_t length)
                 latestKnownPriceSource = LKP_SRC_WS;
                 lastFetchedPrice = wsLastPrice;
                 safeMutexGive(dataMutex, "WS latestKnownPrice");
+            }
+
+            // Markeer "WS live" bij een echte price update.
+            if (!wsHasSeenFirstLiveMessage) {
+                wsHasSeenFirstLiveMessage = true;
+                wsLiveSinceMs = millis();
             }
         }
     }
@@ -3508,6 +3566,13 @@ void netMutexUnlock(const char* taskName)
     #endif
 }
 
+// C2: Non-blocking net mutex probeer-lock (optioneel gebruikt in WS steady loop)
+static bool netMutexTryLock()
+{
+    if (gNetMutex == NULL) return true;
+    return xSemaphoreTake(gNetMutex, 0) == pdTRUE;
+}
+
 // Forward declarations
 // Fase 6.1: AlertEngine module gebruikt deze functies (extern declarations in AlertEngine.cpp)
 void findMinMaxInSecondPrices(float &minVal, float &maxVal);
@@ -3718,19 +3783,19 @@ static bool ntfyPauseWsBeforeNtfySendIfNeeded()
     Serial_println(F("[NTFY] pausing WS before send"));
     wsPauseForNtfySend = true;
     // We pauzeren enkel de WS loop processing (geen echte WS disconnect).
-    Serial_println(F("[NTFY] WS paused/disconnected"));
+    Serial_println(F("[NTFY] WS paused"));
     if (wsConnected) {
-        Serial_println(F("[NTFY] WS paused/disconnected detail: was connected"));
+        Serial_println(F("[NTFY] WS pause active: was connected"));
     } else if (wsConnecting) {
-        Serial_println(F("[NTFY] WS paused/disconnected detail: was connecting"));
+        Serial_println(F("[NTFY] WS pause active: was connecting"));
     } else {
-        Serial_println(F("[NTFY] WS paused/disconnected detail: was idle"));
+        Serial_println(F("[NTFY] WS pause active: was idle"));
     }
     return true;
 #else
     // WS compile-time uit: geen echte pauze mogelijk.
     Serial_println(F("[NTFY] pausing WS before send (WS disabled)"));
-    Serial_println(F("[NTFY] WS paused/disconnected"));
+    Serial_println(F("[NTFY] WS pause skipped (WS disabled)"));
     return false;
 #endif
 #else
@@ -3828,6 +3893,12 @@ static void ntfyRestoreWsAfterNtfySend()
         Serial_println(F("[NTFY] WS restore skipped: ws not initialized/alloc failed"));
     }
 
+    // Zet alleen grace-timestamp als de restore daadwerkelijk live WS maakte.
+    // (Voorkomt dat startup/idle/poging-zonder-connect de REST guards temperen.)
+    if (wsConnected) {
+        lastNtfyWsRestoreMs = millis();
+    }
+
     wsPauseForNtfySend = false;
 #endif
 #endif
@@ -3894,6 +3965,37 @@ static void ntfyStartupTestIfEnabled()
     } else {
         Serial_println(F("[NTFY][test] startup test sent failed"));
     }
+#else
+    (void)0;
+#endif
+}
+
+// Eenmalige extra NTFY health ping, pas nadat WS echt live is (+delay)
+static void ntfyWsLiveHealthPingIfDue()
+{
+#if CRYPTO_ALERT_NTFY_STARTUP_TEST
+#if WS_ENABLED && WS_LIB_AVAILABLE
+    if (!wsHasSeenFirstLiveMessage || wsLiveNtfyTestSent) return;
+    if (wsLiveSinceMs == 0) return;
+    if (WiFi.status() != WL_CONNECTED) return;
+
+    const unsigned long now = millis();
+    if ((now - wsLiveSinceMs) < WS_LIVE_NTFY_HEALTH_PING_DELAY_MS) return;
+
+    wsLiveNtfyTestSent = true; // 1x per boot
+
+    Serial.println(F("[NTFY][ws-live] health ping queued"));
+    const char* tag = "☑️";
+    const char* text = "WS live health ping";
+    bool sent = sendNotification(text, text, tag);
+    if (sent) {
+        Serial.println(F("[NTFY][ws-live] health ping sent ok"));
+    } else {
+        Serial.println(F("[NTFY][ws-live] health ping sent failed"));
+    }
+#else
+    (void)0;
+#endif
 #else
     (void)0;
 #endif
@@ -4323,6 +4425,9 @@ static void loadSettings()
     regimeEnergiekCooldown1mMult = settings.regimeEnergiekCooldown1mMult;
     regimeEnergiekCooldown5mMult = settings.regimeEnergiekCooldown5mMult;
     regimeEnergiekCooldown30mMult = settings.regimeEnergiekCooldown30mMult;
+    regimeEnergiekAllowStandalone1mBurst = settings.regimeEnergiekAllowStandalone1mBurst;
+    regimeEnergiekStandalone1mFactor = settings.regimeEnergiekStandalone1mFactor;
+    regimeEnergiekMinDirectionStrength = settings.regimeEnergiekMinDirectionStrength;
     
     Serial_printf(F("[Settings] Loaded: topic=%s, symbol=%s, 1min trend=%.2f/%.2f%%/min, 30min trend=%.2f/%.2f%%/uur, cooldown=%lu/%lu ms\n"),
                   ntfyTopic, bitvavoSymbol, threshold1MinUp, threshold1MinDown, threshold30MinUp, threshold30MinDown,
@@ -4436,6 +4541,9 @@ void saveSettings()
     settings.regimeEnergiekCooldown1mMult = regimeEnergiekCooldown1mMult;
     settings.regimeEnergiekCooldown5mMult = regimeEnergiekCooldown5mMult;
     settings.regimeEnergiekCooldown30mMult = regimeEnergiekCooldown30mMult;
+    settings.regimeEnergiekAllowStandalone1mBurst = regimeEnergiekAllowStandalone1mBurst;
+    settings.regimeEnergiekStandalone1mFactor = regimeEnergiekStandalone1mFactor;
+    settings.regimeEnergiekMinDirectionStrength = regimeEnergiekMinDirectionStrength;
     
     // Save using SettingsStore
     settingsStore.save(settings);
@@ -7434,12 +7542,28 @@ static void updateLatestKlineMetricsIfNeeded()
     if (WiFi.status() != WL_CONNECTED) {
         return;
     }
-    if (candlesNextAllowedMs != 0 && millis() < candlesNextAllowedMs) {
+    const unsigned long now = millis();
+    if (candlesNextAllowedMs != 0 && now < candlesNextAllowedMs) {
+        return;
+    }
+    if (lastNtfyWsRestoreMs != 0 && (now - lastNtfyWsRestoreMs) < NTFY_WS_RESTORE_GRACE_CANDLES_MS) {
+        static unsigned long lastNtfyCandlesSkipLogMs = 0;
+        if (now - lastNtfyCandlesSkipLogMs >= 5000UL) {
+            lastNtfyCandlesSkipLogMs = now;
+            Serial.println(F("[Candles][NTFY restore grace] Skip REST"));
+        }
+        return;
+    }
+    if (lastCandleRestFailMs != 0 && (now - lastCandleRestFailMs) < CANDLE_REST_CONNECT_BACKOFF_MS) {
+        static unsigned long lastCandleRestBackoffLogMs = 0;
+        if (now - lastCandleRestBackoffLogMs >= 5000UL) {
+            lastCandleRestBackoffLogMs = now;
+            Serial.println(F("[Candles][REST backoff] Skip REST"));
+        }
         return;
     }
 #if WS_ENABLED && WS_LIB_AVAILABLE
     if (wsConnected) {
-        unsigned long now = millis();
         // Net verbonden: geef WS even de tijd om eerste candles te leveren
         if (wsLastCandle1mMs == 0 && (now - wsConnectedMs) < 20000UL) {
             return;
@@ -7450,7 +7574,7 @@ static void updateLatestKlineMetricsIfNeeded()
             static unsigned long lastWsSkipLogMs = 0;
             if (now - lastWsSkipLogMs >= 120000UL) {
                 lastWsSkipLogMs = now;
-                Serial_println(F("[Candles] Skip REST: WS candles up-to-date"));
+                Serial_println(F("[Candles][WS fresh] Skip REST"));
             }
             return; // WS candles up-to-date, skip REST
         }
@@ -7460,15 +7584,48 @@ static void updateLatestKlineMetricsIfNeeded()
 #if WS_ENABLED && WS_LIB_AVAILABLE
     extern bool wsConnecting;
     extern unsigned long wsConnectStartMs;
-    if (wsConnecting && (millis() - wsConnectStartMs) < 15000UL) {
+    if (wsConnecting && (now - wsConnectStartMs) < 15000UL) {
         return;
     }
 #endif
-    
+#if WS_ENABLED && WS_LIB_AVAILABLE
+    if (lastWsDisconnectMs != 0 && (now - lastWsDisconnectMs) < WS_RECONNECT_GRACE_CANDLES_MS) {
+        static unsigned long lastDiscGraceLogMs = 0;
+        if (now - lastDiscGraceLogMs >= 8000UL) {
+            lastDiscGraceLogMs = now;
+            Serial.println(F("[Candles][Reconnect grace] Skip REST"));
+        }
+        return;
+    }
+    if (lastWsReconnectMs != 0 && (now - lastWsReconnectMs) < WS_RECONNECT_GRACE_CANDLES_MS) {
+        static unsigned long lastRecoGraceLogMs = 0;
+        if (now - lastRecoGraceLogMs >= 8000UL) {
+            lastRecoGraceLogMs = now;
+            Serial.println(F("[Candles][Reconnect grace] Skip REST"));
+        }
+        return;
+    }
+#endif
+
     static unsigned long last1mFetchMs = 0;
     static unsigned long last5mFetchMs = 0;
-    unsigned long now = millis();
-    
+
+#if WS_ENABLED && WS_LIB_AVAILABLE
+    if (wsConnected) {
+        if (!(wsLastCandle1mMs == 0 && (now - wsConnectedMs) < 20000UL)) {
+            bool recent1m = (wsLastCandle1mMs != 0 && (now - wsLastCandle1mMs) < 90000UL);
+            bool recent5m = (wsLastCandle5mMs != 0 && (now - wsLastCandle5mMs) < 360000UL);
+            if (!(recent1m && recent5m)) {
+                static unsigned long lastWsStaleLogMs = 0;
+                if (now - lastWsStaleLogMs >= 12000UL) {
+                    lastWsStaleLogMs = now;
+                    Serial.println(F("[Candles][WS stale] REST fallback"));
+                }
+            }
+        }
+    }
+#endif
+
     if (last1mFetchMs == 0 || (now - last1mFetchMs) >= 60000UL) {
         float temp1mPrices[2];
         int fetched1m = fetchBitvavoCandles(bitvavoSymbol, "1m", 2, temp1mPrices, nullptr, 2);
@@ -7550,6 +7707,15 @@ void fetchPrice()
     unsigned long fetchTime = 0;
     if (!usedWs) {
     // Fase 4.1.7: Gebruik hoog-niveau fetchBitvavoPrice() method
+        if (lastNtfyWsRestoreMs != 0 && (millis() - lastNtfyWsRestoreMs) < NTFY_WS_RESTORE_GRACE_PRICE_MS) {
+            static unsigned long lastNtfyPriceSkipLogMs = 0;
+            const unsigned long nowMs = millis();
+            if (nowMs - lastNtfyPriceSkipLogMs >= 5000UL) {
+                lastNtfyPriceSkipLogMs = nowMs;
+                Serial.println(F("[Price][NTFY restore grace] Skip REST"));
+            }
+            return;
+        }
         httpSuccess = apiClient.fetchBitvavoPrice(bitvavoSymbol, fetched);
         fetchTime = millis() - fetchStart;
     } else {
@@ -8714,8 +8880,7 @@ void setup()
     wifiConnectionAndFetchPrice();
     logBootStage("after wifi+initial price");
     
-    // NTFY baseline test: na succesvolle WiFi+time, maar vóór start FreeRTOS tasks/WS connect runtime.
-    ntfyStartupTestIfEnabled();
+    // NTFY baseline test wordt verplaatst naar NA warmstart (maar nog vóór staged MQTT/WS).
     #if CRYPTO_ALERT_NTFY_PERIODIC_TEST
     ntfyPeriodicTestNextMs = millis() + CRYPTO_ALERT_NTFY_PERIODIC_TEST_MS;
     #endif
@@ -8764,6 +8929,9 @@ void setup()
                        req1mCandles, req5mCandles, req30mCandles, req2hCandles);
     }
     logBootStage("after warmstart");
+    
+    // NTFY baseline test na warmstart (maar nog vóór staged MQTT/WS).
+    ntfyStartupTestIfEnabled();
     
     // WS init wordt uitgesteld tot na de eerste succesvolle API-prijs
     
@@ -9401,6 +9569,9 @@ void loop()
 
     // NTFY periodieke test onder netwerkbelasting (optioneel)
     ntfyPeriodicTestIfEnabled();
+
+    // NTFY extra health ping nadat WS echt live werd (eenmalig per boot)
+    ntfyWsLiveHealthPingIfDue();
     
     // Deferred MQTT reconnect (thread-safe)
     applyPendingMqttReconnect();
@@ -9513,7 +9684,14 @@ void loop()
                     wsReconnectSessionActive = false;
                     wsReconnectTimeoutLogged = false;
                 }
-                wsClientPtr->loop();
+                // WS steady-state loop: alleen draaien als netwerkmutex beschikbaar is.
+                if (netMutexTryLock()) {
+                    wsClientPtr->loop();
+                    // Silent unlock to avoid per-iteration [NET] release logspam.
+                    if (gNetMutex != NULL) {
+                        xSemaphoreGive(gNetMutex);
+                    }
+                }
             }
             if (wsPending) {
                 wsPending = false;

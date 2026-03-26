@@ -149,6 +149,7 @@ extern uint8_t language;
 extern bool minuteArrayFilled;
 extern uint8_t minuteIndex;
 extern float lastFetchedPrice;
+extern float latestKnownPrice;
 extern unsigned long latestKnownPriceMs;
 extern uint32_t lastApiMs;
 extern uint8_t latestKnownPriceSource;
@@ -2370,8 +2371,8 @@ void UIController::updateChartSection(int32_t currentPrice, bool hasNewPriceData
     }
 
     // Fase 8.7.1: Gebruik globale pointers (synchroniseert met module pointers)
-    // Voeg een punt toe aan de grafiek als er geldige data is
-    if (prices[symbolIndexToChart] > 0.0f) {
+    // Voeg een punt toe aan de grafiek als er geldige data is (currentPrice volgt live snapshot in updateUI)
+    if (currentPrice > 0) {
         // Track laatste chart waarde om conditional invalidate te doen
         static int32_t lastChartValue = 0;
         bool valueChanged = (currentPrice != lastChartValue);
@@ -2432,8 +2433,15 @@ void UIController::updateUI()
         return;
     }
     
-    // UI leest best-effort; data kan intussen wijzigen, maar UI blokkeert geen writers
-    int32_t p = (int32_t)lroundf(prices[symbolIndexToChart] * 100.0f);
+    // Bovenste grafiek: live latestKnownPrice onder mutex; fallback prices[symbolIndexToChart] (zelfde cadans als priceRepeatTask)
+    float chartPriceFloat = prices[symbolIndexToChart];
+    if (dataMutex != nullptr && safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "UI chart snapshot")) {
+        float lk = latestKnownPrice;
+        float px = prices[symbolIndexToChart];
+        safeMutexGive(dataMutex, "UI chart snapshot");
+        chartPriceFloat = (lk > 0.0f) ? lk : px;
+    }
+    int32_t p = (int32_t)lroundf(chartPriceFloat * 100.0f);
     
     // Bepaal of er nieuwe data is op basis van timestamp
     // Bij 2000ms interval + retries kan call tot ~3000ms duren, dus marge van 3000ms
