@@ -2,11 +2,17 @@
 
 // FASE X.2: Include AlertEngine voor throttling
 #include "../AlertEngine/AlertEngine.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 // Forward declarations voor dependencies (worden later via modules)
 extern bool sendNotification(const char *title, const char *message, const char *colorTag = nullptr);
 extern char bitvavoSymbol[];  // Bitvavo market (bijv. "BTC-EUR")
 extern float prices[];  // Voor notificatie formaat
+extern float latestKnownPrice;
+extern SemaphoreHandle_t dataMutex;
+extern bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const char* context);
+extern void safeMutexGive(SemaphoreHandle_t mutex, const char* context);
 extern uint8_t language;  // Taalinstelling (0 = Nederlands, 1 = English)
 extern const char* getText(const char* nlText, const char* enText);  // Taalvertaling functie
 void getFormattedTimestampForNotification(char* buffer, size_t bufferSize);  // Nieuwe functie voor notificaties met slash formaat
@@ -26,6 +32,18 @@ extern VolatilityState volatilityState;  // Hoort bij VolatilityTracker module
 #ifndef NTFY_TREND_STARTUP_SUPPRESS_MS
 #define NTFY_TREND_STARTUP_SUPPRESS_MS 45000UL
 #endif
+
+static float snapshotNotifDisplayPriceTrend(void)
+{
+    float p = prices[0];
+    if (dataMutex != nullptr && safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "trend notif price")) {
+        float lk = latestKnownPrice;
+        float px = prices[0];
+        safeMutexGive(dataMutex, "trend notif price");
+        p = (lk > 0.0f) ? lk : px;
+    }
+    return p;
+}
 
 // Forward declaration voor Serial_printf macro
 #ifndef Serial_printf
@@ -297,9 +315,10 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
                  trendArrow,
                  bitvavoSymbol,
                  getText("Trend Wijziging", "Trend Change"));
+            const float ntfPrice2h = snapshotNotifDisplayPriceTrend();
             snprintf(msg, sizeof(msg), 
                  "%.2f (%s)\n%s: %s → %s\n2h: %+.2f%%\n30m: %+.2f%%\n%s: %s\n%s: %s",
-                 prices[0], timestamp,
+                 ntfPrice2h, timestamp,
                  getText("Trend change", "Trend change"), fromTrendTranslated, toTrendTranslated,
                  ret_2h, ret_30m_value,
                  getText("Volatiliteit", "Volatility"), volTextTranslated,
@@ -412,9 +431,10 @@ void TrendDetector::checkMediumTrendChange(float ret_4h_value, float ret_1d_valu
                  trendArrow,
                  bitvavoSymbol,
                  getText("1d Trend Wijziging", "1d Trend Change"));
+        const float ntfPrice1d = snapshotNotifDisplayPriceTrend();
         snprintf(msg, sizeof(msg), 
                  "%.2f (%s)\n%s: %s → %s\n1d: %+.2f%%\n%s: %s",
-                 prices[0], timestamp,
+                 ntfPrice1d, timestamp,
                  getText("1d trend change", "1d trend change"), fromTrendTranslated, toTrendTranslated,
                  ret_1d_value,
                  getText("2h trend", "2h trend"), shortTermTrendText);
@@ -521,9 +541,10 @@ void TrendDetector::checkLongTermTrendChange(float ret_7d_value, float longTermT
                  trendArrow,
                  bitvavoSymbol,
                  getText("7d Trend Wijziging", "7d Trend Change"));
+        const float ntfPrice7d = snapshotNotifDisplayPriceTrend();
         snprintf(msg, sizeof(msg), 
                  "%.2f (%s)\n%s: %s → %s\n7d: %+.2f%%\n%s: %s",
-                 prices[0], timestamp,
+                 ntfPrice7d, timestamp,
                  getText("7d trend change", "7d trend change"), fromTrendTranslated, toTrendTranslated,
                  ret_7d_value,
                  getText("2h trend", "2h trend"), shortTermTrendText);

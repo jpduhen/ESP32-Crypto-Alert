@@ -2,6 +2,8 @@
 #include <WiFi.h>
 #include <time.h>  // Voor getLocalTime()
 #include <math.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 #include "../RegimeEngine/RegimeEngine.h"
 
@@ -34,6 +36,10 @@ extern PriceData priceData;  // Voor getFiveMinutePrices()
 extern bool sendNotification(const char *title, const char *message, const char *colorTag = nullptr);
 extern char bitvavoSymbol[];  // Bitvavo market (bijv. "BTC-EUR")
 extern float prices[];  // Fase 6.1.4: Voor formatNotificationMessage
+extern float latestKnownPrice;
+extern SemaphoreHandle_t dataMutex;
+extern bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const char* context);
+extern void safeMutexGive(SemaphoreHandle_t mutex, const char* context);
 extern uint8_t language;  // Taalinstelling (0 = Nederlands, 1 = English)
 extern const char* getText(const char* nlText, const char* enText);  // Taalvertaling functie
 extern bool isValidPrice(float price);  // Voor price validatie
@@ -211,6 +217,19 @@ static float roundToEuroNotif(float price)
     return (float)((uint32_t)(price + 0.5f));
 }
 
+// Alleen voor weergave in NTFY-teksten: live snapshot, zelfde discipline als UI
+static float snapshotNotifDisplayPrice(void)
+{
+    float p = prices[0];
+    if (dataMutex != nullptr && safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "alert notif price")) {
+        float lk = latestKnownPrice;
+        float px = prices[0];
+        safeMutexGive(dataMutex, "alert notif price");
+        p = (lk > 0.0f) ? lk : px;
+    }
+    return p;
+}
+
 // Constructor - initialiseer state variabelen
 AlertEngine::AlertEngine() {
     // Fase 6.1.6: Initialiseer alert state variabelen
@@ -361,14 +380,14 @@ void AlertEngine::formatNotificationMessage(char* msg, size_t msgSize, float ret
     // FASE 8.1: Notificatie waarden verificatie logging
     #if DEBUG_CALCULATIONS
     Serial.printf(F("[Notify][Format] ret=%.2f%%, direction=%s, minVal=%.0f, maxVal=%.0f, price=%.0f\n"),
-                 ret, direction, roundToEuroNotif(minVal), roundToEuroNotif(maxVal), roundToEuroNotif(prices[0]));
+                 ret, direction, roundToEuroNotif(minVal), roundToEuroNotif(maxVal), roundToEuroNotif(snapshotNotifDisplayPrice()));
     #endif
     
     // Static functie: gebruik lokale buffer (kan geen instance members gebruiken)
     char timestamp[32];
     getFormattedTimestamp(timestamp, sizeof(timestamp));
     
-    float priceRounded = roundToEuroNotif(prices[0]);
+    float priceRounded = roundToEuroNotif(snapshotNotifDisplayPrice());
     float minRounded = roundToEuroNotif(minVal);
     float maxRounded = roundToEuroNotif(maxVal);
     if (ret >= 0) {
@@ -614,7 +633,7 @@ bool AlertEngine::checkAndSendConfluenceAlert(unsigned long now, float ret_30m)
     else if (strcmp(trendText, "DOWN") == 0) trendTextTranslated = getText("NEER", "DOWN");
     else if (strcmp(trendText, "SIDEWAYS") == 0) trendTextTranslated = getText("ZIJWAARTS", "SIDEWAYS");
     
-    float confluencePriceRounded = roundToEuroNotif(prices[0]);
+    float confluencePriceRounded = roundToEuroNotif(snapshotNotifDisplayPrice());
     if (direction == EVENT_UP) {
         snprintf(msgBuffer, sizeof(msgBuffer),
                  "%.0f (%s)\n%s\n1m: +%.2f%%\n5m: +%.2f%%\n30m %s: %s (%+.2f%%)",
@@ -739,12 +758,12 @@ void AlertEngine::formatNotificationMessageInternal(float ret, const char* direc
     // FASE 8.1: Notificatie waarden verificatie logging (internal)
     #if DEBUG_CALCULATIONS
     Serial.printf(F("[Notify][FormatInternal] timeframe=%s, ret=%.2f%%, direction=%s, minVal=%.0f, maxVal=%.0f, price=%.0f\n"),
-                 timeframe, ret, direction, roundToEuroNotif(minVal), roundToEuroNotif(maxVal), roundToEuroNotif(prices[0]));
+                 timeframe, ret, direction, roundToEuroNotif(minVal), roundToEuroNotif(maxVal), roundToEuroNotif(snapshotNotifDisplayPrice()));
     #endif
     
     getFormattedTimestamp(timestampBuffer, sizeof(timestampBuffer));
     
-    float priceRounded = roundToEuroNotif(prices[0]);
+    float priceRounded = roundToEuroNotif(snapshotNotifDisplayPrice());
     float minRounded = roundToEuroNotif(minVal);
     float maxRounded = roundToEuroNotif(maxVal);
     if (ret >= 0) {
@@ -950,12 +969,12 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             // FASE 8.1: Notificatie waarden verificatie logging (1m spike)
                             #if DEBUG_CALCULATIONS
                             Serial.printf(F("[Notify][1mSpike] ret_1m=%.2f%%, ret_5m=%.2f%%, minVal=%.0f, maxVal=%.0f, price=%.0f\n"),
-                                         ret_1m, ret_5m, roundToEuroNotif(minVal), roundToEuroNotif(maxVal), roundToEuroNotif(prices[0]));
+                                         ret_1m, ret_5m, roundToEuroNotif(minVal), roundToEuroNotif(maxVal), roundToEuroNotif(snapshotNotifDisplayPrice()));
                             #endif
                             
                             // Format message met hergebruik van class buffer
                             getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
-                    float spikePriceRounded = roundToEuroNotif(prices[0]);
+                    float spikePriceRounded = roundToEuroNotif(snapshotNotifDisplayPrice());
                     float spikeMinRounded = roundToEuroNotif(minVal);
                     float spikeMaxRounded = roundToEuroNotif(maxVal);
                     if (ret_1m >= 0) {
@@ -1051,7 +1070,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                         Serial.println(F("[PhaseC] standalone_enter"));
                         #endif
                         getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
-                        const float spikePriceRoundedS = roundToEuroNotif(prices[0]);
+                        const float spikePriceRoundedS = roundToEuroNotif(snapshotNotifDisplayPrice());
                         const char* lineStandalone = safeFmtStr(getText(
                             "Standalone (geen 5m bevestiging)", "Standalone (no 5m confirmation)"));
                         const char* tsS = safeFmtStr(timestampBuffer);
@@ -1129,7 +1148,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
             
                     // Format message met hergebruik van class buffer
                     getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
-            float movePriceRounded = roundToEuroNotif(prices[0]);
+            float movePriceRounded = roundToEuroNotif(snapshotNotifDisplayPrice());
             float moveMinRounded = roundToEuroNotif(minVal);
             float moveMaxRounded = roundToEuroNotif(maxVal);
             if (ret_30m >= 0) {
@@ -1238,7 +1257,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             // Format message met hergebruik van class buffer
                             getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
                             // ret_30m is beschikbaar in checkAndNotify scope
-                    float move5mPriceRounded = roundToEuroNotif(prices[0]);
+                    float move5mPriceRounded = roundToEuroNotif(snapshotNotifDisplayPrice());
                     float move5mMinRounded = roundToEuroNotif(minVal);
                     float move5mMaxRounded = roundToEuroNotif(maxVal);
                     if (ret_5m >= 0) {

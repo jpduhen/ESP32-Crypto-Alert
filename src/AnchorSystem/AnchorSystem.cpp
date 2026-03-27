@@ -1,7 +1,13 @@
 #include "AnchorSystem.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 // Forward declarations voor dependencies (worden later via modules)
 extern float openPrices[];  // Voor setAnchorPrice
+extern float latestKnownPrice;
+extern SemaphoreHandle_t dataMutex;
+extern bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const char* context);
+extern void safeMutexGive(SemaphoreHandle_t mutex, const char* context);
 extern uint8_t language;  // Taalinstelling (0 = Nederlands, 1 = English)
 extern const char* getText(const char* nlText, const char* enText);  // Taalvertaling functie
 // Fase 8.11.2: updateUI() is verplaatst naar UIController module (header al geïncludeerd via AnchorSystem.h)
@@ -44,6 +50,18 @@ static float roundToEuroNotif(float price)
         return price;
     }
     return (float)((uint32_t)(price + 0.5f));
+}
+
+static float snapshotNotifDisplayPriceAnchor(void)
+{
+    float p = prices[0];
+    if (dataMutex != nullptr && safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "anchor notif price")) {
+        float lk = latestKnownPrice;
+        float px = prices[0];
+        safeMutexGive(dataMutex, "anchor notif price");
+        p = (lk > 0.0f) ? lk : px;
+    }
+    return p;
 }
 
 // Begin - synchroniseer state met globale variabelen (parallel implementatie)
@@ -149,6 +167,7 @@ void AnchorSystem::formatAnchorNotification(AnchorEventType eventType, float anc
                                             char* titleBuffer, size_t titleSize,
                                             char* timestampBuffer, size_t timestampSize) {
     getFormattedTimestampForNotification(timestampBuffer, timestampSize);
+    const float curSnap = snapshotNotifDisplayPriceAnchor();
     
     // Vertaal trend naar juiste taal
     const char* trendNameTranslated = trendName;
@@ -164,9 +183,9 @@ void AnchorSystem::formatAnchorNotification(AnchorEventType eventType, float anc
                  "\xE2\x8F\xAB\xEF\xB8\x8F\xE2\x9A\x93\xEF\xB8\x8F\xE2\x9A\xA0\xEF\xB8\x8F %s %s: %s",
                  bitvavoSymbol,
                  getText("Anker", "Anchor"), getText("Winstpakker", "Take Profit"));
-        float priceRounded = roundToEuroNotif(prices[0]);
+        float priceRounded = roundToEuroNotif(curSnap);
         float anchorRounded = roundToEuroNotif(this->anchorPrice);
-        float profitRounded = roundToEuroNotif(prices[0] - this->anchorPrice);
+        float profitRounded = roundToEuroNotif(curSnap - this->anchorPrice);
         if (this->trendAdaptiveAnchorsEnabled) {
             snprintf(msgBuffer, msgSize, 
                      "%.0f (%s)\n%s: %s\n%s: %.0f | %s: +%.0f\nTP: +%.2f%% (%s: +%.2f%%, %s: +%.2f%%)",
@@ -190,9 +209,9 @@ void AnchorSystem::formatAnchorNotification(AnchorEventType eventType, float anc
                  "\xE2\x8F\xAC\xEF\xB8\x8F\xE2\x9A\x93\xEF\xB8\x8F\xE2\x9A\xA0\xEF\xB8\x8F %s %s: %s",
                  bitvavoSymbol,
                  getText("Anker", "Anchor"), getText("Verliesbeperker", "Max Loss"));
-        float priceRounded = roundToEuroNotif(prices[0]);
+        float priceRounded = roundToEuroNotif(curSnap);
         float anchorRounded = roundToEuroNotif(this->anchorPrice);
-        float lossRounded = roundToEuroNotif(prices[0] - this->anchorPrice);
+        float lossRounded = roundToEuroNotif(curSnap - this->anchorPrice);
         if (this->trendAdaptiveAnchorsEnabled) {
             snprintf(msgBuffer, msgSize, 
                      "%.0f (%s)\n%s: %s\n%s: %.0f | %s: %.0f\nML: %.2f%% (%s: %.2f%%, %s: %.2f%%)",
@@ -254,7 +273,7 @@ void AnchorSystem::sendAnchorAlert(AnchorEventType eventType, float anchorPct,
     float baseThreshold = (eventType == ANCHOR_EVENT_TAKE_PROFIT) ? this->anchorTakeProfit : this->anchorMaxLoss;
     Serial_printf(F("[Anchor] %s notificatie verzonden: %.2f%% (threshold: %.2f%%, basis: %.2f%%, trend: %s, anchor: %.0f, prijs: %.0f)\n"),
                  eventName, anchorPct, threshold, baseThreshold, trendName,
-                 roundToEuroNotif(this->anchorPrice), roundToEuroNotif(prices[0]));
+                 roundToEuroNotif(this->anchorPrice), roundToEuroNotif(snapshotNotifDisplayPriceAnchor()));
     #endif
     
     // Publiceer event naar MQTT

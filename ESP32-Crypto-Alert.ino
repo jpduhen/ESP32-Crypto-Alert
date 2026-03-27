@@ -559,6 +559,22 @@ static uint32_t wsMsgCount = 0;
 static unsigned long wsLastLogMs = 0;
 static float wsLastPrice = 0.0f;
 static unsigned long wsLastPriceMs = 0;
+static float wsLastBid = 0.0f;
+static float wsLastAsk = 0.0f;
+static float wsLastSpread = 0.0f;
+static unsigned long wsLastBidAskMs = 0;
+struct WsSecondAggregateState {
+    float secondOpen = 0.0f;
+    float secondHigh = 0.0f;
+    float secondLow = 0.0f;
+    float secondClose = 0.0f;
+    uint32_t secondTickCount = 0;
+    float secondSpreadLast = 0.0f;
+    float secondSpreadMax = 0.0f;
+    uint32_t secondBucket = 0;
+    bool valid = false;
+};
+static WsSecondAggregateState wsSecondAgg;
 static unsigned long wsLastCandle1mMs = 0;
 static unsigned long wsLastCandle5mMs = 0;
 static unsigned long wsLastCandle4hMs = 0;
@@ -3222,19 +3238,11 @@ static void processWsTextMessage(const char* wsBuf, size_t length)
         }
     }
 
-    const char* keyBid = "\"bestBid\":\"";
-    const char* keyAsk = "\"bestAsk\":\"";
-    char* pos = strstr(wsBuf, keyBid);
-    if (pos == nullptr) {
-        pos = strstr(wsBuf, keyAsk);
-        if (pos != nullptr) {
-            pos += strlen(keyAsk);
-        }
-    } else {
-        pos += strlen(keyBid);
-    }
-    if (pos != nullptr) {
-        char valBuf[16];
+    auto parseWsPriceField = [&](const char* key, float& out) -> bool {
+        char* pos = strstr(wsBuf, key);
+        if (pos == nullptr) return false;
+        pos += strlen(key);
+        char valBuf[24];
         size_t idx = 0;
         while (idx < sizeof(valBuf) - 1 && pos[idx] != '\0' && pos[idx] != '"') {
             valBuf[idx] = pos[idx];
@@ -3242,23 +3250,81 @@ static void processWsTextMessage(const char* wsBuf, size_t length)
         }
         valBuf[idx] = '\0';
         float parsed = 0.0f;
-        if (safeAtof(valBuf, parsed) && parsed > 0.0f) {
-            wsLastPrice = roundToEuro(parsed);
-            wsLastPriceMs = millis();
-            // Alleen gedeelde prijsstaat — geen directe buffer-write (sampler schrijft 1 Hz)
-            if (dataMutex != nullptr && safeMutexTake(dataMutex, pdMS_TO_TICKS(50), "WS latestKnownPrice")) {
-                latestKnownPrice = wsLastPrice;
-                latestKnownPriceMs = wsLastPriceMs;
-                latestKnownPriceSource = LKP_SRC_WS;
-                lastFetchedPrice = wsLastPrice;
-                safeMutexGive(dataMutex, "WS latestKnownPrice");
-            }
+        if (!safeAtof(valBuf, parsed) || parsed <= 0.0f) return false;
+        out = parsed;
+        return true;
+    };
 
-            // Markeer "WS live" bij een echte price update.
-            if (!wsHasSeenFirstLiveMessage) {
-                wsHasSeenFirstLiveMessage = true;
-                wsLiveSinceMs = millis();
+    float parsedLast = 0.0f;
+    float parsedBid = 0.0f;
+    float parsedAsk = 0.0f;
+    const bool hasLast = parseWsPriceField("\"lastPrice\":\"", parsedLast);
+    const bool hasBid = parseWsPriceField("\"bestBid\":\"", parsedBid);
+    const bool hasAsk = parseWsPriceField("\"bestAsk\":\"", parsedAsk);
+
+    const unsigned long wsNowMs = millis();
+    bool spreadValidThisTick = false;
+    float spreadThisTick = 0.0f;
+    if (hasBid || hasAsk) {
+        if (hasBid) wsLastBid = parsedBid;
+        if (hasAsk) wsLastAsk = parsedAsk;
+        if (wsLastBid > 0.0f && wsLastAsk > 0.0f && wsLastAsk >= wsLastBid) {
+            wsLastSpread = wsLastAsk - wsLastBid;
+            spreadValidThisTick = true;
+            spreadThisTick = wsLastSpread;
+        }
+        wsLastBidAskMs = wsNowMs;
+    }
+
+    float chosenPrice = 0.0f;
+    if (hasLast) {
+        chosenPrice = parsedLast;   // Primair: trade lastPrice
+    } else if (hasBid) {
+        chosenPrice = parsedBid;    // Fallback: bestBid
+    } else if (hasAsk) {
+        chosenPrice = parsedAsk;    // Fallback: bestAsk
+    }
+
+    if (chosenPrice > 0.0f) {
+        wsLastPrice = chosenPrice;
+        wsLastPriceMs = wsNowMs;
+
+        const uint32_t currentSecondBucket = (uint32_t)(wsNowMs / 1000UL);
+        if (!wsSecondAgg.valid || wsSecondAgg.secondBucket != currentSecondBucket) {
+            // Vorige seconde is impliciet afgesloten met zijn laatst gezette secondClose.
+            wsSecondAgg.valid = true;
+            wsSecondAgg.secondBucket = currentSecondBucket;
+            wsSecondAgg.secondOpen = chosenPrice;
+            wsSecondAgg.secondHigh = chosenPrice;
+            wsSecondAgg.secondLow = chosenPrice;
+            wsSecondAgg.secondClose = chosenPrice;
+            wsSecondAgg.secondTickCount = 1;
+            wsSecondAgg.secondSpreadLast = spreadValidThisTick ? spreadThisTick : 0.0f;
+            wsSecondAgg.secondSpreadMax = spreadValidThisTick ? spreadThisTick : 0.0f;
+        } else {
+            if (chosenPrice > wsSecondAgg.secondHigh) wsSecondAgg.secondHigh = chosenPrice;
+            if (chosenPrice < wsSecondAgg.secondLow) wsSecondAgg.secondLow = chosenPrice;
+            wsSecondAgg.secondClose = chosenPrice;
+            wsSecondAgg.secondTickCount++;
+            if (spreadValidThisTick) {
+                wsSecondAgg.secondSpreadLast = spreadThisTick;
+                if (spreadThisTick > wsSecondAgg.secondSpreadMax) wsSecondAgg.secondSpreadMax = spreadThisTick;
             }
+        }
+
+        // Alleen gedeelde prijsstaat — geen directe buffer-write (sampler schrijft 1 Hz)
+        if (dataMutex != nullptr && safeMutexTake(dataMutex, pdMS_TO_TICKS(50), "WS latestKnownPrice")) {
+            latestKnownPrice = wsLastPrice;
+            latestKnownPriceMs = wsLastPriceMs;
+            latestKnownPriceSource = LKP_SRC_WS;
+            lastFetchedPrice = wsLastPrice;
+            safeMutexGive(dataMutex, "WS latestKnownPrice");
+        }
+
+        // Markeer "WS live" bij een echte price update.
+        if (!wsHasSeenFirstLiveMessage) {
+            wsHasSeenFirstLiveMessage = true;
+            wsLiveSinceMs = wsNowMs;
         }
     }
 
@@ -7730,8 +7796,10 @@ void fetchPrice()
         #endif
         // Gebruik laatste bekende prijs als fallback (al ingesteld als fetched = prices[0])
     } else {
-        // Succesvol opgehaald (alleen loggen bij langzame calls > 1200ms)
-        fetched = roundToEuro(fetched);
+        // Succesvol opgehaald (alleen REST-prijs afronden; WS runtime-state blijft ongerond)
+        if (!usedWs) {
+            fetched = roundToEuro(fetched);
+        }
         #if !DEBUG_BUTTON_ONLY
         if (!usedWs && fetchTime > 1200) {
             Serial.printf(F("[API] OK -> %s %.2f (tijd: %lu ms) - langzaam\n"), bitvavoSymbol, fetched, fetchTime);

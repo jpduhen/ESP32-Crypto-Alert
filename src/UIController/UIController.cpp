@@ -1697,11 +1697,19 @@ void UIController::updateBTCEURCard(bool hasNewData)
         setBtcTitleLabel();
     }
     
+    float displayPrice = prices[0];
+    if (dataMutex != nullptr && safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "UI BTCEUR snapshot")) {
+        float lk = latestKnownPrice;
+        float px = prices[0];
+        safeMutexGive(dataMutex, "UI BTCEUR snapshot");
+        displayPrice = (lk > 0.0f) ? lk : px;
+    }
+    
     // Update price label alleen als waarde veranderd is (cache check)
-    if (::priceLbl[0] != nullptr && (lastPriceLblValue != prices[0] || lastPriceLblValue < 0.0f)) {
-        snprintf(priceLblBuffer, PRICE_LBL_BUFFER_SIZE, "%.0f", prices[0]);
+    if (::priceLbl[0] != nullptr && (lastPriceLblValue != displayPrice || lastPriceLblValue < 0.0f)) {
+        snprintf(priceLblBuffer, PRICE_LBL_BUFFER_SIZE, "%.0f", displayPrice);
         lv_label_set_text(::priceLbl[0], priceLblBuffer);
-        lastPriceLblValue = prices[0];
+        lastPriceLblValue = displayPrice;
     }
     
     // Bitcoin waarde linksonderin volgt quote kleur (EUR blauw, USDC groen)
@@ -1804,8 +1812,8 @@ void UIController::updateBTCEURCard(bool hasNewData)
     }
     
     if (::anchorLabel != nullptr) {
-        if (anchorDisplayActive && prices[0] > 0.0f) {
-            float anchorPct = ((prices[0] - activeAnchorPrice) / activeAnchorPrice) * 100.0f;
+        if (anchorDisplayActive && displayPrice > 0.0f) {
+            float anchorPct = ((displayPrice - activeAnchorPrice) / activeAnchorPrice) * 100.0f;
             float anchorDisplay = roundToEuroUi(activeAnchorPrice);
             // Update alleen als waarde veranderd is (check zowel anchorPrice als anchorPct)
             float currentValue = anchorDisplay + anchorPct;  // Combinatie voor cache check
