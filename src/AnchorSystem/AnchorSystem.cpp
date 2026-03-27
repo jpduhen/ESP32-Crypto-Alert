@@ -10,6 +10,7 @@ extern bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const cha
 extern void safeMutexGive(SemaphoreHandle_t mutex, const char* context);
 extern uint8_t language;  // Taalinstelling (0 = Nederlands, 1 = English)
 extern const char* getText(const char* nlText, const char* enText);  // Taalvertaling functie
+extern bool getWsSecondLastClosedCloseFresh(float& close, bool& ok);
 // Fase 8.11.2: updateUI() is verplaatst naar UIController module (header al geïncludeerd via AnchorSystem.h)
 
 // Forward declarations voor Serial macros
@@ -285,17 +286,25 @@ void AnchorSystem::sendAnchorAlert(AnchorEventType eventType, float anchorPct,
 // Geoptimaliseerd: cache waarden, early returns, hergebruik buffers, validatie
 void AnchorSystem::checkAnchorAlerts()
 {
+    // Gebruik primaire anchor-checkprijs op basis van laatst afgesloten WS-seconde (1s close)
+    float anchorCurrentPrice = prices[0];
+    bool wsOk = false;
+    float wsClose = 0.0f;
+    if (getWsSecondLastClosedCloseFresh(wsClose, wsOk) && wsOk) {
+        anchorCurrentPrice = wsClose;
+    }
+    
     // Geconsolideerde early return: check alle voorwaarden in één keer (sneller, minder branches)
-    if (!this->anchorActive || 
-        !isValidPrice(this->anchorPrice) || !isValidPrice(prices[0]) ||
-        isnan(prices[0]) || isinf(prices[0]) || 
+    if (!this->anchorActive ||
+        !isValidPrice(this->anchorPrice) || !isValidPrice(anchorCurrentPrice) ||
+        isnan(anchorCurrentPrice) || isinf(anchorCurrentPrice) ||
         isnan(this->anchorPrice) || isinf(this->anchorPrice) ||
         this->anchorPrice <= 0.0f) {
         return; // Geen actieve anchor, geen prijs data, of ongeldige waarden
     }
     
     // Bereken anchor percentage direct (cache verwijderd om geheugen te besparen)
-    float anchorPct = ((prices[0] - this->anchorPrice) / this->anchorPrice) * 100.0f;
+    float anchorPct = ((anchorCurrentPrice - this->anchorPrice) / this->anchorPrice) * 100.0f;
     
     // Haal trend state op (geen cache om geheugen te besparen)
     TrendState currentTrend = trendDetector.getTrendState();

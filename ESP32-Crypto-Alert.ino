@@ -574,7 +574,46 @@ struct WsSecondAggregateState {
     uint32_t secondBucket = 0;
     bool valid = false;
 };
-static WsSecondAggregateState wsSecondAgg;
+static WsSecondAggregateState wsSecondAggCurrent;
+static WsSecondAggregateState wsSecondAggLastClosed;
+bool getWsSecondLastClosedQuality(uint32_t& tickCount, float& spreadMax, bool& valid, bool& fresh) {
+    valid = wsSecondAggLastClosed.valid;
+    fresh = false;
+    if (!valid) {
+        tickCount = 0;
+        spreadMax = 0.0f;
+        return false;
+    }
+    tickCount = wsSecondAggLastClosed.secondTickCount;
+    spreadMax = wsSecondAggLastClosed.secondSpreadMax;
+    const uint32_t nowBucket = (uint32_t)(millis() / 1000UL);
+    const uint32_t ageBuckets = (nowBucket >= wsSecondAggLastClosed.secondBucket)
+        ? (nowBucket - wsSecondAggLastClosed.secondBucket)
+        : (UINT32_MAX - wsSecondAggLastClosed.secondBucket + nowBucket + 1U);
+    fresh = (ageBuckets <= 1U);
+    return true;
+}
+
+// Live anchor-check huidige prijs bron voor responsiviteit: laatst afgesloten 1s close
+// Alleen geldig als snapshot zowel valid als fresh is.
+bool getWsSecondLastClosedCloseFresh(float& close, bool& ok) {
+    close = 0.0f;
+    ok = false;
+    if (!wsSecondAggLastClosed.valid) return false;
+
+    const uint32_t nowBucket = (uint32_t)(millis() / 1000UL);
+    const uint32_t ageBuckets = (nowBucket >= wsSecondAggLastClosed.secondBucket)
+        ? (nowBucket - wsSecondAggLastClosed.secondBucket)
+        : (UINT32_MAX - wsSecondAggLastClosed.secondBucket + nowBucket + 1U);
+    if (ageBuckets > 1U) return false;
+
+    if (wsSecondAggLastClosed.secondClose > 0.0f) {
+        close = wsSecondAggLastClosed.secondClose;
+        ok = true;
+        return true;
+    }
+    return false;
+}
 static unsigned long wsLastCandle1mMs = 0;
 static unsigned long wsLastCandle5mMs = 0;
 static unsigned long wsLastCandle4hMs = 0;
@@ -3290,25 +3329,29 @@ static void processWsTextMessage(const char* wsBuf, size_t length)
         wsLastPriceMs = wsNowMs;
 
         const uint32_t currentSecondBucket = (uint32_t)(wsNowMs / 1000UL);
-        if (!wsSecondAgg.valid || wsSecondAgg.secondBucket != currentSecondBucket) {
-            // Vorige seconde is impliciet afgesloten met zijn laatst gezette secondClose.
-            wsSecondAgg.valid = true;
-            wsSecondAgg.secondBucket = currentSecondBucket;
-            wsSecondAgg.secondOpen = chosenPrice;
-            wsSecondAgg.secondHigh = chosenPrice;
-            wsSecondAgg.secondLow = chosenPrice;
-            wsSecondAgg.secondClose = chosenPrice;
-            wsSecondAgg.secondTickCount = 1;
-            wsSecondAgg.secondSpreadLast = spreadValidThisTick ? spreadThisTick : 0.0f;
-            wsSecondAgg.secondSpreadMax = spreadValidThisTick ? spreadThisTick : 0.0f;
+        if (!wsSecondAggCurrent.valid || wsSecondAggCurrent.secondBucket != currentSecondBucket) {
+            // Sluit vorige seconde af: freeze volledige snapshot in lastClosed.
+            if (wsSecondAggCurrent.valid) {
+                wsSecondAggLastClosed = wsSecondAggCurrent;
+                wsSecondAggLastClosed.valid = true;
+            }
+            wsSecondAggCurrent.valid = true;
+            wsSecondAggCurrent.secondBucket = currentSecondBucket;
+            wsSecondAggCurrent.secondOpen = chosenPrice;
+            wsSecondAggCurrent.secondHigh = chosenPrice;
+            wsSecondAggCurrent.secondLow = chosenPrice;
+            wsSecondAggCurrent.secondClose = chosenPrice;
+            wsSecondAggCurrent.secondTickCount = 1;
+            wsSecondAggCurrent.secondSpreadLast = spreadValidThisTick ? spreadThisTick : 0.0f;
+            wsSecondAggCurrent.secondSpreadMax = spreadValidThisTick ? spreadThisTick : 0.0f;
         } else {
-            if (chosenPrice > wsSecondAgg.secondHigh) wsSecondAgg.secondHigh = chosenPrice;
-            if (chosenPrice < wsSecondAgg.secondLow) wsSecondAgg.secondLow = chosenPrice;
-            wsSecondAgg.secondClose = chosenPrice;
-            wsSecondAgg.secondTickCount++;
+            if (chosenPrice > wsSecondAggCurrent.secondHigh) wsSecondAggCurrent.secondHigh = chosenPrice;
+            if (chosenPrice < wsSecondAggCurrent.secondLow) wsSecondAggCurrent.secondLow = chosenPrice;
+            wsSecondAggCurrent.secondClose = chosenPrice;
+            wsSecondAggCurrent.secondTickCount++;
             if (spreadValidThisTick) {
-                wsSecondAgg.secondSpreadLast = spreadThisTick;
-                if (spreadThisTick > wsSecondAgg.secondSpreadMax) wsSecondAgg.secondSpreadMax = spreadThisTick;
+                wsSecondAggCurrent.secondSpreadLast = spreadThisTick;
+                if (spreadThisTick > wsSecondAggCurrent.secondSpreadMax) wsSecondAggCurrent.secondSpreadMax = spreadThisTick;
             }
         }
 
@@ -3996,8 +4039,10 @@ static void ntfyStartupTestIfEnabled()
     char hhmmss[10] = {0};
     (void)waitLocalTimeHHMMSS(hhmmss, sizeof(hhmmss), 15000UL);
 
-    char text[96];
-    snprintf(text, sizeof(text), "[%s] Reboot - Setup compleet", hhmmss);
+    char title[96];
+    char body[96];
+    snprintf(title, sizeof(title), "Reboot - %s", VERSION_STRING);
+    snprintf(body, sizeof(body), "[%s] Setup compleet", hhmmss);
 
     Serial_println(F("[NTFY][test] startup test queued"));
 
@@ -4010,8 +4055,8 @@ static void ntfyStartupTestIfEnabled()
         Serial_println(F("[NTFY][test] waiting for network slot (mutex busy)"));
     }
 
-    const char *tag = "☑️";
-    bool sent = sendNotification(text, text, tag);
+    const char *tag = "☑️♻️";
+    bool sent = sendNotification(title, body, tag);
     if (sent) {
         Serial_println(F("[NTFY][test] startup test sent ok"));
     } else if (ntfyLastSendAttemptWas429 &&
@@ -4146,11 +4191,13 @@ static void ntfyDeferredStartupTestIfPending()
     char hhmmss[10] = {0};
     (void)formatLocalTimeHHMMSS(hhmmss, sizeof(hhmmss));
 
-    char text[96];
-    snprintf(text, sizeof(text), "[%s] Reboot - Setup compleet", hhmmss);
+    char title[96];
+    char body[96];
+    snprintf(title, sizeof(title), "Reboot - %s", VERSION_STRING);
+    snprintf(body, sizeof(body), "[%s] Setup compleet", hhmmss);
 
-    const char *tag = "☑️";
-    bool sent = sendNotification(text, text, tag);
+    const char *tag = "☑️♻️";
+    bool sent = sendNotification(title, body, tag);
 
     if (sent) {
         ntfyStartupTestDeferredRetryAttempted = true;
@@ -7996,20 +8043,50 @@ void fetchPrice()
             if (minuteUpdate && ret_1m != 0.0f)
             {
                 float abs_ret_1m = fabsf(ret_1m);
-                volatilityTracker.addAbs1mReturnToVolatilityBuffer(abs_ret_1m);
-                
-                // Bereken gemiddelde en bepaal volatiliteit state
-                // Fase 5.2: Gebruik VolatilityTracker module
-                float avg_abs_1m = volatilityTracker.calculateAverageAbs1mReturn();
-                // Fase 5.2: Gebruik VolatilityTracker module
-                if (avg_abs_1m > 0.0f)
+                bool wsQualitySkipVolInput = false;
+#ifndef ENABLE_WS_SECOND_QUALITY_GUARD_VOLATILITY
+#define ENABLE_WS_SECOND_QUALITY_GUARD_VOLATILITY 1
+#endif
+#if ENABLE_WS_SECOND_QUALITY_GUARD_VOLATILITY
                 {
-                    extern float volatilityLowThreshold;
-                    extern float volatilityHighThreshold;
-                    // Fase 5.3.15: Update module eerst, synchroniseer dan globale variabele
-                    VolatilityState newVolatilityState = volatilityTracker.determineVolatilityState(avg_abs_1m, volatilityLowThreshold, volatilityHighThreshold);
-                    volatilityTracker.setVolatilityState(newVolatilityState);  // Update VolatilityTracker state
-                    volatilityState = newVolatilityState;  // Synchroniseer globale variabele
+                    uint32_t wsSecTicks = 0;
+                    float wsSecSpreadMax = 0.0f;
+                    bool wsSecValid = false;
+                    bool wsSecFresh = false;
+                    if (getWsSecondLastClosedQuality(wsSecTicks, wsSecSpreadMax, wsSecValid, wsSecFresh) &&
+                        wsSecValid && wsSecFresh)
+                    {
+                        wsQualitySkipVolInput =
+                            (wsSecTicks < 2U) ||
+                            (wsSecSpreadMax > 35.0f);
+                    }
+                }
+#endif
+
+                if (!wsQualitySkipVolInput) {
+                    volatilityTracker.addAbs1mReturnToVolatilityBuffer(abs_ret_1m);
+                    
+                    // Bereken gemiddelde en bepaal volatiliteit state
+                    // Fase 5.2: Gebruik VolatilityTracker module
+                    float avg_abs_1m = volatilityTracker.calculateAverageAbs1mReturn();
+                    // Fase 5.2: Gebruik VolatilityTracker module
+                    if (avg_abs_1m > 0.0f)
+                    {
+                        extern float volatilityLowThreshold;
+                        extern float volatilityHighThreshold;
+                        // Fase 5.3.15: Update module eerst, synchroniseer dan globale variabele
+                        VolatilityState newVolatilityState = volatilityTracker.determineVolatilityState(avg_abs_1m, volatilityLowThreshold, volatilityHighThreshold);
+                        volatilityTracker.setVolatilityState(newVolatilityState);  // Update VolatilityTracker state
+                        volatilityState = newVolatilityState;  // Synchroniseer globale variabele
+                    }
+                } else {
+#if !DEBUG_BUTTON_ONLY
+                    static unsigned long s_lastWsQualitySkipVolLogMs = 0;
+                    if (now - s_lastWsQualitySkipVolLogMs >= 5000UL) {
+                        s_lastWsQualitySkipVolLogMs = now;
+                        Serial_printf(F("[VOL][WS quality guard] Skip 1m input\n"));
+                    }
+#endif
                 }
             }
             
@@ -9488,7 +9565,7 @@ void apiTask(void *parameter)
 }
 
 // FreeRTOS Task: 1 Hz sampler — enige schrijver naar secondPrices/fiveMinutePrices (addPriceToSecondArray)
-// Bron: latestKnownPrice (REST of WS); API-poll blijft UPDATE_API_INTERVAL
+// Bron: primair laatst afgesloten WS-seconde-close, fallback latestKnownPrice; API-poll blijft UPDATE_API_INTERVAL
 void priceRepeatTask(void *parameter)
 {
     // Wacht tot WiFi verbonden is
@@ -9502,6 +9579,15 @@ void priceRepeatTask(void *parameter)
     {
         if (dataMutex != nullptr && safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "priceRepeatTask")) {
             float p = latestKnownPrice;
+            const uint32_t nowBucket = (uint32_t)(millis() / 1000UL);
+            if (wsSecondAggLastClosed.valid) {
+                const uint32_t ageBuckets = (nowBucket >= wsSecondAggLastClosed.secondBucket)
+                    ? (nowBucket - wsSecondAggLastClosed.secondBucket)
+                    : (UINT32_MAX - wsSecondAggLastClosed.secondBucket + nowBucket + 1U);
+                if (ageBuckets <= 1U && wsSecondAggLastClosed.secondClose > 0.0f) {
+                    p = wsSecondAggLastClosed.secondClose;
+                }
+            }
             if (p > 0.0f) {
                 priceData.addPriceToSecondArray(p);
             }

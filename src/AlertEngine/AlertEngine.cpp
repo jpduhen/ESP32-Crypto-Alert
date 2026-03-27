@@ -108,6 +108,11 @@ extern bool regimeEnergiekAllowStandalone1mBurst;
 extern float regimeEnergiekStandalone1mFactor;
 extern float regimeEnergiekMinDirectionStrength;
 extern bool hasRet30m;
+extern bool getWsSecondLastClosedQuality(uint32_t& tickCount, float& spreadMax, bool& valid, bool& fresh);
+
+#ifndef ENABLE_WS_SECOND_QUALITY_GUARD_1M
+#define ENABLE_WS_SECOND_QUALITY_GUARD_1M 1
+#endif
 
 namespace {
 
@@ -201,6 +206,8 @@ static bool energiekStandalone1mGuardsOk(float directionScore,
 #define VOLUME_EVENT_COOLDOWN_MS 60000UL
 #define VOLUME_EMA_WINDOW_1M 20
 #define VOLUME_EMA_WINDOW_5M 20
+static const uint32_t WS_SECOND_QUALITY_MIN_TICKS_1M = 2U;
+static const float WS_SECOND_QUALITY_MAX_SPREAD_1M = 35.0f;
 // Nachtstand thresholds (instelbaar)
 
 // Forward declaration voor Serial_printf macro
@@ -937,6 +944,30 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                     Serial_printf(F("[Notify] 1m spike onderdrukt (volume/range confirmatie fail)\n"));
                     #endif
                 } else {
+            bool wsQualitySuppress1m = false;
+#if ENABLE_WS_SECOND_QUALITY_GUARD_1M
+            {
+                uint32_t wsSecTicks = 0;
+                float wsSecSpreadMax = 0.0f;
+                bool wsSecValid = false;
+                bool wsSecFresh = false;
+                if (getWsSecondLastClosedQuality(wsSecTicks, wsSecSpreadMax, wsSecValid, wsSecFresh) && wsSecValid && wsSecFresh) {
+                    wsQualitySuppress1m =
+                        (wsSecTicks < WS_SECOND_QUALITY_MIN_TICKS_1M) ||
+                        (wsSecSpreadMax > WS_SECOND_QUALITY_MAX_SPREAD_1M);
+                    if (wsQualitySuppress1m) {
+                        static unsigned long s_lastWsQualitySuppressLogMs = 0;
+                        if ((now - s_lastWsQualitySuppressLogMs) >= 5000UL) {
+                            s_lastWsQualitySuppressLogMs = now;
+                            Serial_printf(F("[1m][WS quality guard] Suppress spike\n"));
+                        }
+                    }
+                }
+            }
+#endif
+            if (wsQualitySuppress1m) {
+                // Extra kwaliteitsfilter voor 1m spike; bestaande thresholds/cooldowns ongewijzigd.
+            } else {
             // Check for confluence first (Smart Confluence Mode)
             bool confluenceFound = false;
             if (smartConfluenceEnabled) {
@@ -1013,6 +1044,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                         }
                     }
                 }
+            }
             }
         }
     }
