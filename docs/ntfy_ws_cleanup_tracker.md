@@ -74,10 +74,7 @@ Dit document is bedoeld om over meerdere Cursor- en chatsessies heen als referen
 
 ### WS interactie
 - WS draait parallel als live prijsbron
-- rond NTFY send bestaat er nu nog logica voor:
-  - pauzeren
-  - of volledig disconnect/reconnect
-- dit maakt het productiepad nog minder eenduidig dan gewenst
+- rond productie-NTFY send: uitsluitend exclusive flow (`wsStopForNtfyExclusive` → HTTPS → `restartWebSocketAfterNtfyExclusive`); geen tweede macro-gestuurde WS-pauze/disconnect meer in de bron
 
 ### Runtimeverdeling
 - `apiTask()` doet prijsverwerking en alertchecks
@@ -209,7 +206,7 @@ Middel
 ---
 
 ## Fase 4 – Oude overlap en dode helpers verwijderen
-**Status:** TODO
+**Status:** DONE (2026-03-27)
 
 ### Doel
 Helpers, flags en comments verwijderen die na Fase 1–3 aantoonbaar niet meer nodig zijn.
@@ -243,8 +240,8 @@ Middel
 
 ## Eerste bekende concrete schuldpunten
 
-1. `sendNtfyNotification()` bevat nog validatie + DNS-diag + mutex; HTTPS-retry zit in `ntfyHttpsPostNtfyAlertBody` (**Fase 3**). Verdere opsplitsing optioneel later.
-2. Er bestaan nog meerdere NTFY/WS-helperpaden naast elkaar (legacy macro-blok zonder call sites).
+1. `sendNtfyNotification()` bevat nog validatie + DNS-diag + mutex; HTTPS-retry zit in `ntfyHttpsPostNtfyAlertBody` (**Fase 3**). Verdere opsplitsing optioneel later (Fase 5 of losse refactor).
+2. ~~Legacy macro-helpers rond NTFY zonder call sites~~ — **Fase 4:** verwijderd (zie Besluit 007).
 3. Diagnose- en testlogica staat nog te dicht op productiegedrag.
 4. `loop()` bevat nog test-/retry-runtimeresten die niet tot normale productieflow horen.
 5. Logging gebruikt meerdere prefixes — **Fase 2:** basissemantiek vastgelegd (Besluit 005); verder verfijnen kan in Fase 3/4.
@@ -299,7 +296,7 @@ Testen vereist expliciet `DIAGNOSTICS_RUNTIME=1` plus de gewenste `CRYPTO_ALERT_
 ---
 
 ### Besluit 005 (Fase 2)
-**Logging-prefixes: `[NTFY]` productie-HTTPS delivery; `[NTFY][diag]` optionele DNS; `[NTFY][Q]` queue; `[NTFY][EXCL]` exclusive apiTask-modus; `[NTFY][test]` diagnostiek-runtime; `[WS]` standaard WS lifecycle; `[WS][NTFY]` legacy macro-paden (PAUSE/FULL_DISCONNECT); `[NET]` mutex/slot (ongewijzigd).**
+**Logging-prefixes: `[NTFY]` productie-HTTPS delivery; `[NTFY][diag]` optionele DNS; `[NTFY][Q]` queue; `[NTFY][EXCL]` exclusive apiTask-modus; `[NTFY][test]` diagnostiek-runtime; `[WS]` standaard WS lifecycle; `[NET]` mutex/slot (ongewijzigd).** *(Historisch: `[WS][NTFY]` werd gebruikt in verwijderde legacy macro-helpers — Fase 4.)*
 
 **Motivatie:**  
 Minder verwarring tussen “NTFY triggert WS” en “HTTPS POST”; test vs productie.
@@ -310,7 +307,7 @@ Geen gedragswijziging; alleen stringteksten en comments.
 ---
 
 ### Besluit 006 (Fase 3)
-**Productie-NTFY delivery is één pad: `sendNotification` → queue → `apiTask` exclusive state machine → `ntfyExclusiveSendOnePendingFromQueue` → `sendNtfyNotification` / `ntfyHttpsPostNtfyAlertBody`. WS-stop/restore uitsluitend `wsStopForNtfyExclusive` + `restartWebSocketAfterNtfyExclusive` (+ pumps). Macro-helpers `ntfyPauseWs*` / `ntfyDisconnectWs*` / `ntfyRestoreWs*` hebben geen call sites; blijven tot Fase 4.**
+**Productie-NTFY delivery is één pad: `sendNotification` → queue → `apiTask` exclusive state machine → `ntfyExclusiveSendOnePendingFromQueue` → `sendNtfyNotification` / `ntfyHttpsPostNtfyAlertBody`. WS-stop/restore uitsluitend `wsStopForNtfyExclusive` + `restartWebSocketAfterNtfyExclusive` (+ pumps).**
 
 **Motivatie:**  
 Transport vs orchestration scheiden zonder queue/backoff te wijzigen.
@@ -320,8 +317,19 @@ Nieuwe static `ntfyHttpsPostNtfyAlertBody`; gedrag gelijk aan vorige inline loop
 
 ---
 
+### Besluit 007 (Fase 4)
+**De dode legacy macro-gestuurde helpers (`ntfyPauseWsBeforeNtfySendIfNeeded`, `ntfyDisconnectWsBeforeNtfySendIfNeeded`, `ntfyRestoreWsAfterNtfySend`, `ntfyRestoreWsAfterNtfySendPausedStrategy`) en de bijbehorende compile-time defaults `CRYPTO_ALERT_NTFY_PAUSE_WS_DURING_SEND` / `CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND` zijn uit de firmware verwijderd: nul call sites in repo, standaardbuild gebruikte ze niet, exclusive productiepad bleef al los daarvan. Externe forks die dit experimentele pad nog nodig hebben: herstel uit git-historie vóór deze stap.**
+
+**Motivatie:**  
+Geen verborgen tweede WS-orchestratie in de bron; kleinere, duidelijkere codebase.
+
+**Impact:**  
+Geen wijziging aan `sendNotification`, `sendNtfyNotification`, `ntfyHttpsPostNtfyAlertBody`, exclusive state machine, `restartWebSocketAfterNtfyExclusive`, queue, of Fase 1-diagnosevlaggen. Variabele `wsWasActiveForNtfySend` verwijderd (alleen door legacy gebruikt). `wsPauseForNtfySend` blijft (exclusive + `loop()`).
+
+---
+
 ## Huidige eerstvolgende stap
-**Fase 4: oude overlap en dode helpers** (zie refactorfases).
+**Fase 5 (optioneel): verdere modulering** — alleen als gewenst; Fase 1–4 NTFY/WS-cleanup is voor het beoogde scope-blok afgerond (zie Definition of done).
 
 ---
 
@@ -379,6 +387,23 @@ Gebruik dit document als voortgangsdocument en bron van waarheid voor de NTFY/WS
 
 #### Opmerkingen:
 - Device: alert + WS restore smoke test aanbevolen na flash.
+
+---
+
+### 2026-03-27 — Fase 4
+#### Build / branch / commit:
+- `arduino-cli compile -b esp32:esp32:esp32s3` (sessie).
+
+#### Uitgevoerde test:
+- Repo-wide grep: geen call sites legacy helpers vóór verwijdering; na wijziging geen restanten macro-namen in `.ino`.
+- Statische review: productiepad ongewijzigd (Besluit 006).
+- Compile: gefaald met **linker/cache-fout** in `Arduino/sketches/.../libraries/lvgl/.../objs.a` (truncated archive / file format not recognized) — **niet** toe te schrijven aan Fase 4 `.ino`-diff; oplossing: sketch-cache legen (`arduino-cli cache clean` of map `.../Caches/arduino/sketches/<hash>` verwijderen) en opnieuw builden.
+
+#### Resultaat:
+- Code-review OK; build in deze omgeving **NIET OK** door toolcache (lvgl), niet door NTFY-wijzigingen.
+
+#### Opmerkingen:
+- Aanbevolen na flash: één productie-alert → NTFY OK → WS weer live (zelfde smoke als eerdere fases).
 
 ---
 
@@ -459,7 +484,25 @@ Gebruik dit document als voortgangsdocument en bron van waarheid voor de NTFY/WS
 - Legacy WS-macro helpers hebben geen call sites → Fase 4 kandidaat.
 
 #### Volgende kleine stap:
-- Fase 4.
+- Fase 4 uitgevoerd (zie Fase 4 sessie-entry).
+
+---
+
+### 2026-03-27 — Fase 4 (dode helpers)
+#### Doel van de sessie:
+- Legacy NTFY/WS-macro-helpers en macro-defaults verwijderen waar aantoonbaar dood; tracker en documentatie bijwerken.
+
+#### Uitgevoerd:
+- Zie wijzigingslog “Fase 4”; Besluit 007; Fase 4 status DONE; architectuur-sectie WS interactie; “Huidige eerstvolgende stap” → Fase 5 optioneel.
+
+#### Niet aangepast:
+- Productie-ingangen en transport (`sendNotification`, `sendNtfyNotification`, `ntfyHttpsPostNtfyAlertBody`); exclusive sequencing; `restartWebSocketAfterNtfyExclusive`; queue/backoff; Fase 1 diagnose-runtime.
+
+#### Belangrijkste observaties:
+- Geen tweede delivery-pad meer uit verwijderde helpers; forks met experimenteel macro-pad: git-historie.
+
+#### Volgende kleine stap:
+- Optioneel Fase 5 (modulering) of alleen onderhoud; NTFY/WS-scope Fase 1–4 inhoudelijk afgerond.
 
 ---
 
@@ -496,7 +539,7 @@ Gebruik dit document als voortgangsdocument en bron van waarheid voor de NTFY/WS
   - retry/backoff
   - logging
 
-- **Fase 2:** basis-prefixmodel vastgelegd in Besluit 005; fijnslijpen eventueel in Fase 3/4.
+- **Fase 2:** basis-prefixmodel vastgelegd in Besluit 005; fijnslijpen eventueel later (cosmetisch).
 
 - Welke diagnoseflags mogen helemaal verdwijnen nadat Fase 1 stabiel is?
 

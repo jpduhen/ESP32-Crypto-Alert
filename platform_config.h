@@ -13,8 +13,8 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 5
-#define VERSION_MINOR 96
-#define VERSION_STRING "5.96"
+#define VERSION_MINOR 98
+#define VERSION_STRING "5.98"
 #endif
 
 // --- Debug Configuration ---

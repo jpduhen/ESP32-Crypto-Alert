@@ -272,16 +272,6 @@ struct NtfyPendingItem;
 #define CRYPTO_ALERT_NTFY_PERIODIC_TEST_MS 30000UL
 #endif
 
-// Diagnosetest: pauzeer WS verwerking rondom een (test-)NTFY send.
-#ifndef CRYPTO_ALERT_NTFY_PAUSE_WS_DURING_SEND
-#define CRYPTO_ALERT_NTFY_PAUSE_WS_DURING_SEND 0
-#endif
-
-// Diagnosetest: WS echt disconnecten (TLS/socket reset) rondom een (test-)NTFY send.
-#ifndef CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND
-#define CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND 0
-#endif
-
 // Spike/Move alert thresholds (geoptimaliseerd op basis van metingen)
 #define SPIKE_1M_THRESHOLD_DEFAULT 0.31f   // 1m spike: |ret_1m| >= 0.31%
 #define SPIKE_5M_THRESHOLD_DEFAULT 0.65f   // 5m spike filter: |ret_5m| >= 0.65% (past bij actuele volatiliteit)
@@ -657,7 +647,7 @@ static bool wsPending = false;
 static size_t wsPendingLen = 0;
 static char wsPendingBuf[360];
 
-// Diagnosetest: WS pauze tijdens NTFY-send om steady-state WS-verkeer te isoleren.
+// Exclusive NTFY + loop(): tijdelijk geen ws.loop() wanneer apiTask WS stopt voor HTTPS-send.
 static volatile bool wsPauseForNtfySend = false;
 
 // NTFY extra health ping: eenmalig pas na de eerste echte WS live message (+ delay)
@@ -666,12 +656,9 @@ static unsigned long wsLiveSinceMs = 0;
 static bool wsLiveNtfyTestSent = true;
 static const unsigned long WS_LIVE_NTFY_HEALTH_PING_DELAY_MS = 15000UL;
 
-// Diagnosetest: waarden om WS te kunnen herstarten na een test-disconnect.
 static const char* WS_HOST = "ws.bitvavo.com";
 static const uint16_t WS_PORT = 443;
 static const char* WS_PATH = "/v2/";
-
-static bool wsWasActiveForNtfySend = false;
 
 // NTFY exclusive network mode (alleen apiTask wisselt modus; loop() respecteert vlag)
 enum NetExclusiveNtfyMode : uint8_t {
@@ -2711,7 +2698,7 @@ void updateWarmStartStatus()
 
 // Send notification via Ntfy.sh (productie-HTTPS delivery).
 // colorTag: "green_square" / "red_square" / "blue_square" / …
-// Logging (Fase 2 tracker): [NTFY] = delivery/HTTP; [NTFY][diag] = optionele DNS; geen mix met [WS] lifecycle (dat is [WS] of [WS][NTFY] legacy).
+// Logging (Fase 2 tracker): [NTFY] = delivery/HTTP; [NTFY][diag] = optionele DNS; [WS] = WS lifecycle (los van NTFY HTTPS).
 
 static void ntfyLogTopicDigest(char *out, size_t outSz, const char *topic) {
     if (out == nullptr || outSz == 0) return;
@@ -2781,7 +2768,6 @@ static const char *ntfyPhaseForClientCode(int code) {
 // 2) apiTask: bij pending → exclusive modus (STOPPING_WS → SEND → RESTARTING_WS)
 // 3) ntfyExclusiveSendOnePendingFromQueue() → sendNtfyNotification() = validatie + deze HTTPS-transporthelper
 // WS stop/restart: uitsluitend apiTask + wsStopForNtfyExclusive / restartWebSocketAfterNtfyExclusive (niet in sendNtfyNotification).
-// Macro-paden CRYPTO_ALERT_NTFY_PAUSE/FULL_DISCONNECT: legacy, geen call sites; zie sectie verderop.
 
 /** Alleen HTTPS POST naar ntfy.sh: retries, globale backoff/streak. Caller houdt netMutex. */
 static bool ntfyHttpsPostNtfyAlertBody(
@@ -4441,137 +4427,6 @@ static bool isNetMutexBusy()
         return false;
     }
     return true;
-}
-
-// ============================================================================
-// LEGACY — macro CRYPTO_ALERT_NTFY_PAUSE_WS / FULL_WS_DISCONNECT (standaard uit)
-// Geen call sites in deze firmware; exclusive productie gebruikt wsStopForNtfyExclusive + restart.
-// Fase 4: verwijderen na bevestigen dat macro-builds nergens meer nodig zijn.
-// ============================================================================
-static bool ntfyPauseWsBeforeNtfySendIfNeeded()
-{
-#if CRYPTO_ALERT_NTFY_PAUSE_WS_DURING_SEND
-#if WS_ENABLED && WS_LIB_AVAILABLE
-    Serial_println(F("[WS][NTFY] pause before send (legacy macro)"));
-    wsPauseForNtfySend = true;
-    Serial_println(F("[WS][NTFY] pause: ws.loop() stopped, socket unchanged"));
-    if (wsConnected) {
-        Serial_println(F("[WS][NTFY] pause: was connected"));
-    } else if (wsConnecting) {
-        Serial_println(F("[WS][NTFY] pause: was connecting"));
-    } else {
-        Serial_println(F("[WS][NTFY] pause: was idle"));
-    }
-    return true;
-#else
-    Serial_println(F("[WS][NTFY] pause skipped (WS disabled at compile time)"));
-    return false;
-#endif
-#else
-    return false;
-#endif
-}
-
-static bool ntfyDisconnectWsBeforeNtfySendIfNeeded()
-{
-#if CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND
-#if WS_ENABLED && WS_LIB_AVAILABLE
-    Serial_println(F("[WS][NTFY] disconnect before send (legacy macro)"));
-
-    wsWasActiveForNtfySend = (wsConnected || wsConnecting);
-    wsPauseForNtfySend = true;
-
-    if (wsInitialized && wsClientPtr != nullptr && wsWasActiveForNtfySend) {
-        if (wsConnected) {
-            Serial_println(F("[WS][NTFY] state before disconnect: connected"));
-        } else if (wsConnecting) {
-            Serial_println(F("[WS][NTFY] state before disconnect: connecting"));
-        }
-
-        wsClientPtr->disconnect();
-        wsConnected = false;
-        wsConnecting = false;
-
-        const unsigned long startMs = millis();
-        while (millis() - startMs < 3000UL) {
-            wsClientPtr->loop();
-            if (!wsConnected && !wsConnecting) break;
-            delay(50);
-        }
-    } else {
-        Serial_println(F("[WS][NTFY] disconnect skipped (not init/active)"));
-    }
-
-    if (!wsConnected && !wsConnecting) {
-        Serial_println(F("[WS][NTFY] disconnected"));
-    } else {
-        Serial_printf(F("[WS][NTFY] disconnect pending (connected=%d connecting=%d)\n"),
-                      wsConnected ? 1 : 0, wsConnecting ? 1 : 0);
-    }
-
-    return wsWasActiveForNtfySend;
-#else
-    Serial_println(F("[WS][NTFY] disconnect skipped (WS disabled at compile time)"));
-    wsWasActiveForNtfySend = false;
-    return false;
-#endif
-#else
-    return false;
-#endif
-}
-
-static void ntfyRestoreWsAfterNtfySend()
-{
-#if CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND
-#if WS_ENABLED && WS_LIB_AVAILABLE
-    if (!wsWasActiveForNtfySend) {
-        wsPauseForNtfySend = false;
-        return;
-    }
-
-    Serial_println(F("[WS][NTFY] restore after send (legacy macro)"));
-
-    wsPauseForNtfySend = true;
-    wsConnected = false;
-    wsConnecting = true;
-    wsConnectStartMs = millis();
-
-    if (wsInitialized && wsClientPtr != nullptr) {
-        wsClientPtr->setReconnectInterval(5000);
-        wsClientPtr->beginSSL(WS_HOST, WS_PORT, WS_PATH);
-
-        const unsigned long startMs = millis();
-        while (millis() - startMs < 15000UL) {
-            wsClientPtr->loop();
-            if (wsConnected) break;
-            delay(50);
-        }
-
-        if (wsConnected) {
-            Serial_println(F("[WS][NTFY] restore: connected"));
-        } else {
-        Serial_printf(F("[WS][NTFY] restore incomplete: connected=%d connecting=%d\n"),
-                          wsConnected ? 1 : 0, wsConnecting ? 1 : 0);
-        }
-    } else {
-        Serial_println(F("[WS][NTFY] restore skipped (not init)"));
-    }
-
-    wsPauseForNtfySend = false;
-#endif
-#endif
-}
-
-static void ntfyRestoreWsAfterNtfySendPausedStrategy()
-{
-#if CRYPTO_ALERT_NTFY_PAUSE_WS_DURING_SEND
-#if WS_ENABLED && WS_LIB_AVAILABLE
-    if (wsPauseForNtfySend) {
-        wsPauseForNtfySend = false;
-        Serial_println(F("[WS][NTFY] unpause: ws.loop() allowed again (legacy macro)"));
-    }
-#endif
-#endif
 }
 
 static void ntfyStartupTestIfEnabled(void)
