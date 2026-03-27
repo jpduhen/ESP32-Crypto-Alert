@@ -78,6 +78,10 @@ DisplayBackend *g_displayBackend = nullptr;
 // Memory module (M1: heap telemetry voor geheugenfragmentatie audit)
 #include "src/Memory/HeapMon.h"
 
+// Forward declaration needed for Arduino auto-prototypes.
+// (Arduino preprocessor may generate function prototypes before the struct body below.)
+struct NtfyPendingItem;
+
 // Net module (M2: streaming HTTP fetch zonder String allocaties)
 #include "src/Net/HttpFetch.h"
 
@@ -249,7 +253,7 @@ DisplayBackend *g_displayBackend = nullptr;
 // --- NTFY Reliability Tests ---
 // Zet deze aan om NTFY te testen (baseline + periodiek) onder netwerkbelasting.
 #ifndef CRYPTO_ALERT_NTFY_STARTUP_TEST
-#define CRYPTO_ALERT_NTFY_STARTUP_TEST 1
+#define CRYPTO_ALERT_NTFY_STARTUP_TEST 0
 #endif
 
 #ifndef CRYPTO_ALERT_NTFY_PERIODIC_TEST
@@ -262,12 +266,12 @@ DisplayBackend *g_displayBackend = nullptr;
 
 // Diagnosetest: pauzeer WS verwerking rondom een (test-)NTFY send.
 #ifndef CRYPTO_ALERT_NTFY_PAUSE_WS_DURING_SEND
-#define CRYPTO_ALERT_NTFY_PAUSE_WS_DURING_SEND 1
+#define CRYPTO_ALERT_NTFY_PAUSE_WS_DURING_SEND 0
 #endif
 
 // Diagnosetest: WS echt disconnecten (TLS/socket reset) rondom een (test-)NTFY send.
 #ifndef CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND
-#define CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND 1
+#define CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND 0
 #endif
 
 // Spike/Move alert thresholds (geoptimaliseerd op basis van metingen)
@@ -648,11 +652,6 @@ static char wsPendingBuf[360];
 // Diagnosetest: WS pauze tijdens NTFY-send om steady-state WS-verkeer te isoleren.
 static volatile bool wsPauseForNtfySend = false;
 
-// NTFY: after WS disconnect/restore, tijdelijk REST price/candle fallbacks temperen
-static unsigned long lastNtfyWsRestoreMs = 0;
-static const unsigned long NTFY_WS_RESTORE_GRACE_PRICE_MS = 15000UL;
-static const unsigned long NTFY_WS_RESTORE_GRACE_CANDLES_MS = 30000UL;
-
 // NTFY extra health ping: eenmalig pas na de eerste echte WS live message (+ delay)
 static bool wsHasSeenFirstLiveMessage = false;
 static unsigned long wsLiveSinceMs = 0;
@@ -665,6 +664,25 @@ static const uint16_t WS_PORT = 443;
 static const char* WS_PATH = "/v2/";
 
 static bool wsWasActiveForNtfySend = false;
+
+// NTFY exclusive network mode (alleen apiTask wisselt modus; loop() respecteert vlag)
+enum NetExclusiveNtfyMode : uint8_t {
+    NET_MODE_NORMAL = 0,
+    NET_MODE_NTFY_EXCLUSIVE_STOPPING_WS = 1,
+    NET_MODE_NTFY_EXCLUSIVE_SENDING = 2,
+    NET_MODE_NTFY_EXCLUSIVE_RESTARTING_WS = 3,
+};
+volatile uint8_t g_netExclusiveNtfyMode = NET_MODE_NORMAL;
+static unsigned long s_netExclusiveDeadlineMs = 0;
+static const unsigned long NTFY_EXCL_WS_STOP_MS = 8000UL;
+static const unsigned long NTFY_EXCL_SEND_MS = 30000UL;
+static const unsigned long NTFY_EXCL_WS_RESTART_MS = 20000UL;
+static const unsigned long NTFY_EXCL_WS_RESTART_WAIT_LOG_MS = 12000UL;
+// Aantal timeout-vensters waarbij we disconnect + beginSSL herhalen voordat we exclusive verlaten (eerste poging telt niet mee als "retry"-log)
+static const uint8_t NTFY_EXCL_WS_RESTART_MAX_RETRIES = 3;
+// Meerdere ws.loop()-calls per apiTask-cyclus: TLS/SSL vordert sneller dan één pump per interval (loop() is tijdens exclusive uit).
+static const uint8_t NTFY_EXCL_WS_RESTART_PUMP_BURST = 40;
+volatile bool g_wsSubscribeSentAfterConnect = false;
 
 static void processWsTextMessage(const char* wsBuf, size_t length);
 
@@ -2757,9 +2775,9 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
     // Reset diagnose-vlag per send-actie (anders kan een eerdere 429 blijven hangen).
     ntfyLastSendAttemptWas429 = false;
     ntfyLastSendAttemptWasRateLimitedByBackoff = false;
-    // NTFY netwerk-diagnose (rate-limited, 1x per 60s): DNS naar ntfy.sh
+    // NTFY netwerk-diagnose (rate-limited): alleen buiten exclusive-modus (geen extra DNS tijdens NTFY-slot)
     static unsigned long lastNtfyNetLogMs = 0;
-    if (nowMs - lastNtfyNetLogMs >= 60000UL) {
+    if (g_netExclusiveNtfyMode == NET_MODE_NORMAL && nowMs - lastNtfyNetLogMs >= 60000UL) {
         lastNtfyNetLogMs = nowMs;
         IPAddress ntfyIp;
         bool resolved = WiFi.hostByName("ntfy.sh", ntfyIp);
@@ -2819,20 +2837,9 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
     char topicDigest[56];
     ntfyLogTopicDigest(topicDigest, sizeof(topicDigest), ntfyTopic);
 
-    // WS connect heavy isolatie: disconnect WS vóór NTFY send en restore erna.
-    // Dit geldt voor alle echte NTFY sends (niet alleen tests).
-    bool wsWasActiveForNtfySend = false;
-#if CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND
-    wsWasActiveForNtfySend = ntfyDisconnectWsBeforeNtfySendIfNeeded();
-    if (wsWasActiveForNtfySend) {
-        Serial_println(F("[NTFY] sending NTFY while WS fully disconnected"));
+    if (g_netExclusiveNtfyMode == NET_MODE_NORMAL) {
+        Serial_println(F("[NTFY] send while WS remains connected"));
     }
-#else
-    wsWasActiveForNtfySend = ntfyPauseWsBeforeNtfySendIfNeeded();
-    if (wsWasActiveForNtfySend) {
-        Serial_println(F("[NTFY] sending NTFY while WS paused"));
-    }
-#endif
 
     netMutexLock("[NTFY] sendNtfyNotification");
 
@@ -3000,12 +3007,6 @@ static bool sendNtfyNotification(const char *title, const char *message, const c
         }
     }
 
-    // Restore WS after NTFY send, still within netMutex so connect-heavy actions blijven geserialiseerd.
-#if CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND
-    ntfyRestoreWsAfterNtfySend();
-#else
-    ntfyRestoreWsAfterNtfySendPausedStrategy();
-#endif
     netMutexUnlock("[NTFY] sendNtfyNotification");
 
     return ok;
@@ -3061,6 +3062,7 @@ static void maybeInitWebSocketAfterWarmStart()
                              bitvavoSymbol);
                     wsClientPtr->sendTXT(payloadBuf);
                     Serial.println(F("[WS] Subscribe sent"));
+                    g_wsSubscribeSentAfterConnect = true;
                 }
                 lastWsReconnectMs = millis();
                 break;
@@ -3765,6 +3767,537 @@ static void checkHeapTelemetry()
 // Notification Functions
 // ============================================================================
 
+// --------------------------------------------------------------------------
+// NTFY pending queue (noodpatch)
+// --------------------------------------------------------------------------
+#define NTFY_PENDING_Q_SIZE 8
+#define NTFY_TITLE_MAX  65   // sendNtfyNotification() limiet: 64
+#define NTFY_BODY_MAX   513  // sendNtfyNotification() limiet: 512
+#define NTFY_TAG_MAX    65   // sendNtfyNotification() tags max: 64
+#define NTFY_SEQUENCE_MAX 40
+
+enum NtfyPriority : uint8_t {
+    NTFY_PRIO_LOW = 0,
+    NTFY_PRIO_MEDIUM = 1,
+    NTFY_PRIO_HIGH = 2,
+};
+
+struct NtfyPendingItem {
+    bool used = false;
+    bool delivered = false;
+    uint8_t priority = (uint8_t)NTFY_PRIO_LOW;
+    uint8_t retryCount = 0;
+    uint32_t createdMs = 0;
+    uint32_t lastAttemptMs = 0;
+    uint32_t nextAttemptMs = 0;
+    char title[NTFY_TITLE_MAX] = {0};
+    char body[NTFY_BODY_MAX] = {0};
+    char colorTag[NTFY_TAG_MAX] = {0};
+    char sequenceId[NTFY_SEQUENCE_MAX] = {0};
+};
+
+static NtfyPendingItem s_ntfyQ[NTFY_PENDING_Q_SIZE];
+static SemaphoreHandle_t s_ntfyQMutex = NULL;
+
+static inline bool ntfyBackoffActive(unsigned long nowMs) {
+    return (ntfyNextAllowedMs != 0 && nowMs < ntfyNextAllowedMs);
+}
+
+static uint32_t ntfyRetryDelayMs(uint8_t retryCount) {
+    // poging 1 direct (0), poging 2 500ms, poging 3 2000ms, poging 4 5000ms, daarna 30000ms
+    if (retryCount <= 0) return 0;
+    if (retryCount == 1) return 500;
+    if (retryCount == 2) return 2000;
+    if (retryCount == 3) return 5000;
+    return 30000UL;
+}
+
+static bool ntfyPendingEquals(const NtfyPendingItem& it,
+                              const char* title, const char* body, const char* tag) {
+    if (!it.used || it.delivered) return false;
+    if (title == nullptr || body == nullptr) return false;
+    if (strcmp(it.title, title) != 0) return false;
+    if (strcmp(it.body, body) != 0) return false;
+    const char* t = (tag != nullptr) ? tag : "";
+    return strcmp(it.colorTag, t) == 0;
+}
+
+static bool ntfyQueueIsEmpty_NoLock() {
+    for (uint8_t i = 0; i < NTFY_PENDING_Q_SIZE; i++) {
+        if (s_ntfyQ[i].used && !s_ntfyQ[i].delivered) return false;
+    }
+    return true;
+}
+
+static uint8_t ntfyQueuePendingCount_NoLock() {
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < NTFY_PENDING_Q_SIZE; i++) {
+        if (s_ntfyQ[i].used && !s_ntfyQ[i].delivered) n++;
+    }
+    return n;
+}
+
+static bool ntfyContainsCaseInsensitive(const char* text, const char* needle) {
+    if (text == nullptr || needle == nullptr) return false;
+    const size_t nLen = strlen(needle);
+    if (nLen == 0) return false;
+    for (const char* p = text; *p; p++) {
+        size_t i = 0;
+        while (i < nLen) {
+            char a = p[i];
+            char b = needle[i];
+            if (a == '\0') return false;
+            if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+            if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+            if (a != b) break;
+            i++;
+        }
+        if (i == nLen) return true;
+    }
+    return false;
+}
+
+static int ntfyDirectionFromBodyLine(const char* body, const char* marker) {
+    // returns +1 up, -1 down, 0 unknown
+    if (body == nullptr || marker == nullptr) return 0;
+    const char* p = strstr(body, marker);
+    if (p == nullptr) return 0;
+    p += strlen(marker);
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '+') return +1;
+    if (*p == '-') return -1;
+    return 0;
+}
+
+static void ntfyBuildSequenceId(const char* title, const char* body, char* outSeq, size_t outSeqSize) {
+    if (outSeq == nullptr || outSeqSize == 0) return;
+    outSeq[0] = '\0';
+    if (title == nullptr) title = "";
+    if (body == nullptr) body = "";
+
+    if (ntfyContainsCaseInsensitive(title, "2h") &&
+        ntfyContainsCaseInsensitive(title, "breakout")) {
+        safeStrncpy(outSeq, "btc-2h-breakout", outSeqSize);
+        return;
+    }
+    if (ntfyContainsCaseInsensitive(title, "2h") &&
+        ntfyContainsCaseInsensitive(title, "breakdown")) {
+        safeStrncpy(outSeq, "btc-2h-breakdown", outSeqSize);
+        return;
+    }
+
+    const int d30 = ntfyDirectionFromBodyLine(body, "30m:");
+    if (d30 > 0) { safeStrncpy(outSeq, "btc-30m-up", outSeqSize); return; }
+    if (d30 < 0) { safeStrncpy(outSeq, "btc-30m-down", outSeqSize); return; }
+
+    const int d5 = ntfyDirectionFromBodyLine(body, "5m:");
+    if (d5 > 0) { safeStrncpy(outSeq, "btc-5m-up", outSeqSize); return; }
+    if (d5 < 0) { safeStrncpy(outSeq, "btc-5m-down", outSeqSize); return; }
+
+    const int d1 = ntfyDirectionFromBodyLine(body, "1m:");
+    if (d1 > 0) { safeStrncpy(outSeq, "btc-1m-up", outSeqSize); return; }
+    if (d1 < 0) { safeStrncpy(outSeq, "btc-1m-down", outSeqSize); return; }
+}
+
+static int ntfyFindFreeSlot_NoLock() {
+    for (uint8_t i = 0; i < NTFY_PENDING_Q_SIZE; i++) {
+        if (!s_ntfyQ[i].used || s_ntfyQ[i].delivered) return (int)i;
+    }
+    return -1;
+}
+
+static int ntfyFindEvictCandidate_NoLock(uint8_t incomingPrio) {
+    // Evict laagste prioriteit, oudste createdMs eerst.
+    int best = -1;
+    uint8_t bestPrio = 255;
+    uint32_t bestCreated = 0;
+    for (uint8_t i = 0; i < NTFY_PENDING_Q_SIZE; i++) {
+        if (!s_ntfyQ[i].used || s_ntfyQ[i].delivered) continue;
+        uint8_t p = s_ntfyQ[i].priority;
+        if (p > incomingPrio) continue; // never evict higher prio than incoming
+        if (best < 0 || p < bestPrio || (p == bestPrio && s_ntfyQ[i].createdMs < bestCreated)) {
+            best = (int)i;
+            bestPrio = p;
+            bestCreated = s_ntfyQ[i].createdMs;
+        }
+    }
+    return best;
+}
+
+static bool enqueueNtfyPending(const char* title, const char* body, const char* colorTag, uint8_t priority, const char* sequenceId = nullptr)
+{
+    if (title == nullptr || body == nullptr) return false;
+    const char* tag = (colorTag != nullptr) ? colorTag : "";
+    const char* seq = (sequenceId != nullptr) ? sequenceId : "";
+
+    if (s_ntfyQMutex == NULL) {
+        // Safety: no queue without mutex.
+        return false;
+    }
+    if (xSemaphoreTake(s_ntfyQMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return false;
+    }
+
+    if (seq[0] != '\0') {
+        for (uint8_t i = 0; i < NTFY_PENDING_Q_SIZE; i++) {
+            if (!s_ntfyQ[i].used || s_ntfyQ[i].delivered) continue;
+            if (strcmp(s_ntfyQ[i].sequenceId, seq) != 0) continue;
+            NtfyPendingItem& ex = s_ntfyQ[i];
+            safeStrncpy(ex.title, title, sizeof(ex.title));
+            safeStrncpy(ex.body, body, sizeof(ex.body));
+            safeStrncpy(ex.colorTag, tag, sizeof(ex.colorTag));
+            if (priority > ex.priority) ex.priority = priority;
+            ex.nextAttemptMs = 0;
+            xSemaphoreGive(s_ntfyQMutex);
+            Serial_printf(F("[NTFY][Q] update pending seq=%s\n"), seq);
+            return true;
+        }
+    }
+
+    // Coalescing: skip duplicate pending.
+    for (uint8_t i = 0; i < NTFY_PENDING_Q_SIZE; i++) {
+        if (ntfyPendingEquals(s_ntfyQ[i], title, body, tag)) {
+            xSemaphoreGive(s_ntfyQMutex);
+            Serial_println(F("[NTFY] duplicate pending alert skipped"));
+            return true;
+        }
+    }
+
+    int slot = ntfyFindFreeSlot_NoLock();
+    if (slot < 0) {
+        // Queue vol: drop LOW/MEDIUM eerst; HIGH probeert te verdringen.
+        slot = ntfyFindEvictCandidate_NoLock(priority);
+        if (slot < 0) {
+            xSemaphoreGive(s_ntfyQMutex);
+            return false;
+        }
+        // Evict bestaande (laag of gelijk), incoming blijft.
+        s_ntfyQ[slot].used = false;
+        s_ntfyQ[slot].delivered = false;
+    }
+
+    NtfyPendingItem& it = s_ntfyQ[slot];
+    it.used = true;
+    it.delivered = false;
+    it.priority = priority;
+    it.retryCount = 0;
+    it.createdMs = millis();
+    it.lastAttemptMs = 0;
+    it.nextAttemptMs = 0; // direct eligible
+    safeStrncpy(it.title, title, sizeof(it.title));
+    safeStrncpy(it.body, body, sizeof(it.body));
+    safeStrncpy(it.colorTag, tag, sizeof(it.colorTag));
+    safeStrncpy(it.sequenceId, seq, sizeof(it.sequenceId));
+
+    const uint8_t qSize = ntfyQueuePendingCount_NoLock();
+    xSemaphoreGive(s_ntfyQMutex);
+    if (seq[0] != '\0') {
+        Serial_printf(F("[NTFY][Q] enqueue seq=%s prio=%u size=%u\n"),
+                      seq, (unsigned)priority, (unsigned)qSize);
+    }
+    return true;
+}
+
+static bool ntfyPickNextPending_NoLock(uint8_t& outIdx)
+{
+    const uint32_t nowMs = millis();
+    int best = -1;
+    uint8_t bestPrio = 0;
+    uint32_t bestCreated = 0;
+    for (uint8_t i = 0; i < NTFY_PENDING_Q_SIZE; i++) {
+        if (!s_ntfyQ[i].used || s_ntfyQ[i].delivered) continue;
+        if (s_ntfyQ[i].nextAttemptMs != 0 && nowMs < s_ntfyQ[i].nextAttemptMs) continue;
+        uint8_t p = s_ntfyQ[i].priority;
+        if (best < 0 || p > bestPrio || (p == bestPrio && s_ntfyQ[i].createdMs < bestCreated)) {
+            best = (int)i;
+            bestPrio = p;
+            bestCreated = s_ntfyQ[i].createdMs;
+        }
+    }
+    if (best < 0) return false;
+    outIdx = (uint8_t)best;
+    return true;
+}
+
+static bool ntfyHasFlushablePendingForExclusive(void)
+{
+    if (s_ntfyQMutex == NULL) return false;
+    if (xSemaphoreTake(s_ntfyQMutex, pdMS_TO_TICKS(0)) != pdTRUE) return false;
+    const uint32_t nowMs = millis();
+    bool has = false;
+    if (!ntfyBackoffActive(nowMs)) {
+        for (uint8_t i = 0; i < NTFY_PENDING_Q_SIZE; i++) {
+            if (!s_ntfyQ[i].used || s_ntfyQ[i].delivered) continue;
+            if (s_ntfyQ[i].nextAttemptMs != 0 && nowMs < s_ntfyQ[i].nextAttemptMs) continue;
+            has = true;
+            break;
+        }
+    }
+    xSemaphoreGive(s_ntfyQMutex);
+    return has;
+}
+
+static bool ntfyExclusiveShouldSkipWsStopPhase(void)
+{
+#if !WS_ENABLED || !WS_LIB_AVAILABLE
+    return true;
+#else
+    return (!wsInitialized || wsClientPtr == nullptr);
+#endif
+}
+
+static void wsExclusiveWsPumpOnce(void)
+{
+#if WS_ENABLED && WS_LIB_AVAILABLE
+    if (wsInitialized && wsClientPtr != nullptr && WiFi.status() == WL_CONNECTED) {
+        netMutexLock("[NTFY][EXCL] ws pump");
+        wsClientPtr->loop();
+        netMutexUnlock("[NTFY][EXCL] ws pump");
+    }
+#endif
+}
+
+/** Alleen RESTARTING_WS: gebundelde pumps zodat WS/TLS binnen exclusive venster kan voltooien (non-blocking, vast aantal iteraties). */
+static void wsExclusiveWsPumpRestartBurst(void)
+{
+#if WS_ENABLED && WS_LIB_AVAILABLE
+    if (wsInitialized && wsClientPtr != nullptr && WiFi.status() == WL_CONNECTED) {
+        netMutexLock("[NTFY][EXCL] ws pump burst");
+        for (uint8_t i = 0; i < NTFY_EXCL_WS_RESTART_PUMP_BURST; i++) {
+            wsClientPtr->loop();
+        }
+        netMutexUnlock("[NTFY][EXCL] ws pump burst");
+    }
+#endif
+}
+
+static void wsStopForNtfyExclusive(void)
+{
+    Serial_println(F("[NTFY][EXCL] ws stop requested"));
+    wsPauseForNtfySend = true;
+#if WS_ENABLED && WS_LIB_AVAILABLE
+    if (wsInitialized && wsClientPtr != nullptr) {
+        netMutexLock("[NTFY][EXCL] ws stop disconnect");
+        wsClientPtr->disconnect();
+        netMutexUnlock("[NTFY][EXCL] ws stop disconnect");
+        wsConnected = false;
+        wsConnecting = false;
+    }
+#endif
+}
+
+static void restartWebSocketAfterNtfyExclusive(void)
+{
+#if !WS_ENABLED || !WS_LIB_AVAILABLE
+    (void)0;
+#else
+    g_wsSubscribeSentAfterConnect = false;
+    if (!wsInitialized) {
+        maybeInitWebSocketAfterWarmStart();
+        return;
+    }
+    if (wsClientPtr == nullptr) {
+        return;
+    }
+    netMutexLock("[NTFY][EXCL] ws restart beginSSL");
+    wsClientPtr->setReconnectInterval(5000);
+    wsClientPtr->beginSSL(WS_HOST, WS_PORT, WS_PATH);
+    netMutexUnlock("[NTFY][EXCL] ws restart beginSSL");
+    wsConnecting = true;
+#endif
+}
+
+// Eén pending alert versturen (alleen vanuit exclusive SEND-state).
+// Slot wordt na pick bij index gehouden; na HTTPS wordt dezelfde index geüpdatet (geen createdMs-match alleen — voorkomt verkeerde slot + mutex-timeout die "send fail" logde bij geslaagde POST).
+static bool ntfyExclusiveSendOnePendingFromQueue(void)
+{
+    const uint32_t nowMs = millis();
+    if (ntfyBackoffActive(nowMs)) {
+        return false;
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+        return false;
+    }
+    if (s_ntfyQMutex == NULL) {
+        return false;
+    }
+    if (xSemaphoreTake(s_ntfyQMutex, pdMS_TO_TICKS(0)) != pdTRUE) {
+        return false;
+    }
+    uint8_t idx = 0;
+    if (!ntfyPickNextPending_NoLock(idx)) {
+        xSemaphoreGive(s_ntfyQMutex);
+        return false;
+    }
+    NtfyPendingItem it = s_ntfyQ[idx];
+    xSemaphoreGive(s_ntfyQMutex);
+
+    Serial_printf(F("[NTFY][Q] flush try seq=%s retry=%u\n"),
+                  (it.sequenceId[0] != '\0') ? it.sequenceId : "-",
+                  (unsigned)it.retryCount);
+    const bool ok = sendNtfyNotification(it.title, it.body, it.colorTag);
+
+    if (xSemaphoreTake(s_ntfyQMutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+        Serial_println(F("[NTFY][Q] WARN: queue lock after send timed out (bookkeeping skipped)"));
+        return ok;
+    }
+
+    int found = -1;
+    if (idx < NTFY_PENDING_Q_SIZE) {
+        NtfyPendingItem& cand = s_ntfyQ[idx];
+        if (cand.used && !cand.delivered &&
+            strcmp(cand.title, it.title) == 0 && strcmp(cand.body, it.body) == 0 &&
+            strcmp(cand.colorTag, it.colorTag) == 0) {
+            found = (int)idx;
+        }
+    }
+    if (found < 0) {
+        for (uint8_t i = 0; i < NTFY_PENDING_Q_SIZE; i++) {
+            if (!s_ntfyQ[i].used || s_ntfyQ[i].delivered) continue;
+            if (strcmp(s_ntfyQ[i].title, it.title) != 0) continue;
+            if (strcmp(s_ntfyQ[i].body, it.body) != 0) continue;
+            if (strcmp(s_ntfyQ[i].colorTag, it.colorTag) != 0) continue;
+            found = (int)i;
+            break;
+        }
+    }
+    if (found >= 0) {
+        NtfyPendingItem& ref = s_ntfyQ[found];
+        ref.lastAttemptMs = nowMs;
+        if (ok) {
+            ref.delivered = true;
+            ref.used = false;
+            const uint8_t qSize = ntfyQueuePendingCount_NoLock();
+            Serial_printf(F("[NTFY][Q] delivered seq=%s size=%u\n"),
+                          (it.sequenceId[0] != '\0') ? it.sequenceId : "-",
+                          (unsigned)qSize);
+        } else {
+            ref.retryCount++;
+            uint32_t delayMs = ntfyRetryDelayMs(ref.retryCount);
+            uint32_t nextMs = nowMs + delayMs;
+            if (ntfyNextAllowedMs != 0 && ntfyNextAllowedMs > nextMs) nextMs = ntfyNextAllowedMs;
+            ref.nextAttemptMs = nextMs;
+        }
+    } else if (ok) {
+        Serial_println(F("[NTFY][Q] WARN: send ok but no matching queue slot (duplicate delivery risk)"));
+    }
+    xSemaphoreGive(s_ntfyQMutex);
+    return ok;
+}
+
+static bool s_ntfyExclusiveSendDoneThisCycle = false;
+static bool s_ntfyExclusiveRestartBegun = false;
+static uint8_t s_ntfyExclWsRestartRetriesUsed = 0;
+static unsigned long s_ntfyExclRsWaitLogMs = 0;
+
+static void apiTaskNtfyExclusiveStateMachine(void)
+{
+    const unsigned long now = millis();
+
+    switch (g_netExclusiveNtfyMode) {
+        case NET_MODE_NTFY_EXCLUSIVE_STOPPING_WS: {
+            wsExclusiveWsPumpOnce();
+            if (!wsConnected && !wsConnecting) {
+                Serial_println(F("[NTFY][EXCL] ws stopped"));
+                g_netExclusiveNtfyMode = NET_MODE_NTFY_EXCLUSIVE_SENDING;
+                s_netExclusiveDeadlineMs = now + NTFY_EXCL_SEND_MS;
+                s_ntfyExclusiveSendDoneThisCycle = false;
+            } else if (now > s_netExclusiveDeadlineMs) {
+                Serial_printf(F("[NTFY][EXCL] timeout in state STOPPING_WS\n"));
+                g_netExclusiveNtfyMode = NET_MODE_NTFY_EXCLUSIVE_SENDING;
+                s_netExclusiveDeadlineMs = now + NTFY_EXCL_SEND_MS;
+                s_ntfyExclusiveSendDoneThisCycle = false;
+            }
+            break;
+        }
+        case NET_MODE_NTFY_EXCLUSIVE_SENDING: {
+            if (!s_ntfyExclusiveSendDoneThisCycle) {
+                s_ntfyExclusiveSendDoneThisCycle = true;
+                Serial_println(F("[NTFY][EXCL] send start"));
+                const bool ok = ntfyExclusiveSendOnePendingFromQueue();
+                if (ok) {
+                    Serial_println(F("[NTFY][EXCL] send ok"));
+                } else {
+                    Serial_println(F("[NTFY][EXCL] send fail"));
+                }
+                g_netExclusiveNtfyMode = NET_MODE_NTFY_EXCLUSIVE_RESTARTING_WS;
+                s_netExclusiveDeadlineMs = now + NTFY_EXCL_WS_RESTART_MS;
+                s_ntfyExclusiveRestartBegun = false;
+                s_ntfyExclWsRestartRetriesUsed = 0;
+                s_ntfyExclRsWaitLogMs = now;
+            }
+            break;
+        }
+        case NET_MODE_NTFY_EXCLUSIVE_RESTARTING_WS: {
+            if (!s_ntfyExclusiveRestartBegun) {
+                s_ntfyExclusiveRestartBegun = true;
+                Serial_println(F("[NTFY][EXCL] ws restart requested"));
+                restartWebSocketAfterNtfyExclusive();
+                Serial_println(F("[NTFY][EXCL] ws restart waiting"));
+            }
+            wsExclusiveWsPumpRestartBurst();
+            if (!(wsConnected && g_wsSubscribeSentAfterConnect) &&
+                (now - s_ntfyExclRsWaitLogMs >= NTFY_EXCL_WS_RESTART_WAIT_LOG_MS)) {
+                s_ntfyExclRsWaitLogMs = now;
+                Serial_println(F("[NTFY][EXCL] ws restart waiting"));
+            }
+            if (wsConnected && g_wsSubscribeSentAfterConnect) {
+                Serial_println(F("[NTFY][EXCL] ws restored"));
+                wsPauseForNtfySend = false;
+                g_netExclusiveNtfyMode = NET_MODE_NORMAL;
+                Serial_println(F("[NTFY][EXCL] exit"));
+                s_ntfyExclusiveRestartBegun = false;
+                s_ntfyExclWsRestartRetriesUsed = 0;
+                s_ntfyExclRsWaitLogMs = 0;
+            } else if (now > s_netExclusiveDeadlineMs) {
+                if (s_ntfyExclWsRestartRetriesUsed < NTFY_EXCL_WS_RESTART_MAX_RETRIES) {
+                    s_ntfyExclWsRestartRetriesUsed++;
+                    Serial_println(F("[NTFY][EXCL] ws restart retry"));
+#if WS_ENABLED && WS_LIB_AVAILABLE
+                    if (wsClientPtr != nullptr) {
+                        netMutexLock("[NTFY][EXCL] ws retry disconnect");
+                        wsClientPtr->disconnect();
+                        netMutexUnlock("[NTFY][EXCL] ws retry disconnect");
+                    }
+                    wsConnected = false;
+                    wsConnecting = false;
+#endif
+                    g_wsSubscribeSentAfterConnect = false;
+                    s_ntfyExclusiveRestartBegun = false;
+                    s_netExclusiveDeadlineMs = now + NTFY_EXCL_WS_RESTART_MS;
+                    s_ntfyExclRsWaitLogMs = now;
+                } else {
+                    Serial_println(F("[NTFY][EXCL] timeout in state RESTARTING_WS (abandon)"));
+#if WS_ENABLED && WS_LIB_AVAILABLE
+                    if (wsClientPtr != nullptr) {
+                        netMutexLock("[NTFY][EXCL] abandon disconnect");
+                        wsClientPtr->disconnect();
+                        netMutexUnlock("[NTFY][EXCL] abandon disconnect");
+                    }
+                    wsConnected = false;
+                    wsConnecting = false;
+#endif
+                    g_wsSubscribeSentAfterConnect = false;
+                    wsPauseForNtfySend = false;
+                    g_netExclusiveNtfyMode = NET_MODE_NORMAL;
+#if WS_ENABLED && WS_LIB_AVAILABLE
+                    if (wsInitialized && wsClientPtr != nullptr) {
+                        restartWebSocketAfterNtfyExclusive();
+                    }
+#endif
+                    Serial_println(F("[NTFY][EXCL] exit"));
+                    s_ntfyExclusiveRestartBegun = false;
+                    s_ntfyExclWsRestartRetriesUsed = 0;
+                    s_ntfyExclRsWaitLogMs = 0;
+                }
+            }
+            break;
+        }
+        default:
+            break;
+    }
+}
+
 // Best-effort notification log (ringbuffer, fixed size, try-lock only in writer)
 #define NOTIF_LOG_TITLE_MAX   48
 #define NOTIF_LOG_MSG_MAX    160
@@ -3839,9 +4372,16 @@ bool getNotificationLogEntry(uint8_t index,
 // Phase 1: logging gebeurt NA sendNtfyNotification() en is best-effort
 bool sendNotification(const char *title, const char *message, const char *colorTag = nullptr)
 {
-    bool sent = sendNtfyNotification(title, message, colorTag);
-    appendNotificationLog(title, message, colorTag, sent ? 1u : 0u);
-    return sent;
+    // Noodpatch: alertpaden mogen niet blokkeren op HTTPS send.
+    // We enqueuen en laten een worker/periodieke flush de delivery doen.
+    char seqId[NTFY_SEQUENCE_MAX] = {0};
+    ntfyBuildSequenceId(title, message, seqId, sizeof(seqId));
+    const bool accepted = enqueueNtfyPending(
+        title, message, colorTag, NTFY_PRIO_HIGH,
+        (seqId[0] != '\0') ? seqId : nullptr
+    );
+    appendNotificationLog(title, message, colorTag, accepted ? 1u : 0u);
+    return accepted;
 }
 
 // ============================================================================
@@ -3973,7 +4513,6 @@ static void ntfyRestoreWsAfterNtfySend()
     }
 
     Serial_println(F("[NTFY] restoring WS after send"));
-    Serial_println(F("[NTFY] WS reconnect requested"));
 
     // Geen concurrent WS processing: hou pauze aan tijdens re-init/reconnect.
     wsPauseForNtfySend = true;
@@ -4002,12 +4541,6 @@ static void ntfyRestoreWsAfterNtfySend()
         Serial_println(F("[NTFY] WS restore skipped: ws not initialized/alloc failed"));
     }
 
-    // Zet alleen grace-timestamp als de restore daadwerkelijk live WS maakte.
-    // (Voorkomt dat startup/idle/poging-zonder-connect de REST guards temperen.)
-    if (wsConnected) {
-        lastNtfyWsRestoreMs = millis();
-    }
-
     wsPauseForNtfySend = false;
 #endif
 #endif
@@ -4028,11 +4561,29 @@ static void ntfyRestoreWsAfterNtfySendPausedStrategy()
 static void ntfyStartupTestIfEnabled()
 {
 #if CRYPTO_ALERT_NTFY_STARTUP_TEST
+    static bool s_logged = false;
+    if (!s_logged) {
+        Serial_println(F("[NTFY] diag/startup disabled for stability"));
+        s_logged = true;
+    }
+    return;
+
     if (ntfyStartupTestSent) return;
-    ntfyStartupTestSent = true;
 
     if (WiFi.status() != WL_CONNECTED) {
         Serial_println(F("[NTFY][test] startup test skipped: WiFi not connected"));
+        return;
+    }
+
+    const unsigned long now = millis();
+    if (ntfyBackoffActive(now)) {
+        Serial_println(F("[NTFY] backoff active, skip startup test"));
+        ntfyStartupTestDeferredPending = true;
+        ntfyStartupTestDeferredRetryAttempted = false;
+        ntfyStartupTestDeferredNextMs = ntfyNextAllowedMs;
+        if (ntfyStartupTestDeferredNextMs == 0) {
+            ntfyStartupTestDeferredNextMs = now + 60000UL;
+        }
         return;
     }
 
@@ -4046,35 +4597,13 @@ static void ntfyStartupTestIfEnabled()
 
     Serial_println(F("[NTFY][test] startup test queued"));
 
-    if (ntfyNextAllowedMs != 0 && millis() < ntfyNextAllowedMs) {
-        Serial_printf(F("[NTFY][test] startup test deferred due to NTFY-backoff (%lu ms left)\n"),
-                      (unsigned long)(ntfyNextAllowedMs - millis()));
-    }
-
-    if (isNetMutexBusy()) {
-        Serial_println(F("[NTFY][test] waiting for network slot (mutex busy)"));
-    }
-
     const char *tag = "☑️♻️";
-    bool sent = sendNotification(title, body, tag);
-    if (sent) {
-        Serial_println(F("[NTFY][test] startup test sent ok"));
-    } else if (ntfyLastSendAttemptWas429 &&
-               !ntfyStartupTestDeferredPending &&
-               !ntfyStartupTestDeferredRetryAttempted) {
-        ntfyStartupTestDeferredPending = true;
-        ntfyStartupTestDeferredRetryAttempted = false;
-        ntfyStartupTestDeferredNextMs = ntfyNextAllowedMs;
-        if (ntfyStartupTestDeferredNextMs == 0) {
-            ntfyStartupTestDeferredNextMs = millis() + 60000UL;  // fallback
-        }
-        const unsigned long msLeft = (ntfyStartupTestDeferredNextMs > millis())
-            ? (ntfyStartupTestDeferredNextMs - millis())
-            : 0UL;
-        Serial_printf(F("[NTFY][test] startup test got 429 rate_limited -> deferred retry in %lu ms\n"),
-                      (unsigned long)msLeft);
+    const bool accepted = enqueueNtfyPending(title, body, tag, NTFY_PRIO_LOW);
+    if (accepted) {
+        ntfyStartupTestSent = true;
+        Serial_println(F("[NTFY][test] startup test accepted"));
     } else {
-        Serial_println(F("[NTFY][test] startup test sent failed"));
+        Serial_println(F("[NTFY][test] startup test enqueue failed"));
     }
 #else
     (void)0;
@@ -4086,11 +4615,22 @@ static void ntfyWsLiveHealthPingIfDue()
 {
 #if CRYPTO_ALERT_NTFY_STARTUP_TEST
 #if WS_ENABLED && WS_LIB_AVAILABLE
+    static bool s_logged = false;
+    if (!s_logged) {
+        Serial_println(F("[NTFY] diag/startup disabled for stability"));
+        s_logged = true;
+    }
+    return;
+
     if (!wsHasSeenFirstLiveMessage || wsLiveNtfyTestSent) return;
     if (wsLiveSinceMs == 0) return;
     if (WiFi.status() != WL_CONNECTED) return;
 
     const unsigned long now = millis();
+    if (ntfyBackoffActive(now)) {
+        Serial_println(F("[NTFY] backoff active, skip diag"));
+        return;
+    }
     if ((now - wsLiveSinceMs) < WS_LIVE_NTFY_HEALTH_PING_DELAY_MS) return;
 
     wsLiveNtfyTestSent = true; // 1x per boot
@@ -4098,11 +4638,11 @@ static void ntfyWsLiveHealthPingIfDue()
     Serial.println(F("[NTFY][ws-live] health ping queued"));
     const char* tag = "☑️";
     const char* text = "WS live health ping";
-    bool sent = sendNotification(text, text, tag);
-    if (sent) {
-        Serial.println(F("[NTFY][ws-live] health ping sent ok"));
+    const bool accepted = enqueueNtfyPending(text, text, tag, NTFY_PRIO_LOW);
+    if (accepted) {
+        Serial.println(F("[NTFY][ws-live] health ping accepted"));
     } else {
-        Serial.println(F("[NTFY][ws-live] health ping sent failed"));
+        Serial.println(F("[NTFY][ws-live] health ping enqueue failed"));
     }
 #else
     (void)0;
@@ -4115,6 +4655,13 @@ static void ntfyWsLiveHealthPingIfDue()
 static void ntfyPeriodicTestIfEnabled()
 {
 #if CRYPTO_ALERT_NTFY_PERIODIC_TEST
+    static bool s_logged = false;
+    if (!s_logged) {
+        Serial_println(F("[NTFY] diag/startup disabled for stability"));
+        s_logged = true;
+    }
+    return;
+
     if (WiFi.status() != WL_CONNECTED) return;
 
     const unsigned long now = millis();
@@ -4126,10 +4673,8 @@ static void ntfyPeriodicTestIfEnabled()
 
     Serial_println(F("[NTFY][test] periodic test due"));
 
-    // Als NTFY backoff actief is: uitstellen en expliciet loggen.
-    if (ntfyNextAllowedMs != 0 && now < ntfyNextAllowedMs) {
-        Serial_printf(F("[NTFY][test] periodic test deferred due to NTFY-backoff (%lu ms left)\n"),
-                      (unsigned long)(ntfyNextAllowedMs - now));
+    if (ntfyBackoffActive(now)) {
+        Serial_println(F("[NTFY] backoff active, skip diag"));
         ntfyPeriodicTestNextMs = ntfyNextAllowedMs;
         return;
     }
@@ -4140,27 +4685,12 @@ static void ntfyPeriodicTestIfEnabled()
     char text[96];
     snprintf(text, sizeof(text), "[%s] Controle NTFY", hhmmss);
 
-    if (isNetMutexBusy()) {
-        Serial_println(F("[NTFY][test] waiting for network slot (mutex busy)"));
-    }
-
     const char *tag = "☑️";
-    bool sent = false;
-#if CRYPTO_ALERT_NTFY_FULL_WS_DISCONNECT_DURING_SEND
-    (void)ntfyDisconnectWsBeforeNtfySendIfNeeded();
-    Serial_println(F("[NTFY] sending NTFY while WS fully disconnected"));
-    sent = sendNotification(text, text, tag);
-    ntfyRestoreWsAfterNtfySend();
-#else
-    (void)ntfyPauseWsBeforeNtfySendIfNeeded();
-    Serial_println(F("[NTFY] sending NTFY while WS paused"));
-    sent = sendNotification(text, text, tag);
-    ntfyRestoreWsAfterNtfySendPausedStrategy();
-#endif
-    if (sent) {
-        Serial_println(F("[NTFY][test] periodic test sent ok"));
+    const bool accepted = enqueueNtfyPending(text, text, tag, NTFY_PRIO_LOW);
+    if (accepted) {
+        Serial_println(F("[NTFY][test] periodic test accepted"));
     } else {
-        Serial_println(F("[NTFY][test] periodic test sent failed"));
+        Serial_println(F("[NTFY][test] periodic test enqueue failed"));
     }
 
     unsigned long desiredNext = now + CRYPTO_ALERT_NTFY_PERIODIC_TEST_MS;
@@ -4177,6 +4707,15 @@ static void ntfyPeriodicTestIfEnabled()
 static void ntfyDeferredStartupTestIfPending()
 {
 #if CRYPTO_ALERT_NTFY_STARTUP_TEST
+    static bool s_logged = false;
+    if (!s_logged) {
+        Serial_println(F("[NTFY] diag/startup disabled for stability"));
+        s_logged = true;
+    }
+    ntfyStartupTestDeferredPending = false;
+    ntfyStartupTestDeferredRetryAttempted = true;
+    return;
+
     if (!ntfyStartupTestDeferredPending) return;
     if (ntfyStartupTestDeferredRetryAttempted) return;
     const unsigned long now = millis();
@@ -4185,6 +4724,11 @@ static void ntfyDeferredStartupTestIfPending()
     unsigned long dueMs = ntfyStartupTestDeferredNextMs;
     if (ntfyNextAllowedMs != 0 && ntfyNextAllowedMs > dueMs) dueMs = ntfyNextAllowedMs;
     if (now < dueMs) return;
+    if (ntfyBackoffActive(now)) {
+        Serial_println(F("[NTFY] backoff active, skip startup test"));
+        ntfyStartupTestDeferredNextMs = ntfyNextAllowedMs;
+        return;
+    }
 
     Serial_println(F("[NTFY][test] deferred startup retry due"));
 
@@ -4197,24 +4741,14 @@ static void ntfyDeferredStartupTestIfPending()
     snprintf(body, sizeof(body), "[%s] Setup compleet", hhmmss);
 
     const char *tag = "☑️♻️";
-    bool sent = sendNotification(title, body, tag);
-
-    if (sent) {
-        ntfyStartupTestDeferredRetryAttempted = true;
-        ntfyStartupTestDeferredPending = false;
-        Serial_println(F("[NTFY][test] deferred startup test sent ok"));
-    } else if (ntfyLastSendAttemptWas429) {
-        ntfyStartupTestDeferredRetryAttempted = true;
-        ntfyStartupTestDeferredPending = false;
-        Serial_println(F("[NTFY][test] deferred startup retry got 429 rate_limited -> giving up"));
-    } else if (ntfyLastSendAttemptWasRateLimitedByBackoff) {
-        // Backoff is alsnog verlengd tussen due-check en echte send; consumeer de deferred retry niet.
-        ntfyStartupTestDeferredNextMs = ntfyNextAllowedMs;
-        return;
+    const bool accepted = enqueueNtfyPending(title, body, tag, NTFY_PRIO_LOW);
+    ntfyStartupTestDeferredRetryAttempted = true;
+    ntfyStartupTestDeferredPending = false;
+    if (accepted) {
+        ntfyStartupTestSent = true;
+        Serial_println(F("[NTFY][test] deferred startup test accepted"));
     } else {
-        ntfyStartupTestDeferredRetryAttempted = true;
-        ntfyStartupTestDeferredPending = false;
-        Serial_println(F("[NTFY][test] deferred startup test retry failed"));
+        Serial_println(F("[NTFY][test] deferred startup test enqueue failed"));
     }
 #else
     (void)0;
@@ -7659,14 +8193,6 @@ static void updateLatestKlineMetricsIfNeeded()
     if (candlesNextAllowedMs != 0 && now < candlesNextAllowedMs) {
         return;
     }
-    if (lastNtfyWsRestoreMs != 0 && (now - lastNtfyWsRestoreMs) < NTFY_WS_RESTORE_GRACE_CANDLES_MS) {
-        static unsigned long lastNtfyCandlesSkipLogMs = 0;
-        if (now - lastNtfyCandlesSkipLogMs >= 5000UL) {
-            lastNtfyCandlesSkipLogMs = now;
-            Serial.println(F("[Candles][NTFY restore grace] Skip REST"));
-        }
-        return;
-    }
     if (lastCandleRestFailMs != 0 && (now - lastCandleRestFailMs) < CANDLE_REST_CONNECT_BACKOFF_MS) {
         static unsigned long lastCandleRestBackoffLogMs = 0;
         if (now - lastCandleRestBackoffLogMs >= 5000UL) {
@@ -7820,15 +8346,6 @@ void fetchPrice()
     unsigned long fetchTime = 0;
     if (!usedWs) {
     // Fase 4.1.7: Gebruik hoog-niveau fetchBitvavoPrice() method
-        if (lastNtfyWsRestoreMs != 0 && (millis() - lastNtfyWsRestoreMs) < NTFY_WS_RESTORE_GRACE_PRICE_MS) {
-            static unsigned long lastNtfyPriceSkipLogMs = 0;
-            const unsigned long nowMs = millis();
-            if (nowMs - lastNtfyPriceSkipLogMs >= 5000UL) {
-                lastNtfyPriceSkipLogMs = nowMs;
-                Serial.println(F("[Price][NTFY restore grace] Skip REST"));
-            }
-            return;
-        }
         httpSuccess = apiClient.fetchBitvavoPrice(bitvavoSymbol, fetched);
         fetchTime = millis() - fetchStart;
     } else {
@@ -8829,6 +9346,12 @@ static void setupMutex()
     if (s_notifLogMutex == NULL) {
         Serial.println(F("[Notify] Log mutex niet aangemaakt; notification log append uit."));
     }
+
+    // NTFY pending queue mutex (noodpatch)
+    s_ntfyQMutex = xSemaphoreCreateMutex();
+    if (s_ntfyQMutex == NULL) {
+        Serial.println(F("[NTFY] Pending queue mutex niet aangemaakt; pending queue uit."));
+    }
 }
 
 // Alloceer ringbuffer-arrays (alle platforms): met PSRAM in SPIRAM, zonder PSRAM in INTERNAL heap
@@ -9489,52 +10012,69 @@ void apiTask(void *parameter)
         
         // Controleer WiFi status voordat we een request doet
         if (WiFi.status() == WL_CONNECTED) {
-            // Voer 1 API call uit
-            fetchPrice();
+            if (g_netExclusiveNtfyMode != NET_MODE_NORMAL) {
+                apiTaskNtfyExclusiveStateMachine();
+            } else {
+                if (ntfyHasFlushablePendingForExclusive()) {
+                    Serial_println(F("[NTFY][EXCL] enter"));
+                    if (ntfyExclusiveShouldSkipWsStopPhase()) {
+                        g_netExclusiveNtfyMode = NET_MODE_NTFY_EXCLUSIVE_SENDING;
+                        s_netExclusiveDeadlineMs = millis() + NTFY_EXCL_SEND_MS;
+                        s_ntfyExclusiveSendDoneThisCycle = false;
+                    } else {
+                        g_netExclusiveNtfyMode = NET_MODE_NTFY_EXCLUSIVE_STOPPING_WS;
+                        s_netExclusiveDeadlineMs = millis() + NTFY_EXCL_WS_STOP_MS;
+                        wsStopForNtfyExclusive();
+                    }
+                } else {
+                    // Voer 1 API call uit (alleen buiten NTFY-exclusive slot)
+                    fetchPrice();
 
-            // WS init pas na eerste succesvolle API-prijs (en warm-start klaar), en na boot-net gate (na MQTT-fase).
-            if (!wsInitAttempted && lastApiMs > 0) {
-                if (s_bootNetWsGateUntilMs != 0 && millis() < s_bootNetWsGateUntilMs) {
-                    static bool s_bootNetWsHoldLogged = false;
-                    if (!s_bootNetWsHoldLogged) {
-                        Serial.printf(
-                            F("[BootNet] WS delayed start (wait ~%lu ms)\n"),
-                            (unsigned long)(s_bootNetWsGateUntilMs - millis()));
-                        s_bootNetWsHoldLogged = true;
+                    // WS init pas na eerste succesvolle API-prijs (en warm-start klaar), en na boot-net gate (na MQTT-fase).
+                    if (!wsInitAttempted && lastApiMs > 0) {
+                        if (s_bootNetWsGateUntilMs != 0 && millis() < s_bootNetWsGateUntilMs) {
+                            static bool s_bootNetWsHoldLogged = false;
+                            if (!s_bootNetWsHoldLogged) {
+                                Serial.printf(
+                                    F("[BootNet] WS delayed start (wait ~%lu ms)\n"),
+                                    (unsigned long)(s_bootNetWsGateUntilMs - millis()));
+                                s_bootNetWsHoldLogged = true;
+                            }
+                        } else {
+                            if (s_bootNetWsGateUntilMs != 0) {
+                                Serial.println(F("[BootNet] WS start now"));
+                                s_bootNetWsGateUntilMs = 0;
+                            }
+                            maybeInitWebSocketAfterWarmStart();
+                            wsInitAttempted = true;
+                        }
                     }
-                } else {
-                    if (s_bootNetWsGateUntilMs != 0) {
-                        Serial.println(F("[BootNet] WS start now"));
-                        s_bootNetWsGateUntilMs = 0;
+                    updateLatestKlineMetricsIfNeeded();
+
+                    // C1: Verwerk pending anchor setting (network-safe: gebeurt in apiTask waar HTTPS calls al zijn)
+                    if (pendingAnchorSetting.pending) {
+                        // Thread-safe: kopieer waarde lokaal om race conditions te voorkomen
+                        float anchorValueToSet = pendingAnchorSetting.value;
+                        bool useCurrentPrice = pendingAnchorSetting.useCurrentPrice;
+                        // Reset flag direct om dubbele verwerking te voorkomen
+                        pendingAnchorSetting.pending = false;
+
+                        // Bepaal waarde: gebruik zojuist opgehaalde prijs als useCurrentPrice, anders opgegeven waarde
+                        float valueToSet = useCurrentPrice ? 0.0f : anchorValueToSet;
+
+                        // C1: Gebruik AnchorSystem module om anchor in te stellen (skipNotifications=false om notificatie te versturen)
+                        // Notificatie wordt BUITEN mutex verstuurd, dus geen blocking probleem
+                        if (anchorSystem.setAnchorPrice(valueToSet, false, false)) {
+                            // C1: Persist settings na succesvolle anchor set
+                            saveSettings();
+                            Serial_printf(F("[API Task] Anchor updated via pending request: %.2f\n"),
+                                         useCurrentPrice ? prices[0] : anchorValueToSet);
+                        } else {
+                            #if !DEBUG_BUTTON_ONLY
+                            Serial_println(F("[API Task] WARN: Kon anchor niet instellen (pending request) - mutex timeout of geen prijs beschikbaar"));
+                            #endif
+                        }
                     }
-                    maybeInitWebSocketAfterWarmStart();
-                    wsInitAttempted = true;
-                }
-            }
-            updateLatestKlineMetricsIfNeeded();
-            
-            // C1: Verwerk pending anchor setting (network-safe: gebeurt in apiTask waar HTTPS calls al zijn)
-            if (pendingAnchorSetting.pending) {
-                // Thread-safe: kopieer waarde lokaal om race conditions te voorkomen
-                float anchorValueToSet = pendingAnchorSetting.value;
-                bool useCurrentPrice = pendingAnchorSetting.useCurrentPrice;
-                // Reset flag direct om dubbele verwerking te voorkomen
-                pendingAnchorSetting.pending = false;
-                
-                // Bepaal waarde: gebruik zojuist opgehaalde prijs als useCurrentPrice, anders opgegeven waarde
-                float valueToSet = useCurrentPrice ? 0.0f : anchorValueToSet;
-                
-                // C1: Gebruik AnchorSystem module om anchor in te stellen (skipNotifications=false om notificatie te versturen)
-                // Notificatie wordt BUITEN mutex verstuurd, dus geen blocking probleem
-                if (anchorSystem.setAnchorPrice(valueToSet, false, false)) {
-                    // C1: Persist settings na succesvolle anchor set
-                    saveSettings();
-                    Serial_printf(F("[API Task] Anchor updated via pending request: %.2f\n"), 
-                                 useCurrentPrice ? prices[0] : anchorValueToSet);
-                } else {
-                    #if !DEBUG_BUTTON_ONLY
-                    Serial_println(F("[API Task] WARN: Kon anchor niet instellen (pending request) - mutex timeout of geen prijs beschikbaar"));
-                    #endif
                 }
             }
         } else {
@@ -9593,7 +10133,7 @@ void priceRepeatTask(void *parameter)
             }
             safeMutexGive(dataMutex, "priceRepeatTask");
         }
-        
+
         vTaskDelay(pdMS_TO_TICKS(PRICE_SAMPLE_INTERVAL_MS));
     }
 }
@@ -9718,71 +10258,74 @@ void loop()
     // Geef tijd aan andere tasks
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    // Afhandeling: uitgestelde startup NTFY retry (optioneel, max 1 extra poging)
-    ntfyDeferredStartupTestIfPending();
+    // Tijdens NTFY exclusive: geen uitgaande MQTT/diag/WS uit loop() — apiTask regisseert WS-pump daar.
+    if (g_netExclusiveNtfyMode == NET_MODE_NORMAL) {
+        // Afhandeling: uitgestelde startup NTFY retry (optioneel, max 1 extra poging)
+        ntfyDeferredStartupTestIfPending();
 
-    // NTFY periodieke test onder netwerkbelasting (optioneel)
-    ntfyPeriodicTestIfEnabled();
+        // NTFY periodieke test onder netwerkbelasting (optioneel)
+        ntfyPeriodicTestIfEnabled();
 
-    // NTFY extra health ping nadat WS echt live werd (eenmalig per boot)
-    ntfyWsLiveHealthPingIfDue();
-    
-    // Deferred MQTT reconnect (thread-safe)
-    applyPendingMqttReconnect();
+        // NTFY extra health ping nadat WS echt live werd (eenmalig per boot)
+        ntfyWsLiveHealthPingIfDue();
 
-    // Deferred IP publish (thread-safe, avoids arduino_events stack use)
-    if (pendingIpPublish && mqttConnected) {
-        char topicBuffer[128];
-        char mqttPrefixTemp[64];
-        getMqttTopicPrefix(mqttPrefixTemp, sizeof(mqttPrefixTemp));
-        snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/ip_address", mqttPrefixTemp);
-        mqttClient.publish(topicBuffer, pendingIpBuffer, false);
-        pendingIpPublish = false;
-    }
-    
-    // MQTT loop (moet regelmatig worden aangeroepen)
-    if (mqttConnected) {
-        if (!mqttClient.loop()) {
-            // Verbinding verloren, probeer reconnect met backoff
-            mqttConnected = false;
-            lastMqttReconnectAttempt = millis(); // voorkom immediate reconnect storm
-            // mqttReconnectAttemptCount wordt NIET gereset, zodat exponential backoff blijft werken
-        } else {
-            // Process queued messages when connected
-            processMqttQueue();
+        // Deferred MQTT reconnect (thread-safe)
+        applyPendingMqttReconnect();
+
+        // Deferred IP publish (thread-safe, avoids arduino_events stack use)
+        if (pendingIpPublish && mqttConnected) {
+            char topicBuffer[128];
+            char mqttPrefixTemp[64];
+            getMqttTopicPrefix(mqttPrefixTemp, sizeof(mqttPrefixTemp));
+            snprintf(topicBuffer, sizeof(topicBuffer), "%s/values/ip_address", mqttPrefixTemp);
+            mqttClient.publish(topicBuffer, pendingIpBuffer, false);
+            pendingIpPublish = false;
         }
-    } else if (WiFi.status() == WL_CONNECTED) {
-        unsigned long now = millis();
-        // Boot: MQTT-connect nog niet — wacht tot gate voorbij is (geen reconnect-teller verhogen).
-        if (s_bootNetMqttGateUntilMs != 0 && now < s_bootNetMqttGateUntilMs) {
-            static bool s_bootNetMqttHoldLogged = false;
-            if (!s_bootNetMqttHoldLogged) {
-                Serial.printf(
-                    F("[BootNet] MQTT delayed start (wait ~%lu ms)\n"),
-                    (unsigned long)(s_bootNetMqttGateUntilMs - now));
-                s_bootNetMqttHoldLogged = true;
-            }
-        } else {
-            // Probeer MQTT reconnect als WiFi verbonden is (met exponential backoff)
-            // Bereken reconnect interval met exponential backoff
-            unsigned long reconnectInterval = MQTT_RECONNECT_INTERVAL;
-            if (mqttReconnectAttemptCount >= MAX_MQTT_RECONNECT_ATTEMPTS) {
-                // Exponential backoff: interval verdubbelt bij elke mislukte poging
-                // Max backoff: 8x het basis interval (3 extra pogingen = 2^3 = 8x)
-                uint8_t backoffMultiplier = 1 << min((mqttReconnectAttemptCount - MAX_MQTT_RECONNECT_ATTEMPTS), 3);
-                reconnectInterval = MQTT_RECONNECT_INTERVAL * backoffMultiplier;
-            }
 
-            if (lastMqttReconnectAttempt == 0 || (now - lastMqttReconnectAttempt >= reconnectInterval)) {
-                lastMqttReconnectAttempt = now;
-                mqttReconnectAttemptCount++;
-                connectMQTT();
+        // MQTT loop (moet regelmatig worden aangeroepen)
+        if (mqttConnected) {
+            if (!mqttClient.loop()) {
+                // Verbinding verloren, probeer reconnect met backoff
+                mqttConnected = false;
+                lastMqttReconnectAttempt = millis(); // voorkom immediate reconnect storm
+                // mqttReconnectAttemptCount wordt NIET gereset, zodat exponential backoff blijft werken
+            } else {
+                // Process queued messages when connected
+                processMqttQueue();
+            }
+        } else if (WiFi.status() == WL_CONNECTED) {
+            unsigned long now = millis();
+            // Boot: MQTT-connect nog niet — wacht tot gate voorbij is (geen reconnect-teller verhogen).
+            if (s_bootNetMqttGateUntilMs != 0 && now < s_bootNetMqttGateUntilMs) {
+                static bool s_bootNetMqttHoldLogged = false;
+                if (!s_bootNetMqttHoldLogged) {
+                    Serial.printf(
+                        F("[BootNet] MQTT delayed start (wait ~%lu ms)\n"),
+                        (unsigned long)(s_bootNetMqttGateUntilMs - now));
+                    s_bootNetMqttHoldLogged = true;
+                }
+            } else {
+                // Probeer MQTT reconnect als WiFi verbonden is (met exponential backoff)
+                // Bereken reconnect interval met exponential backoff
+                unsigned long reconnectInterval = MQTT_RECONNECT_INTERVAL;
+                if (mqttReconnectAttemptCount >= MAX_MQTT_RECONNECT_ATTEMPTS) {
+                    // Exponential backoff: interval verdubbelt bij elke mislukte poging
+                    // Max backoff: 8x het basis interval (3 extra pogingen = 2^3 = 8x)
+                    uint8_t backoffMultiplier = 1 << min((mqttReconnectAttemptCount - MAX_MQTT_RECONNECT_ATTEMPTS), 3);
+                    reconnectInterval = MQTT_RECONNECT_INTERVAL * backoffMultiplier;
+                }
+
+                if (lastMqttReconnectAttempt == 0 || (now - lastMqttReconnectAttempt >= reconnectInterval)) {
+                    lastMqttReconnectAttempt = now;
+                    mqttReconnectAttemptCount++;
+                    connectMQTT();
+                }
             }
         }
     }
 
 #if WS_ENABLED && WS_LIB_AVAILABLE
-    if (wsInitialized && wsClientPtr != nullptr) {
+    if (g_netExclusiveNtfyMode == NET_MODE_NORMAL && wsInitialized && wsClientPtr != nullptr) {
         if (WiFi.status() == WL_CONNECTED) {
             // Regie: tijdens (re)connect nemen we de netwerkmutex zodat NTFY/MQTT/API niet tegelijk connect zware acties doen.
             static unsigned long wsReconnectLastPollMs = 0;
