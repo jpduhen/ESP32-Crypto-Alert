@@ -13,14 +13,21 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 5
-#define VERSION_MINOR 95
-#define VERSION_STRING "5.95"
+#define VERSION_MINOR 96
+#define VERSION_STRING "5.96"
 #endif
 
 // --- Debug Configuration ---
 // Zet op 1 om alleen knop-acties te loggen, 0 voor alle logging
 #ifndef DEBUG_BUTTON_ONLY
 #define DEBUG_BUTTON_ONLY 0
+#endif
+
+// --- NTFY runtime-diagnostiek (Fase 1 tracker) ---
+// Master-vlag: alleen op 1 zetten voor handmatige test (startup/periodic/deferred/WS-health); productie-alertdelivery blijft via queue/exclusive.
+// Sub-vlaggen staan in ESP32-Crypto-Alert.ino (CRYPTO_ALERT_NTFY_STARTUP_TEST / PERIODIC_TEST).
+#ifndef CRYPTO_ALERT_NTFY_DIAGNOSTICS_RUNTIME
+#define CRYPTO_ALERT_NTFY_DIAGNOSTICS_RUNTIME 0
 #endif
 
 // --- WebSocket Configuration ---
