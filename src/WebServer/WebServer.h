@@ -24,9 +24,12 @@ public:
     
     // Fase 9.1.3: HTML generatie
     void renderSettingsHTML();
+    /// Read-only configuratieweergave (zelfde sectie-/veldvolgorde als renderSettingsHTML).
+    void renderConfigReadOnlyHTML();
     
     // Fase 9.1.4: Web handlers
     void handleRoot();
+    void handleConfigView();
     void handleSave();
     void handleNotFound();
     void handleAnchorSet();

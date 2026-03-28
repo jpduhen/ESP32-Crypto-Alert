@@ -57,6 +57,10 @@ extern PubSubClient mqttClient;
 extern unsigned long lastMqttReconnectAttempt;
 extern uint8_t mqttReconnectAttemptCount;
 extern uint32_t lastApiMs;
+extern bool wsConnected;
+extern float latestKnownPrice;
+extern unsigned long latestKnownPriceMs;
+extern uint8_t latestKnownPriceSource;
 
 // Settings variabelen
 // Note: spike1mThreshold, spike5mThreshold, etc. zijn macro's (gedefinieerd hieronder)
@@ -207,6 +211,103 @@ extern TwoHMetrics computeTwoHMetrics();
 #include "../VolatilityTracker/VolatilityTracker.h"
 #include "../AnchorSystem/AnchorSystem.h"
 
+// HTML-escape voor read-only tekstwaarden (MQTT, symbolen, …)
+static void webHtmlEscapeText(const char* src, char* dest, size_t destCap) {
+    if (destCap == 0) {
+        return;
+    }
+    dest[0] = '\0';
+    if (src == nullptr) {
+        return;
+    }
+    size_t w = 0;
+    for (; *src != '\0' && w + 7 < destCap; ++src) {
+        switch (*src) {
+            case '&':
+                memcpy(dest + w, "&amp;", 5);
+                w += 5;
+                break;
+            case '<':
+                memcpy(dest + w, "&lt;", 4);
+                w += 4;
+                break;
+            case '>':
+                memcpy(dest + w, "&gt;", 4);
+                w += 4;
+                break;
+            case '"':
+                memcpy(dest + w, "&quot;", 6);
+                w += 6;
+                break;
+            default:
+                dest[w++] = *src;
+                break;
+        }
+    }
+    dest[w] = '\0';
+}
+
+static void sendWebUiStylesheet(WebServer* srv) {
+    if (srv == nullptr) {
+        return;
+    }
+    static const char kWebUiCssBlock[] PROGMEM =
+        "<style>"
+        "*{box-sizing:border-box;}"
+        "body{font-family:Arial;margin:0;padding:10px;background:#1a1a1a;color:#fff;}"
+        ".container{max-width:600px;margin:0 auto;padding:0 10px;}"
+        "h1{color:#00BCD4;margin:15px 0;font-size:24px;}"
+        "form{max-width:100%;}"
+        "label{display:block;margin:15px 0 5px;color:#ccc;}"
+        "input[type=number],input[type=text],select{width:100%;padding:8px;border:1px solid #444;background:#2a2a2a;color:#fff;border-radius:4px;box-sizing:border-box;}"
+        "button{background:#00BCD4;color:#fff;padding:12px 24px;border:none;border-radius:4px;cursor:pointer;font-size:16px;margin-top:20px;width:100%;}"
+        "button:hover{background:#00acc1;}"
+        ".info{color:#888;font-size:12px;margin-top:5px;}"
+        ".status-box{background:#2a2a2a;border:1px solid #444;border-radius:4px;padding:15px;margin:20px 0;max-width:100%;}"
+        ".status-row{display:flex;justify-content:space-between;margin:8px 0;padding:8px 0;border-bottom:1px solid #333;flex-wrap:wrap;}"
+        ".status-label{color:#888;flex:1;min-width:120px;}"
+        ".status-value{color:#fff;font-weight:bold;text-align:right;flex:1;min-width:100px;}"
+        ".section-header{background:#2a2a2a;border:1px solid #444;border-radius:4px;padding:12px;margin:15px 0 0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;}"
+        ".section-header:hover{background:#333;}"
+        ".section-header h3{margin:0;color:#00BCD4;font-size:16px;}"
+        ".section-content{display:none;padding:15px;background:#1a1a1a;border:1px solid #444;border-top:none;border-radius:0 0 4px 4px;}"
+        ".section-content.active{display:block;}"
+        ".section-desc{color:#888;font-size:12px;margin-top:5px;margin-bottom:15px;}"
+        ".toggle-icon{color:#00BCD4;font-size:18px;flex-shrink:0;margin-left:10px;}"
+        ".runtime-context{background:#1a2a2a;border:2px solid #00BCD4;border-radius:4px;padding:12px;margin:15px 0;}"
+        ".runtime-context h2{margin:0 0 10px;color:#00BCD4;font-size:16px;}"
+        "@media (max-width:600px){"
+        "body{padding:5px;}"
+        ".container{padding:0 5px;}"
+        "h1{font-size:20px;margin:10px 0;}"
+        ".status-box{padding:10px;margin:15px 0;}"
+        ".status-row{flex-direction:column;padding:6px 0;}"
+        ".status-label{min-width:auto;margin-bottom:3px;}"
+        ".status-value{text-align:left;min-width:auto;}"
+        ".section-header{padding:10px;}"
+        ".section-header h3{font-size:14px;}"
+        ".section-content{padding:10px;}"
+        "button{padding:10px 20px;font-size:14px;}"
+        "label{font-size:14px;}"
+        "input[type=number],input[type=text],select{font-size:14px;padding:6px;}"
+        "}"
+        "</style>";
+    srv->sendContent_P(kWebUiCssBlock);
+}
+
+static void sendRoEscaped(WebServer* srv, const char* label, const char* raw) {
+    if (srv == nullptr) {
+        return;
+    }
+    char esc[160];
+    webHtmlEscapeText(raw, esc, sizeof(esc));
+    char line[400];
+    snprintf(line, sizeof(line),
+             "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value'>%s</span></div>",
+             label, esc);
+    srv->sendContent(line);
+}
+
 // WebServerModule implementation
 // Fase 9: Web Interface Module refactoring
 
@@ -248,6 +349,8 @@ void WebServerModule::setupWebServer() {
     // Read-only notification log page
     server->on("/notifications", HTTP_GET, [this]() { this->handleNotifications(); });
     Serial.println(F("[WebServer] Route '/notifications' geregistreerd"));
+    server->on("/config", HTTP_GET, [this]() { this->handleConfigView(); });
+    Serial.println(F("[WebServer] Route '/config' geregistreerd (read-only)"));
 #if OTA_ENABLED
     // Web-based OTA firmware update (chunked upload) - extracted to module
     otaWebUpdater.begin(server);
@@ -1044,6 +1147,616 @@ void WebServerModule::renderSettingsHTML() {
     sendHtmlFooter();
 }
 
+void WebServerModule::handleConfigView() {
+    if (server == nullptr) {
+        return;
+    }
+    logHeap("WEB_CONFIG");
+    renderConfigReadOnlyHTML();
+}
+
+void WebServerModule::renderConfigReadOnlyHTML() {
+    if (server == nullptr) {
+        return;
+    }
+    if (!isClientConnected(server)) {
+        Serial_println(F("[WEB] WARN: client disconnected, skip config view"));
+        return;
+    }
+
+    float currentPrice = 0.0f;
+    TrendState currentTrend = TREND_SIDEWAYS;
+    TrendState trendMediumSnap = TREND_SIDEWAYS;
+    TrendState trendLongSnap = TREND_SIDEWAYS;
+    VolatilityState currentVol = VOLATILITY_MEDIUM;
+    bool currentAnchorActive = false;
+    float currentAnchorPrice = 0.0f;
+    float currentAnchorPct = 0.0f;
+    float lkPrice = 0.0f;
+    unsigned long lkMs = 0;
+    uint8_t lkSrc = 0;
+    TwoHMetrics roMetrics;
+
+    if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "renderConfigReadOnly")) {
+        if (isValidPrice(prices[0])) {
+            currentPrice = prices[0];
+        }
+        currentTrend = trendDetector.getTrendState();
+        trendMediumSnap = trendDetector.getMediumTrendState();
+        trendLongSnap = trendDetector.getLongTermTrendState();
+        currentVol = volatilityTracker.getVolatilityState();
+        currentAnchorActive = anchorActive;
+        if (anchorActive && isValidPrice(anchorPrice)) {
+            currentAnchorPrice = anchorPrice;
+            if (isValidPrice(prices[0]) && anchorPrice > 0.0f) {
+                currentAnchorPct = ((prices[0] - anchorPrice) / anchorPrice) * 100.0f;
+            }
+        }
+        lkPrice = latestKnownPrice;
+        lkMs = latestKnownPriceMs;
+        lkSrc = latestKnownPriceSource;
+        roMetrics = computeTwoHMetrics();
+        safeMutexGive(dataMutex, "renderConfigReadOnly");
+    }
+
+    const char* platformName = "";
+#if defined(PLATFORM_ESP32S3_SUPERMINI)
+    platformName = "ESP32-S3";
+#elif defined(PLATFORM_ESP32S3_GEEK)
+    platformName = "ESP32-S3 GEEK";
+#elif defined(PLATFORM_ESP32S3_LCDWIKI_28)
+    platformName = "LCDWIKI28";
+#elif defined(PLATFORM_ESP32S3_JC3248W535)
+    platformName = "JC3248W535";
+#elif defined(PLATFORM_ESP32S3_AMOLED_206)
+    platformName = "AMOLED206";
+#else
+    platformName = "Unknown";
+#endif
+
+    char tmpBuf[384];
+    char valueBuf[96];
+    char quoteCurrency[8] = "EUR";
+    const char* dash = strchr(bitvavoSymbol, '-');
+    if (dash != nullptr && *(dash + 1) != '\0') {
+        safeStrncpy(quoteCurrency, dash + 1, sizeof(quoteCurrency));
+    }
+
+    const unsigned long nowMs = millis();
+    uint32_t apiAgeMs = 0;
+    bool apiFresh = false;
+    if (lastApiMs > 0) {
+        apiAgeMs = (nowMs >= lastApiMs) ? (nowMs - lastApiMs) : (ULONG_MAX - lastApiMs + nowMs);
+        apiFresh = (apiAgeMs < 3000);
+    }
+    unsigned long lkAgeMs = 0;
+    if (lkMs > 0) {
+        lkAgeMs = (nowMs >= lkMs) ? (nowMs - lkMs) : (ULONG_MAX - lkMs + nowMs);
+    }
+    const char* lkSrcStr = "--";
+    if (lkSrc == 1) {
+        lkSrcStr = "REST";
+    } else if (lkSrc == 2) {
+        lkSrcStr = "WS";
+    } else if (lkSrc == 0) {
+        lkSrcStr = "NONE";
+    }
+
+    char ipStr[20] = "";
+    if (WiFi.status() == WL_CONNECTED) {
+        formatIPAddress(WiFi.localIP(), ipStr, sizeof(ipStr));
+    }
+    const RegimeSnapshot regimeSnap = regimeEngineGetSnapshot();
+    const char* regimeStr = regimeStatusJsonString(regimeEngineEnabled, regimeSnap.committedRegime);
+
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server->send(200, "text/html; charset=utf-8", "");
+    server->sendContent(F("<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"));
+    snprintf(tmpBuf, sizeof(tmpBuf), "<title>%s v%s</title>", getText("Config (alleen lezen)", "Config (read-only)"), VERSION_STRING);
+    server->sendContent(tmpBuf);
+    sendWebUiStylesheet(server);
+
+    server->sendContent(F("<script type='text/javascript'>"));
+    server->sendContent(F("(function(){function toggleSection(id){var c=document.getElementById('content-'+id);var ic=document.getElementById('icon-'+id);if(!c||!ic)return false;if(c.classList.contains('active')){c.classList.remove('active');ic.innerHTML='&#9654;';}else{c.classList.add('active');ic.innerHTML='&#9660;';}return false;}"));
+    server->sendContent(F("function refreshStatus(){fetch('/status').then(function(r){return r.json();}).then(function(d){"));
+    snprintf(tmpBuf, sizeof(tmpBuf), "var quote='%s';", quoteCurrency);
+    server->sendContent(tmpBuf);
+    server->sendContent(F("var el=document.getElementById('curPrice');if(el)el.textContent=d.price>0?d.price.toFixed(2)+' '+quote:'--';"));
+    server->sendContent(F("el=document.getElementById('trend2h');if(el)el.textContent=d.trend||'--';"));
+    server->sendContent(F("el=document.getElementById('trend1d');if(el)el.textContent=d.trendMedium||'--';"));
+    server->sendContent(F("el=document.getElementById('trend7d');if(el)el.textContent=d.trendLong||'--';"));
+    server->sendContent(F("el=document.getElementById('volatility');if(el)el.textContent=d.volatility||'--';"));
+    server->sendContent(F("el=document.getElementById('regimeStatus');if(el)el.textContent=(d.regime!==undefined&&d.regime!==null)?d.regime:'--';"));
+    server->sendContent(F("el=document.getElementById('volume');if(el)el.textContent=d.volume||'--';"));
+    server->sendContent(F("el=document.getElementById('ret1m');if(el)el.textContent=d.ret1m!=0?d.ret1m.toFixed(2)+'%':'--';"));
+    server->sendContent(F("el=document.getElementById('ret5m');if(el)el.textContent=d.ret5m!=0?d.ret5m.toFixed(2)+'%':'--';"));
+    server->sendContent(F("el=document.getElementById('ret30m');if(el)el.textContent=d.ret30m!=0?d.ret30m.toFixed(2)+'%':'--';"));
+    server->sendContent(F("el=document.getElementById('ret2h');if(el)el.textContent=d.ret2h!=0?d.ret2h.toFixed(2)+'%':'--';"));
+    server->sendContent(F("el=document.getElementById('ret1d');if(el)el.textContent=d.ret1d!=0?d.ret1d.toFixed(2)+'%':'--';"));
+    server->sendContent(F("el=document.getElementById('ret7d');if(el)el.textContent=d.ret7d!=0?d.ret7d.toFixed(2)+'%':'--';"));
+    server->sendContent(F("el=document.getElementById('anchor');if(el)el.textContent=d.anchor>0?d.anchor.toFixed(2)+' '+quote:'--';"));
+    server->sendContent(F("el=document.getElementById('anchorDelta');if(el)el.textContent=d.anchorDeltaPct!=0?d.anchorDeltaPct.toFixed(2)+'%':'--';"));
+    server->sendContent(F("el=document.getElementById('apiStateHeader');if(el){if(d.apiFresh){el.textContent='';}else{var age=(d.apiAgeMs?Math.round(d.apiAgeMs/1000):0);el.textContent='STALE '+age+'s';}}"));
+    server->sendContent(F("}).catch(function(e){var el=document.getElementById('apiStateHeader');if(el)el.textContent='NET?';});}"));
+    server->sendContent(F("window.addEventListener('DOMContentLoaded',function(){var headers=document.querySelectorAll('.section-header');for(var i=0;i<headers.length;i++){headers[i].addEventListener('click',function(e){var id=this.getAttribute('data-section');toggleSection(id);e.preventDefault();return false;});}refreshStatus();setInterval(refreshStatus,2000);});})();</script>"));
+
+    server->sendContent(F("</head><body><div class='container'>"));
+    server->sendContent(F("<div style='margin-bottom:10px;font-size:13px;'>"));
+    server->sendContent(F("<a href=\"/\" style='color:#00BCD4;text-decoration:none;'>"));
+    server->sendContent(getText("Instellingen bewerken", "Edit settings"));
+    server->sendContent(F("</a> &middot; <a href=\"/notifications\" style='color:#00BCD4;text-decoration:none;'>"));
+    server->sendContent(getText("Laatste notificaties", "Recent notifications"));
+    server->sendContent(F("</a> &middot; <a href=\"/settings.txt\" style='color:#00BCD4;text-decoration:none;'>"));
+    server->sendContent(getText("Instellingen kopiëren (tekst)", "Copy settings (text)"));
+    server->sendContent(F("</a>"));
+#if OTA_ENABLED
+    server->sendContent(F(" &middot; <a href=\"/update\" style='color:red;text-decoration:none;'>"));
+    server->sendContent(getText("Firmware-update (OTA)", "Firmware update (OTA)"));
+    server->sendContent(F("</a>"));
+#endif
+    server->sendContent(F("<span id='apiStateHeader' style='margin-left:10px;font-size:11px;color:#666;'></span></div>"));
+
+    snprintf(tmpBuf, sizeof(tmpBuf), "<h1>%s &mdash; %s %s</h1>", getText("Config (alleen lezen)", "Config (read-only)"), bitvavoSymbol, ntfyTopic);
+    server->sendContent(tmpBuf);
+
+    server->sendContent(F("<div class='runtime-context'><h2>"));
+    server->sendContent(getText("Runtime (alleen lezen)", "Runtime (read-only)"));
+    server->sendContent(F("</h2>"));
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
+             getText("Firmware", "Firmware"), VERSION_STRING);
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
+             getText("Platform", "Platform"), platformName);
+    server->sendContent(tmpBuf);
+    {
+        unsigned long upSec = nowMs / 1000UL;
+        unsigned upD = static_cast<unsigned>(upSec / 86400UL);
+        unsigned upH = static_cast<unsigned>((upSec % 86400UL) / 3600UL);
+        unsigned upM = static_cast<unsigned>((upSec % 3600UL) / 60UL);
+        unsigned upS = static_cast<unsigned>(upSec % 60UL);
+        snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%u d %02u:%02u:%02u</span></div>",
+                 getText("Uptime", "Uptime"), upD, upH, upM, upS);
+        server->sendContent(tmpBuf);
+    }
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
+             getText("WiFi", "WiFi"),
+             (WiFi.status() == WL_CONNECTED) ? getText("Verbonden", "Connected") : getText("Niet verbonden", "Disconnected"));
+    server->sendContent(tmpBuf);
+    if (WiFi.status() == WL_CONNECTED) {
+        snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
+                 getText("IP-adres", "IP address"), ipStr);
+        server->sendContent(tmpBuf);
+        snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>RSSI</span><span class='status-value'>%d dBm</span></div>",
+                 WiFi.RSSI());
+        server->sendContent(tmpBuf);
+    }
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
+             getText("WebSocket", "WebSocket"),
+             wsConnected ? getText("Verbonden", "Connected") : getText("Niet verbonden", "Disconnected"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
+             getText("Laatste REST/API cyclus (vers)", "Last REST/API cycle (fresh)"),
+             apiFresh ? getText("ja", "yes") : getText("nee (stale)", "no (stale)"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%lu ms</span></div>",
+             getText("Leeftijd laatste API-poll", "Last API poll age"), static_cast<unsigned long>(apiAgeMs));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
+             getText("Live prijsbron (latestKnown)", "Live price source (latestKnown)"), lkSrcStr);
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%.2f %s</span></div>",
+             getText("Live prijs (latestKnown)", "Live price (latestKnown)"), lkPrice, quoteCurrency);
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%lu ms</span></div>",
+             getText("Leeftijd live sample", "Live sample age"), static_cast<unsigned long>(lkAgeMs));
+    server->sendContent(tmpBuf);
+    {
+        char t2h[16];
+        char t1d[16];
+        char t7d[16];
+        formatTrendLabel(t2h, sizeof(t2h), "2h", currentTrend);
+        formatTrendLabel(t1d, sizeof(t1d), "1d", trendMediumSnap);
+        formatTrendLabel(t7d, sizeof(t7d), "7d", trendLongSnap);
+        snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s / %s / %s</span></div>",
+                 getText("Trend (2h/1d/7d snapshot)", "Trend (2h/1d/7d snapshot)"), t2h, t1d, t7d);
+        server->sendContent(tmpBuf);
+    }
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
+             getText("Volatiliteit (snapshot)", "Volatility (snapshot)"), getVolatilityText(currentVol));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
+             getText("Regime (snapshot)", "Regime (snapshot)"), regimeStr);
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%.2f / %.2f / %.2f</span></div>",
+             getText("2h avg / high / low", "2h avg / high / low"), roMetrics.avg2h, roMetrics.high2h, roMetrics.low2h);
+    server->sendContent(tmpBuf);
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f", roMetrics.rangePct);
+    sendStatusRow(getText("2h range %", "2h range %"), valueBuf);
+    if (isValidPrice(currentPrice)) {
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f %s", currentPrice, quoteCurrency);
+    } else {
+        safeStrncpy(valueBuf, "--", sizeof(valueBuf));
+    }
+    sendStatusRow(getText("Grafiekprijs prices[0] (snapshot)", "Chart price prices[0] (snapshot)"), valueBuf);
+    if (currentAnchorActive && isValidPrice(currentAnchorPrice)) {
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f%%", currentAnchorPct);
+    } else {
+        safeStrncpy(valueBuf, "--", sizeof(valueBuf));
+    }
+    sendStatusRow(getText("Anchor delta % (snapshot)", "Anchor delta % (snapshot)"), valueBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
+             getText("MQTT verbonden", "MQTT connected"),
+             mqttConnected ? getText("Ja", "Yes") : getText("Nee", "No"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%u</span></div>",
+             getText("Vrij heap (bytes)", "Free heap (bytes)"), static_cast<unsigned>(ESP.getFreeHeap()));
+    server->sendContent(tmpBuf);
+    server->sendContent(F("</div>"));
+
+    snprintf(valueBuf, sizeof(valueBuf), "%.2f",
+             (currentPrice > 0.0f) ? currentPrice : ((currentAnchorActive && currentAnchorPrice > 0.0f) ? currentAnchorPrice : 0.0f));
+    server->sendContent(F("<div style='background:#2a2a2a;border:1px solid #444;border-radius:4px;padding:15px;margin:15px 0;'>"));
+    snprintf(tmpBuf, sizeof(tmpBuf), "<p style='margin:0 0 8px;color:#888;font-size:12px;'>%s</p>",
+             getText("Referentiewaarde zoals op bewerkpagina (geen invoer)", "Reference value as on edit page (no input)"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s (%s)</span><span class='status-value'>%s</span></div>",
+             getText("Referentieprijs (Anchor)", "Reference price (Anchor)"), quoteCurrency, valueBuf);
+    server->sendContent(tmpBuf);
+    server->sendContent(F("</div>"));
+
+    server->sendContent(F("<div class='status-box'>"));
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='curPrice'>--</span></div>",
+             getText("Huidige Prijs", "Current Price"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='trend2h'>--</span></div>",
+             getText("Trend 2h", "Trend 2h"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='trend1d'>--</span></div>",
+             getText("Trend 1d", "Trend 1d"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='trend7d'>--</span></div>",
+             getText("Trend 7d", "Trend 7d"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='volatility'>--</span></div>",
+             getText("Volatiliteit", "Volatility"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='regimeStatus'>--</span></div>",
+             getText("Regime", "Regime"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='volume'>--</span></div>",
+             getText("Volume", "Volume"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='ret1m'>--</span></div>",
+             getText("1m Return", "1m Return"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='ret5m'>--</span></div>",
+             getText("5m Return", "5m Return"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='ret30m'>--</span></div>",
+             getText("30m Return", "30m Return"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='ret2h'>--</span></div>",
+             getText("2h Return", "2h Return"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='ret1d'>--</span></div>",
+             getText("1d Return", "1d Return"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='ret7d'>--</span></div>",
+             getText("7d Return", "7d Return"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='anchor'>--</span></div>",
+             getText("Anchor", "Anchor"));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value' id='anchorDelta'>--</span></div>",
+             getText("Anchor Delta", "Anchor Delta"));
+    server->sendContent(tmpBuf);
+    server->sendContent(F("</div>"));
+
+    // --- Configuratiesecties: zelfde volgorde en velden als renderSettingsHTML() ---
+    {
+        const char* strategyOptionsRo[] = {
+            getText("Handmatig", "Manual"),
+            getText("Conservatief (2h +1.8%, 2h -1.2%)", "Conservative (2h +1.8%, 2h -1.2%)"),
+            getText("Actief (2h +1.2%, 2h -0.9%)", "Active (2h +1.2%, 2h -0.9%)")
+        };
+        unsigned stratIdx = anchorStrategy;
+        if (stratIdx > 2) {
+            stratIdx = 2;
+        }
+        const char* anchorSourceOptionsRo[] = {"MANUAL", "AUTO", "AUTO_FALLBACK", "OFF"};
+        unsigned asrc = alert2HThresholds.anchorSourceMode;
+        if (asrc > 3) {
+            asrc = 3;
+        }
+
+        sendSectionHeader(getText("Basis & Connectiviteit", "Basic & Connectivity"), "basic", true);
+        sendSectionDesc(getText("Basisinstellingen voor symbol, notificaties en connectiviteit",
+                               "Basic settings for symbol, notifications and connectivity"));
+        sendRoEscaped(server, getText("NTFY Topic", "NTFY Topic"), ntfyTopic);
+        sendRoEscaped(server, getText("Bitvavo Market", "Bitvavo Market"), bitvavoSymbol);
+        snprintf(valueBuf, sizeof(valueBuf), "%u (%s)", static_cast<unsigned>(language),
+                 language == 0 ? getText("NL", "NL") : getText("EN", "EN"));
+        sendStatusRow(getText("Taal", "Language"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(displayRotation));
+        sendStatusRow(getText("Display Rotatie", "Display Rotation"), valueBuf);
+        sendSectionFooter();
+
+        sendSectionHeader(getText("Anchor & Risicokader", "Anchor & Risk Framework"), "anchor", true);
+        sendSectionDesc(getText("Anchor prijs instellingen en risicobeheer", "Anchor price settings and risk management"));
+        sendStatusRow(getText("2h/2h Strategie", "2h/2h Strategy"), strategyOptionsRo[stratIdx]);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", anchorTakeProfit);
+        sendStatusRow(getText("Take Profit", "Take Profit"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", anchorMaxLoss);
+        sendStatusRow(getText("Max Loss", "Max Loss"), valueBuf);
+        sendSectionFooter();
+
+        sendSectionHeader(getText("Signaalgeneratie", "Signal Generation"), "signals", true);
+        sendSectionDesc(getText("Thresholds voor spike en move detectie", "Thresholds for spike and move detection"));
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", spike1mThreshold);
+        sendStatusRow(getText("1m Spike Threshold", "1m Spike Threshold"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", spike5mThreshold);
+        sendStatusRow(getText("5m Spike Threshold", "5m Spike Threshold"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", move5mAlertThreshold);
+        sendStatusRow(getText("5m Move Threshold", "5m Move Threshold"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", move5mThreshold);
+        sendStatusRow(getText("5m Move Filter", "5m Move Filter"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", move30mThreshold);
+        sendStatusRow(getText("30m Move Threshold", "30m Move Threshold"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", trendThreshold);
+        sendStatusRow(getText("Trend Threshold", "Trend Threshold"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", volatilityLowThreshold);
+        sendStatusRow(getText("Volatiliteit Laag", "Volatility Low"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", volatilityHighThreshold);
+        sendStatusRow(getText("Volatiliteit Hoog", "Volatility High"), valueBuf);
+        sendSectionFooter();
+
+        sendSectionHeader(getText("2-uur Alert Thresholds", "2-hour Alert Thresholds"), "2hAlerts", true);
+        sendSectionDesc(getText("Thresholds voor 2-uur breakout, breakdown, compressie en mean reversion alerts",
+                               "Thresholds for 2-hour breakout, breakdown, compression and mean reversion alerts"));
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.breakMarginPct);
+        sendStatusRow(getText("Breakout/Breakdown Margin (%)", "Breakout/Breakdown Margin (%)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.breakResetMarginPct);
+        sendStatusRow(getText("Breakout Reset Margin (%)", "Breakout Reset Margin (%)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.breakCooldownMs / 1000UL / 60UL);
+        sendStatusRow(getText("Breakout Cooldown (min)", "Breakout Cooldown (min)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.meanMinDistancePct);
+        sendStatusRow(getText("Mean Min Distance (%)", "Mean Min Distance (%)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.meanTouchBandPct);
+        sendStatusRow(getText("Mean Touch Band (%)", "Mean Touch Band (%)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.meanCooldownMs / 1000UL / 60UL);
+        sendStatusRow(getText("Mean Reversion Cooldown (min)", "Mean Reversion Cooldown (min)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.compressThresholdPct);
+        sendStatusRow(getText("Compress Threshold (%)", "Compress Threshold (%)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.compressResetPct);
+        sendStatusRow(getText("Compress Reset (%)", "Compress Reset (%)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.compressCooldownMs / 1000UL / 60UL);
+        sendStatusRow(getText("Compress Cooldown (min)", "Compress Cooldown (min)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.anchorOutsideMarginPct);
+        sendStatusRow(getText("Anchor Outside Margin (%)", "Anchor Outside Margin (%)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.anchorCooldownMs / 1000UL / 60UL);
+        sendStatusRow(getText("Anchor Context Cooldown (min)", "Anchor Context Cooldown (min)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.trendHysteresisFactor);
+        sendStatusRow(getText("Trend Hysteresis Factor", "Trend Hysteresis Factor"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.throttlingTrendChangeMs / 1000UL / 60UL);
+        sendStatusRow(getText("Throttle: Trend Change (min)", "Throttle: Trend Change (min)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.throttlingTrendToMeanMs / 1000UL / 60UL);
+        sendStatusRow(getText("Throttle: Trend→Mean (min)", "Throttle: Trend→Mean (min)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.throttlingMeanTouchMs / 1000UL / 60UL);
+        sendStatusRow(getText("Throttle: Mean Touch (min)", "Throttle: Mean Touch (min)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.throttlingCompressMs / 1000UL / 60UL);
+        sendStatusRow(getText("Throttle: Compress (min)", "Throttle: Compress (min)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.twoHSecondaryGlobalCooldownSec / 60UL);
+        sendStatusRow(getText("2h Secondary Global Cooldown (min)", "2h Secondary Global Cooldown (min)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.twoHSecondaryCoalesceWindowSec);
+        sendStatusRow(getText("2h Secondary Coalesce Window (sec)", "2h Secondary Coalesce Window (sec)"), valueBuf);
+        sendSectionFooter();
+
+        sendSectionHeader(getText("Auto Anchor", "Auto Anchor"), "autoAnchor", true);
+        sendSectionDesc(getText("Automatische anchor berekening op basis van 4h en 1d EMA",
+                               "Automatic anchor calculation based on 4h and 1d EMA"));
+        sendStatusRow(getText("Anchor Bron", "Anchor Source"), anchorSourceOptionsRo[asrc]);
+        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(alert2HThresholds.autoAnchorUpdateMinutes));
+        sendStatusRow(getText("Update Interval (min)", "Update Interval (min)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(alert2HThresholds.autoAnchorForceUpdateMinutes));
+        sendStatusRow(getText("Force Update Interval (min)", "Force Update Interval (min)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(alert2HThresholds.autoAnchor4hCandles));
+        sendStatusRow(getText("4h Candles", "4h Candles"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(alert2HThresholds.autoAnchor1dCandles));
+        sendStatusRow(getText("1d Candles", "1d Candles"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.getAutoAnchorMinUpdatePct());
+        sendStatusRow(getText("Min Update %", "Min Update %"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.getAutoAnchorTrendPivotPct());
+        sendStatusRow(getText("Trend Pivot %", "Trend Pivot %"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.getAutoAnchorW4hBase());
+        sendStatusRow(getText("4h Base Weight", "4h Base Weight"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.getAutoAnchorW4hTrendBoost());
+        sendStatusRow(getText("4h Trend Boost", "4h Trend Boost"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.autoAnchorLastValue);
+        sendStatusRow(getText("Laatste Auto Anchor", "Last Auto Anchor"), valueBuf);
+        sendStatusRow(getText("Notificatie bij update", "Notify on update"),
+                      alert2HThresholds.getAutoAnchorNotifyEnabled() ? getText("Ja", "Yes") : getText("Nee", "No"));
+        sendSectionFooter();
+
+        sendSectionHeader(getText("Slimme logica & filters", "Smart Logic & Filters"), "smart", true);
+        sendSectionDesc(getText("Trend-adaptive anchors, Confluence Mode en Auto-Volatility",
+                               "Trend-adaptive anchors, Confluence Mode and Auto-Volatility"));
+        sendStatusRow(getText("Trend-Adaptive Anchors", "Trend-Adaptive Anchors"),
+                      trendAdaptiveAnchorsEnabled ? getText("Ja", "Yes") : getText("Nee", "No"));
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", uptrendMaxLossMultiplier);
+        sendStatusRow(getText("UP Trend Max Loss Multiplier", "UP Trend Max Loss Multiplier"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", uptrendTakeProfitMultiplier);
+        sendStatusRow(getText("UP Trend Take Profit Multiplier", "UP Trend Take Profit Multiplier"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", downtrendMaxLossMultiplier);
+        sendStatusRow(getText("DOWN Trend Max Loss Multiplier", "DOWN Trend Max Loss Multiplier"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", downtrendTakeProfitMultiplier);
+        sendStatusRow(getText("DOWN Trend Take Profit Multiplier", "DOWN Trend Take Profit Multiplier"), valueBuf);
+        sendStatusRow(getText("Smart Confluence Mode", "Smart Confluence Mode"),
+                      smartConfluenceEnabled ? getText("Ja", "Yes") : getText("Nee", "No"));
+        sendStatusRow(getText("Nachtstand actief", "Night mode enabled"),
+                      nightModeEnabled ? getText("Ja", "Yes") : getText("Nee", "No"));
+        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(nightModeStartHour));
+        sendStatusRow(getText("Nachtstand start (uur)", "Night mode start (hour)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(nightModeEndHour));
+        sendStatusRow(getText("Nachtstand einde (uur)", "Night mode end (hour)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", nightSpike5mThreshold);
+        sendStatusRow(getText("Nacht: 5m Spike Filter", "Night: 5m Spike Filter"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", nightMove5mAlertThreshold);
+        sendStatusRow(getText("Nacht: 5m Move Threshold", "Night: 5m Move Threshold"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", nightMove30mThreshold);
+        sendStatusRow(getText("Nacht: 30m Move Threshold", "Night: 30m Move Threshold"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(nightCooldown5mSec));
+        sendStatusRow(getText("Nacht: 5m Cooldown (sec)", "Night: 5m Cooldown (sec)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", nightAutoVolMinMultiplier);
+        sendStatusRow(getText("Nacht: Auto-Vol Min", "Night: Auto-Vol Min"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", nightAutoVolMaxMultiplier);
+        sendStatusRow(getText("Nacht: Auto-Vol Max", "Night: Auto-Vol Max"), valueBuf);
+        sendStatusRow(getText("Auto-Volatility Mode", "Auto-Volatility Mode"),
+                      autoVolatilityEnabled ? getText("Ja", "Yes") : getText("Nee", "No"));
+        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(autoVolatilityWindowMinutes));
+        sendStatusRow(getText("Volatility Window (min)", "Volatility Window (min)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", autoVolatilityBaseline1mStdPct);
+        sendStatusRow(getText("Baseline σ (1m)", "Baseline σ (1m)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", autoVolatilityMinMultiplier);
+        sendStatusRow(getText("Min Multiplier", "Min Multiplier"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.2f", autoVolatilityMaxMultiplier);
+        sendStatusRow(getText("Max Multiplier", "Max Multiplier"), valueBuf);
+        sendSectionFooter();
+
+        sendSectionHeader(getText("Cooldowns", "Cooldowns"), "cooldowns", true);
+        sendSectionDesc(getText("Tijdsintervallen tussen alerts", "Time intervals between alerts"));
+        snprintf(valueBuf, sizeof(valueBuf), "%lu", notificationCooldown1MinMs / 1000UL);
+        sendStatusRow(getText("1m Cooldown (sec)", "1m Cooldown (sec)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%lu", notificationCooldown5MinMs / 1000UL);
+        sendStatusRow(getText("5m Cooldown (sec)", "5m Cooldown (sec)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%lu", notificationCooldown30MinMs / 1000UL);
+        sendStatusRow(getText("30m Cooldown (sec)", "30m Cooldown (sec)"), valueBuf);
+        sendSectionFooter();
+
+        sendSectionHeader(getText("Regime Engine (experimenteel)", "Regime Engine (experimental)"), "regime", true);
+        sendSectionDesc(getText("Regime-classificatie en Fase B multipliers (experimenteel)",
+                               "Regime classification and Phase B multipliers (experimental)"));
+        sendStatusRow(getText("Regime-engine ingeschakeld", "Regime engine enabled"),
+                      regimeEngineEnabled ? getText("Ja", "Yes") : getText("Nee", "No"));
+        sendSectionDesc(getText("Basis", "Basis"));
+        snprintf(valueBuf, sizeof(valueBuf), "%lu", static_cast<unsigned long>(regimeMinDwellSec));
+        sendStatusRow(getText("Min. verblijf (sec)", "Min dwell (sec)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergeticEnter);
+        sendStatusRow(getText("Energiek: enter", "Energetic: enter"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergeticExit);
+        sendStatusRow(getText("Energiek: exit", "Energetic: exit"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeSlapEnter);
+        sendStatusRow(getText("Rustig: enter", "Calm: enter"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeSlapExit);
+        sendStatusRow(getText("Rustig: exit", "Calm: exit"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeLoadedFloor);
+        sendStatusRow(getText("Geladen: vloer", "Loaded: floor"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeLoadedDrop);
+        sendStatusRow(getText("Geladen: daling", "Loaded: drop"), valueBuf);
+        sendSectionDesc(getText("Richting / compressie", "Direction / compression"));
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeDirDeadband1mPct);
+        sendStatusRow(getText("Richting deadband 1m (%)", "Direction deadband 1m (%)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeDirDeadband5mPct);
+        sendStatusRow(getText("Richting deadband 5m (%)", "Direction deadband 5m (%)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeDirDeadband30mPct);
+        sendStatusRow(getText("Richting deadband 30m (%)", "Direction deadband 30m (%)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeDirDeadband2hPct);
+        sendStatusRow(getText("Richting deadband 2h (%)", "Direction deadband 2h (%)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regime2hCompressMinPct);
+        sendStatusRow(getText("2h compressie min (%)", "2h compression min (%)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regime2hCompressMaxPct);
+        sendStatusRow(getText("2h compressie max (%)", "2h compression max (%)"), valueBuf);
+        sendSectionDesc(getText("Multipliers RUSTIG", "Multipliers CALM (RUSTIG)"));
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeSlapSpike1mMult);
+        sendStatusRow(getText("Rustig: 1m spike mult.", "Calm: 1m spike mult."), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeSlapMove5mAlertMult);
+        sendStatusRow(getText("Rustig: 5m alert mult.", "Calm: 5m alert mult."), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeSlapMove30mMult);
+        sendStatusRow(getText("Rustig: 30m move mult.", "Calm: 30m move mult."), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeSlapCooldown1mMult);
+        sendStatusRow(getText("Rustig: 1m cooldown mult.", "Calm: 1m cooldown mult."), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeSlapCooldown5mMult);
+        sendStatusRow(getText("Rustig: 5m cooldown mult.", "Calm: 5m cooldown mult."), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeSlapCooldown30mMult);
+        sendStatusRow(getText("Rustig: 30m cooldown mult.", "Calm: 30m cooldown mult."), valueBuf);
+        sendSectionDesc(getText("Multipliers GELADEN", "Multipliers LOADED"));
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeGeladenSpike1mMult);
+        sendStatusRow(getText("Geladen: 1m spike mult.", "Loaded: 1m spike mult."), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeGeladenMove5mAlertMult);
+        sendStatusRow(getText("Geladen: 5m alert mult.", "Loaded: 5m alert mult."), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeGeladenMove30mMult);
+        sendStatusRow(getText("Geladen: 30m move mult.", "Loaded: 30m move mult."), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeGeladenCooldown1mMult);
+        sendStatusRow(getText("Geladen: 1m cooldown mult.", "Loaded: 1m cooldown mult."), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeGeladenCooldown5mMult);
+        sendStatusRow(getText("Geladen: 5m cooldown mult.", "Loaded: 5m cooldown mult."), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeGeladenCooldown30mMult);
+        sendStatusRow(getText("Geladen: 30m cooldown mult.", "Loaded: 30m cooldown mult."), valueBuf);
+        sendSectionDesc(getText("Multipliers ENERGIEK", "Multipliers ENERGETIC"));
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergiekSpike1mMult);
+        sendStatusRow(getText("Energiek: 1m spike mult.", "Energetic: 1m spike mult."), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergiekMove5mAlertMult);
+        sendStatusRow(getText("Energiek: 5m alert mult.", "Energetic: 5m alert mult."), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergiekMove30mMult);
+        sendStatusRow(getText("Energiek: 30m move mult.", "Energetic: 30m move mult."), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergiekCooldown1mMult);
+        sendStatusRow(getText("Energiek: 1m cooldown mult.", "Energetic: 1m cooldown mult."), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergiekCooldown5mMult);
+        sendStatusRow(getText("Energiek: 5m cooldown mult.", "Energetic: 5m cooldown mult."), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergiekCooldown30mMult);
+        sendStatusRow(getText("Energiek: 30m cooldown mult.", "Energetic: 30m cooldown mult."), valueBuf);
+        sendSectionDesc(getText("Standalone 1m in ENERGIEK (Fase C)", "Standalone 1m in ENERGIEK (Phase C)"));
+        sendStatusRow(getText("Standalone 1m-burst (geen 5m bevestiging)", "Standalone 1m burst (no 5m confirm)"),
+                      regimeEnergiekAllowStandalone1mBurst ? getText("Ja", "Yes") : getText("Nee", "No"));
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergiekStandalone1mFactor);
+        sendStatusRow(getText("Standalone 1m factor (× finale 1m-drempel)", "Standalone 1m factor (× final 1m threshold)"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%.4f", regimeEnergiekMinDirectionStrength);
+        sendStatusRow(getText("Min. richtingsterkte (|directionScore|)", "Min. direction strength (|directionScore|)"), valueBuf);
+        sendSectionFooter();
+
+        sendSectionHeader(getText("Warm-Start", "Warm-Start"), "warmstart", true);
+        sendSectionDesc(getText("Binance historische data voor snelle initialisatie",
+                               "Binance historical data for fast initialization"));
+        sendStatusRow(getText("Warm-Start Ingeschakeld", "Warm-Start Enabled"),
+                      warmStartEnabled ? getText("Ja", "Yes") : getText("Nee", "No"));
+        sendStatusRow(getText("Warm-Start 1m overslaan", "Skip Warm-Start 1m"),
+                      warmStartSkip1m ? getText("Ja", "Yes") : getText("Nee", "No"));
+        sendStatusRow(getText("Warm-Start 5m overslaan", "Skip Warm-Start 5m"),
+                      warmStartSkip5m ? getText("Ja", "Yes") : getText("Nee", "No"));
+        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(warmStart1mExtraCandles));
+        sendStatusRow(getText("1m Extra Candles", "1m Extra Candles"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(warmStart5mCandles));
+        sendStatusRow(getText("5m Candles", "5m Candles"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(warmStart30mCandles));
+        sendStatusRow(getText("30m Candles", "30m Candles"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(warmStart2hCandles));
+        sendStatusRow(getText("2h Candles", "2h Candles"), valueBuf);
+        sendSectionFooter();
+
+        sendSectionHeader(getText("Integratie", "Integration"), "mqtt", true);
+        sendSectionDesc(getText("MQTT instellingen voor Home Assistant", "MQTT settings for Home Assistant"));
+        sendRoEscaped(server, getText("MQTT Host", "MQTT Host"), mqttHost);
+        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(mqttPort));
+        sendStatusRow(getText("MQTT Port", "MQTT Port"), valueBuf);
+        sendRoEscaped(server, getText("MQTT User", "MQTT User"), mqttUser);
+        sendRoEscaped(server, getText("MQTT Password", "MQTT Password"), mqttPass);
+        char mqttPrefix[64];
+        getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
+        sendRoEscaped(server, getText("MQTT Topic Prefix", "MQTT Topic Prefix"), mqttPrefix);
+        sendSectionFooter();
+
+        const char* wifiResetTitleRo = getText("WiFi reset", "WiFi reset");
+        snprintf(tmpBuf, sizeof(tmpBuf), "<span style='color:#e74c3c;'>%s</span>", wifiResetTitleRo);
+        sendSectionHeader(tmpBuf, "wifiReset", true);
+        sendSectionDesc(getText("Wist WiFi-instellingen en herstart het device",
+                               "Clears WiFi settings and reboots the device"));
+        sendStatusRow(getText("Actie op deze pagina", "Action on this page"),
+                      getText("Geen (gebruik bewerkpagina)", "None (use edit page)"));
+        sendSectionFooter();
+    }
+
+    server->sendContent(F("</div></body></html>"));
+}
+
 // Fase 9.1.4: Web handlers verplaatst vanuit .ino
 void WebServerModule::handleRoot() {
     if (server == nullptr) {
@@ -1630,6 +2343,7 @@ void WebServerModule::handleNotFound() {
 
 // WEB: Read-only settings export in plain text (easy copy/paste)
 // Route: GET /settings.txt
+// Canonieke sectievolgorde = renderSettingsHTML() (edit-pagina). Eerst runtime-snapshot, daarna opgeslagen instellingen.
 void WebServerModule::handleSettingsExport() {
     if (server == nullptr) {
         return;
@@ -1638,208 +2352,444 @@ void WebServerModule::handleSettingsExport() {
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
     server->send(200, "text/plain; charset=utf-8", "");
 
-    char line[192];
+    char line[384];
+    const unsigned long nowMs = millis();
 
-    // Header (version from platform_config.h)
-    snprintf(line, sizeof(line),
-             "# ESP32-Crypto-Alert %s settings export\n", VERSION_STRING);
+    float snapPrice0 = 0.0f;
+    float lkPrice = 0.0f;
+    unsigned long lkMs = 0;
+    uint8_t lkSrc = 0;
+    TrendState tr2h = TREND_SIDEWAYS;
+    TrendState tr1d = TREND_SIDEWAYS;
+    TrendState tr7d = TREND_SIDEWAYS;
+    VolatilityState volSnap = VOLATILITY_MEDIUM;
+    VolumeRangeStatus volRangeSnap{};
+    bool anchAct = false;
+    float anchP = 0.0f;
+    float anchDeltaPct = 0.0f;
+    TwoHMetrics m2h{};
+
+    if (safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "settingsTxt")) {
+        if (isValidPrice(prices[0])) {
+            snapPrice0 = prices[0];
+        }
+        lkPrice = latestKnownPrice;
+        lkMs = latestKnownPriceMs;
+        lkSrc = latestKnownPriceSource;
+        tr2h = trendDetector.getTrendState();
+        tr1d = trendDetector.getMediumTrendState();
+        tr7d = trendDetector.getLongTermTrendState();
+        volSnap = volatilityTracker.getVolatilityState();
+        volRangeSnap = lastVolumeRange1m;
+        anchAct = anchorActive;
+        if (anchorActive && isValidPrice(anchorPrice)) {
+            anchP = anchorPrice;
+            if (isValidPrice(prices[0]) && anchorPrice > 0.0f) {
+                anchDeltaPct = ((prices[0] - anchorPrice) / anchorPrice) * 100.0f;
+            }
+        }
+        m2h = computeTwoHMetrics();
+        safeMutexGive(dataMutex, "settingsTxt");
+    }
+
+    uint32_t apiAgeMs = 0;
+    bool apiFresh = false;
+    if (lastApiMs > 0) {
+        apiAgeMs = (nowMs >= lastApiMs) ? (nowMs - lastApiMs) : (ULONG_MAX - lastApiMs + nowMs);
+        apiFresh = (apiAgeMs < 3000);
+    }
+    unsigned long lkAgeMs = 0;
+    if (lkMs > 0) {
+        lkAgeMs = (nowMs >= lkMs) ? (nowMs - lkMs) : (ULONG_MAX - lkMs + nowMs);
+    }
+
+    const char* lkSrcStr = "NONE";
+    if (lkSrc == 1) {
+        lkSrcStr = "REST";
+    } else if (lkSrc == 2) {
+        lkSrcStr = "WS";
+    }
+
+    char ipStr[20] = "";
+    if (WiFi.status() == WL_CONNECTED) {
+        formatIPAddress(WiFi.localIP(), ipStr, sizeof(ipStr));
+    }
+
+    const RegimeSnapshot regimeSnap = regimeEngineGetSnapshot();
+    const char* regimeStr = regimeStatusJsonString(regimeEngineEnabled, regimeSnap.committedRegime);
+
+    const char* platformName = "Unknown";
+#if defined(PLATFORM_ESP32S3_SUPERMINI)
+    platformName = "ESP32-S3";
+#elif defined(PLATFORM_ESP32S3_GEEK)
+    platformName = "ESP32-S3 GEEK";
+#elif defined(PLATFORM_ESP32S3_LCDWIKI_28)
+    platformName = "LCDWIKI28";
+#elif defined(PLATFORM_ESP32S3_JC3248W535)
+    platformName = "JC3248W535";
+#elif defined(PLATFORM_ESP32S3_AMOLED_206)
+    platformName = "AMOLED206";
+#endif
+
+    char tlab2h[20];
+    char tlab1d[20];
+    char tlab7d[20];
+    formatTrendLabel(tlab2h, sizeof(tlab2h), "2h", tr2h);
+    formatTrendLabel(tlab1d, sizeof(tlab1d), "1d", tr1d);
+    formatTrendLabel(tlab7d, sizeof(tlab7d), "7d", tr7d);
+
+    const uint32_t psramTotal = ESP.getPsramSize();
+    const uint32_t psramFree = (psramTotal > 0) ? ESP.getFreePsram() : 0U;
+
+    server->sendContent("# ESP32-Crypto-Alert settings export\n");
+    server->sendContent("# Notatie: key: value | secties = zelfde volgorde als WebUI edit-pagina (/)\n\n");
+
+    server->sendContent("[runtime]\n");
+    snprintf(line, sizeof(line), "firmware_version: %s\n", VERSION_STRING);
     server->sendContent(line);
-    snprintf(line, sizeof(line),
-             "# Format: key=value (for easy copy/paste)\n\n");
+    snprintf(line, sizeof(line), "platform: %s\n", platformName);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "uptime_ms: %lu\n", static_cast<unsigned long>(nowMs));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "wifi_connected: %s\n", (WiFi.status() == WL_CONNECTED) ? "yes" : "no");
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "wifi_ip: %s\n", (WiFi.status() == WL_CONNECTED) ? ipStr : "--");
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "wifi_rssi_dbm: %d\n", (WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : 0);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "websocket_connected: %s\n", wsConnected ? "yes" : "no");
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "api_poll_age_ms: %lu\n", static_cast<unsigned long>(apiAgeMs));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "api_poll_fresh: %s\n", apiFresh ? "yes" : "no");
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "latest_known_price_source: %s\n", lkSrcStr);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "latest_known_price: %.4f\n", lkPrice);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "latest_known_price_age_ms: %lu\n", static_cast<unsigned long>(lkAgeMs));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "chart_price_prices0: %.4f\n", snapPrice0);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "trend_labels: %s | %s | %s\n", tlab2h, tlab1d, tlab7d);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "volatility: %s\n", getVolatilityText(volSnap));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "volume_confirm: %s\n", getVolumeText(volRangeSnap));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regime: %s\n", regimeStr);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "two_h_avg: %.4f\n", m2h.avg2h);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "two_h_high: %.4f\n", m2h.high2h);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "two_h_low: %.4f\n", m2h.low2h);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "two_h_range_pct: %.4f\n", m2h.rangePct);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "anchor_active: %s\n", anchAct ? "yes" : "no");
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "anchor_price: %.4f\n", anchP);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "anchor_delta_pct: %.4f\n", anchDeltaPct);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "mqtt_connected: %s\n", mqttConnected ? "yes" : "no");
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "heap_free_bytes: %u\n", static_cast<unsigned>(ESP.getFreeHeap()));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "heap_largest_free_block: %u\n", ESP.getMaxAllocHeap());
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "psram_detected: %s\n", (psramTotal > 0) ? "yes" : "no");
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "psram_total_bytes: %u\n", static_cast<unsigned>(psramTotal));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "psram_free_bytes: %u\n\n", static_cast<unsigned>(psramFree));
     server->sendContent(line);
 
-    // Basic
     server->sendContent("[basic]\n");
-    snprintf(line, sizeof(line), "bitvavoSymbol=%s\n", bitvavoSymbol);
+    snprintf(line, sizeof(line), "ntfyTopic: %s\n", ntfyTopic);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "ntfyTopic=%s\n", ntfyTopic);
+    snprintf(line, sizeof(line), "bitvavoSymbol: %s\n", bitvavoSymbol);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "language=%u\n", static_cast<unsigned>(language));
+    snprintf(line, sizeof(line), "language: %u\n", static_cast<unsigned>(language));
     server->sendContent(line);
-    snprintf(line, sizeof(line), "displayRotation=%u\n\n", static_cast<unsigned>(displayRotation));
-    server->sendContent(line);
-
-    // Alerts
-    server->sendContent("[alerts]\n");
-    snprintf(line, sizeof(line), "spike1m=%.4f\n", alertThresholds.spike1m);
-    server->sendContent(line);
-    snprintf(line, sizeof(line), "spike5m=%.4f\n", alertThresholds.spike5m);
-    server->sendContent(line);
-    snprintf(line, sizeof(line), "move30m=%.4f\n", alertThresholds.move30m);
-    server->sendContent(line);
-    snprintf(line, sizeof(line), "move5m=%.4f\n", alertThresholds.move5m);
-    server->sendContent(line);
-    snprintf(line, sizeof(line), "move5mAlert=%.4f\n\n", alertThresholds.move5mAlert);
+    snprintf(line, sizeof(line), "displayRotation: %u\n\n", static_cast<unsigned>(displayRotation));
     server->sendContent(line);
 
-    // Cooldowns
-    server->sendContent("[cooldowns]\n");
-    snprintf(line, sizeof(line), "cooldown1MinMs=%lu\n",
-             static_cast<unsigned long>(notificationCooldowns.cooldown1MinMs));
+    server->sendContent("[anchor]\n");
+    snprintf(line, sizeof(line), "anchorStrategy: %u\n", static_cast<unsigned>(anchorStrategy));
     server->sendContent(line);
-    snprintf(line, sizeof(line), "cooldown5MinMs=%lu\n",
-             static_cast<unsigned long>(notificationCooldowns.cooldown5MinMs));
+    snprintf(line, sizeof(line), "anchorTakeProfit: %.4f\n", anchorTakeProfit);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "cooldown30MinMs=%lu\n",
-             static_cast<unsigned long>(notificationCooldowns.cooldown30MinMs));
-    server->sendContent(line);
-    snprintf(line, sizeof(line), "nightCooldown5mSec=%u\n\n",
-             static_cast<unsigned>(nightCooldown5mSec));
+    snprintf(line, sizeof(line), "anchorMaxLoss: %.4f\n\n", anchorMaxLoss);
     server->sendContent(line);
 
-    // 2h thresholds (kernwaarden, geen auto-anchor-details)
-    server->sendContent("[2h]\n");
-    snprintf(line, sizeof(line), "breakMarginPct=%.4f\n", alert2HThresholds.breakMarginPct);
+    server->sendContent("[signals]\n");
+    snprintf(line, sizeof(line), "spike1m: %.4f\n", alertThresholds.spike1m);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "breakResetMarginPct=%.4f\n", alert2HThresholds.breakResetMarginPct);
+    snprintf(line, sizeof(line), "spike5m: %.4f\n", alertThresholds.spike5m);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "breakCooldownMs=%lu\n",
+    snprintf(line, sizeof(line), "move5mAlert: %.4f\n", alertThresholds.move5mAlert);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "move5m: %.4f\n", alertThresholds.move5m);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "move30m: %.4f\n", alertThresholds.move30m);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "trendThreshold: %.4f\n", trendThreshold);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "volatilityLowThreshold: %.4f\n", volatilityLowThreshold);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "volatilityHighThreshold: %.4f\n\n", volatilityHighThreshold);
+    server->sendContent(line);
+
+    server->sendContent("[2hAlerts]\n");
+    snprintf(line, sizeof(line), "breakMarginPct: %.4f\n", alert2HThresholds.breakMarginPct);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "breakResetMarginPct: %.4f\n", alert2HThresholds.breakResetMarginPct);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "breakCooldownMs: %lu\n",
              static_cast<unsigned long>(alert2HThresholds.breakCooldownMs));
     server->sendContent(line);
-    snprintf(line, sizeof(line), "meanMinDistancePct=%.4f\n", alert2HThresholds.meanMinDistancePct);
+    snprintf(line, sizeof(line), "meanMinDistancePct: %.4f\n", alert2HThresholds.meanMinDistancePct);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "meanTouchBandPct=%.4f\n", alert2HThresholds.meanTouchBandPct);
+    snprintf(line, sizeof(line), "meanTouchBandPct: %.4f\n", alert2HThresholds.meanTouchBandPct);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "meanCooldownMs=%lu\n",
+    snprintf(line, sizeof(line), "meanCooldownMs: %lu\n",
              static_cast<unsigned long>(alert2HThresholds.meanCooldownMs));
     server->sendContent(line);
-    snprintf(line, sizeof(line), "compressThresholdPct=%.4f\n", alert2HThresholds.compressThresholdPct);
+    snprintf(line, sizeof(line), "compressThresholdPct: %.4f\n", alert2HThresholds.compressThresholdPct);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "compressResetPct=%.4f\n", alert2HThresholds.compressResetPct);
+    snprintf(line, sizeof(line), "compressResetPct: %.4f\n", alert2HThresholds.compressResetPct);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "compressCooldownMs=%lu\n",
+    snprintf(line, sizeof(line), "compressCooldownMs: %lu\n",
              static_cast<unsigned long>(alert2HThresholds.compressCooldownMs));
     server->sendContent(line);
-    snprintf(line, sizeof(line), "anchorOutsideMarginPct=%.4f\n", alert2HThresholds.anchorOutsideMarginPct);
+    snprintf(line, sizeof(line), "anchorOutsideMarginPct: %.4f\n", alert2HThresholds.anchorOutsideMarginPct);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "anchorCooldownMs=%lu\n",
+    snprintf(line, sizeof(line), "anchorCooldownMs: %lu\n",
              static_cast<unsigned long>(alert2HThresholds.anchorCooldownMs));
     server->sendContent(line);
-    snprintf(line, sizeof(line), "trendHysteresisFactor=%.4f\n", alert2HThresholds.trendHysteresisFactor);
+    snprintf(line, sizeof(line), "trendHysteresisFactor: %.4f\n", alert2HThresholds.trendHysteresisFactor);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "throttlingTrendChangeMs=%lu\n",
+    snprintf(line, sizeof(line), "throttlingTrendChangeMs: %lu\n",
              static_cast<unsigned long>(alert2HThresholds.throttlingTrendChangeMs));
     server->sendContent(line);
-    snprintf(line, sizeof(line), "throttlingTrendToMeanMs=%lu\n",
+    snprintf(line, sizeof(line), "throttlingTrendToMeanMs: %lu\n",
              static_cast<unsigned long>(alert2HThresholds.throttlingTrendToMeanMs));
     server->sendContent(line);
-    snprintf(line, sizeof(line), "throttlingMeanTouchMs=%lu\n",
+    snprintf(line, sizeof(line), "throttlingMeanTouchMs: %lu\n",
              static_cast<unsigned long>(alert2HThresholds.throttlingMeanTouchMs));
     server->sendContent(line);
-    snprintf(line, sizeof(line), "throttlingCompressMs=%lu\n",
+    snprintf(line, sizeof(line), "throttlingCompressMs: %lu\n",
              static_cast<unsigned long>(alert2HThresholds.throttlingCompressMs));
     server->sendContent(line);
-    snprintf(line, sizeof(line), "twoHSecondaryGlobalCooldownSec=%lu\n",
+    snprintf(line, sizeof(line), "twoHSecondaryGlobalCooldownSec: %lu\n",
              static_cast<unsigned long>(alert2HThresholds.twoHSecondaryGlobalCooldownSec));
     server->sendContent(line);
-    snprintf(line, sizeof(line), "twoHSecondaryCoalesceWindowSec=%lu\n",
+    snprintf(line, sizeof(line), "twoHSecondaryCoalesceWindowSec: %lu\n\n",
              static_cast<unsigned long>(alert2HThresholds.twoHSecondaryCoalesceWindowSec));
     server->sendContent(line);
-    snprintf(line, sizeof(line), "anchorSourceMode=%u\n\n",
-             static_cast<unsigned>(alert2HThresholds.anchorSourceMode));
+
+    server->sendContent("[autoAnchor]\n");
+    snprintf(line, sizeof(line), "anchorSourceMode: %u\n", static_cast<unsigned>(alert2HThresholds.anchorSourceMode));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "autoAnchorUpdateMinutes: %u\n",
+             static_cast<unsigned>(alert2HThresholds.autoAnchorUpdateMinutes));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "autoAnchorForceUpdateMinutes: %u\n",
+             static_cast<unsigned>(alert2HThresholds.autoAnchorForceUpdateMinutes));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "autoAnchor4hCandles: %u\n",
+             static_cast<unsigned>(alert2HThresholds.autoAnchor4hCandles));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "autoAnchor1dCandles: %u\n",
+             static_cast<unsigned>(alert2HThresholds.autoAnchor1dCandles));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "autoAnchorMinUpdatePct: %.4f\n", alert2HThresholds.getAutoAnchorMinUpdatePct());
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "autoAnchorTrendPivotPct: %.4f\n", alert2HThresholds.getAutoAnchorTrendPivotPct());
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "autoAnchorW4hBase: %.4f\n", alert2HThresholds.getAutoAnchorW4hBase());
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "autoAnchorW4hTrendBoost: %.4f\n", alert2HThresholds.getAutoAnchorW4hTrendBoost());
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "autoAnchorLastValue: %.4f\n", alert2HThresholds.autoAnchorLastValue);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "autoAnchorNotifyEnabled: %s\n\n",
+             alert2HThresholds.getAutoAnchorNotifyEnabled() ? "yes" : "no");
     server->sendContent(line);
 
-    // Anchor
-    server->sendContent("[anchor]\n");
-    snprintf(line, sizeof(line), "anchorTakeProfit=%.4f\n", anchorTakeProfit);
+    server->sendContent("[smart]\n");
+    snprintf(line, sizeof(line), "trendAdaptiveAnchorsEnabled: %s\n",
+             trendAdaptiveAnchorsEnabled ? "yes" : "no");
     server->sendContent(line);
-    snprintf(line, sizeof(line), "anchorMaxLoss=%.4f\n", anchorMaxLoss);
+    snprintf(line, sizeof(line), "uptrendMaxLossMultiplier: %.4f\n", uptrendMaxLossMultiplier);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "anchorStrategy=%u\n", static_cast<unsigned>(anchorStrategy));
+    snprintf(line, sizeof(line), "uptrendTakeProfitMultiplier: %.4f\n", uptrendTakeProfitMultiplier);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "trendAdaptiveAnchorsEnabled=%u\n",
-             static_cast<unsigned>(trendAdaptiveAnchorsEnabled ? 1 : 0));
+    snprintf(line, sizeof(line), "downtrendMaxLossMultiplier: %.4f\n", downtrendMaxLossMultiplier);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "uptrendMaxLossMultiplier=%.4f\n", uptrendMaxLossMultiplier);
+    snprintf(line, sizeof(line), "downtrendTakeProfitMultiplier: %.4f\n", downtrendTakeProfitMultiplier);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "uptrendTakeProfitMultiplier=%.4f\n", uptrendTakeProfitMultiplier);
+    snprintf(line, sizeof(line), "smartConfluenceEnabled: %s\n", smartConfluenceEnabled ? "yes" : "no");
     server->sendContent(line);
-    snprintf(line, sizeof(line), "downtrendMaxLossMultiplier=%.4f\n", downtrendMaxLossMultiplier);
+    snprintf(line, sizeof(line), "nightModeEnabled: %s\n", nightModeEnabled ? "yes" : "no");
     server->sendContent(line);
-    snprintf(line, sizeof(line), "downtrendTakeProfitMultiplier=%.4f\n\n", downtrendTakeProfitMultiplier);
+    snprintf(line, sizeof(line), "nightModeStartHour: %u\n", static_cast<unsigned>(nightModeStartHour));
     server->sendContent(line);
-
-    // Modes & filters
-    server->sendContent("[modes]\n");
-    snprintf(line, sizeof(line), "smartConfluenceEnabled=%u\n",
-             static_cast<unsigned>(smartConfluenceEnabled ? 1 : 0));
+    snprintf(line, sizeof(line), "nightModeEndHour: %u\n", static_cast<unsigned>(nightModeEndHour));
     server->sendContent(line);
-    snprintf(line, sizeof(line), "nightModeEnabled=%u\n",
-             static_cast<unsigned>(nightModeEnabled ? 1 : 0));
+    snprintf(line, sizeof(line), "nightSpike5mThreshold: %.4f\n", nightSpike5mThreshold);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "nightModeStartHour=%u\n",
-             static_cast<unsigned>(nightModeStartHour));
+    snprintf(line, sizeof(line), "nightMove5mAlertThreshold: %.4f\n", nightMove5mAlertThreshold);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "nightModeEndHour=%u\n",
-             static_cast<unsigned>(nightModeEndHour));
+    snprintf(line, sizeof(line), "nightMove30mThreshold: %.4f\n", nightMove30mThreshold);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "warmStartEnabled=%u\n",
-             static_cast<unsigned>(warmStartEnabled ? 1 : 0));
+    snprintf(line, sizeof(line), "nightCooldown5mSec: %u\n", static_cast<unsigned>(nightCooldown5mSec));
     server->sendContent(line);
-    snprintf(line, sizeof(line), "autoVolatilityEnabled=%u\n\n",
-             static_cast<unsigned>(autoVolatilityEnabled ? 1 : 0));
+    snprintf(line, sizeof(line), "nightAutoVolMinMultiplier: %.4f\n", nightAutoVolMinMultiplier);
     server->sendContent(line);
-
-    // Night mode details
-    server->sendContent("[night]\n");
-    snprintf(line, sizeof(line), "nightSpike5mThreshold=%.4f\n", nightSpike5mThreshold);
+    snprintf(line, sizeof(line), "nightAutoVolMaxMultiplier: %.4f\n", nightAutoVolMaxMultiplier);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "nightMove5mAlertThreshold=%.4f\n", nightMove5mAlertThreshold);
+    snprintf(line, sizeof(line), "autoVolatilityEnabled: %s\n", autoVolatilityEnabled ? "yes" : "no");
     server->sendContent(line);
-    snprintf(line, sizeof(line), "nightMove30mThreshold=%.4f\n", nightMove30mThreshold);
-    server->sendContent(line);
-    snprintf(line, sizeof(line), "nightAutoVolMinMultiplier=%.4f\n", nightAutoVolMinMultiplier);
-    server->sendContent(line);
-    snprintf(line, sizeof(line), "nightAutoVolMaxMultiplier=%.4f\n\n", nightAutoVolMaxMultiplier);
-    server->sendContent(line);
-
-    // Warm-start
-    server->sendContent("[warmStart]\n");
-    snprintf(line, sizeof(line), "warmStart1mExtraCandles=%u\n",
-             static_cast<unsigned>(warmStart1mExtraCandles));
-    server->sendContent(line);
-    snprintf(line, sizeof(line), "warmStart5mCandles=%u\n",
-             static_cast<unsigned>(warmStart5mCandles));
-    server->sendContent(line);
-    snprintf(line, sizeof(line), "warmStart30mCandles=%u\n",
-             static_cast<unsigned>(warmStart30mCandles));
-    server->sendContent(line);
-    snprintf(line, sizeof(line), "warmStart2hCandles=%u\n",
-             static_cast<unsigned>(warmStart2hCandles));
-    server->sendContent(line);
-    snprintf(line, sizeof(line), "warmStartSkip1m=%u\n",
-             static_cast<unsigned>(warmStartSkip1m ? 1 : 0));
-    server->sendContent(line);
-    snprintf(line, sizeof(line), "warmStartSkip5m=%u\n\n",
-             static_cast<unsigned>(warmStartSkip5m ? 1 : 0));
-    server->sendContent(line);
-
-    // Auto-volatility
-    server->sendContent("[autoVolatility]\n");
-    snprintf(line, sizeof(line), "autoVolatilityWindowMinutes=%u\n",
+    snprintf(line, sizeof(line), "autoVolatilityWindowMinutes: %u\n",
              static_cast<unsigned>(autoVolatilityWindowMinutes));
     server->sendContent(line);
-    snprintf(line, sizeof(line), "autoVolatilityBaseline1mStdPct=%.4f\n",
-             autoVolatilityBaseline1mStdPct);
+    snprintf(line, sizeof(line), "autoVolatilityBaseline1mStdPct: %.4f\n", autoVolatilityBaseline1mStdPct);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "autoVolatilityMinMultiplier=%.4f\n",
-             autoVolatilityMinMultiplier);
+    snprintf(line, sizeof(line), "autoVolatilityMinMultiplier: %.4f\n", autoVolatilityMinMultiplier);
     server->sendContent(line);
-    snprintf(line, sizeof(line), "autoVolatilityMaxMultiplier=%.4f\n",
-             autoVolatilityMaxMultiplier);
+    snprintf(line, sizeof(line), "autoVolatilityMaxMultiplier: %.4f\n\n", autoVolatilityMaxMultiplier);
     server->sendContent(line);
 
-    // Trend & volatility thresholds
-    server->sendContent("\n[trend]\n");
-    snprintf(line, sizeof(line), "trendThreshold=%.4f\n", trendThreshold);
+    server->sendContent("[cooldowns]\n");
+    snprintf(line, sizeof(line), "cooldown1MinMs: %lu\n",
+             static_cast<unsigned long>(notificationCooldowns.cooldown1MinMs));
     server->sendContent(line);
-    snprintf(line, sizeof(line), "volatilityLowThreshold=%.4f\n", volatilityLowThreshold);
+    snprintf(line, sizeof(line), "cooldown5MinMs: %lu\n",
+             static_cast<unsigned long>(notificationCooldowns.cooldown5MinMs));
     server->sendContent(line);
-      snprintf(line, sizeof(line), "volatilityHighThreshold=%.4f\n", volatilityHighThreshold);
-      server->sendContent(line);
+    snprintf(line, sizeof(line), "cooldown30MinMs: %lu\n\n",
+             static_cast<unsigned long>(notificationCooldowns.cooldown30MinMs));
+    server->sendContent(line);
 
-      // Footer
-      server->sendContent("\n# end\n");
+    server->sendContent("[regime]\n");
+    snprintf(line, sizeof(line), "regimeEngineEnabled: %s\n", regimeEngineEnabled ? "yes" : "no");
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeMinDwellSec: %lu\n", static_cast<unsigned long>(regimeMinDwellSec));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeEnergeticEnter: %.4f\n", regimeEnergeticEnter);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeEnergeticExit: %.4f\n", regimeEnergeticExit);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeSlapEnter: %.4f\n", regimeSlapEnter);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeSlapExit: %.4f\n", regimeSlapExit);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeLoadedFloor: %.4f\n", regimeLoadedFloor);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeLoadedDrop: %.4f\n", regimeLoadedDrop);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeDirDeadband1mPct: %.4f\n", regimeDirDeadband1mPct);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeDirDeadband5mPct: %.4f\n", regimeDirDeadband5mPct);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeDirDeadband30mPct: %.4f\n", regimeDirDeadband30mPct);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeDirDeadband2hPct: %.4f\n", regimeDirDeadband2hPct);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regime2hCompressMinPct: %.4f\n", regime2hCompressMinPct);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regime2hCompressMaxPct: %.4f\n", regime2hCompressMaxPct);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeSlapSpike1mMult: %.4f\n", regimeSlapSpike1mMult);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeSlapMove5mAlertMult: %.4f\n", regimeSlapMove5mAlertMult);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeSlapMove30mMult: %.4f\n", regimeSlapMove30mMult);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeSlapCooldown1mMult: %.4f\n", regimeSlapCooldown1mMult);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeSlapCooldown5mMult: %.4f\n", regimeSlapCooldown5mMult);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeSlapCooldown30mMult: %.4f\n", regimeSlapCooldown30mMult);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeGeladenSpike1mMult: %.4f\n", regimeGeladenSpike1mMult);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeGeladenMove5mAlertMult: %.4f\n", regimeGeladenMove5mAlertMult);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeGeladenMove30mMult: %.4f\n", regimeGeladenMove30mMult);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeGeladenCooldown1mMult: %.4f\n", regimeGeladenCooldown1mMult);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeGeladenCooldown5mMult: %.4f\n", regimeGeladenCooldown5mMult);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeGeladenCooldown30mMult: %.4f\n", regimeGeladenCooldown30mMult);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeEnergiekSpike1mMult: %.4f\n", regimeEnergiekSpike1mMult);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeEnergiekMove5mAlertMult: %.4f\n", regimeEnergiekMove5mAlertMult);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeEnergiekMove30mMult: %.4f\n", regimeEnergiekMove30mMult);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeEnergiekCooldown1mMult: %.4f\n", regimeEnergiekCooldown1mMult);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeEnergiekCooldown5mMult: %.4f\n", regimeEnergiekCooldown5mMult);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeEnergiekCooldown30mMult: %.4f\n", regimeEnergiekCooldown30mMult);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeEnergiekAllowStandalone1mBurst: %s\n",
+             regimeEnergiekAllowStandalone1mBurst ? "yes" : "no");
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeEnergiekStandalone1mFactor: %.4f\n", regimeEnergiekStandalone1mFactor);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "regimeEnergiekMinDirectionStrength: %.4f\n\n", regimeEnergiekMinDirectionStrength);
+    server->sendContent(line);
+
+    server->sendContent("[warmstart]\n");
+    snprintf(line, sizeof(line), "warmStartEnabled: %s\n", warmStartEnabled ? "yes" : "no");
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "warmStartSkip1m: %s\n", warmStartSkip1m ? "yes" : "no");
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "warmStartSkip5m: %s\n", warmStartSkip5m ? "yes" : "no");
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "warmStart1mExtraCandles: %u\n",
+             static_cast<unsigned>(warmStart1mExtraCandles));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "warmStart5mCandles: %u\n", static_cast<unsigned>(warmStart5mCandles));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "warmStart30mCandles: %u\n", static_cast<unsigned>(warmStart30mCandles));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "warmStart2hCandles: %u\n\n", static_cast<unsigned>(warmStart2hCandles));
+    server->sendContent(line);
+
+    server->sendContent("[mqtt]\n");
+    snprintf(line, sizeof(line), "mqttHost: %s\n", mqttHost);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "mqttPort: %u\n", static_cast<unsigned>(mqttPort));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "mqttUser: %s\n", mqttUser);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "mqttPass: %s\n", mqttPass);
+    server->sendContent(line);
+    {
+        char mqttPrefix[64];
+        getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
+        snprintf(line, sizeof(line), "mqttTopicPrefix: %s\n\n", mqttPrefix);
+        server->sendContent(line);
+    }
+
+    server->sendContent("[wifiReset]\n");
+#if OTA_ENABLED
+    server->sendContent("ota_web_update: yes\n");
+#else
+    server->sendContent("ota_web_update: no\n");
+#endif
+    server->sendContent("wifi_reset_action: edit_page_only\n");
+    server->sendContent("note: WiFi credential reset only via POST on edit page (/).\n\n");
+
+    server->sendContent("# end export\n");
 }
 
 // WEB: Read-only notification log page (HTML table, newest first)
@@ -1876,6 +2826,8 @@ void WebServerModule::handleNotifications() {
     server->sendContent(F("</h2>"));
     server->sendContent(F("<div><a href='/'>"));
     server->sendContent(getText("Terug naar instellingen", "Back to settings"));
+    server->sendContent(F("</a> &middot; <a href='/config'>"));
+    server->sendContent(getText("Config (alleen lezen)", "Config (read-only)"));
     server->sendContent(F("</a></div>"));
 
     uint8_t count = getNotificationLogCount();
@@ -1935,8 +2887,8 @@ void WebServerModule::handleNotifications() {
 static size_t s_otaWritten = 0;
 static size_t s_otaTotal = 0;
 static bool s_otaStarted = false;
-// Beperk maximale OTA-bestandsgrootte tot ~1.875 MB (zoals mainline min_spiffs voorbeeld).
-static const size_t OTA_MAX_SIZE = 0x1E0000u;
+// Zelfde bovengrens als OTA_WEBUPDATER_MAX_SIZE / partitions app-slot (0x2F0000).
+static const size_t OTA_MAX_SIZE = 0x2F0000u;
 
 // Eenvoudige JSON-parse voor "total": number
 static bool parseOtaTotalFromBody(const String& body, size_t& outTotal) {
@@ -2245,7 +3197,7 @@ void WebServerModule::handleStatus() {
         static_cast<unsigned long>(apiAgeMs),
         nowMs / 1000,
         ESP.getFreeHeap(),
-        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+        ESP.getMaxAllocHeap(),
         regimeEnabledForJson ? "true" : "false",
         regimeStrJson
     );
@@ -2450,48 +3402,7 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
              getText("Instellingen", "Settings"), bitvavoSymbol, ntfyTopic, VERSION_STRING);
     server->sendContent(titleBuf);
     
-    // CSS - Performance optimalisatie: combineer statische CSS in één PROGMEM string
-    // Dit vermindert het aantal sendContent() calls en TCP/IP overhead
-    static const char cssBlock[] PROGMEM = 
-        "<style>"
-        "*{box-sizing:border-box;}"
-        "body{font-family:Arial;margin:0;padding:10px;background:#1a1a1a;color:#fff;}"
-        ".container{max-width:600px;margin:0 auto;padding:0 10px;}"
-        "h1{color:#00BCD4;margin:15px 0;font-size:24px;}"
-        "form{max-width:100%;}"
-        "label{display:block;margin:15px 0 5px;color:#ccc;}"
-        "input[type=number],input[type=text],select{width:100%;padding:8px;border:1px solid #444;background:#2a2a2a;color:#fff;border-radius:4px;box-sizing:border-box;}"
-        "button{background:#00BCD4;color:#fff;padding:12px 24px;border:none;border-radius:4px;cursor:pointer;font-size:16px;margin-top:20px;width:100%;}"
-        "button:hover{background:#00acc1;}"
-        ".info{color:#888;font-size:12px;margin-top:5px;}"
-        ".status-box{background:#2a2a2a;border:1px solid #444;border-radius:4px;padding:15px;margin:20px 0;max-width:100%;}"
-        ".status-row{display:flex;justify-content:space-between;margin:8px 0;padding:8px 0;border-bottom:1px solid #333;flex-wrap:wrap;}"
-        ".status-label{color:#888;flex:1;min-width:120px;}"
-        ".status-value{color:#fff;font-weight:bold;text-align:right;flex:1;min-width:100px;}"
-        ".section-header{background:#2a2a2a;border:1px solid #444;border-radius:4px;padding:12px;margin:15px 0 0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;}"
-        ".section-header:hover{background:#333;}"
-        ".section-header h3{margin:0;color:#00BCD4;font-size:16px;}"
-        ".section-content{display:none;padding:15px;background:#1a1a1a;border:1px solid #444;border-top:none;border-radius:0 0 4px 4px;}"
-        ".section-content.active{display:block;}"
-        ".section-desc{color:#888;font-size:12px;margin-top:5px;margin-bottom:15px;}"
-        ".toggle-icon{color:#00BCD4;font-size:18px;flex-shrink:0;margin-left:10px;}"
-        "@media (max-width:600px){"
-        "body{padding:5px;}"
-        ".container{padding:0 5px;}"
-        "h1{font-size:20px;margin:10px 0;}"
-        ".status-box{padding:10px;margin:15px 0;}"
-        ".status-row{flex-direction:column;padding:6px 0;}"
-        ".status-label{min-width:auto;margin-bottom:3px;}"
-        ".status-value{text-align:left;min-width:auto;}"
-        ".section-header{padding:10px;}"
-        ".section-header h3{font-size:14px;}"
-        ".section-content{padding:10px;}"
-        "button{padding:10px 20px;font-size:14px;}"
-        "label{font-size:14px;}"
-        "input[type=number],input[type=text],select{font-size:14px;padding:6px;}"
-        "}"
-        "</style>";
-    server->sendContent_P(cssBlock);
+    sendWebUiStylesheet(server);
     
     // JavaScript
     server->sendContent(F("<script type='text/javascript'>"));
@@ -2662,6 +3573,9 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(F("<div style='margin-bottom:10px;font-size:13px;'>"));
     server->sendContent(F("<a href=\"/notifications\" style='color:#00BCD4;text-decoration:none;'>"));
     server->sendContent(getText("Laatste notificaties", "Recent notifications"));
+    server->sendContent(F("</a>"));
+    server->sendContent(F(" &middot; <a href=\"/config\" style='color:#00BCD4;text-decoration:none;'>"));
+    server->sendContent(getText("Config (alleen lezen)", "Config (read-only)"));
     server->sendContent(F("</a>"));
     server->sendContent(F(" &middot; <a href=\"/settings.txt\" style='color:#00BCD4;text-decoration:none;'>"));
     server->sendContent(getText("Instellingen kopiëren (tekst)", "Copy settings (text)"));

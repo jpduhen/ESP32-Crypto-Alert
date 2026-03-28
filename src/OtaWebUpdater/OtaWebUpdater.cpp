@@ -4,6 +4,9 @@
 
 #include <ESP.h>      // ESP.restart()
 #include <Update.h>   // Update.begin / write / end / abort
+#include <cstdlib>    // strtoul
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
 
 // OTA_ENABLED is defined in the project platform config.
 // platform_config.h include PINS files alleen in de main .ino.
@@ -43,7 +46,7 @@ bool OtaWebUpdater::parseOtaTotalFromBody(const String& body, size_t& outTotal) 
         p++;
     }
 
-    if (val == 0 || val > OTA_WEBUPDATER_MAX_SIZE) return false;
+    if (val == 0) return false;
     outTotal = (size_t)val;
     return true;
 }
@@ -131,20 +134,52 @@ void OtaWebUpdater::handleUpdateGet() {
 #endif
 }
 
+#if OTA_ENABLED
+// TEMP OTA DEBUG BEGIN
+static void otaTempDebugLogRuntimePartitions() {
+    Serial.printf("[OTA] free_sketch_space=%u bytes\n", (unsigned)ESP.getFreeSketchSpace());
+    const esp_partition_t* run = esp_ota_get_running_partition();
+    const esp_partition_t* next = esp_ota_get_next_update_partition(nullptr);
+    if (run) {
+        Serial.printf("[OTA] running: label=%s addr=0x%08lx size=%lu\n",
+                      run->label ? run->label : "?",
+                      (unsigned long)run->address,
+                      (unsigned long)run->size);
+    } else {
+        Serial.println(F("[OTA] running: (null)"));
+    }
+    if (next) {
+        Serial.printf("[OTA] next_update: label=%s addr=0x%08lx size=%lu\n",
+                      next->label ? next->label : "?",
+                      (unsigned long)next->address,
+                      (unsigned long)next->size);
+    } else {
+        Serial.println(F("[OTA] next_update: (null)"));
+    }
+}
+// TEMP OTA DEBUG END
+#endif
+
 void OtaWebUpdater::handleUpdateStart() {
 #if OTA_ENABLED
     if (server == nullptr) return;
 
+    // TEMP OTA DEBUG BEGIN
+    Serial.println(F("[OTA] /update/start: OTA upload gestart"));
+    // TEMP OTA DEBUG END
+
     size_t total = 0;
 
-    // Total out URL parameter (trusted) or out JSON body
+    // Total uit URL-parameter of JSON-body (plain)
     if (server->hasArg("total")) {
-        long t = server->arg("total").toInt();
-        if (t > 0 && (size_t)t <= OTA_WEBUPDATER_MAX_SIZE) total = (size_t)t;
+        const char* ts = server->arg("total").c_str();
+        char* endPtr = nullptr;
+        unsigned long t = strtoul(ts, &endPtr, 10);
+        if (endPtr != ts && t > 0UL) {
+            total = (size_t)t;
+        }
     }
-
     if (total == 0) {
-        // Try JSON body (server->arg("plain"))
         parseOtaTotalFromBody(server->arg("plain"), total);
     }
 
@@ -153,19 +188,62 @@ void OtaWebUpdater::handleUpdateStart() {
         return;
     }
 
-    if (total > OTA_WEBUPDATER_MAX_SIZE) {
-        server->send(400, "application/json", "{\"ok\":false,\"error\":\"File too large\"}");
+    // Echte limiet = kleinste van (compile-time plafond) en (OTA-slot in huidige partitietabel).
+    // ESP.getFreeSketchSpace() = grootte van het volgende app-partitie-slot (zie Esp.cpp).
+    const size_t slotBytes = ESP.getFreeSketchSpace();
+    size_t maxBin = (size_t)OTA_WEBUPDATER_MAX_SIZE;
+    if (slotBytes > 0 && slotBytes < maxBin) {
+        maxBin = slotBytes;
+    }
+    if (slotBytes == 0) {
+        server->send(400, "application/json",
+                     "{\"ok\":false,\"error\":\"no_ota_partition\",\"hint\":\"Wrong partition scheme in flash (need two app slots)\"}");
         return;
     }
+    if (total > maxBin) {
+        char rej[192];
+        snprintf(rej, sizeof(rej),
+                 "{\"ok\":false,\"error\":\"file_larger_than_ota_slot\",\"slot_max\":%u,\"requested\":%u}",
+                 (unsigned)maxBin, (unsigned)total);
+        server->send(400, "application/json", rej);
+        return;
+    }
+
+    // TEMP OTA DEBUG BEGIN
+    Serial.printf("[OTA] ontvangen firmware_size=%u (maxBin=%u slot=%u config_cap=%u)\n",
+                  (unsigned)total, (unsigned)maxBin, (unsigned)slotBytes,
+                  (unsigned)OTA_WEBUPDATER_MAX_SIZE);
+    // TEMP OTA DEBUG END
 
     if (otaStarted) {
         Update.abort();
         otaStarted = false;
     }
 
-    if (!Update.begin(total, U_FLASH)) {
+    // TEMP OTA DEBUG BEGIN
+    Serial.println(F("[OTA] vlak voor Update.begin(total, U_FLASH)"));
+    otaTempDebugLogRuntimePartitions();
+    // TEMP OTA DEBUG END
+
+    const bool beginOk = Update.begin(total, U_FLASH);
+
+    // TEMP OTA DEBUG BEGIN
+    Serial.printf("[OTA] Update.begin -> %s\n", beginOk ? "OK" : "FAIL");
+    // TEMP OTA DEBUG END
+
+    if (!beginOk) {
+        // TEMP OTA DEBUG BEGIN
+        Serial.println(F("[OTA] Update.begin failed; Update.printError:"));
         Update.printError(Serial);
-        server->send(500, "application/json", "{\"ok\":false,\"error\":\"Update.begin failed\"}");
+        Serial.printf("[OTA] Update.getError()=%u errorString=%s\n",
+                      (unsigned)Update.getError(),
+                      Update.errorString() ? Update.errorString() : "(null)");
+        char errJson[160];
+        snprintf(errJson, sizeof(errJson),
+                 "{\"ok\":false,\"error\":\"OTA could not begin\",\"code\":%u}",
+                 (unsigned)Update.getError());
+        server->send(400, "application/json", errJson);
+        // TEMP OTA DEBUG END
         return;
     }
 
@@ -188,7 +266,7 @@ void OtaWebUpdater::handleUpdateChunkUpload() {
     static unsigned long s_lastLogKb = 0;
 
     if (upload.status == UPLOAD_FILE_WRITE) {
-        if (otaWritten + upload.currentSize > OTA_WEBUPDATER_MAX_SIZE) {
+        if (otaTotal > 0 && otaWritten + upload.currentSize > otaTotal) {
             Update.abort();
             otaStarted = false;
             return;
