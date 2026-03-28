@@ -58,6 +58,8 @@ The complete English user guide is split into separate chapters for better reada
 ## Developer notes
 
 - [Metric contract](docs/METRICS_CONTRACT.md) — firmware vs JSON vs MQTT names, regression/trend % vs classic returns, warm/mixed/live semantics, 2h trend vs 2h price stats.
+- [NTFY / WS cleanup tracker](docs/ntfy_ws_cleanup_tracker.md) — productie delivery path, diagnostics flags, phased cleanup (Fase 1–4 closed as of 2026-03-27).
+- **Regime Engine (v1):** `src/RegimeEngine/` — regime snapshot for UI/settings; see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
 ## Quick Start
 1. Choose a compatible board (e.g., Cheap Yellow Display).
@@ -74,6 +76,6 @@ This project provides **no financial advice**. Cryptocurrency markets are highly
 
 ---
 
-**Last guide update: February 6, 2026**
+**Last guide update: March 27, 2026**
 
 Enjoy your ESP32-Crypto-Alert! 🚀

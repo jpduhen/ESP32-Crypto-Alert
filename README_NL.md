@@ -53,6 +53,12 @@ De volledige Nederlandstalige handleiding is onderverdeeld in aparte hoofdstukke
 10. [Hoofdstuk 10: Geavanceerd Gebruik en Aanpassingen](docs/10-Geavanceerd-Gebruik-en-Aanpassingen.md)  
     Code wijzigen, custom thresholds, OTA en meer
 
+## Ontwikkelaarsnotities
+
+- [Metric contract](docs/METRICS_CONTRACT.md) — firmware vs JSON vs MQTT-namen, warm/mixed/live, enz.
+- [NTFY / WS cleanup tracker](docs/ntfy_ws_cleanup_tracker.md) — productiepad, diagnose-vlaggen, afgeronde opschoning Fase 1–4 (2026-03-27).
+- **Regime Engine (v1):** `src/RegimeEngine/` — regime-snapshot voor UI/instellingen; zie [RELEASE_NOTES.md](RELEASE_NOTES.md).
+
 ## 🚀 Quick Start
 1. Kies een compatibel board (bijv. Cheap Yellow Display).
 2. Volg [Hoofdstuk 4: Installatie](docs/04-Installatie.md).
@@ -68,6 +74,6 @@ Dit project biedt **geen financieel advies**. Cryptocurrency-markten zijn volati
 
 ---
 
-**Laatste update handleiding: 6 februari 2026**
+**Laatste update handleiding: 27 maart 2026**
 
 Veel plezier met je ESP32-Crypto-Alert! 🚀

@@ -244,7 +244,7 @@ Middel
 2. ~~Legacy macro-helpers rond NTFY zonder call sites~~ — **Fase 4:** verwijderd (zie Besluit 007).
 3. Diagnose- en testlogica staat nog te dicht op productiegedrag.
 4. `loop()` bevat nog test-/retry-runtimeresten die niet tot normale productieflow horen.
-5. Logging gebruikt meerdere prefixes — **Fase 2:** basissemantiek vastgelegd (Besluit 005); verder verfijnen kan in Fase 3/4.
+5. Logging gebruikt meerdere prefixes — **Fase 2:** basissemantiek vastgelegd (Besluit 005); verder verfijnen eventueel later (cosmetisch).
 6. De `.ino` is nog te veel orchestration-kern.
 
 ---
@@ -407,6 +407,23 @@ Gebruik dit document als voortgangsdocument en bron van waarheid voor de NTFY/WS
 
 ---
 
+### 2026-03-27 — Afsluitende smoke test (productie, device)
+#### Build / omgeving:
+- Arduino IDE build; device: **GEEK-S3** (ESP32-S3).
+
+#### Uitgevoerde test:
+- Productie-alert getriggerd → **OK**
+- NTFY delivery (melding op ontvanger) → **OK**
+- WS restore / weer live na exclusive-cyclus → **OK**
+
+#### Resultaat:
+- **OK** — acceptatie voor Fase 1–4 NTFY/WS-cleanup bevestigd op hardware.
+
+#### Opmerkingen:
+- Sluit eerdere code-review / toolcache-buildnotities af met dit device-resultaat.
+
+---
+
 ### Template
 #### Datum:
 #### Fase:
@@ -528,20 +545,27 @@ Gebruik dit document als voortgangsdocument en bron van waarheid voor de NTFY/WS
 
 ## Open punten
 
-- **Fase 4-kandidaat:** `ntfyPauseWsBeforeNtfySendIfNeeded`, `ntfyDisconnectWsBeforeNtfySendIfNeeded`, `ntfyRestoreWsAfterNtfySend`, `ntfyRestoreWsAfterNtfySendPausedStrategy` — geen call sites in repo; macro’s eerst verifiëren voor externe forks.
-- Welke WS-strategie wordt uiteindelijk de enige productievariant?
-  - pause
-  - full disconnect/reconnect
+*(Alleen nog echte vervolg-opties; afgeronde Fase 4-kandidaten zijn verwijderd — zie **Besluit 007**.)*
 
-- Moet `sendNtfyNotification()` later opgesplitst worden in:
-  - orchestration
-  - transport
-  - retry/backoff
-  - logging
+- **Externe forks:** experimenteel macro-pad (pauze/full-disconnect rond NTFY) is uit de upstream-bron verwijderd; herstel uit git-historie vóór die commit indien nodig (Besluit 007).
 
-- **Fase 2:** basis-prefixmodel vastgelegd in Besluit 005; fijnslijpen eventueel later (cosmetisch).
+- Moet `sendNtfyNotification()` later opgesplitst worden in orchestration / transport / retry/backoff / logging? (optioneel, los van deze cleanup.)
 
-- Welke diagnoseflags mogen helemaal verdwijnen nadat Fase 1 stabiel is?
+- **Logging:** basis-prefixmodel vastgelegd in Besluit 005; verder fijnslijpen eventueel later (cosmetisch).
+
+- **Diagnose:** welke optionele diagnoseflags of testhooks kunnen in een latere onderhoudsron verder worden ingekort? (geen verplichting; Fase 1-master-vlag blijft leidend.)
+
+---
+
+## Afsluitnotitie — NTFY/WS cleanup workstream
+
+**Status (2026-03-27):** Fase **1–4** zijn **afgerond** en met de afsluitende device-smoke (zie testlog, **GEEK-S3**) inhoudelijk **goedgekeurd**.
+
+- **Productiepad** is **enkelvoudig** (Besluit 006): queue → exclusive state machine → HTTPS (`sendNtfyNotification` / `ntfyHttpsPostNtfyAlertBody`); WS alleen via `wsStopForNtfyExclusive` / `restartWebSocketAfterNtfyExclusive`.
+- **Diagnostiek** staat achter **`CRYPTO_ALERT_NTFY_DIAGNOSTICS_RUNTIME`** met sub-vlaggen (Besluit 004); standaard-runtime blijft schoon.
+- **Fase 5** (verdere modulering uit `.ino`) blijft **optioneel** en valt buiten de verplichte afsluiting van deze workstream.
+
+Deze cleanup-workstream kan **formeel worden gesloten**; vervolgwerk is alleen nog vrijwillige verfijning of architectuur (Fase 5 / onderhoud).
 
 ---
 
@@ -556,3 +580,5 @@ Deze NTFY/WS-cleanup is pas echt “klaar” als:
 - de hoofdsketch aantoonbaar minder rommelig is
 - de werkende functionaliteit behouden is
 - de codebasis weer uitlegbaar is voor volgende sessies
+
+**Toets (2026-03-27):** bovenstaande punten zijn voor het NTFY/WS-scope-blok ingevuld; zie **Afsluitnotitie** en **testlog** (smoke op GEEK-S3).
