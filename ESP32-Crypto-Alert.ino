@@ -3790,6 +3790,7 @@ struct NtfyPendingItem {
     bool delivered = false;
     uint8_t priority = (uint8_t)NTFY_PRIO_LOW;
     uint8_t retryCount = 0;
+    uint32_t auditId = 0;
     uint32_t createdMs = 0;
     uint32_t lastAttemptMs = 0;
     uint32_t nextAttemptMs = 0;
@@ -3801,6 +3802,38 @@ struct NtfyPendingItem {
 
 static NtfyPendingItem s_ntfyQ[NTFY_PENDING_Q_SIZE];
 static SemaphoreHandle_t s_ntfyQMutex = NULL;
+static uint32_t s_ntfyAuditCounter = 0;
+
+static uint32_t ntfyNextAuditId(void) {
+    s_ntfyAuditCounter++;
+    if (s_ntfyAuditCounter == 0) {
+        s_ntfyAuditCounter = 1;
+    }
+    return s_ntfyAuditCounter;
+}
+
+// Meetpatch: correlatie via ntfyAuditLog(); geen invloed op queue-/retry-beleid.
+static void ntfyAuditLog(const __FlashStringHelper* event,
+                          uint32_t auditId,
+                          const char* sequenceId,
+                          uint8_t prio,
+                          uint8_t retryCount,
+                          uint8_t qsize,
+                          uint32_t createdMs,
+                          uint32_t queueWaitMs,
+                          uint32_t sendDurationMs,
+                          uint32_t nextAttemptMs,
+                          const char* reason) {
+    const char* seq = (sequenceId != nullptr && sequenceId[0] != '\0') ? sequenceId : "-";
+    const char* rs = (reason != nullptr && reason[0] != '\0') ? reason : "-";
+    Serial.print(F("[NTFY][AUDIT] event="));
+    Serial.print(event);
+    Serial.printf(
+        " audit=%lu seq=%s prio=%u retry=%u qsize=%u created_ms=%lu queue_wait_ms=%lu send_duration_ms=%lu next_attempt_ms=%lu reason=%s\n",
+        (unsigned long)auditId, seq, (unsigned)prio, (unsigned)retryCount, (unsigned)qsize,
+        (unsigned long)createdMs, (unsigned long)queueWaitMs, (unsigned long)sendDurationMs,
+        (unsigned long)nextAttemptMs, rs);
+}
 
 static inline bool ntfyBackoffActive(unsigned long nowMs) {
     return (ntfyNextAllowedMs != 0 && nowMs < ntfyNextAllowedMs);
@@ -3951,8 +3984,17 @@ static bool enqueueNtfyPending(const char* title, const char* body, const char* 
             safeStrncpy(ex.colorTag, tag, sizeof(ex.colorTag));
             if (priority > ex.priority) ex.priority = priority;
             ex.nextAttemptMs = 0;
+            const uint32_t nowUp = millis();
+            const uint32_t qWaitUp = (nowUp >= ex.createdMs) ? (nowUp - ex.createdMs) : 0;
+            const uint8_t qsUp = ntfyQueuePendingCount_NoLock();
+            const uint32_t snapAudit = ex.auditId;
+            const uint8_t snapPrio = ex.priority;
+            const uint8_t snapRetry = ex.retryCount;
+            const uint32_t snapCreated = ex.createdMs;
+            const uint32_t snapNext = ex.nextAttemptMs;
             xSemaphoreGive(s_ntfyQMutex);
-            Serial_printf(F("[NTFY][Q] update pending seq=%s\n"), seq);
+            ntfyAuditLog(F("update_pending"), snapAudit, seq, snapPrio, snapRetry, qsUp,
+                          snapCreated, qWaitUp, 0, snapNext, "seq_coalesce");
             return true;
         }
     }
@@ -3960,19 +4002,59 @@ static bool enqueueNtfyPending(const char* title, const char* body, const char* 
     // Coalescing: skip duplicate pending.
     for (uint8_t i = 0; i < NTFY_PENDING_Q_SIZE; i++) {
         if (ntfyPendingEquals(s_ntfyQ[i], title, body, tag)) {
+            const NtfyPendingItem& dup = s_ntfyQ[i];
+            const uint32_t nowDup = millis();
+            const uint32_t qWaitDup = (nowDup >= dup.createdMs) ? (nowDup - dup.createdMs) : 0;
+            const uint8_t qsDup = ntfyQueuePendingCount_NoLock();
+            const uint32_t dAudit = dup.auditId;
+            const uint8_t dPrio = dup.priority;
+            const uint8_t dRetry = dup.retryCount;
+            const uint32_t dCreated = dup.createdMs;
+            const uint32_t dNext = dup.nextAttemptMs;
+            char dSeq[NTFY_SEQUENCE_MAX];
+            safeStrncpy(dSeq, dup.sequenceId, sizeof(dSeq));
             xSemaphoreGive(s_ntfyQMutex);
-            Serial_println(F("[NTFY][Q] duplicate pending skipped"));
+            ntfyAuditLog(F("duplicate_skipped"), dAudit,
+                          (dSeq[0] != '\0') ? dSeq : nullptr,
+                          dPrio, dRetry, qsDup, dCreated, qWaitDup, 0, dNext,
+                          "same_title_body_tag");
             return true;
         }
     }
+
+    bool evictedSlot = false;
+    uint32_t evictAudit = 0;
+    uint8_t evictPrio = 0;
+    uint8_t evictRetry = 0;
+    uint8_t evictQs = 0;
+    uint32_t evictCreated = 0;
+    uint32_t evictQWait = 0;
+    uint32_t evictNext = 0;
+    char evictSeq[NTFY_SEQUENCE_MAX] = {0};
 
     int slot = ntfyFindFreeSlot_NoLock();
     if (slot < 0) {
         // Queue vol: drop LOW/MEDIUM eerst; HIGH probeert te verdringen.
         slot = ntfyFindEvictCandidate_NoLock(priority);
         if (slot < 0) {
+            const uint8_t qsDrop = ntfyQueuePendingCount_NoLock();
             xSemaphoreGive(s_ntfyQMutex);
+            ntfyAuditLog(F("drop_queue_full"), 0, (seq[0] != '\0') ? seq : nullptr, priority, 0, qsDrop,
+                          0, 0, 0, 0, "no_evict_candidate");
             return false;
+        }
+        evictedSlot = true;
+        {
+            const NtfyPendingItem& victim = s_ntfyQ[slot];
+            const uint32_t nowEv = millis();
+            evictQWait = (nowEv >= victim.createdMs) ? (nowEv - victim.createdMs) : 0;
+            evictQs = ntfyQueuePendingCount_NoLock();
+            evictAudit = victim.auditId;
+            evictPrio = victim.priority;
+            evictRetry = victim.retryCount;
+            evictCreated = victim.createdMs;
+            evictNext = victim.nextAttemptMs;
+            safeStrncpy(evictSeq, victim.sequenceId, sizeof(evictSeq));
         }
         // Evict bestaande (laag of gelijk), incoming blijft.
         s_ntfyQ[slot].used = false;
@@ -3984,6 +4066,7 @@ static bool enqueueNtfyPending(const char* title, const char* body, const char* 
     it.delivered = false;
     it.priority = priority;
     it.retryCount = 0;
+    it.auditId = ntfyNextAuditId();
     it.createdMs = millis();
     it.lastAttemptMs = 0;
     it.nextAttemptMs = 0; // direct eligible
@@ -3993,11 +4076,17 @@ static bool enqueueNtfyPending(const char* title, const char* body, const char* 
     safeStrncpy(it.sequenceId, seq, sizeof(it.sequenceId));
 
     const uint8_t qSize = ntfyQueuePendingCount_NoLock();
+    const uint32_t enqAudit = it.auditId;
+    const uint32_t enqCreated = it.createdMs;
     xSemaphoreGive(s_ntfyQMutex);
-    if (seq[0] != '\0') {
-        Serial_printf(F("[NTFY][Q] enqueue seq=%s prio=%u size=%u\n"),
-                      seq, (unsigned)priority, (unsigned)qSize);
+    if (evictedSlot) {
+        ntfyAuditLog(F("evict_for_new_item"), evictAudit,
+                      (evictSeq[0] != '\0') ? evictSeq : nullptr,
+                      evictPrio, evictRetry, evictQs, evictCreated, evictQWait, 0, evictNext,
+                      "incoming_takes_slot");
     }
+    ntfyAuditLog(F("enqueue"), enqAudit, (seq[0] != '\0') ? seq : nullptr, priority, 0, qSize,
+                  enqCreated, 0, 0, 0, evictedSlot ? "after_evict" : "new_slot");
     return true;
 }
 
@@ -4134,17 +4223,28 @@ static bool ntfyExclusiveSendOnePendingFromQueue(void)
         return false;
     }
     NtfyPendingItem it = s_ntfyQ[idx];
+    const uint8_t qszPick = ntfyQueuePendingCount_NoLock();
     xSemaphoreGive(s_ntfyQMutex);
 
-    Serial_printf(F("[NTFY][Q] flush try seq=%s retry=%u\n"),
-                  (it.sequenceId[0] != '\0') ? it.sequenceId : "-",
-                  (unsigned)it.retryCount);
+    const uint32_t pickMs = millis();
+    const uint32_t qwaitPick = (pickMs >= it.createdMs) ? (pickMs - it.createdMs) : 0;
+    ntfyAuditLog(F("flush_start"), it.auditId,
+                  (it.sequenceId[0] != '\0') ? it.sequenceId : nullptr,
+                  it.priority, it.retryCount, qszPick, it.createdMs, qwaitPick, 0, it.nextAttemptMs,
+                  "exclusive_send");
+
+    const unsigned long sendT0 = millis();
     const bool ok = sendNtfyNotification(it.title, it.body, it.colorTag);
+    const unsigned long sendT1 = millis();
+    const uint32_t sendDur = (sendT1 >= sendT0) ? (uint32_t)(sendT1 - sendT0) : 0;
 
     if (xSemaphoreTake(s_ntfyQMutex, pdMS_TO_TICKS(200)) != pdTRUE) {
         Serial_println(F("[NTFY][Q] WARN: queue lock after send timed out (bookkeeping skipped)"));
         return ok;
     }
+
+    const uint32_t bookMs = millis();
+    const uint32_t qwaitBook = (bookMs >= it.createdMs) ? (bookMs - it.createdMs) : 0;
 
     int found = -1;
     if (idx < NTFY_PENDING_Q_SIZE) {
@@ -4168,19 +4268,33 @@ static bool ntfyExclusiveSendOnePendingFromQueue(void)
     if (found >= 0) {
         NtfyPendingItem& ref = s_ntfyQ[found];
         ref.lastAttemptMs = nowMs;
+        const uint8_t qsBook = ntfyQueuePendingCount_NoLock();
         if (ok) {
+            ntfyAuditLog(F("send_result"), it.auditId,
+                          (it.sequenceId[0] != '\0') ? it.sequenceId : nullptr,
+                          it.priority, it.retryCount, qsBook, it.createdMs, qwaitBook, sendDur, 0, "ok");
             ref.delivered = true;
             ref.used = false;
             const uint8_t qSize = ntfyQueuePendingCount_NoLock();
-            Serial_printf(F("[NTFY][Q] delivered seq=%s size=%u\n"),
-                          (it.sequenceId[0] != '\0') ? it.sequenceId : "-",
-                          (unsigned)qSize);
+            ntfyAuditLog(F("delivered"), it.auditId,
+                          (it.sequenceId[0] != '\0') ? it.sequenceId : nullptr,
+                          it.priority, it.retryCount, qSize, it.createdMs, qwaitBook, sendDur, 0,
+                          "slot_cleared");
         } else {
             ref.retryCount++;
             uint32_t delayMs = ntfyRetryDelayMs(ref.retryCount);
             uint32_t nextMs = nowMs + delayMs;
             if (ntfyNextAllowedMs != 0 && ntfyNextAllowedMs > nextMs) nextMs = ntfyNextAllowedMs;
             ref.nextAttemptMs = nextMs;
+            ntfyAuditLog(F("send_result"), it.auditId,
+                          (it.sequenceId[0] != '\0') ? it.sequenceId : nullptr,
+                          it.priority, ref.retryCount, qsBook, it.createdMs, qwaitBook, sendDur, ref.nextAttemptMs,
+                          "fail");
+            const uint8_t qsRetry = ntfyQueuePendingCount_NoLock();
+            ntfyAuditLog(F("retry_scheduled"), it.auditId,
+                          (it.sequenceId[0] != '\0') ? it.sequenceId : nullptr,
+                          it.priority, ref.retryCount, qsRetry, it.createdMs, qwaitBook, sendDur, ref.nextAttemptMs,
+                          "queue_backoff");
         }
     } else if (ok) {
         Serial_println(F("[NTFY][Q] WARN: send ok but no matching queue slot (duplicate delivery risk)"));
