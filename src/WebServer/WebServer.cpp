@@ -1302,12 +1302,25 @@ void WebServerModule::renderConfigReadOnlyHTML() {
     server->sendContent(F("<div class='runtime-context'><h2>"));
     server->sendContent(getText("Runtime (alleen lezen)", "Runtime (read-only)"));
     server->sendContent(F("</h2>"));
+    // Systeem / apparaat (zelfde veldvolgorde als validatiedoc: firmware → … → taal → rotatie)
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
              getText("Firmware", "Firmware"), VERSION_STRING);
     server->sendContent(tmpBuf);
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
              getText("Platform", "Platform"), platformName);
     server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s %s</span></div>",
+             getText("Build datum/tijd", "Build date/time"), __DATE__, __TIME__);
+    server->sendContent(tmpBuf);
+    {
+        const char* hn = WiFi.getHostname();
+        if (hn == nullptr || hn[0] == '\0') {
+            hn = "--";
+        }
+        snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
+                 getText("Hostname (WiFi STA)", "Hostname (WiFi STA)"), hn);
+        server->sendContent(tmpBuf);
+    }
     {
         unsigned long upSec = nowMs / 1000UL;
         unsigned upD = static_cast<unsigned>(upSec / 86400UL);
@@ -1316,6 +1329,27 @@ void WebServerModule::renderConfigReadOnlyHTML() {
         unsigned upS = static_cast<unsigned>(upSec % 60UL);
         snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%u d %02u:%02u:%02u</span></div>",
                  getText("Uptime", "Uptime"), upD, upH, upM, upS);
+        server->sendContent(tmpBuf);
+    }
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%u</span></div>",
+             getText("Vrij heap (bytes)", "Free heap (bytes)"), static_cast<unsigned>(ESP.getFreeHeap()));
+    server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%u</span></div>",
+             getText("Grootste vrij heap-blok (bytes)", "Largest free heap block (bytes)"),
+             static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    server->sendContent(tmpBuf);
+    {
+        const uint32_t psramTotal = ESP.getPsramSize();
+        const uint32_t psramFree = (psramTotal > 0) ? ESP.getFreePsram() : 0U;
+        if (psramTotal == 0) {
+            snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
+                     getText("PSRAM", "PSRAM"), getText("niet gedetecteerd", "not detected"));
+        } else {
+            snprintf(tmpBuf, sizeof(tmpBuf),
+                     "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%u / %u B</span></div>",
+                     getText("PSRAM (vrij / totaal)", "PSRAM (free / total)"), static_cast<unsigned>(psramFree),
+                     static_cast<unsigned>(psramTotal));
+        }
         server->sendContent(tmpBuf);
     }
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
@@ -1341,6 +1375,15 @@ void WebServerModule::renderConfigReadOnlyHTML() {
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%lu ms</span></div>",
              getText("Leeftijd laatste API-poll", "Last API poll age"), static_cast<unsigned long>(apiAgeMs));
     server->sendContent(tmpBuf);
+    snprintf(valueBuf, sizeof(valueBuf), "%u (%s)", static_cast<unsigned>(language),
+             language == 0 ? getText("NL", "NL") : getText("EN", "EN"));
+    sendStatusRow(getText("Taal", "Language"), valueBuf);
+    snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(displayRotation));
+    sendStatusRow(getText("Display Rotatie", "Display Rotation"), valueBuf);
+
+    server->sendContent(F("<h3 style='color:#00BCD4;font-size:14px;margin:16px 0 8px;'>"));
+    server->sendContent(getText("Live markt / monitor (snapshot)", "Live market / monitor (snapshot)"));
+    server->sendContent(F("</h3>"));
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
              getText("Live prijsbron (latestKnown)", "Live price source (latestKnown)"), lkSrcStr);
     server->sendContent(tmpBuf);
@@ -1388,8 +1431,12 @@ void WebServerModule::renderConfigReadOnlyHTML() {
              getText("MQTT verbonden", "MQTT connected"),
              mqttConnected ? getText("Ja", "Yes") : getText("Nee", "No"));
     server->sendContent(tmpBuf);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
+             getText("MQTT broker geconfigureerd", "MQTT broker configured"),
+             (mqttHost[0] != '\0') ? getText("Ja", "Yes") : getText("Nee", "No"));
+    server->sendContent(tmpBuf);
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%u</span></div>",
-             getText("Vrij heap (bytes)", "Free heap (bytes)"), static_cast<unsigned>(ESP.getFreeHeap()));
+             getText("MQTT reconnect teller", "MQTT reconnect counter"), static_cast<unsigned>(mqttReconnectAttemptCount));
     server->sendContent(tmpBuf);
     server->sendContent(F("</div>"));
 
@@ -1473,6 +1520,11 @@ void WebServerModule::renderConfigReadOnlyHTML() {
         sendSectionDesc(getText("Basisinstellingen voor symbol, notificaties en connectiviteit",
                                "Basic settings for symbol, notifications and connectivity"));
         sendRoEscaped(server, getText("NTFY Topic", "NTFY Topic"), ntfyTopic);
+        sendStatusRow(getText("NTFY topic ingesteld", "NTFY topic configured"),
+                      (ntfyTopic[0] != '\0') ? getText("Ja", "Yes") : getText("Nee", "No"));
+        sendStatusRow(getText("NTFY meldingen", "NTFY notifications"),
+                      (ntfyTopic[0] != '\0') ? getText("Actief (topic vereist)", "Active (topic required)")
+                                             : getText("Uit (geen topic)", "Off (no topic)"));
         sendRoEscaped(server, getText("Bitvavo Market", "Bitvavo Market"), bitvavoSymbol);
         snprintf(valueBuf, sizeof(valueBuf), "%u (%s)", static_cast<unsigned>(language),
                  language == 0 ? getText("NL", "NL") : getText("EN", "EN"));
@@ -1582,14 +1634,16 @@ void WebServerModule::renderConfigReadOnlyHTML() {
                                "Trend-adaptive anchors, Confluence Mode and Auto-Volatility"));
         sendStatusRow(getText("Trend-Adaptive Anchors", "Trend-Adaptive Anchors"),
                       trendAdaptiveAnchorsEnabled ? getText("Ja", "Yes") : getText("Nee", "No"));
-        snprintf(valueBuf, sizeof(valueBuf), "%.2f", uptrendMaxLossMultiplier);
-        sendStatusRow(getText("UP Trend Max Loss Multiplier", "UP Trend Max Loss Multiplier"), valueBuf);
-        snprintf(valueBuf, sizeof(valueBuf), "%.2f", uptrendTakeProfitMultiplier);
-        sendStatusRow(getText("UP Trend Take Profit Multiplier", "UP Trend Take Profit Multiplier"), valueBuf);
-        snprintf(valueBuf, sizeof(valueBuf), "%.2f", downtrendMaxLossMultiplier);
-        sendStatusRow(getText("DOWN Trend Max Loss Multiplier", "DOWN Trend Max Loss Multiplier"), valueBuf);
-        snprintf(valueBuf, sizeof(valueBuf), "%.2f", downtrendTakeProfitMultiplier);
-        sendStatusRow(getText("DOWN Trend Take Profit Multiplier", "DOWN Trend Take Profit Multiplier"), valueBuf);
+        if (trendAdaptiveAnchorsEnabled) {
+            snprintf(valueBuf, sizeof(valueBuf), "%.2f", uptrendMaxLossMultiplier);
+            sendStatusRow(getText("UP Trend Max Loss Multiplier", "UP Trend Max Loss Multiplier"), valueBuf);
+            snprintf(valueBuf, sizeof(valueBuf), "%.2f", uptrendTakeProfitMultiplier);
+            sendStatusRow(getText("UP Trend Take Profit Multiplier", "UP Trend Take Profit Multiplier"), valueBuf);
+            snprintf(valueBuf, sizeof(valueBuf), "%.2f", downtrendMaxLossMultiplier);
+            sendStatusRow(getText("DOWN Trend Max Loss Multiplier", "DOWN Trend Max Loss Multiplier"), valueBuf);
+            snprintf(valueBuf, sizeof(valueBuf), "%.2f", downtrendTakeProfitMultiplier);
+            sendStatusRow(getText("DOWN Trend Take Profit Multiplier", "DOWN Trend Take Profit Multiplier"), valueBuf);
+        }
         sendStatusRow(getText("Smart Confluence Mode", "Smart Confluence Mode"),
                       smartConfluenceEnabled ? getText("Ja", "Yes") : getText("Nee", "No"));
         sendStatusRow(getText("Nachtstand actief", "Night mode enabled"),
@@ -1612,14 +1666,16 @@ void WebServerModule::renderConfigReadOnlyHTML() {
         sendStatusRow(getText("Nacht: Auto-Vol Max", "Night: Auto-Vol Max"), valueBuf);
         sendStatusRow(getText("Auto-Volatility Mode", "Auto-Volatility Mode"),
                       autoVolatilityEnabled ? getText("Ja", "Yes") : getText("Nee", "No"));
-        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(autoVolatilityWindowMinutes));
-        sendStatusRow(getText("Volatility Window (min)", "Volatility Window (min)"), valueBuf);
-        snprintf(valueBuf, sizeof(valueBuf), "%.4f", autoVolatilityBaseline1mStdPct);
-        sendStatusRow(getText("Baseline σ (1m)", "Baseline σ (1m)"), valueBuf);
-        snprintf(valueBuf, sizeof(valueBuf), "%.2f", autoVolatilityMinMultiplier);
-        sendStatusRow(getText("Min Multiplier", "Min Multiplier"), valueBuf);
-        snprintf(valueBuf, sizeof(valueBuf), "%.2f", autoVolatilityMaxMultiplier);
-        sendStatusRow(getText("Max Multiplier", "Max Multiplier"), valueBuf);
+        if (autoVolatilityEnabled) {
+            snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(autoVolatilityWindowMinutes));
+            sendStatusRow(getText("Volatility Window (min)", "Volatility Window (min)"), valueBuf);
+            snprintf(valueBuf, sizeof(valueBuf), "%.4f", autoVolatilityBaseline1mStdPct);
+            sendStatusRow(getText("Baseline σ (1m)", "Baseline σ (1m)"), valueBuf);
+            snprintf(valueBuf, sizeof(valueBuf), "%.2f", autoVolatilityMinMultiplier);
+            sendStatusRow(getText("Min Multiplier", "Min Multiplier"), valueBuf);
+            snprintf(valueBuf, sizeof(valueBuf), "%.2f", autoVolatilityMaxMultiplier);
+            sendStatusRow(getText("Max Multiplier", "Max Multiplier"), valueBuf);
+        }
         sendSectionFooter();
 
         sendSectionHeader(getText("Cooldowns", "Cooldowns"), "cooldowns", true);
@@ -1722,18 +1778,22 @@ void WebServerModule::renderConfigReadOnlyHTML() {
                       warmStartSkip1m ? getText("Ja", "Yes") : getText("Nee", "No"));
         sendStatusRow(getText("Warm-Start 5m overslaan", "Skip Warm-Start 5m"),
                       warmStartSkip5m ? getText("Ja", "Yes") : getText("Nee", "No"));
-        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(warmStart1mExtraCandles));
-        sendStatusRow(getText("1m Extra Candles", "1m Extra Candles"), valueBuf);
-        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(warmStart5mCandles));
-        sendStatusRow(getText("5m Candles", "5m Candles"), valueBuf);
-        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(warmStart30mCandles));
-        sendStatusRow(getText("30m Candles", "30m Candles"), valueBuf);
-        snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(warmStart2hCandles));
-        sendStatusRow(getText("2h Candles", "2h Candles"), valueBuf);
+        if (warmStartEnabled) {
+            snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(warmStart1mExtraCandles));
+            sendStatusRow(getText("1m Extra Candles", "1m Extra Candles"), valueBuf);
+            snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(warmStart5mCandles));
+            sendStatusRow(getText("5m Candles", "5m Candles"), valueBuf);
+            snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(warmStart30mCandles));
+            sendStatusRow(getText("30m Candles", "30m Candles"), valueBuf);
+            snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(warmStart2hCandles));
+            sendStatusRow(getText("2h Candles", "2h Candles"), valueBuf);
+        }
         sendSectionFooter();
 
         sendSectionHeader(getText("Integratie", "Integration"), "mqtt", true);
         sendSectionDesc(getText("MQTT instellingen voor Home Assistant", "MQTT settings for Home Assistant"));
+        sendStatusRow(getText("MQTT ingeschakeld (broker geconfigureerd)", "MQTT enabled (broker configured)"),
+                      (mqttHost[0] != '\0') ? getText("Ja", "Yes") : getText("Nee", "No"));
         sendRoEscaped(server, getText("MQTT Host", "MQTT Host"), mqttHost);
         snprintf(valueBuf, sizeof(valueBuf), "%u", static_cast<unsigned>(mqttPort));
         sendStatusRow(getText("MQTT Port", "MQTT Port"), valueBuf);
@@ -1742,6 +1802,30 @@ void WebServerModule::renderConfigReadOnlyHTML() {
         char mqttPrefix[64];
         getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
         sendRoEscaped(server, getText("MQTT Topic Prefix", "MQTT Topic Prefix"), mqttPrefix);
+        sendStatusRow(getText("Home Assistant MQTT Discovery", "Home Assistant MQTT Discovery"),
+                      getText("Ja (via topic-prefix / retain)", "Yes (via topic prefix / retain)"));
+        sendSectionFooter();
+
+        sendSectionHeader(getText("Netwerk / OTA / extern", "Network / OTA / external"), "netOta", true);
+        sendSectionDesc(getText("Status en externe integraties (read-only)", "Status and external integrations (read-only)"));
+        sendStatusRow(getText("DuckDNS of andere DDNS", "DuckDNS or other DDNS"),
+                      getText("n.v.t. in firmware", "n/a in firmware"));
+#if OTA_ENABLED
+        sendStatusRow(getText("OTA web-update", "OTA web update"), getText("Beschikbaar (/update)", "Available (/update)"));
+#else
+        sendStatusRow(getText("OTA web-update", "OTA web update"), getText("Niet ingebouwd", "Not built in"));
+#endif
+        sendSectionFooter();
+
+        sendSectionHeader(getText("Advanced / debug (build)", "Advanced / debug (build)"), "advDebug", true);
+        sendSectionDesc(getText("Compile-time en platform (geen runtime-instelling)", "Compile-time and platform (not a runtime setting)"));
+        snprintf(valueBuf, sizeof(valueBuf), "%d", DEBUG_BUTTON_ONLY);
+        sendStatusRow(getText("DEBUG_BUTTON_ONLY", "DEBUG_BUTTON_ONLY"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%d", DEBUG_CALCULATIONS);
+        sendStatusRow(getText("DEBUG_CALCULATIONS", "DEBUG_CALCULATIONS"), valueBuf);
+        snprintf(valueBuf, sizeof(valueBuf), "%d", DEBUG_UI_TIMEFRAME_MINMAX);
+        sendStatusRow(getText("DEBUG_UI_TIMEFRAME_MINMAX", "DEBUG_UI_TIMEFRAME_MINMAX"), valueBuf);
+        sendRoEscaped(server, getText("Chip model", "Chip model"), ESP.getChipModel());
         sendSectionFooter();
 
         const char* wifiResetTitleRo = getText("WiFi reset", "WiFi reset");
