@@ -13,8 +13,8 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 5
-#define VERSION_MINOR 99
-#define VERSION_STRING "5.99"
+#define VERSION_MINOR 104
+#define VERSION_STRING "5.104"
 #endif
 
 // --- Debug Configuration ---
@@ -46,6 +46,11 @@
 // WAARSCHUWING: DEBUG_CALCULATIONS gebruikt ~2808 bytes DRAM voor debug strings
 #ifndef DEBUG_CALCULATIONS
 #define DEBUG_CALCULATIONS 0  // Standaard uit (productie)
+#endif
+
+// Alertketen: compacte trace (grep op [ALERT_TRACE]); alleen logging, geen gedrag
+#ifndef DEBUG_ALERT_TRACE
+#define DEBUG_ALERT_TRACE 1
 #endif
 
 // UI: compacte Serial-log per timeframe-min/max (raw vs live-merge); los van DEBUG_CALCULATIONS om DRAM te sparen

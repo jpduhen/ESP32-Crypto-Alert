@@ -636,7 +636,7 @@ void WebServerModule::renderSettingsHTML() {
     snprintf(valueBuf, sizeof(valueBuf), "%lu", alert2HThresholds.breakCooldownMs / 1000UL / 60UL);
     sendInputRow(getText("Breakout Cooldown (min)", "Breakout Cooldown (min)"), "2hBreakCD", "number", 
                  valueBuf, getText("Cooldown in minuten tussen breakout alerts", "Cooldown in minutes between breakout alerts"), 
-                 1, 180, 1);
+                 1, 300, 1);
     
     // Mean reversion thresholds
     snprintf(valueBuf, sizeof(valueBuf), "%.2f", alert2HThresholds.meanMinDistancePct);
@@ -1252,7 +1252,7 @@ void WebServerModule::renderConfigReadOnlyHTML() {
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
     server->send(200, "text/html; charset=utf-8", "");
     server->sendContent(F("<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"));
-    snprintf(tmpBuf, sizeof(tmpBuf), "<title>%s v%s</title>", getText("Config (alleen lezen)", "Config (read-only)"), VERSION_STRING);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<title>%s v%s</title>", getText("Overzicht (alleen lezen)", "Overview (read-only)"), VERSION_STRING);
     server->sendContent(tmpBuf);
     sendWebUiStylesheet(server);
 
@@ -1285,18 +1285,18 @@ void WebServerModule::renderConfigReadOnlyHTML() {
     server->sendContent(F("<a href=\"/\" style='color:#00BCD4;text-decoration:none;'>"));
     server->sendContent(getText("Instellingen bewerken", "Edit settings"));
     server->sendContent(F("</a> &middot; <a href=\"/notifications\" style='color:#00BCD4;text-decoration:none;'>"));
-    server->sendContent(getText("Laatste notificaties", "Recent notifications"));
+    server->sendContent(getText("Notificaties", "Notifications"));
     server->sendContent(F("</a> &middot; <a href=\"/settings.txt\" style='color:#00BCD4;text-decoration:none;'>"));
-    server->sendContent(getText("Instellingen kopiëren (tekst)", "Copy settings (text)"));
+    server->sendContent(getText("Instellingen (kopiëren)", "Settings (copy)"));
     server->sendContent(F("</a>"));
 #if OTA_ENABLED
     server->sendContent(F(" &middot; <a href=\"/update\" style='color:red;text-decoration:none;'>"));
-    server->sendContent(getText("Firmware-update (OTA)", "Firmware update (OTA)"));
+    server->sendContent(getText("Firmware Update (OTA)", "Firmware Update (OTA)"));
     server->sendContent(F("</a>"));
 #endif
     server->sendContent(F("<span id='apiStateHeader' style='margin-left:10px;font-size:11px;color:#666;'></span></div>"));
 
-    snprintf(tmpBuf, sizeof(tmpBuf), "<h1>%s &mdash; %s %s</h1>", getText("Config (alleen lezen)", "Config (read-only)"), bitvavoSymbol, ntfyTopic);
+    snprintf(tmpBuf, sizeof(tmpBuf), "<h1>%s &mdash; %s %s</h1>", getText("Overzicht (alleen lezen)", "Overview (read-only)"), bitvavoSymbol, ntfyTopic);
     server->sendContent(tmpBuf);
 
     server->sendContent(F("<div class='runtime-context'><h2>"));
@@ -1993,7 +1993,7 @@ void WebServerModule::handleSave() {
         alert2HThresholds.breakResetMarginPct = floatVal;
     }
     int intVal;
-    if (parseIntArg("2hBreakCD", intVal, 1, 180)) {
+    if (parseIntArg("2hBreakCD", intVal, 1, 300)) {
         alert2HThresholds.breakCooldownMs = intVal * 60UL * 1000UL;
     }
     if (parseFloatArg("2hMeanMinDist", floatVal, 0.01f, 10.0f)) {
@@ -2886,9 +2886,9 @@ void WebServerModule::handleNotifications() {
     server->send(200, "text/html; charset=utf-8", "");
 
     server->sendContent(F("<!DOCTYPE html><html><head><meta charset='UTF-8'>"));
-    // Titel: Laatste notificaties / Recent notifications
+    // Titel: Notificaties / Notifications
     server->sendContent(F("<title>"));
-    server->sendContent(getText("Laatste notificaties", "Recent notifications"));
+    server->sendContent(getText("Notificaties", "Notifications"));
     server->sendContent(F("</title>"));
     server->sendContent(F("<style>"
                           "body{font-family:Arial;background:#1a1a1a;color:#fff;margin:10px;}"
@@ -2906,12 +2906,12 @@ void WebServerModule::handleNotifications() {
                           "th:nth-child(5),td:nth-child(5){width:43%;word-wrap:break-word;word-break:break-word;text-align:left;}"
                           "</style></head><body>"));
     server->sendContent(F("<h2>"));
-    server->sendContent(getText("Laatste notificaties", "Recent notifications"));
+    server->sendContent(getText("Notificaties", "Notifications"));
     server->sendContent(F("</h2>"));
     server->sendContent(F("<div><a href='/'>"));
     server->sendContent(getText("Terug naar instellingen", "Back to settings"));
     server->sendContent(F("</a> &middot; <a href='/config'>"));
-    server->sendContent(getText("Config (alleen lezen)", "Config (read-only)"));
+    server->sendContent(getText("Overzicht (alleen lezen)", "Overview (read-only)"));
     server->sendContent(F("</a></div>"));
 
     uint8_t count = getNotificationLogCount();
@@ -2994,7 +2994,7 @@ void WebServerModule::handleUpdateGet() {
     if (!isClientConnected(server)) return;
     const char* html =
         "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>Firmware update</title><style>"
+        "<title>Firmware Update (OTA)</title><style>"
         "body{font-family:sans-serif;background:#1a1a1a;color:#eee;padding:20px;max-width:500px;margin:0 auto;}"
         "h1{font-size:1.2em;} input[type=file]{margin:10px 0;}"
         "button{background:#2196F3;color:#fff;border:none;padding:12px 24px;border-radius:4px;cursor:pointer;font-size:16px;}"
@@ -3006,7 +3006,7 @@ void WebServerModule::handleUpdateGet() {
         ".progress-fill{height:100%;background:#2196F3;width:0%;transition:width 0.15s;}"
         "#progressPct{margin-top:6px;font-size:14px;color:#00BCD4;}"
         "</style></head><body>"
-        "<h1>Firmware update (OTA)</h1>"
+        "<h1>Firmware Update (OTA)</h1>"
         "<p>Kies een .bin bestand.</p>"
         "<p style='font-size:0.9em;color:#aaa;'>In Arduino IDE compileer je via Menu &rarr; Sketch &rarr; Export compiled Binary. "
         "Het bestand &hellip;.ino.bin staat in de build-map.</p>"
@@ -3656,17 +3656,17 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     // Eenvoudige navigatie
     server->sendContent(F("<div style='margin-bottom:10px;font-size:13px;'>"));
     server->sendContent(F("<a href=\"/notifications\" style='color:#00BCD4;text-decoration:none;'>"));
-    server->sendContent(getText("Laatste notificaties", "Recent notifications"));
+    server->sendContent(getText("Notificaties", "Notifications"));
     server->sendContent(F("</a>"));
     server->sendContent(F(" &middot; <a href=\"/config\" style='color:#00BCD4;text-decoration:none;'>"));
-    server->sendContent(getText("Config (alleen lezen)", "Config (read-only)"));
+    server->sendContent(getText("Overzicht (alleen lezen)", "Overview (read-only)"));
     server->sendContent(F("</a>"));
     server->sendContent(F(" &middot; <a href=\"/settings.txt\" style='color:#00BCD4;text-decoration:none;'>"));
-    server->sendContent(getText("Instellingen kopiëren (tekst)", "Copy settings (text)"));
+    server->sendContent(getText("Instellingen (kopiëren)", "Settings (copy)"));
     server->sendContent(F("</a>"));
 #if OTA_ENABLED
     server->sendContent(F(" &middot; <a href=\"/update\" style='color:red;text-decoration:none;'>"));
-    server->sendContent(getText("Firmware-update (OTA)", "Firmware update (OTA)"));
+    server->sendContent(getText("Firmware Update (OTA)", "Firmware Update (OTA)"));
     server->sendContent(F("</a>"));
 #endif
     server->sendContent(F("<span id='apiStateHeader' style='margin-left:10px;font-size:11px;color:#666;'></span>"));

@@ -225,8 +225,8 @@ struct NtfyPendingItem;
 #define WARM_START_30M_CANDLES_DEFAULT 8  // Aantal 30m candles (default: 8 = 4 uur)
 #define WARM_START_2H_CANDLES_DEFAULT 6  // Aantal 2h candles (default: 6 = 12 uur)
 // Optimalisatie: skip warm-start voor 1m/5m als live data snel genoeg is
-#define WARM_START_SKIP_1M_DEFAULT true
-#define WARM_START_SKIP_5M_DEFAULT true
+#define WARM_START_SKIP_1M_DEFAULT false
+#define WARM_START_SKIP_5M_DEFAULT false
 // Bitvavo candlestick endpoint: /{market}/candles (wordt dynamisch gebouwd)
 #define WARM_START_TIMEOUT_MS 10000  // Timeout voor warm-start API calls (10 seconden)
 
@@ -261,7 +261,7 @@ struct NtfyPendingItem;
 
 // Sub-vlaggen: alleen effect als CRYPTO_ALERT_NTFY_DIAGNOSTICS_RUNTIME==1 (handmatige test onder belasting).
 #ifndef CRYPTO_ALERT_NTFY_STARTUP_TEST
-#define CRYPTO_ALERT_NTFY_STARTUP_TEST 0
+#define CRYPTO_ALERT_NTFY_STARTUP_TEST 1
 #endif
 
 #ifndef CRYPTO_ALERT_NTFY_PERIODIC_TEST
@@ -3524,23 +3524,28 @@ static const unsigned long MAX_MUTEX_HOLD_TIME_MS = 2000; // Max 2 seconden hold
 // Fase 4.1: Geconsolideerde mutex timeout handling
 // Helper: Handle mutex timeout with rate-limited logging
 // Geoptimaliseerd: elimineert code duplicatie voor mutex timeout handling
+static inline const char* safeLogStr(const char* p)
+{
+    return (p != nullptr) ? p : "?";
+}
+
 static void handleMutexTimeout(uint32_t& timeoutCount, const char* context, const char* symbol = nullptr, uint32_t logInterval = 10, uint32_t resetThreshold = 50)
 {
     timeoutCount++;
     // Log alleen bij eerste timeout of elke N-de timeout (rate limiting)
     if (timeoutCount == 1 || timeoutCount % logInterval == 0) {
         if (symbol) {
-            Serial_printf(F("[%s] WARN -> %s mutex timeout (count: %lu)\n"), context, symbol, timeoutCount);
+            Serial_printf(F("[%s] WARN -> %s mutex timeout (count: %lu)\n"), safeLogStr(context), safeLogStr(symbol), timeoutCount);
         } else {
-            Serial_printf(F("[%s] WARN: mutex timeout (count: %lu)\n"), context, timeoutCount);
+            Serial_printf(F("[%s] WARN: mutex timeout (count: %lu)\n"), safeLogStr(context), timeoutCount);
         }
     }
     // Reset counter na te veel timeouts (mogelijk deadlock)
     if (timeoutCount > resetThreshold) {
         if (symbol) {
-            Serial_printf(F("[%s] CRIT -> %s mutex timeout te vaak, mogelijk deadlock!\n"), context, symbol);
+            Serial_printf(F("[%s] CRIT -> %s mutex timeout te vaak, mogelijk deadlock!\n"), safeLogStr(context), safeLogStr(symbol));
         } else {
-            Serial_printf(F("[%s] CRIT: mutex timeout te vaak, mogelijk deadlock!\n"), context);
+            Serial_printf(F("[%s] CRIT: mutex timeout te vaak, mogelijk deadlock!\n"), safeLogStr(context));
         }
         timeoutCount = 0; // Reset counter
     }
@@ -3562,7 +3567,7 @@ static void resetMutexTimeoutCounter(uint32_t& timeoutCount)
 bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const char* context)
 {
     if (mutex == nullptr) {
-        Serial_printf(F("[Mutex] ERROR: Attempt to take nullptr mutex in %s\n"), context);
+        Serial_printf(F("[Mutex] ERROR: Attempt to take nullptr mutex in %s\n"), safeLogStr(context));
         return false;
     }
     
@@ -3571,7 +3576,7 @@ bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const char* cont
         unsigned long holdTime = millis() - mutexTakeTime;
         if (holdTime > MAX_MUTEX_HOLD_TIME_MS) {
             Serial_printf(F("[Mutex] WARNING: Potential deadlock detected! Mutex held for %lu ms by %s\n"), 
-                         holdTime, mutexHolderContext);
+                         holdTime, safeLogStr(mutexHolderContext));
         }
     }
     
@@ -3590,7 +3595,7 @@ bool safeMutexTake(SemaphoreHandle_t mutex, TickType_t timeout, const char* cont
 void safeMutexGive(SemaphoreHandle_t mutex, const char* context)
 {
     if (mutex == nullptr) {
-        Serial_printf(F("[Mutex] ERROR: Attempt to give nullptr mutex in %s\n"), context);
+        Serial_printf(F("[Mutex] ERROR: Attempt to give nullptr mutex in %s\n"), safeLogStr(context));
         return;
     }
     
@@ -3599,13 +3604,13 @@ void safeMutexGive(SemaphoreHandle_t mutex, const char* context)
         unsigned long holdTime = millis() - mutexTakeTime;
         if (holdTime > MAX_MUTEX_HOLD_TIME_MS) {
             Serial_printf(F("[Mutex] WARNING: Mutex held for %lu ms by %s (potential deadlock)\n"), 
-                         holdTime, mutexHolderContext ? mutexHolderContext : "unknown");
+                         holdTime, safeLogStr(mutexHolderContext));
         }
     }
     
     BaseType_t result = xSemaphoreGive(mutex);
     if (result != pdTRUE) {
-        Serial_printf(F("[Mutex] ERROR: xSemaphoreGive failed in %s (result=%d)\n"), context, result);
+        Serial_printf(F("[Mutex] ERROR: xSemaphoreGive failed in %s (result=%d)\n"), safeLogStr(context), result);
         // Note: This could indicate a mutex leak or double-release
         return;
     }
@@ -3621,7 +3626,8 @@ void netMutexLock(const char* taskName)
 {
     if (gNetMutex == NULL) {
         #if !DEBUG_BUTTON_ONLY
-        Serial.printf(F("[NetMutex] WARN: gNetMutex is NULL, HTTP operatie zonder mutex (by %s)\n"), taskName);
+        const char* safeTaskName = (taskName != nullptr) ? taskName : "net";
+        Serial.printf(F("[NetMutex] WARN: gNetMutex is NULL, HTTP operatie zonder mutex (by %s)\n"), safeTaskName);
         #endif
         return;
     }
@@ -3905,7 +3911,7 @@ static int ntfyDirectionFromBodyLine(const char* body, const char* marker) {
     return 0;
 }
 
-static void ntfyBuildSequenceId(const char* title, const char* body, char* outSeq, size_t outSeqSize) {
+void ntfyBuildSequenceId(const char* title, const char* body, char* outSeq, size_t outSeqSize) {
     if (outSeq == nullptr || outSeqSize == 0) return;
     outSeq[0] = '\0';
     if (title == nullptr) title = "";
@@ -3933,6 +3939,55 @@ static void ntfyBuildSequenceId(const char* title, const char* body, char* outSe
     const int d1 = ntfyDirectionFromBodyLine(body, "1m:");
     if (d1 > 0) { safeStrncpy(outSeq, "btc-1m-up", outSeqSize); return; }
     if (d1 < 0) { safeStrncpy(outSeq, "btc-1m-down", outSeqSize); return; }
+}
+
+void alertAuditPriceSnapshot(float* outPrice, const char** outSrcTag, uint32_t* outAgeMs) {
+    const unsigned long now = millis();
+    float p = latestKnownPrice;
+    if (!(p > 0.0f) && lastFetchedPrice > 0.0f) {
+        p = lastFetchedPrice;
+    }
+    if (outPrice != nullptr) {
+        *outPrice = p;
+    }
+    const char* src = "UNKNOWN";
+    switch (latestKnownPriceSource) {
+        case LKP_SRC_WS:
+            src = "WS";
+            break;
+        case LKP_SRC_REST:
+            src = "REST";
+            break;
+        default:
+            if (p > 0.0f || lastFetchedPrice > 0.0f) {
+                src = "FALLBACK";
+            }
+            break;
+    }
+    if (outSrcTag != nullptr) {
+        *outSrcTag = src;
+    }
+    uint32_t age = 0;
+    if (latestKnownPriceMs != 0UL && now >= latestKnownPriceMs) {
+        age = (uint32_t)(now - latestKnownPriceMs);
+    }
+    if (outAgeMs != nullptr) {
+        *outAgeMs = age;
+    }
+}
+
+void alertAuditLog(const char* rule, const char* seqNullable, float price, const char* price_src,
+                   uint32_t price_age_ms, const char* metric, float threshold,
+                   const char* context1, const char* context2) {
+    const char* sq = (seqNullable != nullptr && seqNullable[0] != '\0') ? seqNullable : "-";
+    const char* ps = (price_src != nullptr && price_src[0] != '\0') ? price_src : "UNKNOWN";
+    const char* m = (metric != nullptr && metric[0] != '\0') ? metric : "-";
+    const char* c1 = (context1 != nullptr && context1[0] != '\0') ? context1 : "-";
+    const char* c2 = (context2 != nullptr && context2[0] != '\0') ? context2 : "-";
+    const char* ru = (rule != nullptr && rule[0] != '\0') ? rule : "-";
+    Serial.printf(
+        "[ALERT][AUDIT] rule=%s seq=%s price=%.2f price_src=%s price_age_ms=%lu metric=%s threshold=%.4f context1=%s context2=%s reason=emit\n",
+        ru, sq, (double)price, ps, (unsigned long)price_age_ms, m, (double)threshold, c1, c2);
 }
 
 static int ntfyFindFreeSlot_NoLock() {
@@ -6264,7 +6319,7 @@ void publishMqttDiscovery() {
     delay(50);
     
     snprintf(topicBuffer, sizeof(topicBuffer), "homeassistant/number/%s_2hBreakCD/config", deviceId);
-    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Breakout Cooldown\",\"unique_id\":\"%s_2hBreakCD\",\"state_topic\":\"%s/config/2hBreakCD\",\"command_topic\":\"%s/config/2hBreakCD/set\",\"min\":1,\"max\":10800,\"step\":1,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
+    snprintf(payloadBuffer, sizeof(payloadBuffer), "{\"name\":\"2h Breakout Cooldown\",\"unique_id\":\"%s_2hBreakCD\",\"state_topic\":\"%s/config/2hBreakCD\",\"command_topic\":\"%s/config/2hBreakCD/set\",\"min\":1,\"max\":18000,\"step\":1,\"unit_of_measurement\":\"s\",\"icon\":\"mdi:timer\",\"mode\":\"box\",%s}", deviceId, mqttPrefix, mqttPrefix, deviceJson);
     mqttClient.publish(topicBuffer, payloadBuffer, true);
     delay(50);
     

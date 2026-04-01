@@ -214,7 +214,9 @@ public:
     // FASE X.2: Wrapper voor sendNotification() met 2h throttling
     // FASE X.3: PRIMARY alerts override throttling, SECONDARY alerts onderhevig aan throttling
     // Gebruik deze functie in plaats van direct sendNotification() voor 2h alerts
-    static bool send2HNotification(Alert2HType alertType, const char* title, const char* msg, const char* colorTag);
+    static bool send2HNotification(Alert2HType alertType, const char* title, const char* msg, const char* colorTag,
+                                   float auditPrimary = 0.0f, float auditThreshold = 0.0f,
+                                   const char* auditMetricTag = nullptr);
     
     // Sync state: Update AlertEngine state met globale variabelen (voor parallel implementatie)
     void syncStateFromGlobals();

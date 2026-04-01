@@ -2,10 +2,15 @@
 #include <WiFi.h>
 #include <time.h>  // Voor getLocalTime()
 #include <math.h>
+#include <string.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
 #include "../RegimeEngine/RegimeEngine.h"
+// platform_config.h trekt PINS_*.h mee (globale bus/gfx); alleen main .ino, anders duplicate symbols bij linken.
+#define MODULE_INCLUDE
+#include "../../platform_config.h"
+#undef MODULE_INCLUDE
 
 // SettingsStore module (Fase 6.1.10: voor AlertThresholds en NotificationCooldowns structs)
 #include "../SettingsStore/SettingsStore.h"
@@ -31,6 +36,8 @@ extern Alert2HThresholds alert2HThresholds;
 // PriceData module (voor fiveMinutePrices getter)
 #include "../PriceData/PriceData.h"
 extern PriceData priceData;  // Voor getFiveMinutePrices()
+
+#include "../AlertAudit.h"
 
 // Forward declarations voor dependencies (worden later via modules)
 extern bool sendNotification(const char *title, const char *message, const char *colorTag = nullptr);
@@ -215,6 +222,98 @@ static const float WS_SECOND_QUALITY_MAX_SPREAD_1M = 35.0f;
 #define Serial_printf Serial.printf
 #endif
 
+#if DEBUG_ALERT_TRACE
+extern unsigned long latestKnownPriceMs;
+extern uint8_t latestKnownPriceSource;
+
+static uint32_t alertTraceAllocId()
+{
+    static uint32_t s_seq = 0;
+    if (++s_seq == 0) {
+        s_seq = 1;
+    }
+    return s_seq;
+}
+
+static const char* alertTraceNormAuditSrc(const char* auditTag)
+{
+    if (auditTag == nullptr || auditTag[0] == '\0') {
+        return "unknown";
+    }
+    if (strcmp(auditTag, "WS") == 0) {
+        return "WS";
+    }
+    if (strcmp(auditTag, "REST") == 0) {
+        return "REST";
+    }
+    if (strcmp(auditTag, "FALLBACK") == 0) {
+        return "prices0";
+    }
+    return "unknown";
+}
+
+static void alertTraceCandTrigger(float* outPri, const char** outNormSrc, uint32_t* outAgeMs)
+{
+    const char* raw = "UNKNOWN";
+    alertAuditPriceSnapshot(outPri, &raw, outAgeMs);
+    *outNormSrc = alertTraceNormAuditSrc(raw);
+}
+
+static void alertTraceFmtEpochS(char* buf, size_t bufSz, unsigned long epochS, bool valid)
+{
+    if (bufSz == 0) {
+        return;
+    }
+    if (!valid || epochS == 0UL) {
+        safeStrncpy(buf, "na", bufSz);
+    } else {
+        snprintf(buf, bufSz, "%lu", (unsigned long)epochS);
+    }
+    buf[bufSz - 1] = '\0';
+}
+
+// Zelfde keuze als snapshotNotifDisplayPrice + bron/leeftijd voor trace (alleen logging).
+static void alertTraceDispNotifSnap(uint32_t nowMs, float* outDisp, const char** outSrc, char* ageBuf,
+                                    size_t ageBufSz)
+{
+    float p = prices[0];
+    *outDisp = p;
+    *outSrc = "na";
+    if (ageBuf != nullptr && ageBufSz > 0) {
+        safeStrncpy(ageBuf, "na", ageBufSz);
+        ageBuf[ageBufSz - 1] = '\0';
+    }
+    if (ageBuf == nullptr || ageBufSz == 0) {
+        return;
+    }
+    if (dataMutex != nullptr && safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "alert trace disp")) {
+        const float lk = latestKnownPrice;
+        const float px = prices[0];
+        const uint8_t src = latestKnownPriceSource;
+        const unsigned long lkMs = latestKnownPriceMs;
+        safeMutexGive(dataMutex, "alert trace disp");
+        if (lk > 0.0f) {
+            *outDisp = lk;
+            if (src == 2U) {
+                *outSrc = "WS";
+            } else if (src == 1U) {
+                *outSrc = "REST";
+            } else {
+                *outSrc = "unknown";
+            }
+            if (lkMs != 0UL && nowMs >= lkMs) {
+                snprintf(ageBuf, ageBufSz, "%lu", (unsigned long)(nowMs - lkMs));
+            }
+        } else {
+            *outDisp = px;
+            *outSrc = "prices0";
+            safeStrncpy(ageBuf, "na", ageBufSz);
+        }
+        ageBuf[ageBufSz - 1] = '\0';
+    }
+}
+#endif
+
 // Rond prijzen af op hele euro's (0.50 -> omhoog) voor NTFY-teksten
 static float roundToEuroNotif(float price)
 {
@@ -359,7 +458,9 @@ static bool volumeEventCooldownOk(unsigned long now)
     return (lastVolumeEventMs == 0 || (now - lastVolumeEventMs) >= VOLUME_EVENT_COOLDOWN_MS);
 }
 
-static void appendVolumeRangeInfo(char* msg, size_t msgSize, const VolumeRangeStatus& status)
+// scopeLine: optioneel (bijv. 30m-alert: volume/range komt uit 5m-candle); nullptr = alleen vol/range-regel
+static void appendVolumeRangeInfo(char* msg, size_t msgSize, const VolumeRangeStatus& status,
+                                  const char* scopeLine = nullptr)
 {
     if (!status.valid) {
         return;
@@ -375,7 +476,11 @@ static void appendVolumeRangeInfo(char* msg, size_t msgSize, const VolumeRangeSt
     char extra[72];
     snprintf(extra, sizeof(extra), "vol%+.0f%% %s | %s %.2f%%",
              status.volumeDeltaPct, vsAvgText, rangeText, status.rangePct);
-    snprintf(msg + len, msgSize - len, "\n%s", extra);
+    if (scopeLine != nullptr && scopeLine[0] != '\0') {
+        snprintf(msg + len, msgSize - len, "\n%s\n%s", scopeLine, extra);
+    } else {
+        snprintf(msg + len, msgSize - len, "\n%s", extra);
+    }
 }
 
 // Helper: Format notification message with timestamp, price, and min/max
@@ -435,6 +540,21 @@ bool AlertEngine::sendAlertNotification(float ret, float threshold, float strong
     char title[48];
     snprintf(title, sizeof(title), "%s %s Alert", bitvavoSymbol, alertType);
     
+    char seqAud[41];
+    ntfyBuildSequenceId(title, msg, seqAud, sizeof(seqAud));
+    float pa = 0.0f;
+    const char* sa = "UNKNOWN";
+    uint32_t ag = 0;
+    alertAuditPriceSnapshot(&pa, &sa, &ag);
+    char ruleAud[48];
+    snprintf(ruleAud, sizeof(ruleAud), "generic_%s", alertType);
+    char c1Aud[24];
+    char c2Aud[20];
+    snprintf(c1Aud, sizeof(c1Aud), "ret=%.4g", (double)ret);
+    safeStrncpy(c2Aud, direction, sizeof(c2Aud));
+    c2Aud[sizeof(c2Aud) - 1] = '\0';
+    alertAuditLog(ruleAud, (seqAud[0] != '\0') ? seqAud : nullptr, pa, sa, ag, "ret_pct", threshold, c1Aud, c2Aud);
+
     bool sent = sendNotification(title, msg, colorTag);
     if (sent) {
     lastNotification = now;
@@ -661,6 +781,18 @@ bool AlertEngine::checkAndSendConfluenceAlert(unsigned long now, float ret_30m)
     appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange);
     
     const char* colorTag = (direction == EVENT_UP) ? "\xF0\x9F\x93\x88" /* 📈 */ : "\xF0\x9F\x93\x89" /* 📉 */;
+    const char* ruleCf = (direction == EVENT_UP) ? "confluence_up" : "confluence_down";
+    char seqCf[41];
+    ntfyBuildSequenceId(titleBuffer, msgBuffer, seqCf, sizeof(seqCf));
+    float pCf = 0.0f;
+    const char* srcCf = "UNKNOWN";
+    uint32_t ageCf = 0;
+    alertAuditPriceSnapshot(&pCf, &srcCf, &ageCf);
+    char c1Cf[36];
+    char c2Cf[36];
+    snprintf(c1Cf, sizeof(c1Cf), "1m=%.3f 5m=%.3f", (double)last1mEvent.magnitude, (double)last5mEvent.magnitude);
+    snprintf(c2Cf, sizeof(c2Cf), "30m=%.3f", (double)ret_30m);
+    alertAuditLog(ruleCf, (seqCf[0] != '\0') ? seqCf : nullptr, pCf, srcCf, ageCf, "confluence", 0.0f, c1Cf, c2Cf);
     bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
     if (sent) {
         lastVolumeEventMs = now;
@@ -674,7 +806,7 @@ bool AlertEngine::checkAndSendConfluenceAlert(unsigned long now, float ret_30m)
     Serial_printf(F("[Confluence] Alert verzonden: 1m=%.2f%%, 5m=%.2f%%, trend=%s, ret_30m=%.2f%%\n"),
                   (direction == EVENT_UP ? last1mEvent.magnitude : -last1mEvent.magnitude),
                   (direction == EVENT_UP ? last5mEvent.magnitude : -last5mEvent.magnitude),
-                  trendText, ret_30m);
+                  safeFmtStr(trendText), ret_30m);
     #endif
     
     return sent;
@@ -935,6 +1067,43 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         
         // Debug logging alleen bij spike detectie
         if (spikeDetected) {
+#if DEBUG_ALERT_TRACE
+                const uint32_t tr1m = alertTraceAllocId();
+                const uint32_t tr1m_det_ms = now;
+                bool tr_ws_qfail = false;
+#if ENABLE_WS_SECOND_QUALITY_GUARD_1M
+                {
+                    uint32_t wsTrTicks = 0;
+                    float wsTrSpread = 0.0f;
+                    bool wsTrValid = false;
+                    bool wsTrFresh = false;
+                    if (getWsSecondLastClosedQuality(wsTrTicks, wsTrSpread, wsTrValid, wsTrFresh) && wsTrValid &&
+                        wsTrFresh) {
+                        tr_ws_qfail = (wsTrTicks < WS_SECOND_QUALITY_MIN_TICKS_1M) ||
+                                      (wsTrSpread > WS_SECOND_QUALITY_MAX_SPREAD_1M);
+                    }
+                }
+#endif
+                {
+                    const RegimeSnapshot trSnap1m = regimeEngineGetSnapshot();
+                    float trP = 0.0f;
+                    const char* trS = "unknown";
+                    uint32_t trAge = 0;
+                    alertTraceCandTrigger(&trP, &trS, &trAge);
+                    char c1s[20];
+                    char c5s[20];
+                    alertTraceFmtEpochS(c1s, sizeof(c1s), lastKline1m.openTime, lastKline1m.valid);
+                    alertTraceFmtEpochS(c5s, sizeof(c5s), lastKline5m.openTime, lastKline5m.valid);
+                    Serial.printf(
+                        "[ALERT_TRACE] id=%lu type=1m_spike phase=candidate ms=%lu r1=%.3f r5=%.3f r30=%.3f th1=%.3f th5f=%.3f vr_ok=%d cf_en=%d ws_qfail=%d night=%d reg_en=%d reg=%u "
+                        "trig_pri=%.2f trig_src=%s trig_age_ms=%lu snap1m_open_s=%s snap5m_open_s=%s\n",
+                        (unsigned long)tr1m, (unsigned long)tr1m_det_ms, (double)ret_1m, (double)ret_5m,
+                        (double)ret_30m, (double)finalSpike1mThreshold, (double)spike5mThreshold,
+                        volumeRangeOk1m ? 1 : 0, smartConfluenceEnabled ? 1 : 0, tr_ws_qfail ? 1 : 0,
+                        nightActive ? 1 : 0, regimeEngineEnabled ? 1 : 0, (unsigned)trSnap1m.committedRegime,
+                        (double)trP, trS, (unsigned long)trAge, c1s, c5s);
+                }
+#endif
                 #if !DEBUG_BUTTON_ONLY
             Serial_printf(F("[Notify] 1m spike: ret_1m=%.2f%%, ret_5m=%.2f%%\n"), ret_1m, ret_5m);
                 #endif
@@ -943,6 +1112,10 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                     #if !DEBUG_BUTTON_ONLY
                     Serial_printf(F("[Notify] 1m spike onderdrukt (volume/range confirmatie fail)\n"));
                     #endif
+#if DEBUG_ALERT_TRACE
+                    Serial.printf("[ALERT_TRACE] id=%lu type=1m_spike phase=suppress reason=volume_range_fail\n",
+                                  (unsigned long)tr1m);
+#endif
                 } else {
             bool wsQualitySuppress1m = false;
 #if ENABLE_WS_SECOND_QUALITY_GUARD_1M
@@ -967,6 +1140,10 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
 #endif
             if (wsQualitySuppress1m) {
                 // Extra kwaliteitsfilter voor 1m spike; bestaande thresholds/cooldowns ongewijzigd.
+#if DEBUG_ALERT_TRACE
+                Serial.printf("[ALERT_TRACE] id=%lu type=1m_spike phase=suppress reason=ws_quality_fail\n",
+                              (unsigned long)tr1m);
+#endif
             } else {
             // Check for confluence first (Smart Confluence Mode)
             bool confluenceFound = false;
@@ -982,16 +1159,29 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                         #if !DEBUG_BUTTON_ONLY
                 Serial_printf(F("[Notify] 1m spike onderdrukt (gebruikt in confluence alert)\n"));
                         #endif
+#if DEBUG_ALERT_TRACE
+                Serial.printf("[ALERT_TRACE] id=%lu type=1m_spike phase=suppress reason=confluence_used\n",
+                              (unsigned long)tr1m);
+#endif
             } else {
                 // Check of dit event al gebruikt is in confluence (suppress individuele alert)
                 if (smartConfluenceEnabled && last1mEvent.usedInConfluence) {
                             #if !DEBUG_BUTTON_ONLY
                     Serial_printf(F("[Notify] 1m spike onderdrukt (al gebruikt in confluence)\n"));
                             #endif
+#if DEBUG_ALERT_TRACE
+                    Serial.printf("[ALERT_TRACE] id=%lu type=1m_spike phase=suppress reason=confluence_used\n",
+                                  (unsigned long)tr1m);
+#endif
                         } else if (!volumeEventCooldownOk(now)) {
                             #if !DEBUG_BUTTON_ONLY
                             Serial_printf(F("[Notify] 1m spike onderdrukt (volume-event cooldown)\n"));
                             #endif
+#if DEBUG_ALERT_TRACE
+                            Serial.printf(
+                                "[ALERT_TRACE] id=%lu type=1m_spike phase=suppress reason=volume_event_cooldown\n",
+                                (unsigned long)tr1m);
+#endif
                 } else {
                     // Bereken min en max uit secondPrices buffer
                     float minVal, maxVal;
@@ -1010,14 +1200,16 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                     float spikeMaxRounded = roundToEuroNotif(maxVal);
                     if (ret_1m >= 0) {
                                 snprintf(msgBuffer, sizeof(msgBuffer), 
-                                         "%.0f (%s)\n1m %s spike: +%.2f%% (5m: +%.2f%%)\n1m %s: %.0f\n1m %s: %.0f", 
-                                         spikePriceRounded, timestampBuffer, 
+                                         "%s: %.0f (%s)\n1m %s spike: +%.2f%% (5m: +%.2f%%)\n1m %s: %.0f\n1m %s: %.0f",
+                                         safeFmtStr(getText("Live prijs", "Live price")),
+                                         spikePriceRounded, timestampBuffer,
                                          getText("OP", "UP"), ret_1m, ret_5m,
                                          getText("Top", "Top"), spikeMaxRounded,
                                          getText("Dal", "Low"), spikeMinRounded);
                     } else {
                                 snprintf(msgBuffer, sizeof(msgBuffer), 
-                                         "%.0f (%s)\n1m %s spike: %.2f%% (5m: %.2f%%)\n1m %s: %.0f\n1m %s: %.0f", 
+                                         "%s: %.0f (%s)\n1m %s spike: %.2f%% (5m: %.2f%%)\n1m %s: %.0f\n1m %s: %.0f",
+                                         safeFmtStr(getText("Live prijs", "Live price")),
                                          spikePriceRounded, timestampBuffer,
                                          getText("NEER", "DOWN"), ret_1m, ret_5m,
                                          getText("Top", "Top"), spikeMaxRounded,
@@ -1026,12 +1218,63 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange1m);
                     
                     const char* colorTag = determineColorTag(ret_1m, finalSpike1mThreshold, finalSpike1mThreshold * 1.5f);
-                            snprintf(titleBuffer, sizeof(titleBuffer), "%s 1m %s", bitvavoSymbol, getText("Spike", "Spike"));
+                            // Titelprefix gelijk aan 5m-move: 🟦/🟧 (richting) + 🔼/🔽; Tags blijven severity via determineColorTag
+                            snprintf(titleBuffer, sizeof(titleBuffer),
+                                     "%s %s %s 1m %s",
+                                     (ret_1m >= 0.0f) ? "\xF0\x9F\x9F\xA6" /* 🟦 */ : "\xF0\x9F\x9F\xA7" /* 🟧 */,
+                                     (ret_1m >= 0.0f) ? "\xF0\x9F\x94\xBC" /* 🔼 */ : "\xF0\x9F\x94\xBD" /* 🔽 */,
+                                     bitvavoSymbol, getText("Spike", "Spike"));
                     
                     // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
-                    if (checkAlertConditions(now, lastNotification1Min, finalCooldown1mMs, 
-                                             alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR, "1m spike")) {
+                    {
+                        const bool ok1mSend = checkAlertConditions(now, lastNotification1Min, finalCooldown1mMs,
+                                                                   alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR,
+                                                                   "1m spike");
+#if DEBUG_ALERT_TRACE
+                        if (!ok1mSend) {
+                            const char* rsn =
+                                (lastNotification1Min != 0 && (now - lastNotification1Min < finalCooldown1mMs))
+                                    ? "cooldown"
+                                    : "hour_cap";
+                            Serial.printf("[ALERT_TRACE] id=%lu type=1m_spike phase=suppress reason=%s\n",
+                                          (unsigned long)tr1m, rsn);
+                        }
+#endif
+                        if (ok1mSend) {
+                                const char* rule1m = (ret_1m >= 0.0f) ? "1m_up" : "1m_down";
+                                char seq1m[41];
+                                ntfyBuildSequenceId(titleBuffer, msgBuffer, seq1m, sizeof(seq1m));
+                                float p1m = 0.0f;
+                                const char* s1m = "UNKNOWN";
+                                uint32_t a1m = 0;
+                                alertAuditPriceSnapshot(&p1m, &s1m, &a1m);
+                                char x1m[28];
+                                char x2m[28];
+                                snprintf(x1m, sizeof(x1m), "ret_1m=%.3f", (double)ret_1m);
+                                snprintf(x2m, sizeof(x2m), "ret_5m=%.3f", (double)ret_5m);
+                                alertAuditLog(rule1m, (seq1m[0] != '\0') ? seq1m : nullptr, p1m, s1m, a1m, "ret_1m",
+                                              finalSpike1mThreshold, x1m, x2m);
+#if DEBUG_ALERT_TRACE
+                                {
+                                    const uint32_t msn = millis();
+                                    float dP = 0.0f;
+                                    const char* dS = "na";
+                                    char dAge[20];
+                                    alertTraceDispNotifSnap(msn, &dP, &dS, dAge, sizeof(dAge));
+                                    Serial.printf(
+                                        "[ALERT_TRACE] id=%lu type=1m_spike phase=send_start ms=%lu disp=%.0f disp_src=%s disp_age_ms=%s min=%.0f max=%.0f det_ms=%lu\n",
+                                        (unsigned long)tr1m, (unsigned long)msn,
+                                        (double)roundToEuroNotif(snapshotNotifDisplayPrice()), dS, dAge,
+                                        (double)roundToEuroNotif(minVal), (double)roundToEuroNotif(maxVal),
+                                        (unsigned long)tr1m_det_ms);
+                                }
+#endif
                                 bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
+#if DEBUG_ALERT_TRACE
+                                Serial.printf(
+                                    "[ALERT_TRACE] id=%lu type=1m_spike phase=send_done ms=%lu sent=%d note=enqueue_return\n",
+                                    (unsigned long)tr1m, (unsigned long)millis(), sent ? 1 : 0);
+#endif
                                 if (sent) {
                         lastNotification1Min = now;
                         alerts1MinThisHour++;
@@ -1040,7 +1283,8 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                         Serial_printf(F("[Notify] 1m spike notificatie verstuurd (%d/%d dit uur)\n"), alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR);
                                     #endif
                                 }
-                            }
+                        }
+                    }
                         }
                     }
                 }
@@ -1067,6 +1311,28 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                 } else if (normal1mSpikeDetected && volumeRangeOk1mS) {
                     // Standaard 1m+5m-spikepad hierboven heeft prioriteit (geen dubbele confluence/standalone).
                 } else {
+#if DEBUG_ALERT_TRACE
+                    const uint32_t tr1e = alertTraceAllocId();
+                    const uint32_t tr1e_det_ms = now;
+                    {
+                        const RegimeSnapshot trSnapE = regimeEngineGetSnapshot();
+                        float trP = 0.0f;
+                        const char* trS = "unknown";
+                        uint32_t trAge = 0;
+                        alertTraceCandTrigger(&trP, &trS, &trAge);
+                        char c1s[20];
+                        char c5s[20];
+                        alertTraceFmtEpochS(c1s, sizeof(c1s), lastKline1m.openTime, lastKline1m.valid);
+                        alertTraceFmtEpochS(c5s, sizeof(c5s), lastKline5m.openTime, lastKline5m.valid);
+                        Serial.printf(
+                            "[ALERT_TRACE] id=%lu type=1m_energiek phase=candidate ms=%lu r1=%.3f r5=%.3f r30=%.3f th_std=%.3f th_st=%.3f vr_ok=%d cf_en=%d night=%d reg=%u "
+                            "trig_pri=%.2f trig_src=%s trig_age_ms=%lu snap1m_open_s=%s snap5m_open_s=%s\n",
+                            (unsigned long)tr1e, (unsigned long)tr1e_det_ms, (double)ret_1m, (double)ret_5m,
+                            (double)ret_30m, (double)finalSpike1mThreshold, (double)standalone1mTh,
+                            volumeRangeOk1mS ? 1 : 0, smartConfluenceEnabled ? 1 : 0, nightActive ? 1 : 0,
+                            (unsigned)trSnapE.committedRegime, (double)trP, trS, (unsigned long)trAge, c1s, c5s);
+                    }
+#endif
                     update1mEvent(ret_1m, now, standalone1mTh);
                     bool confluenceFoundS = false;
                     if (smartConfluenceEnabled) {
@@ -1079,14 +1345,27 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                         #if !DEBUG_BUTTON_ONLY
                         Serial_printf(F("[Notify] 1m ENERGIEK standalone onderdrukt (confluence)\n"));
                         #endif
+#if DEBUG_ALERT_TRACE
+                        Serial.printf("[ALERT_TRACE] id=%lu type=1m_energiek phase=suppress reason=confluence_used\n",
+                                      (unsigned long)tr1e);
+#endif
                     } else if (smartConfluenceEnabled && last1mEvent.usedInConfluence) {
                         #if !DEBUG_BUTTON_ONLY
                         Serial_printf(F("[Notify] 1m ENERGIEK standalone onderdrukt (confluence)\n"));
                         #endif
+#if DEBUG_ALERT_TRACE
+                        Serial.printf("[ALERT_TRACE] id=%lu type=1m_energiek phase=suppress reason=confluence_used\n",
+                                      (unsigned long)tr1e);
+#endif
                     } else if (!volumeEventCooldownOk(now)) {
                         #if !DEBUG_BUTTON_ONLY
                         Serial_printf(F("[Notify] 1m ENERGIEK standalone onderdrukt (volume-event cooldown)\n"));
                         #endif
+#if DEBUG_ALERT_TRACE
+                        Serial.printf(
+                            "[ALERT_TRACE] id=%lu type=1m_energiek phase=suppress reason=volume_event_cooldown\n",
+                            (unsigned long)tr1e);
+#endif
                     } else if (!energiekStandalone1mGuardsOk(snapEn.directionScore,
                                                             regimeEnergiekMinDirectionStrength,
                                                             hasRet30m,
@@ -1095,6 +1374,10 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                         #if !DEBUG_BUTTON_ONLY
                         Serial.println(F("[PhaseC] suppressed_energiek_1m_low_direction"));
                         #endif
+#if DEBUG_ALERT_TRACE
+                        Serial.printf("[ALERT_TRACE] id=%lu type=1m_energiek phase=suppress reason=direction_guard\n",
+                                      (unsigned long)tr1e);
+#endif
                     } else {
                         // Minimaal, self-contained bericht: geen ret_5m/min-max/appendVolumeRangeInfo
                         // (minder stack en geen hergebruik van 5m-velden in de tekst).
@@ -1112,18 +1395,66 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                         Serial.println(F("[PhaseC] standalone_before_format"));
                         #endif
                         snprintf(msgBuffer, sizeof(msgBuffer),
-                                 "%.0f (%s)\n%s\n1m: %+.2f%%",
+                                 "%s: %.0f (%s)\n%s\n1m: %+.2f%%",
+                                 safeFmtStr(getText("Live prijs", "Live price")),
                                  spikePriceRoundedS, tsS, lineStandalone, ret_1m);
                         const char* colorTagS =
                             determineColorTag(ret_1m, standalone1mTh, standalone1mTh * 1.5f);
-                        snprintf(titleBuffer, sizeof(titleBuffer), "%s 1m %s", symS, spikeLblS);
-                        if (checkAlertConditions(now, lastNotification1Min, finalCooldown1mMs,
-                                                alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR,
-                                                "1m spike ENERGIEK standalone")) {
+                        snprintf(titleBuffer, sizeof(titleBuffer),
+                                 "%s %s %s 1m %s",
+                                 (ret_1m >= 0.0f) ? "\xF0\x9F\x9F\xA6" /* 🟦 */ : "\xF0\x9F\x9F\xA7" /* 🟧 */,
+                                 (ret_1m >= 0.0f) ? "\xF0\x9F\x94\xBC" /* 🔼 */ : "\xF0\x9F\x94\xBD" /* 🔽 */,
+                                 symS, spikeLblS);
+                        {
+                            const bool ok1eSend = checkAlertConditions(
+                                now, lastNotification1Min, finalCooldown1mMs, alerts1MinThisHour,
+                                MAX_1M_ALERTS_PER_HOUR, "1m spike ENERGIEK standalone");
+#if DEBUG_ALERT_TRACE
+                            if (!ok1eSend) {
+                                const char* rsn =
+                                    (lastNotification1Min != 0 && (now - lastNotification1Min < finalCooldown1mMs))
+                                        ? "cooldown"
+                                        : "hour_cap";
+                                Serial.printf("[ALERT_TRACE] id=%lu type=1m_energiek phase=suppress reason=%s\n",
+                                              (unsigned long)tr1e, rsn);
+                            }
+#endif
+                            if (ok1eSend) {
                             #if !DEBUG_BUTTON_ONLY
                             Serial.println(F("[PhaseC] standalone_before_send"));
                             #endif
+                            const char* rule1s = (ret_1m >= 0.0f) ? "1m_up" : "1m_down";
+                            char seq1s[41];
+                            ntfyBuildSequenceId(titleBuffer, msgBuffer, seq1s, sizeof(seq1s));
+                            float p1s = 0.0f;
+                            const char* s1s = "UNKNOWN";
+                            uint32_t a1s = 0;
+                            alertAuditPriceSnapshot(&p1s, &s1s, &a1s);
+                            char u1s[28];
+                            snprintf(u1s, sizeof(u1s), "ret_1m=%.3f", (double)ret_1m);
+                            alertAuditLog(rule1s, (seq1s[0] != '\0') ? seq1s : nullptr, p1s, s1s, a1s, "ret_1m",
+                                          standalone1mTh, u1s, "standalone");
+#if DEBUG_ALERT_TRACE
+                            {
+                                const uint32_t mse = millis();
+                                float dP = 0.0f;
+                                const char* dS = "na";
+                                char dAge[20];
+                                alertTraceDispNotifSnap(mse, &dP, &dS, dAge, sizeof(dAge));
+                                Serial.printf(
+                                    "[ALERT_TRACE] id=%lu type=1m_energiek phase=send_start ms=%lu disp=%.0f disp_src=%s disp_age_ms=%s min=%.0f max=%.0f det_ms=%lu\n",
+                                    (unsigned long)tr1e, (unsigned long)mse,
+                                    (double)roundToEuroNotif(snapshotNotifDisplayPrice()), dS, dAge,
+                                    (double)roundToEuroNotif(spikePriceRoundedS), (double)roundToEuroNotif(spikePriceRoundedS),
+                                    (unsigned long)tr1e_det_ms);
+                            }
+#endif
                             bool sentS = sendNotification(titleBuffer, msgBuffer, safeFmtStr(colorTagS));
+#if DEBUG_ALERT_TRACE
+                            Serial.printf(
+                                "[ALERT_TRACE] id=%lu type=1m_energiek phase=send_done ms=%lu sent=%d note=enqueue_return\n",
+                                (unsigned long)tr1e, (unsigned long)millis(), sentS ? 1 : 0);
+#endif
                             if (sentS) {
                                 lastNotification1Min = now;
                                 alerts1MinThisHour++;
@@ -1133,6 +1464,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                                     F("[Notify] 1m ENERGIEK standalone notificatie verstuurd (%d/%d dit uur)\n"),
                                     alerts1MinThisHour, MAX_1M_ALERTS_PER_HOUR);
                                 #endif
+                            }
                             }
                         }
                     }
@@ -1165,6 +1497,29 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         
         // Debug logging alleen bij move detectie
         if (moveDetected) {
+#if DEBUG_ALERT_TRACE
+                const uint32_t tr30 = alertTraceAllocId();
+                const uint32_t tr30_det_ms = now;
+                {
+                    const RegimeSnapshot trSnap30 = regimeEngineGetSnapshot();
+                    float trP = 0.0f;
+                    const char* trS = "unknown";
+                    uint32_t trAge = 0;
+                    alertTraceCandTrigger(&trP, &trS, &trAge);
+                    char c1s[20];
+                    char c5s[20];
+                    alertTraceFmtEpochS(c1s, sizeof(c1s), lastKline1m.openTime, lastKline1m.valid);
+                    alertTraceFmtEpochS(c5s, sizeof(c5s), lastKline5m.openTime, lastKline5m.valid);
+                    Serial.printf(
+                        "[ALERT_TRACE] id=%lu type=30m_move phase=candidate ms=%lu r1=%.3f r5=%.3f r30=%.3f th30=%.3f th5f=%.3f vr_ok=%d cf_en=%d ws_qfail=0 night=%d reg_en=%d reg=%u "
+                        "trig_pri=%.2f trig_src=%s trig_age_ms=%lu snap1m_open_s=%s snap5m_open_s=%s\n",
+                        (unsigned long)tr30, (unsigned long)tr30_det_ms, (double)ret_1m, (double)ret_5m,
+                        (double)ret_30m, (double)finalMove30mThreshold, (double)alertThresholds.move5m,
+                        volumeRangeOk5m ? 1 : 0, smartConfluenceEnabled ? 1 : 0, nightActive ? 1 : 0,
+                        regimeEngineEnabled ? 1 : 0, (unsigned)trSnap30.committedRegime, (double)trP, trS,
+                        (unsigned long)trAge, c1s, c5s);
+                }
+#endif
                 #if !DEBUG_BUTTON_ONLY
             Serial_printf(F("[Notify] 30m move: ret_30m=%.2f%%, ret_5m=%.2f%%\n"), ret_30m, ret_5m);
                 #endif
@@ -1173,6 +1528,10 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                     #if !DEBUG_BUTTON_ONLY
                     Serial_printf(F("[Notify] 30m move onderdrukt (volume/range confirmatie fail)\n"));
                     #endif
+#if DEBUG_ALERT_TRACE
+                    Serial.printf("[ALERT_TRACE] id=%lu type=30m_move phase=suppress reason=volume_range_fail\n",
+                                  (unsigned long)tr30);
+#endif
                 } else {
             // Bereken min en max uit laatste 30 minuten van minuteAverages buffer
             float minVal, maxVal;
@@ -1185,32 +1544,90 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
             float moveMaxRounded = roundToEuroNotif(maxVal);
             if (ret_30m >= 0) {
                         snprintf(msgBuffer, sizeof(msgBuffer), 
-                                 "%.0f (%s)\n30m %s move: +%.2f%% (5m: +%.2f%%)\n30m %s: %.0f\n30m %s: %.0f", 
+                                 "%s: %.0f (%s)\n30m %s move: +%.2f%% (5m: +%.2f%%)\n30m %s: %.0f\n30m %s: %.0f",
+                                 safeFmtStr(getText("Live prijs", "Live price")),
                                  movePriceRounded, timestampBuffer,
                                  getText("OP", "UP"), ret_30m, ret_5m,
                                  getText("Top", "Top"), moveMaxRounded,
                                  getText("Dal", "Low"), moveMinRounded);
             } else {
                         snprintf(msgBuffer, sizeof(msgBuffer), 
-                                 "%.0f (%s)\n30m %s move: %.2f%% (5m: %.2f%%)\n30m %s: %.0f\n30m %s: %.0f", 
+                                 "%s: %.0f (%s)\n30m %s move: %.2f%% (5m: %.2f%%)\n30m %s: %.0f\n30m %s: %.0f",
+                                 safeFmtStr(getText("Live prijs", "Live price")),
                                  movePriceRounded, timestampBuffer,
                                  getText("NEER", "DOWN"), ret_30m, ret_5m,
                                  getText("Top", "Top"), moveMaxRounded,
                                  getText("Dal", "Low"), moveMinRounded);
                     }
-                    appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange5m);
+                    appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange5m,
+                                          safeFmtStr(getText("5m candle — volume/range",
+                                                            "5m candle — volume/range")));
             
             const char* colorTag = determineColorTag(ret_30m, finalMove30mThreshold, finalMove30mThreshold * 1.5f);
-                    snprintf(titleBuffer, sizeof(titleBuffer), "%s 30m %s", bitvavoSymbol, getText("Move", "Move"));
+                    snprintf(titleBuffer, sizeof(titleBuffer),
+                             "%s %s %s 30m %s",
+                             (ret_30m >= 0.0f) ? "\xF0\x9F\x9F\xA6" /* 🟦 */ : "\xF0\x9F\x9F\xA7" /* 🟧 */,
+                             (ret_30m >= 0.0f) ? "\xF0\x9F\x94\xBC" /* 🔼 */ : "\xF0\x9F\x94\xBD" /* 🔽 */,
+                             bitvavoSymbol, getText("Move", "Move"));
             
             // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
                     if (!volumeEventCooldownOk(now)) {
                         #if !DEBUG_BUTTON_ONLY
                         Serial_printf(F("[Notify] 30m move onderdrukt (volume-event cooldown)\n"));
                         #endif
-                    } else if (checkAlertConditions(now, lastNotification30Min, finalCooldown30mMs, 
-                                     alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR, "30m move")) {
+#if DEBUG_ALERT_TRACE
+                        Serial.printf(
+                            "[ALERT_TRACE] id=%lu type=30m_move phase=suppress reason=volume_event_cooldown\n",
+                            (unsigned long)tr30);
+#endif
+                    } else {
+                        const bool ok30Send = checkAlertConditions(now, lastNotification30Min, finalCooldown30mMs,
+                                                                   alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR,
+                                                                   "30m move");
+#if DEBUG_ALERT_TRACE
+                        if (!ok30Send) {
+                            const char* rsn =
+                                (lastNotification30Min != 0 && (now - lastNotification30Min < finalCooldown30mMs))
+                                    ? "cooldown"
+                                    : "hour_cap";
+                            Serial.printf("[ALERT_TRACE] id=%lu type=30m_move phase=suppress reason=%s\n",
+                                          (unsigned long)tr30, rsn);
+                        }
+#endif
+                        if (ok30Send) {
+                        char seq30[41];
+                        ntfyBuildSequenceId(titleBuffer, msgBuffer, seq30, sizeof(seq30));
+                        float p30 = 0.0f;
+                        const char* s30 = "UNKNOWN";
+                        uint32_t a30 = 0;
+                        alertAuditPriceSnapshot(&p30, &s30, &a30);
+                        char u30a[32];
+                        char u30b[32];
+                        snprintf(u30a, sizeof(u30a), "ret_30m=%.3f", (double)ret_30m);
+                        snprintf(u30b, sizeof(u30b), "ret_5m=%.3f", (double)ret_5m);
+                        alertAuditLog("30m_move", (seq30[0] != '\0') ? seq30 : nullptr, p30, s30, a30, "ret_30m",
+                                      finalMove30mThreshold, u30a, u30b);
+#if DEBUG_ALERT_TRACE
+                        {
+                            const uint32_t ms3 = millis();
+                            float dP = 0.0f;
+                            const char* dS = "na";
+                            char dAge[20];
+                            alertTraceDispNotifSnap(ms3, &dP, &dS, dAge, sizeof(dAge));
+                            Serial.printf(
+                                "[ALERT_TRACE] id=%lu type=30m_move phase=send_start ms=%lu disp=%.0f disp_src=%s disp_age_ms=%s min=%.0f max=%.0f det_ms=%lu\n",
+                                (unsigned long)tr30, (unsigned long)ms3,
+                                (double)roundToEuroNotif(snapshotNotifDisplayPrice()), dS, dAge,
+                                (double)roundToEuroNotif(minVal), (double)roundToEuroNotif(maxVal),
+                                (unsigned long)tr30_det_ms);
+                        }
+#endif
                         bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
+#if DEBUG_ALERT_TRACE
+                        Serial.printf(
+                            "[ALERT_TRACE] id=%lu type=30m_move phase=send_done ms=%lu sent=%d note=enqueue_return\n",
+                            (unsigned long)tr30, (unsigned long)millis(), sent ? 1 : 0);
+#endif
                         if (sent) {
                 lastNotification30Min = now;
                 alerts30MinThisHour++;
@@ -1218,6 +1635,7 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             #if !DEBUG_BUTTON_ONLY
                 Serial_printf(F("[Notify] 30m move notificatie verstuurd (%d/%d dit uur)\n"), alerts30MinThisHour, MAX_30M_ALERTS_PER_HOUR);
                             #endif
+                        }
                         }
                     }
                 }
@@ -1248,6 +1666,29 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
         
         // Debug logging alleen bij move detectie
         if (move5mDetected) {
+#if DEBUG_ALERT_TRACE
+                const uint32_t tr5 = alertTraceAllocId();
+                const uint32_t tr5_det_ms = now;
+                {
+                    const RegimeSnapshot trSnap5 = regimeEngineGetSnapshot();
+                    float trP = 0.0f;
+                    const char* trS = "unknown";
+                    uint32_t trAge = 0;
+                    alertTraceCandTrigger(&trP, &trS, &trAge);
+                    char c1s[20];
+                    char c5s[20];
+                    alertTraceFmtEpochS(c1s, sizeof(c1s), lastKline1m.openTime, lastKline1m.valid);
+                    alertTraceFmtEpochS(c5s, sizeof(c5s), lastKline5m.openTime, lastKline5m.valid);
+                    Serial.printf(
+                        "[ALERT_TRACE] id=%lu type=5m_move phase=candidate ms=%lu r1=%.3f r5=%.3f r30=%.3f th5=%.3f vr_ok=%d cf_en=%d ws_qfail=0 night=%d reg_en=%d reg=%u night5m_ok=%d "
+                        "trig_pri=%.2f trig_src=%s trig_age_ms=%lu snap1m_open_s=%s snap5m_open_s=%s\n",
+                        (unsigned long)tr5, (unsigned long)tr5_det_ms, (double)ret_1m, (double)ret_5m,
+                        (double)ret_30m, (double)finalMove5mThreshold, volumeRangeOk5m ? 1 : 0,
+                        smartConfluenceEnabled ? 1 : 0, nightActive ? 1 : 0, regimeEngineEnabled ? 1 : 0,
+                        (unsigned)trSnap5.committedRegime, nightModeAllows5mMove(ret_5m, ret_30m) ? 1 : 0,
+                        (double)trP, trS, (unsigned long)trAge, c1s, c5s);
+                }
+#endif
                 #if !DEBUG_BUTTON_ONLY
             Serial_printf(F("[Notify] 5m move: ret_5m=%.2f%%\n"), ret_5m);
                 #endif
@@ -1256,6 +1697,10 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                     #if !DEBUG_BUTTON_ONLY
                     Serial_printf(F("[Notify] 5m move onderdrukt (volume/range confirmatie fail)\n"));
                     #endif
+#if DEBUG_ALERT_TRACE
+                    Serial.printf("[ALERT_TRACE] id=%lu type=5m_move phase=suppress reason=volume_range_fail\n",
+                                  (unsigned long)tr5);
+#endif
                 } else {
             // Check for confluence first (Smart Confluence Mode)
             bool confluenceFound = false;
@@ -1273,14 +1718,28 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                         #if !DEBUG_BUTTON_ONLY
                 Serial_printf(F("[Notify] 5m move onderdrukt (al gebruikt in confluence)\n"));
                         #endif
+#if DEBUG_ALERT_TRACE
+                Serial.printf("[ALERT_TRACE] id=%lu type=5m_move phase=suppress reason=confluence_used\n",
+                              (unsigned long)tr5);
+#endif
             } else if (!confluenceSentThisRound && !volumeEventCooldownOk(now)) {
                         #if !DEBUG_BUTTON_ONLY
                         Serial_printf(F("[Notify] 5m move onderdrukt (volume-event cooldown)\n"));
                         #endif
+#if DEBUG_ALERT_TRACE
+                Serial.printf(
+                    "[ALERT_TRACE] id=%lu type=5m_move phase=suppress reason=volume_event_cooldown\n",
+                    (unsigned long)tr5);
+#endif
             } else if (!nightModeAllows5mMove(ret_5m, ret_30m)) {
                             #if !DEBUG_BUTTON_ONLY
                             Serial_printf(F("[Notify] 5m move onderdrukt (nachtstand, 30m richting mismatch)\n"));
                             #endif
+#if DEBUG_ALERT_TRACE
+                            Serial.printf(
+                                "[ALERT_TRACE] id=%lu type=5m_move phase=suppress reason=night_direction_mismatch\n",
+                                (unsigned long)tr5);
+#endif
                 } else {
                             // Bereken min en max uit fiveMinutePrices buffer (geoptimaliseerde versie)
                             float minVal, maxVal;
@@ -1294,14 +1753,16 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                     float move5mMaxRounded = roundToEuroNotif(maxVal);
                     if (ret_5m >= 0) {
                                 snprintf(msgBuffer, sizeof(msgBuffer), 
-                                         "%.0f (%s)\n5m %s move: +%.2f%% (30m: %+.2f%%)\n5m %s: %.0f\n5m %s: %.0f", 
+                                         "%s: %.0f (%s)\n5m %s move: +%.2f%% (30m: %+.2f%%)\n5m %s: %.0f\n5m %s: %.0f",
+                                         safeFmtStr(getText("Live prijs", "Live price")),
                                          move5mPriceRounded, timestampBuffer,
                                          getText("OP", "UP"), ret_5m, ret_30m,
                                          getText("Top", "Top"), move5mMaxRounded,
                                          getText("Dal", "Low"), move5mMinRounded);
                     } else {
                                 snprintf(msgBuffer, sizeof(msgBuffer), 
-                                         "%.0f (%s)\n5m %s move: %.2f%% (30m: %+.2f%%)\n5m %s: %.0f\n5m %s: %.0f", 
+                                         "%s: %.0f (%s)\n5m %s move: %.2f%% (30m: %+.2f%%)\n5m %s: %.0f\n5m %s: %.0f",
+                                         safeFmtStr(getText("Live prijs", "Live price")),
                                          move5mPriceRounded, timestampBuffer,
                                          getText("NEER", "DOWN"), ret_5m, ret_30m,
                                          getText("Top", "Top"), move5mMaxRounded,
@@ -1318,9 +1779,55 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                                      getText("Move", "Move"));
                     
                     // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
-                    if (checkAlertConditions(now, lastNotification5Min, finalCooldown5mMs, 
-                                             alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR, "5m move")) {
+                    {
+                        const bool ok5Send = checkAlertConditions(now, lastNotification5Min, finalCooldown5mMs,
+                                                                  alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR,
+                                                                  "5m move");
+#if DEBUG_ALERT_TRACE
+                        if (!ok5Send) {
+                            const char* rsn =
+                                (lastNotification5Min != 0 && (now - lastNotification5Min < finalCooldown5mMs))
+                                    ? "cooldown"
+                                    : "hour_cap";
+                            Serial.printf("[ALERT_TRACE] id=%lu type=5m_move phase=suppress reason=%s\n",
+                                          (unsigned long)tr5, rsn);
+                        }
+#endif
+                        if (ok5Send) {
+                                const char* rule5 = (ret_5m >= 0.0f) ? "5m_up" : "5m_down";
+                                char seq5[41];
+                                ntfyBuildSequenceId(titleBuffer, msgBuffer, seq5, sizeof(seq5));
+                                float p5 = 0.0f;
+                                const char* s5 = "UNKNOWN";
+                                uint32_t a5 = 0;
+                                alertAuditPriceSnapshot(&p5, &s5, &a5);
+                                char u5a[28];
+                                char u5b[28];
+                                snprintf(u5a, sizeof(u5a), "ret_5m=%.3f", (double)ret_5m);
+                                snprintf(u5b, sizeof(u5b), "ret_30m=%.3f", (double)ret_30m);
+                                alertAuditLog(rule5, (seq5[0] != '\0') ? seq5 : nullptr, p5, s5, a5, "ret_5m",
+                                              finalMove5mThreshold, u5a, u5b);
+#if DEBUG_ALERT_TRACE
+                                {
+                                    const uint32_t ms5 = millis();
+                                    float dP = 0.0f;
+                                    const char* dS = "na";
+                                    char dAge[20];
+                                    alertTraceDispNotifSnap(ms5, &dP, &dS, dAge, sizeof(dAge));
+                                    Serial.printf(
+                                        "[ALERT_TRACE] id=%lu type=5m_move phase=send_start ms=%lu disp=%.0f disp_src=%s disp_age_ms=%s min=%.0f max=%.0f det_ms=%lu\n",
+                                        (unsigned long)tr5, (unsigned long)ms5,
+                                        (double)roundToEuroNotif(snapshotNotifDisplayPrice()), dS, dAge,
+                                        (double)roundToEuroNotif(minVal), (double)roundToEuroNotif(maxVal),
+                                        (unsigned long)tr5_det_ms);
+                                }
+#endif
                                 bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
+#if DEBUG_ALERT_TRACE
+                                Serial.printf(
+                                    "[ALERT_TRACE] id=%lu type=5m_move phase=send_done ms=%lu sent=%d note=enqueue_return\n",
+                                    (unsigned long)tr5, (unsigned long)millis(), sent ? 1 : 0);
+#endif
                                 if (sent) {
                         lastNotification5Min = now;
                         alerts5MinThisHour++;
@@ -1329,7 +1836,8 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                         Serial_printf(F("[Notify] 5m move notificatie verstuurd (%d/%d dit uur)\n"), alerts5MinThisHour, MAX_5M_ALERTS_PER_HOUR);
                                     #endif
                                 }
-                            }
+                        }
+                    }
                         }
                     }
                 }
@@ -1464,7 +1972,8 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                      getText("Gem", "Avg"), avgRounded,
                      getText("Dal", "Low"), lowRounded);
             // FASE X.2: Gebruik throttling wrapper
-            if (send2HNotification(ALERT2H_COMPRESS, title, msg, "\xF0\x9F\x9F\xA8")) {  // 🟨
+            if (send2HNotification(ALERT2H_COMPRESS, title, msg, "\xF0\x9F\x9F\xA8", metrics.rangePct,
+                                   alert2HThresholds.compressThresholdPct, "range_pct")) {  // 🟨
             gAlert2H.lastCompressMs = now;
             gAlert2H.setCompressArmed(false);
             }
@@ -1514,7 +2023,8 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                      getText("Raakt", "Touched"), getText("gem.", "avg"), directionText,
                      getText("na", "after"), distPct, getText("verwijdering", "away"));
             // FASE X.2: Gebruik throttling wrapper (colorTag 🟦 = blue context, consistent met title)
-            if (send2HNotification(ALERT2H_MEAN_TOUCH, title, msg, "\xF0\x9F\x9F\xA6")) {
+            if (send2HNotification(ALERT2H_MEAN_TOUCH, title, msg, "\xF0\x9F\x9F\xA6", distPct,
+                                   alert2HThresholds.meanTouchBandPct, "dist_pct")) {
             gAlert2H.lastMeanMs = now;
             gAlert2H.setMeanArmed(false);
             gAlert2H.setMeanWasFar(false);
@@ -1565,7 +2075,8 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                      getText("Gem", "Avg"), avgRounded,
                      getText("Dal", "Low"), lowRounded);
             // FASE X.2: Gebruik throttling wrapper
-            if (send2HNotification(ALERT2H_ANCHOR_CTX, title, msg, "\xE2\x9A\x93" /* ⚓ */)) {
+            if (send2HNotification(ALERT2H_ANCHOR_CTX, title, msg, "\xE2\x9A\x93" /* ⚓ */, lastPrice,
+                                   (float)alert2HThresholds.anchorOutsideMarginPct, "anchor_ctx")) {
             gAlert2H.lastAnchorCtxMs = now;
             gAlert2H.setAnchorCtxArmed(false);
             }
@@ -1609,7 +2120,7 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
                  getText("Prijs", "Price"), getText("Top", "High"), highRounded,
                  getText("Gem", "Avg"), avgRounded, getText("Band", "Range"), metrics.rangePct);
         // FASE X.2: Gebruik throttling wrapper (Breakout mag altijd door). Tag congruent met title: 🟪
-        send2HNotification(ALERT2H_BREAKOUT_UP, title, msg, "\xF0\x9F\x9F\xAA");  // 🟪
+        send2HNotification(ALERT2H_BREAKOUT_UP, title, msg, "\xF0\x9F\x9F\xAA", lastPrice, threshold, "break_lvl");  // 🟪
     } else {
         #if DEBUG_2H_ALERTS
         Serial.printf("[ALERT2H] breakdown_down sent: price=%.0f < low2h=%.0f (avg=%.0f, range=%.2f%%)\n",
@@ -1627,7 +2138,7 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
                  getText("Prijs", "Price"), getText("Dal", "Low"), lowRounded,
                  getText("Gem", "Avg"), avgRounded, getText("Band", "Range"), metrics.rangePct);
         // FASE X.2: Gebruik throttling wrapper (Breakdown mag altijd door). Tag congruent met title: 🟥
-        send2HNotification(ALERT2H_BREAKOUT_DOWN, title, msg, "\xF0\x9F\x9F\xA5");  // 🟥
+        send2HNotification(ALERT2H_BREAKOUT_DOWN, title, msg, "\xF0\x9F\x9F\xA5", lastPrice, threshold, "break_lvl");  // 🟥
     }
 }
 
@@ -1645,6 +2156,34 @@ static uint32_t pendingSecondaryCreatedMillis = 0;
 static char pendingSecondaryTitle[64];
 static char pendingSecondaryMsg[256];
 static char pendingSecondaryColorTag[32];
+#if DEBUG_ALERT_TRACE
+static uint32_t pendingSecondaryTraceDetMs = 0;
+static float pendingSecondaryTraceTrigPrice = 0.0f;
+static char pendingSecondaryTraceTrigSrc[12] = {0};
+static uint32_t pendingSecondaryTraceAlertId = 0;
+
+static void alertTracePendingTraceSave(uint32_t detMs, uint32_t alertTraceId)
+{
+    float tgp = 0.0f;
+    const char* tgr = "UNKNOWN";
+    uint32_t tga = 0;
+    alertAuditPriceSnapshot(&tgp, &tgr, &tga);
+    (void)tga;
+    pendingSecondaryTraceDetMs = detMs;
+    pendingSecondaryTraceTrigPrice = tgp;
+    safeStrncpy(pendingSecondaryTraceTrigSrc, alertTraceNormAuditSrc(tgr), sizeof(pendingSecondaryTraceTrigSrc));
+    pendingSecondaryTraceTrigSrc[sizeof(pendingSecondaryTraceTrigSrc) - 1] = '\0';
+    pendingSecondaryTraceAlertId = alertTraceId;
+}
+
+static void alertTracePendingTraceClear()
+{
+    pendingSecondaryTraceDetMs = 0;
+    pendingSecondaryTraceTrigPrice = 0.0f;
+    pendingSecondaryTraceTrigSrc[0] = '\0';
+    pendingSecondaryTraceAlertId = 0;
+}
+#endif
 
 // FASE X.3: Check of alert PRIMARY is (override throttling)
 bool AlertEngine::isPrimary2HAlert(Alert2HType alertType) {
@@ -1779,6 +2318,63 @@ bool AlertEngine::shouldThrottle2HAlert(Alert2HType alertType, uint32_t now) {
     return false;  // Geen throttling
 }
 
+static const char* alert2HRuleTag(Alert2HType t) {
+    switch (t) {
+        case ALERT2H_BREAKOUT_UP:
+            return "2h_break_up";
+        case ALERT2H_BREAKOUT_DOWN:
+            return "2h_break_down";
+        case ALERT2H_COMPRESS:
+            return "2h_compress";
+        case ALERT2H_MEAN_TOUCH:
+            return "2h_mean_touch";
+        case ALERT2H_ANCHOR_CTX:
+            return "2h_anchor_ctx";
+        case ALERT2H_TREND_CHANGE:
+            return "2h_trend";
+        default:
+            return "2h_unknown";
+    }
+}
+
+static const char* alert2HDefaultMetric(Alert2HType t) {
+    switch (t) {
+        case ALERT2H_BREAKOUT_UP:
+        case ALERT2H_BREAKOUT_DOWN:
+            return "break_lvl";
+        case ALERT2H_COMPRESS:
+            return "range_pct";
+        case ALERT2H_MEAN_TOUCH:
+            return "dist_pct";
+        case ALERT2H_ANCHOR_CTX:
+            return "anchor_ctx";
+        case ALERT2H_TREND_CHANGE:
+            return "trend";
+        default:
+            return "2h";
+    }
+}
+
+static void alertAuditEmit2hSend(Alert2HType alertType, const char* title, const char* msg,
+                                 float auditPrimary, float auditThreshold, const char* auditMetricTag) {
+    const char* metric = (auditMetricTag != nullptr && auditMetricTag[0] != '\0') ? auditMetricTag
+                                                                                  : alert2HDefaultMetric(alertType);
+    char seq[41];
+    ntfyBuildSequenceId(title, msg, seq, sizeof(seq));
+    float p = 0.0f;
+    const char* src = "UNKNOWN";
+    uint32_t age = 0;
+    alertAuditPriceSnapshot(&p, &src, &age);
+    char c1[40] = {0};
+    const char* pc1 = "-";
+    if (auditMetricTag != nullptr && auditMetricTag[0] != '\0') {
+        snprintf(c1, sizeof(c1), "cur=%.4g", (double)auditPrimary);
+        pc1 = c1;
+    }
+    alertAuditLog(alert2HRuleTag(alertType), (seq[0] != '\0') ? seq : nullptr, p, src, age, metric,
+                  auditThreshold, pc1, "-");
+}
+
 // FASE X.5: Flush pending SECONDARY alert (verstuur als er een pending is)
 // Interne helper functie (gebruikt uint32_t now parameter)
 static bool flushPendingSecondaryAlertInternal(uint32_t now) {
@@ -1790,13 +2386,47 @@ static bool flushPendingSecondaryAlertInternal(uint32_t now) {
     // Gebruik AlertEngine::shouldThrottle2HAlert omdat het een member functie is
     if (AlertEngine::shouldThrottle2HAlert(pendingSecondaryType, now)) {
         // Pending alert is nu gesuppresseerd, reset pending state
+#if DEBUG_ALERT_TRACE
+        Serial.printf(
+            "[ALERT_TRACE] id=%lu type=%s phase=suppress reason=2h_throttled detail=pending_flush_drop ms=%lu "
+            "orig_det_ms=%lu orig_trig_pri=%.2f orig_trig_src=%s orig_trace_id=%lu\n",
+            (unsigned long)alertTraceAllocId(), alert2HRuleTag(pendingSecondaryType), (unsigned long)now,
+            (unsigned long)pendingSecondaryTraceDetMs, (double)pendingSecondaryTraceTrigPrice,
+            (pendingSecondaryTraceTrigSrc[0] != '\0') ? pendingSecondaryTraceTrigSrc : "na",
+            (unsigned long)pendingSecondaryTraceAlertId);
+        alertTracePendingTraceClear();
+#endif
         pendingSecondaryType = ALERT2H_NONE;
         pendingSecondaryCreatedMillis = 0;
         return false;
     }
     
     // Verstuur pending alert (titel ongewijzigd; bevat al emoji/context, geen [Context]-prefix)
-        bool result = sendNotification(pendingSecondaryTitle, pendingSecondaryMsg, pendingSecondaryColorTag);
+    alertAuditEmit2hSend(pendingSecondaryType, pendingSecondaryTitle, pendingSecondaryMsg, 0.0f, 0.0f, nullptr);
+#if DEBUG_ALERT_TRACE
+    const uint32_t trFl = alertTraceAllocId();
+    const uint32_t pendAge = (pendingSecondaryCreatedMillis > 0) ? (now - pendingSecondaryCreatedMillis) : 0;
+    const uint32_t msF = millis();
+    float dP = 0.0f;
+    const char* dS = "na";
+    char dAge[20];
+    alertTraceDispNotifSnap(msF, &dP, &dS, dAge, sizeof(dAge));
+    Serial.printf(
+        "[ALERT_TRACE] id=%lu type=%s phase=send_start ms=%lu disp=%.0f disp_src=%s disp_age_ms=%s min=%.4g max=%.4g "
+        "orig_det_ms=%lu orig_trig_pri=%.2f orig_trig_src=%s orig_trace_id=%lu pend_created_ms=%lu pend_age_ms=%lu detail=2h_flush_pending\n",
+        (unsigned long)trFl, alert2HRuleTag(pendingSecondaryType), (unsigned long)msF,
+        (double)roundToEuroNotif(snapshotNotifDisplayPrice()), dS, dAge, 0.0, 0.0,
+        (unsigned long)pendingSecondaryTraceDetMs, (double)pendingSecondaryTraceTrigPrice,
+        (pendingSecondaryTraceTrigSrc[0] != '\0') ? pendingSecondaryTraceTrigSrc : "na",
+        (unsigned long)pendingSecondaryTraceAlertId, (unsigned long)pendingSecondaryCreatedMillis,
+        (unsigned long)pendAge);
+#endif
+    bool result = sendNotification(pendingSecondaryTitle, pendingSecondaryMsg, pendingSecondaryColorTag);
+#if DEBUG_ALERT_TRACE
+    Serial.printf(
+        "[ALERT_TRACE] id=%lu type=%s phase=send_done ms=%lu sent=%d note=enqueue_return detail=2h_flush_pending\n",
+        (unsigned long)trFl, alert2HRuleTag(pendingSecondaryType), (unsigned long)millis(), result ? 1 : 0);
+#endif
     
     // Update throttling state: bij success normaal, bij failure korte backoff om spam te voorkomen
     if (result) {
@@ -1815,6 +2445,9 @@ static bool flushPendingSecondaryAlertInternal(uint32_t now) {
     // Reset pending state
     pendingSecondaryType = ALERT2H_NONE;
     pendingSecondaryCreatedMillis = 0;
+#if DEBUG_ALERT_TRACE
+    alertTracePendingTraceClear();
+#endif
     
     return result;
 }
@@ -1822,23 +2455,67 @@ static bool flushPendingSecondaryAlertInternal(uint32_t now) {
 // FASE X.2: Wrapper voor sendNotification() met 2h throttling
 // FASE X.3: PRIMARY alerts override throttling, SECONDARY alerts onderhevig aan throttling
 // FASE X.5: Uitgebreid met coalescing voor SECONDARY alerts
-bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, const char* msg, const char* colorTag) {
+bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, const char* msg, const char* colorTag,
+                                     float auditPrimary, float auditThreshold, const char* auditMetricTag) {
     uint32_t now = millis();
     
     // FASE X.3: PRIMARY alerts override throttling (altijd door, geen coalescing)
     bool isPrimary = isPrimary2HAlert(alertType);
+#if DEBUG_ALERT_TRACE
+    const uint32_t tr2h = alertTraceAllocId();
+    const uint32_t tr2h_det_ms = now;
+    {
+        float trP = 0.0f;
+        const char* trS = "unknown";
+        uint32_t trAge = 0;
+        alertTraceCandTrigger(&trP, &trS, &trAge);
+        Serial.printf(
+            "[ALERT_TRACE] id=%lu type=%s phase=candidate ms=%lu primary=%d audit_pri=%.4g audit_th=%.4g "
+            "trig_pri=%.2f trig_src=%s trig_age_ms=%lu snap1m_open_s=na snap5m_open_s=na\n",
+            (unsigned long)tr2h, alert2HRuleTag(alertType), (unsigned long)tr2h_det_ms, isPrimary ? 1 : 0,
+            (double)auditPrimary, (double)auditThreshold, (double)trP, trS, (unsigned long)trAge);
+    }
+#endif
     
     if (isPrimary) {
         // PRIMARY: direct versturen, flush pending SECONDARY eerst
+#if DEBUG_ALERT_TRACE
+        Serial.printf("[ALERT_TRACE] id=%lu type=%s phase=2h_route decision=primary_flush_pending\n",
+                      (unsigned long)tr2h, alert2HRuleTag(alertType));
+#endif
         flushPendingSecondaryAlertInternal(now);
         
         // Check throttling (voor PRIMARY is dit altijd false, maar voor consistentie)
         if (shouldThrottle2HAlert(alertType, now)) {
+#if DEBUG_ALERT_TRACE
+            Serial.printf("[ALERT_TRACE] id=%lu type=%s phase=suppress reason=2h_throttled detail=primary_matrix\n",
+                          (unsigned long)tr2h, alert2HRuleTag(alertType));
+#endif
             return false;
         }
         
         // Verstuur PRIMARY alert (titel ongewijzigd, geen [PRIMARY]-prefix)
+        alertAuditEmit2hSend(alertType, title, msg, auditPrimary, auditThreshold, auditMetricTag);
+#if DEBUG_ALERT_TRACE
+        {
+            const uint32_t msP = millis();
+            float dP = 0.0f;
+            const char* dS = "na";
+            char dAge[20];
+            alertTraceDispNotifSnap(msP, &dP, &dS, dAge, sizeof(dAge));
+            Serial.printf(
+                "[ALERT_TRACE] id=%lu type=%s phase=send_start ms=%lu disp=%.0f disp_src=%s disp_age_ms=%s min=%.4g max=%.4g det_ms=%lu detail=2h_primary_direct\n",
+                (unsigned long)tr2h, alert2HRuleTag(alertType), (unsigned long)msP,
+                (double)roundToEuroNotif(snapshotNotifDisplayPrice()), dS, dAge, (double)auditPrimary,
+                (double)auditThreshold, (unsigned long)tr2h_det_ms);
+        }
+#endif
         bool result = sendNotification(title, msg, colorTag);
+#if DEBUG_ALERT_TRACE
+        Serial.printf(
+            "[ALERT_TRACE] id=%lu type=%s phase=send_done ms=%lu sent=%d note=enqueue_return detail=2h_primary_direct\n",
+            (unsigned long)tr2h, alert2HRuleTag(alertType), (unsigned long)millis(), result ? 1 : 0);
+#endif
         
         // Update throttling state: bij failure ook cooldown zodat we niet spam-retryen
         if (result) {
@@ -1867,6 +2544,10 @@ bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, c
         }
         Serial_printf(F("[2h throttled] %s: %s\n"), alertTypeName, title);
         #endif
+#if DEBUG_ALERT_TRACE
+        Serial.printf("[ALERT_TRACE] id=%lu type=%s phase=suppress reason=2h_throttled detail=secondary_incoming\n",
+                      (unsigned long)tr2h, alert2HRuleTag(alertType));
+#endif
         return false;  // Alert gesuppresseerd
     }
     
@@ -1886,13 +2567,41 @@ bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, c
                 Serial_printf(F("[2h coalesced] old->new: %d->%d (priority %d->%d)\n"),
                              pendingSecondaryType, alertType, pendingPriority, newPriority);
                 #endif
+#if DEBUG_ALERT_TRACE
+                Serial.printf(
+                    "[ALERT_TRACE] id=%lu type=%s phase=suppress reason=2h_coalesced detail=replace_pending pend_type=%s pend_pri=%u new_pri=%u "
+                    "old_orig_det_ms=%lu old_orig_trig_pri=%.2f old_orig_trig_src=%s old_orig_trace_id=%lu\n",
+                    (unsigned long)tr2h, alert2HRuleTag(alertType), alert2HRuleTag(pendingSecondaryType),
+                    (unsigned)pendingPriority, (unsigned)newPriority, (unsigned long)pendingSecondaryTraceDetMs,
+                    (double)pendingSecondaryTraceTrigPrice,
+                    (pendingSecondaryTraceTrigSrc[0] != '\0') ? pendingSecondaryTraceTrigSrc : "na",
+                    (unsigned long)pendingSecondaryTraceAlertId);
+#endif
                 // Update pending met nieuwe (hogere prioriteit) alert
                 pendingSecondaryType = alertType;
                 safeStrncpy(pendingSecondaryTitle, title, sizeof(pendingSecondaryTitle));
                 safeStrncpy(pendingSecondaryMsg, msg, sizeof(pendingSecondaryMsg));
                 safeStrncpy(pendingSecondaryColorTag, colorTag ? colorTag : "", sizeof(pendingSecondaryColorTag));
                 pendingSecondaryCreatedMillis = now;
+#if DEBUG_ALERT_TRACE
+                alertTracePendingTraceSave(tr2h_det_ms, tr2h);
+#endif
             }
+#if DEBUG_ALERT_TRACE
+            else {
+                const uint32_t pendAgeK = (pendingSecondaryCreatedMillis > 0 && now >= pendingSecondaryCreatedMillis)
+                                              ? (now - pendingSecondaryCreatedMillis)
+                                              : 0;
+                Serial.printf(
+                    "[ALERT_TRACE] id=%lu type=%s phase=suppress reason=2h_coalesced detail=keep_pending pend_type=%s pend_pri=%u new_pri=%u "
+                    "orig_det_ms=%lu orig_trig_pri=%.2f orig_trig_src=%s orig_trace_id=%lu pend_age_ms=%lu\n",
+                    (unsigned long)tr2h, alert2HRuleTag(alertType), alert2HRuleTag(pendingSecondaryType),
+                    (unsigned)pendingPriority, (unsigned)newPriority, (unsigned long)pendingSecondaryTraceDetMs,
+                    (double)pendingSecondaryTraceTrigPrice,
+                    (pendingSecondaryTraceTrigSrc[0] != '\0') ? pendingSecondaryTraceTrigSrc : "na",
+                    (unsigned long)pendingSecondaryTraceAlertId, (unsigned long)pendAgeK);
+            }
+#endif
             // Anders: behoud bestaande pending (hogere prioriteit)
             return false;  // Alert gecoalesced, niet direct verstuurd
         } else {
@@ -1908,6 +2617,15 @@ bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, c
     safeStrncpy(pendingSecondaryMsg, msg, sizeof(pendingSecondaryMsg));
     safeStrncpy(pendingSecondaryColorTag, colorTag ? colorTag : "", sizeof(pendingSecondaryColorTag));
     pendingSecondaryCreatedMillis = now;
+#if DEBUG_ALERT_TRACE
+    alertTracePendingTraceSave(tr2h_det_ms, tr2h);
+    Serial.printf(
+        "[ALERT_TRACE] id=%lu type=%s phase=2h_pending_stored win_ms=%lu orig_det_ms=%lu orig_trig_pri=%.2f orig_trig_src=%s orig_trace_id=%lu\n",
+        (unsigned long)tr2h, alert2HRuleTag(alertType), (unsigned long)coalesceWindowMs,
+        (unsigned long)pendingSecondaryTraceDetMs, (double)pendingSecondaryTraceTrigPrice,
+        (pendingSecondaryTraceTrigSrc[0] != '\0') ? pendingSecondaryTraceTrigSrc : "na",
+        (unsigned long)pendingSecondaryTraceAlertId);
+#endif
     
     // Verstuur direct als er geen andere pending was (eerste alert in nieuwe window)
     // Dit voorkomt dat de eerste alert blijft hangen
