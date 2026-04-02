@@ -98,6 +98,13 @@ enum Alert2HType {
     ALERT2H_ANCHOR_CTX
 };
 
+// Expliciet resultaat voor 2h-dispatch (vooral SECONDARY: bool was dubbelzinnig)
+enum class Alert2HDispatchResult : uint8_t {
+    DISPATCH_BLOCKED = 0,           // Throttle, coalesce keep-pending, of primary send mislukt
+    DISPATCH_PENDING_ACCEPTED = 1,  // Opgenomen in pending (nieuw of vervangen); nog geen directe send
+    DISPATCH_SENT_NOW = 2           // PRIMARY direct verstuurd, of toekomstig secundair direct-pad
+};
+
 // Alert2HState struct - persistent runtime state voor 2h notificaties
 // Geoptimaliseerd met bitfields en compacte layout om geheugen te besparen (24 bytes i.p.v. 32 bytes)
 struct Alert2HState {
@@ -217,6 +224,12 @@ public:
     static bool send2HNotification(Alert2HType alertType, const char* title, const char* msg, const char* colorTag,
                                    float auditPrimary = 0.0f, float auditThreshold = 0.0f,
                                    const char* auditMetricTag = nullptr);
+    
+    // Zelfde pijplijn als send2HNotification, maar met expliciet resultaat (aanbevolen voor SECONDARY call-sites)
+    static Alert2HDispatchResult dispatch2HNotification(Alert2HType alertType, const char* title, const char* msg,
+                                                       const char* colorTag,
+                                                       float auditPrimary = 0.0f, float auditThreshold = 0.0f,
+                                                       const char* auditMetricTag = nullptr);
     
     // Sync state: Update AlertEngine state met globale variabelen (voor parallel implementatie)
     void syncStateFromGlobals();

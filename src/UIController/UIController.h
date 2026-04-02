@@ -139,6 +139,11 @@ private:
                                        char* maxBuffer, char* minBuffer, char* diffBuffer,
                                        float maxVal, float minVal, float diff,
                                        float& lastMaxValue, float& lastMinValue, float& lastDiffValue);
+
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+    // JC3248: nested TF min/max finalisatie (UIController.cpp) — mag private updateMinMaxDiffLabels aanroepen
+    friend void jc3248FinalizeNestedTfMinMax(UIController* self);
+#endif
     
     // Forward declarations voor interne helpers (worden later geïmplementeerd)
     // Fase 8.3: createHeaderLabels(), createPriceBoxes(), createFooter()

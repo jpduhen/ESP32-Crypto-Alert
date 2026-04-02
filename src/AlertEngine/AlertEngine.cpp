@@ -406,6 +406,20 @@ const char* AlertEngine::determineColorTag(float ret, float threshold, float str
     }
 }
 
+// Eén plek voor 1m Spike / 5m Move / 30m Move titels: 🟦(op)/🟧(neer) + 🔼/🔽 + symbool + band + soortlabel.
+// ⏫/⏬ (sterk) blijft alleen in ntfy Tags via determineColorTag(), niet in de titelregel.
+static void buildDirectionalMinuteAlertTitle(char* dest, size_t destSz, bool up,
+                                             const char* symbol, const char* band,
+                                             const char* kindLabel)
+{
+    if (dest == nullptr || destSz == 0) {
+        return;
+    }
+    const char* sq = up ? "\xF0\x9F\x9F\xA6" /* 🟦 */ : "\xF0\x9F\x9F\xA7" /* 🟧 */;
+    const char* ar = up ? "\xF0\x9F\x94\xBC" /* 🔼 */ : "\xF0\x9F\x94\xBD" /* 🔽 */;
+    snprintf(dest, destSz, "%s %s %s %s %s", sq, ar, symbol, band, kindLabel);
+}
+
 static EmaAccumulator volumeEma1m;
 static EmaAccumulator volumeEma5m;
 static bool volumeEma1mInitialized = false;
@@ -763,7 +777,8 @@ bool AlertEngine::checkAndSendConfluenceAlert(unsigned long now, float ret_30m)
     float confluencePriceRounded = roundToEuroNotif(snapshotNotifDisplayPrice());
     if (direction == EVENT_UP) {
         snprintf(msgBuffer, sizeof(msgBuffer),
-                 "%.0f (%s)\n%s\n1m: +%.2f%%\n5m: +%.2f%%\n30m %s: %s (%+.2f%%)",
+                 "%s: %.0f (%s)\n%s\n1m: +%.2f%%\n5m: +%.2f%%\n30m %s: %s (%+.2f%%)",
+                 safeFmtStr(getText("Live prijs", "Live price")),
                  confluencePriceRounded, timestampBuffer,
                  getText("Eensgezind OMHOOG", "Confluence UP"),
                  last1mEvent.magnitude,
@@ -771,7 +786,8 @@ bool AlertEngine::checkAndSendConfluenceAlert(unsigned long now, float ret_30m)
                  getText("Trend", "Trend"), trendTextTranslated, ret_30m);
     } else {
         snprintf(msgBuffer, sizeof(msgBuffer),
-                 "%.0f (%s)\n%s\n1m: %.2f%%\n5m: %.2f%%\n30m %s: %s (%.2f%%)",
+                 "%s: %.0f (%s)\n%s\n1m: %.2f%%\n5m: %.2f%%\n30m %s: %s (%.2f%%)",
+                 safeFmtStr(getText("Live prijs", "Live price")),
                  confluencePriceRounded, timestampBuffer,
                  getText("Eensgezind OMLAAG", "Confluence DOWN"),
                  -last1mEvent.magnitude,
@@ -1218,12 +1234,8 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange1m);
                     
                     const char* colorTag = determineColorTag(ret_1m, finalSpike1mThreshold, finalSpike1mThreshold * 1.5f);
-                            // Titelprefix gelijk aan 5m-move: 🟦/🟧 (richting) + 🔼/🔽; Tags blijven severity via determineColorTag
-                            snprintf(titleBuffer, sizeof(titleBuffer),
-                                     "%s %s %s 1m %s",
-                                     (ret_1m >= 0.0f) ? "\xF0\x9F\x9F\xA6" /* 🟦 */ : "\xF0\x9F\x9F\xA7" /* 🟧 */,
-                                     (ret_1m >= 0.0f) ? "\xF0\x9F\x94\xBC" /* 🔼 */ : "\xF0\x9F\x94\xBD" /* 🔽 */,
-                                     bitvavoSymbol, getText("Spike", "Spike"));
+                            buildDirectionalMinuteAlertTitle(titleBuffer, sizeof(titleBuffer), ret_1m >= 0.0f,
+                                                             bitvavoSymbol, "1m", getText("Spike", "Spike"));
                     
                     // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
                     {
@@ -1400,11 +1412,8 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                                  spikePriceRoundedS, tsS, lineStandalone, ret_1m);
                         const char* colorTagS =
                             determineColorTag(ret_1m, standalone1mTh, standalone1mTh * 1.5f);
-                        snprintf(titleBuffer, sizeof(titleBuffer),
-                                 "%s %s %s 1m %s",
-                                 (ret_1m >= 0.0f) ? "\xF0\x9F\x9F\xA6" /* 🟦 */ : "\xF0\x9F\x9F\xA7" /* 🟧 */,
-                                 (ret_1m >= 0.0f) ? "\xF0\x9F\x94\xBC" /* 🔼 */ : "\xF0\x9F\x94\xBD" /* 🔽 */,
-                                 symS, spikeLblS);
+                        buildDirectionalMinuteAlertTitle(titleBuffer, sizeof(titleBuffer), ret_1m >= 0.0f,
+                                                         symS, "1m", spikeLblS);
                         {
                             const bool ok1eSend = checkAlertConditions(
                                 now, lastNotification1Min, finalCooldown1mMs, alerts1MinThisHour,
@@ -1564,11 +1573,8 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                                                             "5m candle — volume/range")));
             
             const char* colorTag = determineColorTag(ret_30m, finalMove30mThreshold, finalMove30mThreshold * 1.5f);
-                    snprintf(titleBuffer, sizeof(titleBuffer),
-                             "%s %s %s 30m %s",
-                             (ret_30m >= 0.0f) ? "\xF0\x9F\x9F\xA6" /* 🟦 */ : "\xF0\x9F\x9F\xA7" /* 🟧 */,
-                             (ret_30m >= 0.0f) ? "\xF0\x9F\x94\xBC" /* 🔼 */ : "\xF0\x9F\x94\xBD" /* 🔽 */,
-                             bitvavoSymbol, getText("Move", "Move"));
+                    buildDirectionalMinuteAlertTitle(titleBuffer, sizeof(titleBuffer), ret_30m >= 0.0f,
+                                                     bitvavoSymbol, "30m", getText("Move", "Move"));
             
             // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
                     if (!volumeEventCooldownOk(now)) {
@@ -1771,12 +1777,8 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange5m);
                     
                     const char* colorTag = (ret_5m >= 0.0f) ? "\xF0\x9F\x9F\xA6" /* 🟦 */ : "\xF0\x9F\x9F\xA7" /* 🟧 */;
-                            snprintf(titleBuffer, sizeof(titleBuffer),
-                                     "%s %s %s 5m %s",
-                                     (ret_5m >= 0.0f) ? "\xF0\x9F\x9F\xA6" /* 🟦 */ : "\xF0\x9F\x9F\xA7" /* 🟧 */,
-                                     (ret_5m >= 0.0f) ? "\xF0\x9F\x94\xBC" /* 🔼 */ : "\xF0\x9F\x94\xBD" /* 🔽 */,
-                                     bitvavoSymbol,
-                                     getText("Move", "Move"));
+                            buildDirectionalMinuteAlertTitle(titleBuffer, sizeof(titleBuffer), ret_5m >= 0.0f,
+                                                             bitvavoSymbol, "5m", getText("Move", "Move"));
                     
                     // Fase 6.1.10: Gebruik struct veld direct i.p.v. #define macro
                     {
@@ -1844,6 +1846,44 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
             }
         }
     }
+
+// Rate-limited: max. ~1 log per secondary type per interval (geen spam bij langdurige throttle).
+static constexpr uint32_t k2hSecondaryThrottlePrecheckLogIntervalMs = 10000UL;
+
+static void logSecondary2hThrottlePrecheckRateLimited(Alert2HType t, uint32_t nowMs)
+{
+#if DEBUG_BUTTON_ONLY
+    (void)t;
+    (void)nowMs;
+#else
+    static uint32_t s_lastLogCompressMs;
+    static uint32_t s_lastLogMeanMs;
+    static uint32_t s_lastLogAnchorMs;
+    uint32_t* lastMs = nullptr;
+    const char* tag = "";
+    switch (t) {
+        case ALERT2H_COMPRESS:
+            lastMs = &s_lastLogCompressMs;
+            tag = "Compress";
+            break;
+        case ALERT2H_MEAN_TOUCH:
+            lastMs = &s_lastLogMeanMs;
+            tag = "Mean Touch";
+            break;
+        case ALERT2H_ANCHOR_CTX:
+            lastMs = &s_lastLogAnchorMs;
+            tag = "Anchor Context";
+            break;
+        default:
+            return;
+    }
+    if (*lastMs != 0U && (nowMs - *lastMs) < k2hSecondaryThrottlePrecheckLogIntervalMs) {
+        return;
+    }
+    *lastMs = nowMs;
+    Serial_printf(F("[2h secondary] precheck throttle: %s (skip title/msg build)\n"), tag);
+#endif
+}
 
 // Check 2-hour notifications (breakout, breakdown, compression, mean reversion, anchor context)
 // Wordt aangeroepen na elke price update
@@ -1951,6 +1991,9 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
         bool cooldownOk = (now - gAlert2H.lastCompressMs) >= alert2HThresholds.compressCooldownMs;
         
         if (gAlert2H.getCompressArmed() && condComp && cooldownOk) {
+            if (shouldThrottle2HAlert(ALERT2H_COMPRESS, now)) {
+                logSecondary2hThrottlePrecheckRateLimited(ALERT2H_COMPRESS, now);
+            } else {
             #if DEBUG_2H_ALERTS
             Serial.printf("[ALERT2H] range_compress sent: range=%.2f%% < %.2f%% (avg=%.0f high=%.0f low=%.0f)\n",
                          metrics.rangePct, alert2HThresholds.compressThresholdPct,
@@ -1971,11 +2014,17 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                      getText("Top", "High"), highRounded,
                      getText("Gem", "Avg"), avgRounded,
                      getText("Dal", "Low"), lowRounded);
-            // FASE X.2: Gebruik throttling wrapper
-            if (send2HNotification(ALERT2H_COMPRESS, title, msg, "\xF0\x9F\x9F\xA8", metrics.rangePct,
-                                   alert2HThresholds.compressThresholdPct, "range_pct")) {  // 🟨
+            // FASE X.2: dispatch2HNotification geeft expliciet pending vs blocked (bool-wrapper blijft voor legacy)
+            {
+                const Alert2HDispatchResult dr = dispatch2HNotification(
+                    ALERT2H_COMPRESS, title, msg, "\xF0\x9F\x9F\xA8", metrics.rangePct,
+                    alert2HThresholds.compressThresholdPct, "range_pct");
+                if (dr == Alert2HDispatchResult::DISPATCH_PENDING_ACCEPTED ||
+                    dr == Alert2HDispatchResult::DISPATCH_SENT_NOW) {
             gAlert2H.lastCompressMs = now;
             gAlert2H.setCompressArmed(false);
+                }
+            }
             }
         }
         
@@ -2000,6 +2049,9 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
         bool cooldownOk = (now - gAlert2H.lastMeanMs) >= alert2HThresholds.meanCooldownMs;
         
         if (gAlert2H.getMeanArmed() && gAlert2H.getMeanWasFar() && touch && cooldownOk) {
+            if (shouldThrottle2HAlert(ALERT2H_MEAN_TOUCH, now)) {
+                logSecondary2hThrottlePrecheckRateLimited(ALERT2H_MEAN_TOUCH, now);
+            } else {
             const char* direction = (gAlert2H.getMeanFarSide() > 0) ? "from above" : "from below";
             #if DEBUG_2H_ALERTS
             Serial.printf("[ALERT2H] mean_touch sent: price=%.0f touched avg2h=%.0f after %.2f%% away (%s)\n",
@@ -2022,13 +2074,19 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                      priceRounded, timestamp,
                      getText("Raakt", "Touched"), getText("gem.", "avg"), directionText,
                      getText("na", "after"), distPct, getText("verwijdering", "away"));
-            // FASE X.2: Gebruik throttling wrapper (colorTag 🟦 = blue context, consistent met title)
-            if (send2HNotification(ALERT2H_MEAN_TOUCH, title, msg, "\xF0\x9F\x9F\xA6", distPct,
-                                   alert2HThresholds.meanTouchBandPct, "dist_pct")) {
+            // FASE X.2: expliciet dispatch-result (pending = event geconsumeerd voor family-state)
+            {
+                const Alert2HDispatchResult dr = dispatch2HNotification(
+                    ALERT2H_MEAN_TOUCH, title, msg, "\xF0\x9F\x9F\xA6", distPct,
+                    alert2HThresholds.meanTouchBandPct, "dist_pct");
+                if (dr == Alert2HDispatchResult::DISPATCH_PENDING_ACCEPTED ||
+                    dr == Alert2HDispatchResult::DISPATCH_SENT_NOW) {
             gAlert2H.lastMeanMs = now;
             gAlert2H.setMeanArmed(false);
             gAlert2H.setMeanWasFar(false);
             gAlert2H.setMeanFarSide(0);
+                }
+            }
             }
         }
         
@@ -2049,6 +2107,9 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
         bool cooldownOk = (now - gAlert2H.lastAnchorCtxMs) >= alert2HThresholds.anchorCooldownMs;
         
         if (gAlert2H.getAnchorCtxArmed() && cooldownOk && (condAnchorHigh || condAnchorLow)) {
+            if (shouldThrottle2HAlert(ALERT2H_ANCHOR_CTX, now)) {
+                logSecondary2hThrottlePrecheckRateLimited(ALERT2H_ANCHOR_CTX, now);
+            } else {
             #if DEBUG_2H_ALERTS
             Serial.printf("[ALERT2H] anchor_context sent: anchor=%.0f outside 2h [%.0f..%.0f] (avg=%.0f)\n",
                          roundToEuroNotif(activeAnchorPrice), roundToEuroNotif(metrics.low2h),
@@ -2074,11 +2135,17 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                      getText("Top", "High"), highRounded,
                      getText("Gem", "Avg"), avgRounded,
                      getText("Dal", "Low"), lowRounded);
-            // FASE X.2: Gebruik throttling wrapper
-            if (send2HNotification(ALERT2H_ANCHOR_CTX, title, msg, "\xE2\x9A\x93" /* ⚓ */, lastPrice,
-                                   (float)alert2HThresholds.anchorOutsideMarginPct, "anchor_ctx")) {
+            // FASE X.2: expliciet dispatch-result
+            {
+                const Alert2HDispatchResult dr = dispatch2HNotification(
+                    ALERT2H_ANCHOR_CTX, title, msg, "\xE2\x9A\x93" /* ⚓ */, lastPrice,
+                    (float)alert2HThresholds.anchorOutsideMarginPct, "anchor_ctx");
+                if (dr == Alert2HDispatchResult::DISPATCH_PENDING_ACCEPTED ||
+                    dr == Alert2HDispatchResult::DISPATCH_SENT_NOW) {
             gAlert2H.lastAnchorCtxMs = now;
             gAlert2H.setAnchorCtxArmed(false);
+                }
+            }
             }
         }
         
@@ -2156,6 +2223,37 @@ static uint32_t pendingSecondaryCreatedMillis = 0;
 static char pendingSecondaryTitle[64];
 static char pendingSecondaryMsg[256];
 static char pendingSecondaryColorTag[32];
+
+// Log-coalescing (alleen logging): herhaalde 2h mean-touch secondary throttling (detail=secondary_incoming).
+static bool mt2hMeanTouchThrottleBurst = false;
+static uint32_t mt2hMeanTouchThrottleBurstStartMs = 0;
+static uint32_t mt2hMeanTouchThrottleBurstExtra = 0;
+
+static void mt2hMeanTouchThrottleBurstEnd(uint32_t nowMs, const char* detailReason) {
+    if (!mt2hMeanTouchThrottleBurst) {
+        return;
+    }
+    const uint32_t extra = mt2hMeanTouchThrottleBurstExtra;
+    uint32_t durMs = 0;
+    if (mt2hMeanTouchThrottleBurstStartMs > 0 && nowMs >= mt2hMeanTouchThrottleBurstStartMs) {
+        durMs = nowMs - mt2hMeanTouchThrottleBurstStartMs;
+    }
+    mt2hMeanTouchThrottleBurst = false;
+    mt2hMeanTouchThrottleBurstStartMs = 0;
+    mt2hMeanTouchThrottleBurstExtra = 0;
+    if (extra == 0) {
+        return;
+    }
+#if DEBUG_ALERT_TRACE
+    Serial.printf(
+        "[ALERT_TRACE] type=2h_mean_touch phase=coalesce_summary suppressed_extra=%lu burst_ms=%lu detail=%s\n",
+        (unsigned long)extra, (unsigned long)durMs, detailReason ? detailReason : "end");
+#elif !DEBUG_BUTTON_ONLY
+    Serial_printf(F("[2h throttled] Mean Touch coalesce_summary: suppressed_extra=%lu burst_ms=%lu (%s)\n"),
+                  (unsigned long)extra, (unsigned long)durMs, detailReason ? detailReason : "end");
+#endif
+}
+
 #if DEBUG_ALERT_TRACE
 static uint32_t pendingSecondaryTraceDetMs = 0;
 static float pendingSecondaryTraceTrigPrice = 0.0f;
@@ -2455,25 +2553,42 @@ static bool flushPendingSecondaryAlertInternal(uint32_t now) {
 // FASE X.2: Wrapper voor sendNotification() met 2h throttling
 // FASE X.3: PRIMARY alerts override throttling, SECONDARY alerts onderhevig aan throttling
 // FASE X.5: Uitgebreid met coalescing voor SECONDARY alerts
-bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, const char* msg, const char* colorTag,
-                                     float auditPrimary, float auditThreshold, const char* auditMetricTag) {
+Alert2HDispatchResult AlertEngine::dispatch2HNotification(Alert2HType alertType, const char* title, const char* msg,
+                                                          const char* colorTag,
+                                                          float auditPrimary, float auditThreshold,
+                                                          const char* auditMetricTag) {
     uint32_t now = millis();
     
     // FASE X.3: PRIMARY alerts override throttling (altijd door, geen coalescing)
     bool isPrimary = isPrimary2HAlert(alertType);
+    // Eén evaluatie voor secondary: zelfde uitkomst als herhaalde shouldThrottle2HAlert (geen state-mutatie in die functie).
+    bool throttle2hForSecondary = false;
+    if (!isPrimary) {
+        throttle2hForSecondary = shouldThrottle2HAlert(alertType, now);
+    }
+    const bool secMeanTouchThrottle = (alertType == ALERT2H_MEAN_TOUCH && throttle2hForSecondary);
+    if (isPrimary || alertType != ALERT2H_MEAN_TOUCH) {
+        mt2hMeanTouchThrottleBurstEnd(now, "route_change");
+    } else if (!secMeanTouchThrottle) {
+        mt2hMeanTouchThrottleBurstEnd(now, "mean_touch_not_throttled");
+    }
 #if DEBUG_ALERT_TRACE
     const uint32_t tr2h = alertTraceAllocId();
     const uint32_t tr2h_det_ms = now;
     {
-        float trP = 0.0f;
-        const char* trS = "unknown";
-        uint32_t trAge = 0;
-        alertTraceCandTrigger(&trP, &trS, &trAge);
-        Serial.printf(
-            "[ALERT_TRACE] id=%lu type=%s phase=candidate ms=%lu primary=%d audit_pri=%.4g audit_th=%.4g "
-            "trig_pri=%.2f trig_src=%s trig_age_ms=%lu snap1m_open_s=na snap5m_open_s=na\n",
-            (unsigned long)tr2h, alert2HRuleTag(alertType), (unsigned long)tr2h_det_ms, isPrimary ? 1 : 0,
-            (double)auditPrimary, (double)auditThreshold, (double)trP, trS, (unsigned long)trAge);
+        const bool skipMeanTouchCand =
+            (alertType == ALERT2H_MEAN_TOUCH && !isPrimary && secMeanTouchThrottle && mt2hMeanTouchThrottleBurst);
+        if (!skipMeanTouchCand) {
+            float trP = 0.0f;
+            const char* trS = "unknown";
+            uint32_t trAge = 0;
+            alertTraceCandTrigger(&trP, &trS, &trAge);
+            Serial.printf(
+                "[ALERT_TRACE] id=%lu type=%s phase=candidate ms=%lu primary=%d audit_pri=%.4g audit_th=%.4g "
+                "trig_pri=%.2f trig_src=%s trig_age_ms=%lu snap1m_open_s=na snap5m_open_s=na\n",
+                (unsigned long)tr2h, alert2HRuleTag(alertType), (unsigned long)tr2h_det_ms, isPrimary ? 1 : 0,
+                (double)auditPrimary, (double)auditThreshold, (double)trP, trS, (unsigned long)trAge);
+        }
     }
 #endif
     
@@ -2491,7 +2606,7 @@ bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, c
             Serial.printf("[ALERT_TRACE] id=%lu type=%s phase=suppress reason=2h_throttled detail=primary_matrix\n",
                           (unsigned long)tr2h, alert2HRuleTag(alertType));
 #endif
-            return false;
+            return Alert2HDispatchResult::DISPATCH_BLOCKED;
         }
         
         // Verstuur PRIMARY alert (titel ongewijzigd, geen [PRIMARY]-prefix)
@@ -2527,28 +2642,46 @@ bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, c
             last2HAlertTimestamp = now;
         }
         
-        return result;
+        return result ? Alert2HDispatchResult::DISPATCH_SENT_NOW : Alert2HDispatchResult::DISPATCH_BLOCKED;
     }
     
     // SECONDARY alerts: coalescing logica
-    // Check throttling eerst
-    if (shouldThrottle2HAlert(alertType, now)) {
-        #if !DEBUG_BUTTON_ONLY
-        const char* alertTypeName = "";
-        switch (alertType) {
-            case ALERT2H_TREND_CHANGE: alertTypeName = "Trend Change"; break;
-            case ALERT2H_MEAN_TOUCH: alertTypeName = "Mean Touch"; break;
-            case ALERT2H_COMPRESS: alertTypeName = "Compress"; break;
-            case ALERT2H_ANCHOR_CTX: alertTypeName = "Anchor Context"; break;
-            default: alertTypeName = "Unknown"; break;
-        }
-        Serial_printf(F("[2h throttled] %s: %s\n"), alertTypeName, title);
-        #endif
-#if DEBUG_ALERT_TRACE
-        Serial.printf("[ALERT_TRACE] id=%lu type=%s phase=suppress reason=2h_throttled detail=secondary_incoming\n",
-                      (unsigned long)tr2h, alert2HRuleTag(alertType));
+    // Check throttling eerst (late vangnet; zelfde regels als shouldThrottle2HAlert elders)
+    if (throttle2hForSecondary) {
+        if (alertType == ALERT2H_MEAN_TOUCH) {
+            if (mt2hMeanTouchThrottleBurst) {
+                mt2hMeanTouchThrottleBurstExtra++;
+            } else {
+                mt2hMeanTouchThrottleBurst = true;
+                mt2hMeanTouchThrottleBurstStartMs = now;
+                mt2hMeanTouchThrottleBurstExtra = 0;
+#if !DEBUG_BUTTON_ONLY
+                Serial_printf(F("[2h throttled] %s: %s\n"), "Mean Touch", title);
 #endif
-        return false;  // Alert gesuppresseerd
+#if DEBUG_ALERT_TRACE
+                Serial.printf(
+                    "[ALERT_TRACE] id=%lu type=%s phase=suppress reason=2h_throttled detail=secondary_incoming\n",
+                    (unsigned long)tr2h, alert2HRuleTag(alertType));
+#endif
+            }
+        } else {
+#if !DEBUG_BUTTON_ONLY
+            const char* alertTypeName = "";
+            switch (alertType) {
+                case ALERT2H_TREND_CHANGE: alertTypeName = "Trend Change"; break;
+                case ALERT2H_MEAN_TOUCH: alertTypeName = "Mean Touch"; break;
+                case ALERT2H_COMPRESS: alertTypeName = "Compress"; break;
+                case ALERT2H_ANCHOR_CTX: alertTypeName = "Anchor Context"; break;
+                default: alertTypeName = "Unknown"; break;
+            }
+            Serial_printf(F("[2h throttled] %s: %s\n"), alertTypeName, title);
+#endif
+#if DEBUG_ALERT_TRACE
+            Serial.printf("[ALERT_TRACE] id=%lu type=%s phase=suppress reason=2h_throttled detail=secondary_incoming\n",
+                          (unsigned long)tr2h, alert2HRuleTag(alertType));
+#endif
+        }
+        return Alert2HDispatchResult::DISPATCH_BLOCKED;
     }
     
     // Coalescing: check of er al een pending SECONDARY alert is
@@ -2586,6 +2719,7 @@ bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, c
 #if DEBUG_ALERT_TRACE
                 alertTracePendingTraceSave(tr2h_det_ms, tr2h);
 #endif
+                return Alert2HDispatchResult::DISPATCH_PENDING_ACCEPTED;
             }
 #if DEBUG_ALERT_TRACE
             else {
@@ -2603,15 +2737,13 @@ bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, c
             }
 #endif
             // Anders: behoud bestaande pending (hogere prioriteit)
-            return false;  // Alert gecoalesced, niet direct verstuurd
-        } else {
-            // Buiten coalesce window: flush pending eerst
-            flushPendingSecondaryAlertInternal(now);
+            return Alert2HDispatchResult::DISPATCH_BLOCKED;
         }
+        // Buiten coalesce window: flush pending eerst
+        flushPendingSecondaryAlertInternal(now);
     }
     
     // Geen pending of pending geflusht: start nieuw pending
-    // (We versturen niet direct, maar wachten op coalesce window of flush)
     pendingSecondaryType = alertType;
     safeStrncpy(pendingSecondaryTitle, title, sizeof(pendingSecondaryTitle));
     safeStrncpy(pendingSecondaryMsg, msg, sizeof(pendingSecondaryMsg));
@@ -2627,9 +2759,18 @@ bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, c
         (unsigned long)pendingSecondaryTraceAlertId);
 #endif
     
-    // Verstuur direct als er geen andere pending was (eerste alert in nieuwe window)
-    // Dit voorkomt dat de eerste alert blijft hangen
-    return false;  // Alert wordt gecoalesced, wordt later geflusht
+    return Alert2HDispatchResult::DISPATCH_PENDING_ACCEPTED;
+}
+
+bool AlertEngine::send2HNotification(Alert2HType alertType, const char* title, const char* msg, const char* colorTag,
+                                     float auditPrimary, float auditThreshold, const char* auditMetricTag) {
+    const Alert2HDispatchResult r = dispatch2HNotification(alertType, title, msg, colorTag, auditPrimary,
+                                                           auditThreshold, auditMetricTag);
+    // Historisch: alleen PRIMARY true bij echte send; SECONDARY altijd false uit bool-wrapper
+    if (isPrimary2HAlert(alertType)) {
+        return (r == Alert2HDispatchResult::DISPATCH_SENT_NOW);
+    }
+    return false;
 }
 
 // FASE X.5: Publieke flush functie (gebruikt millis() intern)

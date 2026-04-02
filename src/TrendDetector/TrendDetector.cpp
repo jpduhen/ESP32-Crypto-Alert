@@ -332,12 +332,23 @@ void TrendDetector::checkTrendChange(float ret_30m_value, float ret_2h, bool min
             Serial_printf(F("[Trend] startup: 2h trend NTFY suppressed (%lu ms left)\n"), msLeft);
             #endif
         } else {
-            if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag)) {
+            const Alert2HDispatchResult dr =
+                AlertEngine::dispatch2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag);
+            if (dr == Alert2HDispatchResult::DISPATCH_PENDING_ACCEPTED ||
+                dr == Alert2HDispatchResult::DISPATCH_SENT_NOW) {
                 lastTrendChangeNotification = now;
             }
             #if !DEBUG_BUTTON_ONLY
-            Serial_printf(F("[Trend] Trend change notificatie verzonden: %s → %s (2h: %.2f%%, 30m: %.2f%%, Vol: %s)\n"),
-                          fromTrend, toTrend, ret_2h, ret_30m_value, volText);
+            if (dr == Alert2HDispatchResult::DISPATCH_BLOCKED) {
+                Serial_printf(F("[Trend] Trend change niet uitgeleverd (2h throttle/coalesce): %s → %s (2h: %.2f%%, 30m: %.2f%%, Vol: %s)\n"),
+                              fromTrend, toTrend, ret_2h, ret_30m_value, volText);
+            } else if (dr == Alert2HDispatchResult::DISPATCH_PENDING_ACCEPTED) {
+                Serial_printf(F("[Trend] Trend change opgenomen in 2h pending: %s → %s (2h: %.2f%%, 30m: %.2f%%, Vol: %s)\n"),
+                              fromTrend, toTrend, ret_2h, ret_30m_value, volText);
+            } else if (dr == Alert2HDispatchResult::DISPATCH_SENT_NOW) {
+                Serial_printf(F("[Trend] Trend change direct verzonden: %s → %s (2h: %.2f%%, 30m: %.2f%%, Vol: %s)\n"),
+                              fromTrend, toTrend, ret_2h, ret_30m_value, volText);
+            }
             #endif
         }
         }
@@ -448,12 +459,23 @@ void TrendDetector::checkMediumTrendChange(float ret_4h_value, float ret_1d_valu
             Serial_printf(F("[1d Trend] startup: 1d trend NTFY suppressed (%lu ms left)\n"), msLeft);
             #endif
         } else {
-            if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag)) {
+            const Alert2HDispatchResult dr =
+                AlertEngine::dispatch2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag);
+            if (dr == Alert2HDispatchResult::DISPATCH_PENDING_ACCEPTED ||
+                dr == Alert2HDispatchResult::DISPATCH_SENT_NOW) {
                 lastMediumTrendChangeNotification = now;
             }
             #if !DEBUG_BUTTON_ONLY
-            Serial_printf(F("[1d Trend] 1d trend change notificatie verzonden: %s → %s (1d: %.2f%%)\n"),
-                          fromTrend, toTrend, ret_1d_value);
+            if (dr == Alert2HDispatchResult::DISPATCH_BLOCKED) {
+                Serial_printf(F("[1d Trend] 1d trend change niet uitgeleverd (2h throttle/coalesce): %s → %s (1d: %.2f%%)\n"),
+                              fromTrend, toTrend, ret_1d_value);
+            } else if (dr == Alert2HDispatchResult::DISPATCH_PENDING_ACCEPTED) {
+                Serial_printf(F("[1d Trend] 1d trend change opgenomen in 2h pending: %s → %s (1d: %.2f%%)\n"),
+                              fromTrend, toTrend, ret_1d_value);
+            } else if (dr == Alert2HDispatchResult::DISPATCH_SENT_NOW) {
+                Serial_printf(F("[1d Trend] 1d trend change direct verzonden: %s → %s (1d: %.2f%%)\n"),
+                              fromTrend, toTrend, ret_1d_value);
+            }
             #endif
         }
     }
@@ -558,12 +580,23 @@ void TrendDetector::checkLongTermTrendChange(float ret_7d_value, float longTermT
             Serial_printf(F("[7d Trend] startup: 7d trend NTFY suppressed (%lu ms left)\n"), msLeft);
             #endif
         } else {
-            if (AlertEngine::send2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag)) {
+            const Alert2HDispatchResult dr =
+                AlertEngine::dispatch2HNotification(ALERT2H_TREND_CHANGE, title, msg, colorTag);
+            if (dr == Alert2HDispatchResult::DISPATCH_PENDING_ACCEPTED ||
+                dr == Alert2HDispatchResult::DISPATCH_SENT_NOW) {
                 lastLongTermTrendChangeNotification = now;
             }
             #if !DEBUG_BUTTON_ONLY
-            Serial_printf(F("[7d Trend] 7d trend change notificatie verzonden: %s → %s (7d: %.2f%%)\n"),
-                          fromTrend, toTrend, ret_7d_value);
+            if (dr == Alert2HDispatchResult::DISPATCH_BLOCKED) {
+                Serial_printf(F("[7d Trend] 7d trend change niet uitgeleverd (2h throttle/coalesce): %s → %s (7d: %.2f%%)\n"),
+                              fromTrend, toTrend, ret_7d_value);
+            } else if (dr == Alert2HDispatchResult::DISPATCH_PENDING_ACCEPTED) {
+                Serial_printf(F("[7d Trend] 7d trend change opgenomen in 2h pending: %s → %s (7d: %.2f%%)\n"),
+                              fromTrend, toTrend, ret_7d_value);
+            } else if (dr == Alert2HDispatchResult::DISPATCH_SENT_NOW) {
+                Serial_printf(F("[7d Trend] 7d trend change direct verzonden: %s → %s (7d: %.2f%%)\n"),
+                              fromTrend, toTrend, ret_7d_value);
+            }
             #endif
         }
     }

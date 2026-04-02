@@ -144,6 +144,13 @@ extern uint8_t g_uiLastMinMaxSource1d;
 extern uint8_t g_uiLastMinMaxSource7d;
 extern bool hasRet1dWarm;
 extern bool hasRet7dWarm;
+extern float g_uiTfRawMin[7];
+extern float g_uiTfRawMax[7];
+extern bool g_uiTfRawValid[7];
+extern uint8_t g_uiTfMinMaxSrc[7];
+extern void uiResetTfMinMaxSnapshot(void);
+extern uint8_t calcLivePctSecondWindow(void);
+extern uint8_t livePct5m;
 #endif
 extern uint8_t language;
 extern bool minuteArrayFilled;
@@ -1943,6 +1950,201 @@ static void uiTfDebugLog(uint8_t cardIdx, const char* tfTag, const char* src, co
 #endif
 #endif
 
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+enum : uint8_t {
+    UI_TF_SRC_NONE = 0,
+    UI_TF_SRC_LIVE = 1,
+    UI_TF_SRC_WARM = 2,
+    UI_TF_SRC_MIX = 3
+};
+static const uint8_t kNestedTfChain[] = {1, 4, 2, 3, 5, 6};
+
+static uint8_t jc3248ClassifyLivePct(uint8_t lp)
+{
+    if (lp >= 80U) {
+        return UI_TF_SRC_LIVE;
+    }
+    if (lp == 0U) {
+        return UI_TF_SRC_WARM;
+    }
+    return UI_TF_SRC_MIX;
+}
+static uint8_t jc3248Classify1d7d(uint8_t gsrc, bool hasWarm)
+{
+    if (gsrc == 1U) {
+        return hasWarm ? UI_TF_SRC_MIX : UI_TF_SRC_LIVE;
+    }
+    if (gsrc == 2U) {
+        return UI_TF_SRC_WARM;
+    }
+    return UI_TF_SRC_NONE;
+}
+static uint8_t jc3248Classify30m()
+{
+    if (hasRet30mLive && hasRet30mWarm) {
+        return UI_TF_SRC_MIX;
+    }
+    if (hasRet30mLive) {
+        return UI_TF_SRC_LIVE;
+    }
+    if (hasRet30mWarm) {
+        return UI_TF_SRC_WARM;
+    }
+    return UI_TF_SRC_NONE;
+}
+static uint8_t jc3248Classify2h()
+{
+    if (hasRet2hLive && hasRet2hWarm) {
+        return UI_TF_SRC_MIX;
+    }
+    if (hasRet2hLive) {
+        return UI_TF_SRC_LIVE;
+    }
+    if (hasRet2hWarm) {
+        return UI_TF_SRC_WARM;
+    }
+    return UI_TF_SRC_NONE;
+}
+
+static const char* jc3248TfSrcAbbr(uint8_t s)
+{
+    switch (s) {
+        case UI_TF_SRC_LIVE:
+            return "LIVE";
+        case UI_TF_SRC_WARM:
+            return "WARM";
+        case UI_TF_SRC_MIX:
+            return "MIX";
+        default:
+            return "--";
+    }
+}
+
+// JC3248: kleur van titelregel (symbool + %) volgens min/max-bron: wit=LIVE oranje=WARM geel=MIX
+static void jc3248ApplyTfSrcTitleColor(uint8_t idx)
+{
+    if (idx >= 7 || ::priceTitle[idx] == nullptr) {
+        return;
+    }
+    lv_color_t c;
+    switch (g_uiTfMinMaxSrc[idx]) {
+        case UI_TF_SRC_LIVE:
+            c = lv_color_white();
+            break;
+        case UI_TF_SRC_WARM:
+            c = lv_palette_main(LV_PALETTE_ORANGE);
+            break;
+        case UI_TF_SRC_MIX:
+            c = lv_palette_main(LV_PALETTE_YELLOW);
+            break;
+        default:
+            c = lv_palette_main(LV_PALETTE_GREY);
+            break;
+    }
+    lv_obj_set_style_text_color(::priceTitle[idx], c, 0);
+}
+
+#if defined(DEBUG_CALCULATIONS) || (DEBUG_UI_TIMEFRAME_MINMAX)
+static uint32_t s_jc3248TfsrcLogMs = 0;
+#endif
+static uint32_t s_jc3248NestWarnMs = 0;
+
+void jc3248FinalizeNestedTfMinMax(UIController* self)
+{
+    float cumMin = 0.0f;
+    float cumMax = 0.0f;
+    bool have = false;
+    const size_t n = sizeof(kNestedTfChain) / sizeof(kNestedTfChain[0]);
+    for (size_t k = 0; k < n; k++) {
+        uint8_t idx = kNestedTfChain[k];
+        if (!g_uiTfRawValid[idx]) {
+            continue;
+        }
+        float rmin = g_uiTfRawMin[idx];
+        float rmax = g_uiTfRawMax[idx];
+        if (!have) {
+            cumMin = rmin;
+            cumMax = rmax;
+            have = true;
+        } else {
+            if (rmin < cumMin) {
+                cumMin = rmin;
+            }
+            if (rmax > cumMax) {
+                cumMax = rmax;
+            }
+        }
+        const float finMin = cumMin;
+        const float finMax = cumMax;
+        const float eps = 0.5f;
+        if ((finMin < rmin - eps || finMax > rmax + eps) && finMin > 0.0f && finMax > 0.0f) {
+            uint32_t now = millis();
+            if (now - s_jc3248NestWarnMs >= 30000UL) {
+                s_jc3248NestWarnMs = now;
+                Serial.printf(
+                    F("[MINMAX][WARN] nested expand TF%u: raw [%.0f,%.0f] -> display [%.0f,%.0f] (cumulative chain)\n"),
+                    (unsigned)idx, (double)rmin, (double)rmax, (double)finMin, (double)finMax);
+            }
+        }
+        float diff = (finMin > 0.0f && finMax > 0.0f) ? (finMax - finMin) : 0.0f;
+        switch (idx) {
+            case 1:
+                self->updateMinMaxDiffLabels(::price1MinMaxLabel, ::price1MinMinLabel, ::price1MinDiffLabel,
+                                             price1MinMaxLabelBuffer, price1MinMinLabelBuffer, price1MinDiffLabelBuffer,
+                                             finMax, finMin, diff,
+                                             lastPrice1MinMaxValue, lastPrice1MinMinValue, lastPrice1MinDiffValue);
+                break;
+            case 2:
+                self->updateMinMaxDiffLabels(::price30MinMaxLabel, ::price30MinMinLabel, ::price30MinDiffLabel,
+                                             price30MinMaxLabelBuffer, price30MinMinLabelBuffer, price30MinDiffLabelBuffer,
+                                             finMax, finMin, diff,
+                                             lastPrice30MinMaxValue, lastPrice30MinMinValue, lastPrice30MinDiffValue);
+                break;
+            case 3:
+                self->updateMinMaxDiffLabels(::price2HMaxLabel, ::price2HMinLabel, ::price2HDiffLabel,
+                                             price2HMaxLabelBuffer, price2HMinLabelBuffer, price2HDiffLabelBuffer,
+                                             finMax, finMin, diff,
+                                             lastPrice2HMaxValue, lastPrice2HMinValue, lastPrice2HDiffValue);
+                break;
+            case 4:
+                self->updateMinMaxDiffLabels(::price5mMaxLabel, ::price5mMinLabel, ::price5mDiffLabel,
+                                             price5mMaxLabelBuffer, price5mMinLabelBuffer, price5mDiffLabelBuffer,
+                                             finMax, finMin, diff,
+                                             lastPrice5mMaxValue, lastPrice5mMinValue, lastPrice5mDiffValue);
+                break;
+            case 5:
+                self->updateMinMaxDiffLabels(::price1dMaxLabel, ::price1dMinLabel, ::price1dDiffLabel,
+                                             price1dMaxLabelBuffer, price1dMinLabelBuffer, price1dDiffLabelBuffer,
+                                             finMax, finMin, diff,
+                                             lastPrice1dMaxValue, lastPrice1dMinValue, lastPrice1dDiffValue);
+                break;
+            case 6:
+                self->updateMinMaxDiffLabels(::price7dMaxLabel, ::price7dMinLabel, ::price7dDiffLabel,
+                                             price7dMaxLabelBuffer, price7dMinLabelBuffer, price7dDiffLabelBuffer,
+                                             finMax, finMin, diff,
+                                             lastPrice7dMaxValue, lastPrice7dMinValue, lastPrice7dDiffValue);
+                break;
+            default:
+                break;
+        }
+    }
+#if defined(DEBUG_CALCULATIONS) || (DEBUG_UI_TIMEFRAME_MINMAX)
+    uint32_t now = millis();
+    if (now - s_jc3248TfsrcLogMs >= 30000UL) {
+        s_jc3248TfsrcLogMs = now;
+        Serial.printf(
+            F("[TFSRC] 1m=%s 5m=%s 30m=%s 2h=%s 1d=%s 7d=%s\n"),
+            jc3248TfSrcAbbr(g_uiTfMinMaxSrc[1]), jc3248TfSrcAbbr(g_uiTfMinMaxSrc[4]),
+            jc3248TfSrcAbbr(g_uiTfMinMaxSrc[2]), jc3248TfSrcAbbr(g_uiTfMinMaxSrc[3]),
+            jc3248TfSrcAbbr(g_uiTfMinMaxSrc[5]), jc3248TfSrcAbbr(g_uiTfMinMaxSrc[6]));
+    }
+#endif
+    for (uint8_t di = 1; di <= 6; di++) {
+        jc3248ApplyTfSrcTitleColor(di);
+    }
+}
+#endif
+
 // Fase 8.6.2: updateAveragePriceCard() naar Module
 // Helper functie om average price cards (1min/30min) bij te werken
 void UIController::updateAveragePriceCard(uint8_t index)
@@ -2101,6 +2303,12 @@ void UIController::updateAveragePriceCard(uint8_t index)
                               price1MinMaxLabelBuffer, price1MinMinLabelBuffer, price1MinDiffLabelBuffer,
                               maxVal, minVal, diff,
                               lastPrice1MinMaxValue, lastPrice1MinMinValue, lastPrice1MinDiffValue);
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+        g_uiTfRawMin[1] = minVal;
+        g_uiTfRawMax[1] = maxVal;
+        g_uiTfRawValid[1] = (minVal > 0.0f && maxVal > 0.0f && maxVal >= minVal);
+        g_uiTfMinMaxSrc[1] = jc3248ClassifyLivePct(calcLivePctSecondWindow());
+#endif
     }
     
     if (index == 2 && ::price30MinMaxLabel != nullptr && ::price30MinMinLabel != nullptr && ::price30MinDiffLabel != nullptr)
@@ -2115,6 +2323,12 @@ void UIController::updateAveragePriceCard(uint8_t index)
                               price30MinMaxLabelBuffer, price30MinMinLabelBuffer, price30MinDiffLabelBuffer,
                               maxVal, minVal, diff,
                               lastPrice30MinMaxValue, lastPrice30MinMinValue, lastPrice30MinDiffValue);
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+        g_uiTfRawMin[2] = minVal;
+        g_uiTfRawMax[2] = maxVal;
+        g_uiTfRawValid[2] = (minVal > 0.0f && maxVal > 0.0f && maxVal >= minVal);
+        g_uiTfMinMaxSrc[2] = jc3248Classify30m();
+#endif
     }
     
     #if defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_JC3248W535)
@@ -2152,6 +2366,12 @@ void UIController::updateAveragePriceCard(uint8_t index)
                                   price2HMaxLabelBuffer, price2HMinLabelBuffer, price2HDiffLabelBuffer,
                                   maxVal, minVal, diff,
                                   lastPrice2HMaxValue, lastPrice2HMinValue, lastPrice2HDiffValue);
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+            g_uiTfRawMin[3] = minVal;
+            g_uiTfRawMax[3] = maxVal;
+            g_uiTfRawValid[3] = (minVal > 0.0f && maxVal > 0.0f && maxVal >= minVal);
+            g_uiTfMinMaxSrc[3] = jc3248Classify2h();
+#endif
         }
     }
     #endif
@@ -2166,6 +2386,10 @@ void UIController::updateAveragePriceCard(uint8_t index)
                               price5mMaxLabelBuffer, price5mMinLabelBuffer, price5mDiffLabelBuffer,
                               maxVal, minVal, diff,
                               lastPrice5mMaxValue, lastPrice5mMinValue, lastPrice5mDiffValue);
+        g_uiTfRawMin[4] = minVal;
+        g_uiTfRawMax[4] = maxVal;
+        g_uiTfRawValid[4] = (minVal > 0.0f && maxVal > 0.0f && maxVal >= minVal);
+        g_uiTfMinMaxSrc[4] = jc3248ClassifyLivePct(livePct5m);
     }
     if (index == 5 && ::price1dMaxLabel != nullptr && ::price1dMinLabel != nullptr && ::price1dDiffLabel != nullptr)
     {
@@ -2193,6 +2417,10 @@ void UIController::updateAveragePriceCard(uint8_t index)
                                   price1dMaxLabelBuffer, price1dMinLabelBuffer, price1dDiffLabelBuffer,
                                   maxVal, minVal, diff,
                                   lastPrice1dMaxValue, lastPrice1dMinValue, lastPrice1dDiffValue);
+            g_uiTfRawMin[5] = minVal;
+            g_uiTfRawMax[5] = maxVal;
+            g_uiTfRawValid[5] = (minVal > 0.0f && maxVal > 0.0f && maxVal >= minVal);
+            g_uiTfMinMaxSrc[5] = jc3248Classify1d7d(g_uiLastMinMaxSource1d, hasRet1dWarm);
         } else {
             lastPrice1dMaxValue = -1.0f;
             lastPrice1dMinValue = -1.0f;
@@ -2231,6 +2459,10 @@ void UIController::updateAveragePriceCard(uint8_t index)
                                   price7dMaxLabelBuffer, price7dMinLabelBuffer, price7dDiffLabelBuffer,
                                   maxVal, minVal, diff,
                                   lastPrice7dMaxValue, lastPrice7dMinValue, lastPrice7dDiffValue);
+            g_uiTfRawMin[6] = minVal;
+            g_uiTfRawMax[6] = maxVal;
+            g_uiTfRawValid[6] = (minVal > 0.0f && maxVal > 0.0f && maxVal >= minVal);
+            g_uiTfMinMaxSrc[6] = jc3248Classify1d7d(g_uiLastMinMaxSource7d, hasRet7dWarm);
         } else {
             lastPrice7dMaxValue = -1.0f;
             lastPrice7dMinValue = -1.0f;
@@ -2798,6 +3030,9 @@ void UIController::updateHeaderSection()
 // Helper functie om price cards section bij te werken
 void UIController::updatePriceCardsSection(bool hasNewPriceData)
 {
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+    uiResetTfMinMaxSnapshot();
+#endif
     // Fase 8.7.3: Gebruik module versies van update functies
     for (uint8_t i = 0; i < SYMBOL_COUNT; ++i) {
         float pct = 0.0f;
@@ -2815,6 +3050,9 @@ void UIController::updatePriceCardsSection(bool hasNewPriceData)
         // Update kleuren
         updatePriceCardColor(i, pct);
     }
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+    jc3248FinalizeNestedTfMinMax(this);
+#endif
 }
 
 // Fase 8.11.3: updateChartRange() verplaatst vanuit .ino naar UIController module

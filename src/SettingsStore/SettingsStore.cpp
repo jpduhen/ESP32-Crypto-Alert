@@ -20,28 +20,28 @@ extern bool hasPSRAM();
 #define THRESHOLD_30MIN_DOWN_DEFAULT -2.0f
 #endif
 #ifndef SPIKE_1M_THRESHOLD_DEFAULT
-#define SPIKE_1M_THRESHOLD_DEFAULT 0.25f
+#define SPIKE_1M_THRESHOLD_DEFAULT 0.16f
 #endif
 #ifndef SPIKE_5M_THRESHOLD_DEFAULT
-#define SPIKE_5M_THRESHOLD_DEFAULT 0.50f
+#define SPIKE_5M_THRESHOLD_DEFAULT 0.36f
 #endif
 #ifndef MOVE_30M_THRESHOLD_DEFAULT
-#define MOVE_30M_THRESHOLD_DEFAULT 1.3f
+#define MOVE_30M_THRESHOLD_DEFAULT 0.80f
 #endif
 #ifndef MOVE_5M_THRESHOLD_DEFAULT
-#define MOVE_5M_THRESHOLD_DEFAULT 0.50f
+#define MOVE_5M_THRESHOLD_DEFAULT 0.36f
 #endif
 #ifndef MOVE_5M_ALERT_THRESHOLD_DEFAULT
 #define MOVE_5M_ALERT_THRESHOLD_DEFAULT 0.50f
 #endif
 #ifndef NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT
-#define NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT 120000UL
+#define NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT 90000UL
 #endif
 #ifndef NOTIFICATION_COOLDOWN_30MIN_MS_DEFAULT
-#define NOTIFICATION_COOLDOWN_30MIN_MS_DEFAULT 900000UL
+#define NOTIFICATION_COOLDOWN_30MIN_MS_DEFAULT 90000UL
 #endif
 #ifndef NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT
-#define NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT 420000UL
+#define NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT 150000UL
 #endif
 #ifndef DISPLAY_ROTATION_DEFAULT
 #define DISPLAY_ROTATION_DEFAULT 0
@@ -83,7 +83,7 @@ extern bool hasPSRAM();
 #define SMART_CONFLUENCE_ENABLED_DEFAULT false
 #endif
 #ifndef NIGHT_MODE_ENABLED_DEFAULT
-#define NIGHT_MODE_ENABLED_DEFAULT true
+#define NIGHT_MODE_ENABLED_DEFAULT false
 #endif
 #ifndef NIGHT_MODE_START_HOUR_DEFAULT
 #define NIGHT_MODE_START_HOUR_DEFAULT 23
@@ -125,10 +125,10 @@ extern bool hasPSRAM();
 #define WARM_START_2H_CANDLES_DEFAULT 6
 #endif
 #ifndef WARM_START_SKIP_1M_DEFAULT
-#define WARM_START_SKIP_1M_DEFAULT true
+#define WARM_START_SKIP_1M_DEFAULT false
 #endif
 #ifndef WARM_START_SKIP_5M_DEFAULT
-#define WARM_START_SKIP_5M_DEFAULT true
+#define WARM_START_SKIP_5M_DEFAULT false
 #endif
 #ifndef AUTO_VOLATILITY_ENABLED_DEFAULT
 #define AUTO_VOLATILITY_ENABLED_DEFAULT false
@@ -458,8 +458,8 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     volatilityLowThreshold = VOLATILITY_LOW_THRESHOLD_DEFAULT;
     volatilityHighThreshold = VOLATILITY_HIGH_THRESHOLD_DEFAULT;
 
-    // Regime-engine defaults (Fase A)
-    regimeEngineEnabled = false;
+    // Regime-engine defaults — profiel 5F (aan, zelfde thresholds als GEEK-5-basis)
+    regimeEngineEnabled = true;
     regimeMinDwellSec = 180u;
     regimeEnergeticEnter = 0.95f;
     regimeEnergeticExit = 0.78f;
@@ -498,27 +498,25 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     regimeEnergiekStandalone1mFactor = 1.20f;
     regimeEnergiekMinDirectionStrength = 0.60f;
     
-    // 2-hour alert thresholds defaults (van Alert2HThresholds namespace)
+    // 2-hour alert thresholds defaults — profiel 5F
     alert2HThresholds.breakMarginPct = 0.15f;
     alert2HThresholds.breakResetMarginPct = 0.10f;
-    alert2HThresholds.breakCooldownMs = 30UL * 60UL * 1000UL; // 30 min
-    alert2HThresholds.meanMinDistancePct = 0.60f;
+    alert2HThresholds.breakCooldownMs = 10800000UL;
+    alert2HThresholds.meanMinDistancePct = 0.80f;
     alert2HThresholds.meanTouchBandPct = 0.10f;
-    alert2HThresholds.meanCooldownMs = 60UL * 60UL * 1000UL; // 60 min
-    alert2HThresholds.compressThresholdPct = 0.80f;
+    alert2HThresholds.meanCooldownMs = 10800000UL;
+    alert2HThresholds.compressThresholdPct = 0.70f;
     alert2HThresholds.compressResetPct = 1.10f;
-    alert2HThresholds.compressCooldownMs = 2UL * 60UL * 60UL * 1000UL; // 2 uur
+    alert2HThresholds.compressCooldownMs = 18000000UL;
     alert2HThresholds.anchorOutsideMarginPct = 0.25f;
-    alert2HThresholds.anchorCooldownMs = 3UL * 60UL * 60UL * 1000UL; // 3 uur
-    // FASE X.4: Trend hysteresis en throttling defaults
-    alert2HThresholds.trendHysteresisFactor = 0.65f;  // 65% van threshold voor trend exit
-    alert2HThresholds.throttlingTrendChangeMs = 180UL * 60UL * 1000UL; // 180 min
-    alert2HThresholds.throttlingTrendToMeanMs = 60UL * 60UL * 1000UL;   // 60 min
-    alert2HThresholds.throttlingMeanTouchMs = 60UL * 60UL * 1000UL;    // 60 min
-    alert2HThresholds.throttlingCompressMs = 120UL * 60UL * 1000UL;    // 120 min
-    // FASE X.5: Secondary global cooldown en coalescing defaults
-    alert2HThresholds.twoHSecondaryGlobalCooldownSec = 7200UL;  // 120 minuten (default)
-    alert2HThresholds.twoHSecondaryCoalesceWindowSec = 90UL;      // 90 seconden (default)
+    alert2HThresholds.anchorCooldownMs = 10800000UL;
+    alert2HThresholds.trendHysteresisFactor = 0.65f;
+    alert2HThresholds.throttlingTrendChangeMs = 10800000UL;
+    alert2HThresholds.throttlingTrendToMeanMs = 3600000UL;
+    alert2HThresholds.throttlingMeanTouchMs = 7200000UL;
+    alert2HThresholds.throttlingCompressMs = 10800000UL;
+    alert2HThresholds.twoHSecondaryGlobalCooldownSec = 14400UL;
+    alert2HThresholds.twoHSecondaryCoalesceWindowSec = 180UL;
     
     // Auto Anchor defaults (geoptimaliseerd: gebruik compacte representatie)
     // Note: hasPSRAM() wordt later aangeroepen in load() voor dynamische defaults
@@ -654,7 +652,7 @@ CryptoMonitorSettings SettingsStore::load() {
     settings.volatilityHighThreshold = prefs.getFloat(PREF_KEY_VOL_HIGH, VOLATILITY_HIGH_THRESHOLD_DEFAULT);
 
     // Load regime-engine settings
-    settings.regimeEngineEnabled = prefs.getBool(PREF_KEY_REGIME_EN, false);
+    settings.regimeEngineEnabled = prefs.getBool(PREF_KEY_REGIME_EN, true);
     settings.regimeMinDwellSec = prefs.getUInt(PREF_KEY_REGIME_DWELL, 180u);
     if (settings.regimeMinDwellSec < 1u) {
         settings.regimeMinDwellSec = 1u;
@@ -713,24 +711,22 @@ CryptoMonitorSettings SettingsStore::load() {
     // Load 2-hour alert thresholds
     settings.alert2HThresholds.breakMarginPct = prefs.getFloat(PREF_KEY_2H_BREAK_MARGIN, 0.15f);
     settings.alert2HThresholds.breakResetMarginPct = prefs.getFloat(PREF_KEY_2H_BREAK_RESET, 0.10f);
-    settings.alert2HThresholds.breakCooldownMs = prefs.getULong(PREF_KEY_2H_BREAK_CD, 30UL * 60UL * 1000UL);
-    settings.alert2HThresholds.meanMinDistancePct = prefs.getFloat(PREF_KEY_2H_MEAN_MIN_DIST, 0.60f);
+    settings.alert2HThresholds.breakCooldownMs = prefs.getULong(PREF_KEY_2H_BREAK_CD, 10800000UL);
+    settings.alert2HThresholds.meanMinDistancePct = prefs.getFloat(PREF_KEY_2H_MEAN_MIN_DIST, 0.80f);
     settings.alert2HThresholds.meanTouchBandPct = prefs.getFloat(PREF_KEY_2H_MEAN_TOUCH, 0.10f);
-    settings.alert2HThresholds.meanCooldownMs = prefs.getULong(PREF_KEY_2H_MEAN_CD, 60UL * 60UL * 1000UL);
-    settings.alert2HThresholds.compressThresholdPct = prefs.getFloat(PREF_KEY_2H_COMPRESS_TH, 0.80f);
+    settings.alert2HThresholds.meanCooldownMs = prefs.getULong(PREF_KEY_2H_MEAN_CD, 10800000UL);
+    settings.alert2HThresholds.compressThresholdPct = prefs.getFloat(PREF_KEY_2H_COMPRESS_TH, 0.70f);
     settings.alert2HThresholds.compressResetPct = prefs.getFloat(PREF_KEY_2H_COMPRESS_RESET, 1.10f);
-    settings.alert2HThresholds.compressCooldownMs = prefs.getULong(PREF_KEY_2H_COMPRESS_CD, 2UL * 60UL * 60UL * 1000UL);
+    settings.alert2HThresholds.compressCooldownMs = prefs.getULong(PREF_KEY_2H_COMPRESS_CD, 18000000UL);
     settings.alert2HThresholds.anchorOutsideMarginPct = prefs.getFloat(PREF_KEY_2H_ANCHOR_MARGIN, 0.25f);
-    settings.alert2HThresholds.anchorCooldownMs = prefs.getULong(PREF_KEY_2H_ANCHOR_CD, 3UL * 60UL * 60UL * 1000UL);
-    // FASE X.4: Trend hysteresis en throttling settings
+    settings.alert2HThresholds.anchorCooldownMs = prefs.getULong(PREF_KEY_2H_ANCHOR_CD, 10800000UL);
     settings.alert2HThresholds.trendHysteresisFactor = prefs.getFloat(PREF_KEY_2H_TREND_HYSTERESIS, 0.65f);
-    settings.alert2HThresholds.throttlingTrendChangeMs = prefs.getULong(PREF_KEY_2H_THROTTLE_TREND_CHANGE, 180UL * 60UL * 1000UL);
-    settings.alert2HThresholds.throttlingTrendToMeanMs = prefs.getULong(PREF_KEY_2H_THROTTLE_TREND_MEAN, 60UL * 60UL * 1000UL);
-    settings.alert2HThresholds.throttlingMeanTouchMs = prefs.getULong(PREF_KEY_2H_THROTTLE_MEAN_TOUCH, 60UL * 60UL * 1000UL);
-    settings.alert2HThresholds.throttlingCompressMs = prefs.getULong(PREF_KEY_2H_THROTTLE_COMPRESS, 120UL * 60UL * 1000UL);
-    // FASE X.5: Secondary global cooldown en coalescing settings
-    settings.alert2HThresholds.twoHSecondaryGlobalCooldownSec = prefs.getULong(PREF_KEY_2H_SEC_GLOBAL_CD, 7200UL);
-    settings.alert2HThresholds.twoHSecondaryCoalesceWindowSec = prefs.getULong(PREF_KEY_2H_SEC_COALESCE, 90UL);
+    settings.alert2HThresholds.throttlingTrendChangeMs = prefs.getULong(PREF_KEY_2H_THROTTLE_TREND_CHANGE, 10800000UL);
+    settings.alert2HThresholds.throttlingTrendToMeanMs = prefs.getULong(PREF_KEY_2H_THROTTLE_TREND_MEAN, 3600000UL);
+    settings.alert2HThresholds.throttlingMeanTouchMs = prefs.getULong(PREF_KEY_2H_THROTTLE_MEAN_TOUCH, 7200000UL);
+    settings.alert2HThresholds.throttlingCompressMs = prefs.getULong(PREF_KEY_2H_THROTTLE_COMPRESS, 10800000UL);
+    settings.alert2HThresholds.twoHSecondaryGlobalCooldownSec = prefs.getULong(PREF_KEY_2H_SEC_GLOBAL_CD, 14400UL);
+    settings.alert2HThresholds.twoHSecondaryCoalesceWindowSec = prefs.getULong(PREF_KEY_2H_SEC_COALESCE, 180UL);
     
     // Load Auto Anchor settings (gebruik config-blob indien beschikbaar, anders individuele keys)
     bool psramAvailable = hasPSRAM();

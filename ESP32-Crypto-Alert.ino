@@ -207,7 +207,7 @@ struct NtfyPendingItem;
 
 // --- Smart Confluence Mode Configuration ---
 #define SMART_CONFLUENCE_ENABLED_DEFAULT false  // Default: uitgeschakeld
-#define NIGHT_MODE_ENABLED_DEFAULT true  // Default: nachtstand aan (23:00-07:00)
+#define NIGHT_MODE_ENABLED_DEFAULT false  // Profiel 5F: nachtstand uit (S3-GEEK-5-basis)
 #define NIGHT_MODE_START_HOUR_DEFAULT 23
 #define NIGHT_MODE_END_HOUR_DEFAULT 7
 #define NIGHT_MODE_SPIKE5M_THRESHOLD_DEFAULT 0.60f
@@ -272,17 +272,17 @@ struct NtfyPendingItem;
 #define CRYPTO_ALERT_NTFY_PERIODIC_TEST_MS 30000UL
 #endif
 
-// Spike/Move alert thresholds (geoptimaliseerd op basis van metingen)
-#define SPIKE_1M_THRESHOLD_DEFAULT 0.31f   // 1m spike: |ret_1m| >= 0.31%
-#define SPIKE_5M_THRESHOLD_DEFAULT 0.65f   // 5m spike filter: |ret_5m| >= 0.65% (past bij actuele volatiliteit)
-#define MOVE_30M_THRESHOLD_DEFAULT 1.3f    // 30m move: |ret_30m| >= 1.3% (0.8% was te gevoelig)
-#define MOVE_5M_THRESHOLD_DEFAULT 0.40f    // 5m move filter: |ret_5m| >= 0.40% (gevoeliger op momentum-opbouw)
-#define MOVE_5M_ALERT_THRESHOLD_DEFAULT 0.8f  // 5m move alert: |ret_5m| >= 0.8% (historisch vaak bij trend start)
+// Spike/Move alert thresholds — centrale code-basis profiel 5F (S3-GEEK-5 + 5F-tuning)
+#define SPIKE_1M_THRESHOLD_DEFAULT 0.16f
+#define SPIKE_5M_THRESHOLD_DEFAULT 0.36f
+#define MOVE_30M_THRESHOLD_DEFAULT 0.80f
+#define MOVE_5M_THRESHOLD_DEFAULT 0.36f
+#define MOVE_5M_ALERT_THRESHOLD_DEFAULT 0.50f
 
-// Cooldown tijden (in milliseconden) om spam te voorkomen (geoptimaliseerd op basis van metingen)
-#define NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT 120000   // 2 minuten tussen 1-minuut spike notificaties
-#define NOTIFICATION_COOLDOWN_30MIN_MS_DEFAULT 900000  // 15 minuten tussen 30-minuten move notificaties (grote moves → langere rust)
-#define NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT 420000   // 7 minuten tussen 5-minuten move notificaties (sneller tweede signaal bij doorbraak)
+// Cooldown tijden (ms) — profiel 5F
+#define NOTIFICATION_COOLDOWN_1MIN_MS_DEFAULT 90000UL
+#define NOTIFICATION_COOLDOWN_30MIN_MS_DEFAULT 90000UL
+#define NOTIFICATION_COOLDOWN_5MIN_MS_DEFAULT 150000UL
 
 // Max alerts per uur
 #define MAX_1M_ALERTS_PER_HOUR 3
@@ -932,6 +932,12 @@ char ntfyTopic[64] = "";  // NTFY topic (max 63 karakters)
 static unsigned long ntfyNextAllowedMs = 0;
 static uint8_t ntfyFailStreak = 0;
 
+// apiTask-handle: direct wakker maken na enqueue (leeg→niet-leeg) i.p.v. volledige UPDATE_API_INTERVAL wachten
+static TaskHandle_t s_apiTaskHandle = nullptr;
+#ifndef DEBUG_NTFY_API_WAKE
+#define DEBUG_NTFY_API_WAKE 0
+#endif
+
 // Diagnostiek: laatste NTFY poging kreeg HTTP 429.
 // Wordt alleen gezet wanneer er effectief een HTTP response code 429 is ontvangen.
 static bool ntfyLastSendAttemptWas429 = false;
@@ -983,18 +989,38 @@ NotificationCooldowns notificationCooldowns = {
 
 // 2-hour alert thresholds in struct voor betere organisatie
 // Wordt gebruikt door AlertEngine voor 2h notificaties
+// 2h-alert defaults — profiel 5F (volledige struct; gelijk aan SettingsStore-basis voor nieuwe/lege NVS)
 Alert2HThresholds alert2HThresholds = {
     .breakMarginPct = 0.15f,
     .breakResetMarginPct = 0.10f,
-    .breakCooldownMs = 30UL * 60UL * 1000UL, // 30 min
-    .meanMinDistancePct = 0.60f,
+    .breakCooldownMs = 10800000UL,
+    .meanMinDistancePct = 0.80f,
     .meanTouchBandPct = 0.10f,
-    .meanCooldownMs = 60UL * 60UL * 1000UL, // 60 min
-    .compressThresholdPct = 0.80f,
+    .meanCooldownMs = 10800000UL,
+    .compressThresholdPct = 0.70f,
     .compressResetPct = 1.10f,
-    .compressCooldownMs = 2UL * 60UL * 60UL * 1000UL, // 2 uur
+    .compressCooldownMs = 18000000UL,
     .anchorOutsideMarginPct = 0.25f,
-    .anchorCooldownMs = 3UL * 60UL * 60UL * 1000UL // 3 uur
+    .anchorCooldownMs = 10800000UL,
+    .trendHysteresisFactor = 0.65f,
+    .throttlingTrendChangeMs = 10800000UL,
+    .throttlingTrendToMeanMs = 3600000UL,
+    .throttlingMeanTouchMs = 7200000UL,
+    .throttlingCompressMs = 10800000UL,
+    .twoHSecondaryGlobalCooldownSec = 14400UL,
+    .twoHSecondaryCoalesceWindowSec = 180UL,
+    .anchorSourceMode = 0,
+    .autoAnchorLastValue = 0.0f,
+    .autoAnchorLastUpdateEpoch = 0,
+    .autoAnchorUpdateMinutes = 120,
+    .autoAnchorForceUpdateMinutes = 720,
+    .autoAnchor4hCandles = 24,
+    .autoAnchor1dCandles = 14,
+    .autoAnchorMinUpdatePct_x100 = 15,
+    .autoAnchorTrendPivotPct_x100 = 100,
+    .autoAnchorW4hBase_x100 = 35,
+    .autoAnchorW4hTrendBoost_x100 = 35,
+    .autoAnchorFlags = 0
 };
 
 // Backward compatibility: legacy variabelen (verwijzen naar struct)
@@ -2249,6 +2275,15 @@ static WarmStartMode performWarmStart()
         Serial_printf(F("[WarmStart][7d] daily window: valid=%u, min=%.2f, max=%.2f, avg=%.2f (warmValid=%d)\n"),
                       (unsigned)cnt7d, warmStart7dMin, warmStart7dMax, warmStart7dAvg,
                       warmStart7dValid ? 1 : 0);
+        // 7× daily *close* min/max kan smaller zijn dan 24×1h intraday — union met 1d warm zodat nested TF logisch blijft
+        if (warmStart7dValid && warmStart1dValid) {
+            if (warmStart1dMax > warmStart7dMax) {
+                warmStart7dMax = warmStart1dMax;
+            }
+            if (warmStart1dMin < warmStart7dMin) {
+                warmStart7dMin = warmStart1dMin;
+            }
+        }
     }
     
     // 5. Haal 4h candles op voor lange termijn trend
@@ -3070,7 +3105,14 @@ static void maybeInitWebSocketAfterWarmStart()
                 lastWsReconnectMs = millis();
                 break;
             case WStype_DISCONNECTED:
-                Serial.println(F("[WS] Disconnected"));
+                Serial.print(F("[WS] Disconnected"));
+                Serial_printf(F(" len=%u"), (unsigned)length);
+                if (payload != nullptr && length >= 2) {
+                    const uint16_t code =
+                        (uint16_t)(((uint16_t)payload[0] << 8) | (uint16_t)payload[1]);
+                    Serial_printf(F(" close=%u"), (unsigned)code);
+                }
+                Serial.println();
                 wsConnected = false;
                 wsConnecting = false;
                 lastWsDisconnectMs = millis();
@@ -4015,6 +4057,16 @@ static int ntfyFindEvictCandidate_NoLock(uint8_t incomingPrio) {
     return best;
 }
 
+static void ntfyWakeApiTaskAfterEnqueueFromEmpty(void) {
+    if (s_apiTaskHandle == nullptr) {
+        return;
+    }
+#if DEBUG_NTFY_API_WAKE
+    Serial.println(F("[NTFY][Q] wake api_task (enqueue from empty)"));
+#endif
+    xTaskNotifyGive(s_apiTaskHandle);
+}
+
 static bool enqueueNtfyPending(const char* title, const char* body, const char* colorTag, uint8_t priority, const char* sequenceId = nullptr)
 {
     if (title == nullptr || body == nullptr) return false;
@@ -4116,6 +4168,8 @@ static bool enqueueNtfyPending(const char* title, const char* body, const char* 
         s_ntfyQ[slot].delivered = false;
     }
 
+    const bool insertFromEmptyQueue = (ntfyQueuePendingCount_NoLock() == 0);
+
     NtfyPendingItem& it = s_ntfyQ[slot];
     it.used = true;
     it.delivered = false;
@@ -4134,6 +4188,9 @@ static bool enqueueNtfyPending(const char* title, const char* body, const char* 
     const uint32_t enqAudit = it.auditId;
     const uint32_t enqCreated = it.createdMs;
     xSemaphoreGive(s_ntfyQMutex);
+    if (insertFromEmptyQueue) {
+        ntfyWakeApiTaskAfterEnqueueFromEmpty();
+    }
     if (evictedSlot) {
         ntfyAuditLog(F("evict_for_new_item"), evictAudit,
                       (evictSeq[0] != '\0') ? evictSeq : nullptr,
@@ -6916,6 +6973,24 @@ uint8_t calcLivePctFiveMinuteWindow()
     return (uint8_t)((liveCount * 100U) / count);
 }
 
+// % SOURCE_LIVE in actief 1m-secondenvenster (min/max-kaart bronstatus)
+uint8_t calcLivePctSecondWindow()
+{
+    uint16_t count = priceData.getSecondArrayFilled()
+                         ? (uint16_t)SECONDS_PER_MINUTE
+                         : (uint16_t)priceData.getSecondIndex();
+    if (count == 0) {
+        return 0;
+    }
+    uint16_t liveCount = 0;
+    for (uint16_t i = 0; i < count; i++) {
+        if (secondPricesSource[i] == SOURCE_LIVE) {
+            liveCount++;
+        }
+    }
+    return (uint8_t)((liveCount * 100U) / count);
+}
+
 // ============================================================================
 // Generic Min/Max Finding Helper (Fase 2.1: Geconsolideerde Min/Max Finding)
 // ============================================================================
@@ -7525,6 +7600,20 @@ static void refreshAveragePrice1dForUi(void)
 uint8_t g_uiLastMinMaxSource1d = 0;
 uint8_t g_uiLastMinMaxSource7d = 0;
 
+// Min/max snapshot vóór centrale nested-chain (UIController); bron: 0=— 1=LIVE 2=WARM 3=MIX
+float g_uiTfRawMin[7];
+float g_uiTfRawMax[7];
+bool g_uiTfRawValid[7];
+uint8_t g_uiTfMinMaxSrc[7];
+
+void uiResetTfMinMaxSnapshot(void)
+{
+    for (uint8_t i = 0; i < 7; i++) {
+        g_uiTfRawValid[i] = false;
+        g_uiTfMinMaxSrc[i] = 0;
+    }
+}
+
 void findMinMaxInLast24Hours(float &minVal, float &maxVal)
 {
     float av;
@@ -7625,6 +7714,7 @@ void findMinMaxInLast7Days(float &minVal, float &maxVal)
     g_uiLastMinMaxSource7d = 0;
     if (fill168HourlyStatsFor7dUi(minVal, maxVal, av)) {
         g_uiLastMinMaxSource7d = 1;
+        // 168h ⊃ laatste 24h uit dezelfde hourly buffer — geen nested-clamp nodig
         return;
     }
     if (warmStart7dValid) {
@@ -9443,7 +9533,7 @@ static void startFreeRTOSTasks()
         apiTaskStack,      // Stack size (platform-specifiek)
         NULL,              // Parameters
         1,                 // Priority
-        NULL,              // Task handle
+        &s_apiTaskHandle,  // Task handle (o.a. ntfy wake na enqueue)
         1                  // Core 1
     );
 
@@ -10107,9 +10197,13 @@ void apiTask(void *parameter)
         }
         #endif
         
-        // Duration-aware timing: wacht (interval - callDuration)
-        // Simpel: normale delay, prijs herhaling gebeurt onafhankelijk in priceRepeatTask
-        vTaskDelay(pdMS_TO_TICKS(waitMs));
+        // Duration-aware timing: wacht tot volgende interval OF vroege wake (ntfy enqueue leeg→pending).
+        // ulTaskNotifyTake verkort queue_wait_ms t.o.v. blind wachten op volledige apiIntervalMs.
+        if (waitMs > 0) {
+            (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(waitMs));
+        } else {
+            vTaskDelay(1);
+        }
     }
 }
 
@@ -10332,6 +10426,14 @@ void loop()
 #if WS_ENABLED && WS_LIB_AVAILABLE
     if (g_netExclusiveNtfyMode == NET_MODE_NORMAL && wsInitialized && wsClientPtr != nullptr) {
         if (WiFi.status() == WL_CONNECTED) {
+            if (wsPauseForNtfySend) {
+                static unsigned long s_wsPauseInNormalLogMs = 0;
+                const unsigned long n = millis();
+                if (n - s_wsPauseInNormalLogMs >= 15000UL) {
+                    s_wsPauseInNormalLogMs = n;
+                    Serial_println(F("[WS][WARN] wsPauseForNtfySend while NET_MODE_NORMAL"));
+                }
+            }
             // Regie: tijdens (re)connect nemen we de netwerkmutex zodat NTFY/MQTT/API niet tegelijk connect zware acties doen.
             static unsigned long wsReconnectLastPollMs = 0;
             static unsigned long wsReconnectLastWaitLogMs = 0;
@@ -10379,6 +10481,19 @@ void loop()
                     wsClientPtr->loop();
                     netMutexUnlock("[WS] reconnect loop");
                     wsReconnectLastPollMs = nowWs;
+                }
+                if (lastWsDisconnectMs != 0 && (nowWs - lastWsDisconnectMs) > 45000UL) {
+                    static unsigned long s_wsDiscStallLogMs = 0;
+                    if (nowWs - s_wsDiscStallLogMs >= 30000UL) {
+                        s_wsDiscStallLogMs = nowWs;
+                        Serial_printf(
+                            F("[WS][stall] disc_age_ms=%lu excl=%u pause=%u cg=%d cn=%d\n"),
+                            (unsigned long)(nowWs - lastWsDisconnectMs),
+                            (unsigned)g_netExclusiveNtfyMode,
+                            (unsigned)(wsPauseForNtfySend ? 1u : 0u),
+                            wsConnecting ? 1 : 0,
+                            wsConnected ? 1 : 0);
+                    }
                 }
             } else {
                 if (wsReconnectSessionActive) {

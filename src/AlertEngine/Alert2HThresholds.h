@@ -22,37 +22,27 @@ namespace Alert2HDefaults {
     // Na een breakout pas opnieuw notificeren als prijs eerst weer onder (high2h - 0.10%) komt
     static constexpr float BREAK_RESET_MARGIN_PCT = 0.10f;
 
-    // Cooldown per richting (om spam te voorkomen)
-    static constexpr uint32_t BREAK_COOLDOWN_MS = 30UL * 60UL * 1000UL; // 30 min
+    // Cooldown per richting (om spam te voorkomen); default rustiger dan vroeger (3 uur)
+    static constexpr uint32_t BREAK_COOLDOWN_MS = 10800000UL; // 3 uur — profiel 5F
 
-    // --- Mean reversion touch (2h average) ---
-    // MEAN_MIN_DISTANCE 0.60% + TOUCH 0.10%: pas melden als het echt een return-to-mean event is.
-    // Alleen melden als prijs vooraf minimaal 0.60% van avg2h af lag en daarna avg2h "raakt"
-    static constexpr float MEAN_MIN_DISTANCE_PCT = 0.60f;
+    // --- Mean reversion touch (2h average) — profiel 5F ---
+    static constexpr float MEAN_MIN_DISTANCE_PCT = 0.80f;
 
-    // Definieer "touch" als binnen 0.10% van avg2h
     static constexpr float MEAN_TOUCH_BAND_PCT = 0.10f;
 
-    // Cooldown om niet elke keer te spammen als hij rond avg2h blijft hangen
-    static constexpr uint32_t MEAN_COOLDOWN_MS = 60UL * 60UL * 1000UL; // 60 min
+    static constexpr uint32_t MEAN_COOLDOWN_MS = 10800000UL;
 
-    // --- Range compression ---
-    // COMPRESS 0.80% / reset 1.10%: compressie is zeldzamer en relevant; reset hoger voorkomt flapper.
-    // Range% = (high2h-low2h)/avg2h*100
-    static constexpr float COMPRESS_THRESHOLD_PCT = 0.80f;
+    // --- Range compression — profiel 5F ---
+    static constexpr float COMPRESS_THRESHOLD_PCT = 0.70f;
 
-    // Reset compressie-notificatie pas als range weer boven 1.10% komt
     static constexpr float COMPRESS_RESET_PCT = 1.10f;
 
-    static constexpr uint32_t COMPRESS_COOLDOWN_MS = 2UL * 60UL * 60UL * 1000UL; // 2 uur
+    static constexpr uint32_t COMPRESS_COOLDOWN_MS = 18000000UL;
 
     // --- Anchor context ---
-    // ANCHOR outside 0.25%: anchor-meldingen moeten schaars zijn; dit is "duidelijk buiten range".
-    // Anchor buiten 2h range als hij >0.25% buiten high/low ligt
     static constexpr float ANCHOR_OUTSIDE_MARGIN_PCT = 0.25f;
 
-    // Cooldown voor anchor-context
-    static constexpr uint32_t ANCHOR_COOLDOWN_MS = 3UL * 60UL * 60UL * 1000UL; // 3 uur
+    static constexpr uint32_t ANCHOR_COOLDOWN_MS = 10800000UL;
 }
 
 // Helper functies (zonder heap allocaties)
