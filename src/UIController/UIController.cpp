@@ -138,6 +138,9 @@ extern bool hasRet2hWarm;
 extern bool hasRet30mWarm;
 extern bool hasRet2hLive;
 extern bool hasRet30mLive;
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+extern bool hasRet7dLive;
+#endif
 extern bool regimeEngineEnabled;
 #if UI_HAS_TF_MINMAX_STATUS_UI
 extern float g_uiTfRawMin[7];
@@ -1891,7 +1894,22 @@ void UIController::updateWarmStartStatusLabel()
     lv_color_t statusColor;
     if (hasRet30mLive) {
         snprintf(warmStartText, sizeof(warmStartText), "LIVE");
+        // LCDwiki: LIVE geel tot 2h live; daarna groen. JC3248: geel tot 7d live; daarna groen. Overige boards: groen.
+#if defined(PLATFORM_ESP32S3_LCDWIKI_28)
+        if (hasRet2hLive) {
+            statusColor = lv_palette_main(LV_PALETTE_GREEN);
+        } else {
+            statusColor = lv_palette_main(LV_PALETTE_YELLOW);
+        }
+#elif defined(PLATFORM_ESP32S3_JC3248W535)
+        if (hasRet7dLive) {
+            statusColor = lv_palette_main(LV_PALETTE_GREEN);
+        } else {
+            statusColor = lv_palette_main(LV_PALETTE_YELLOW);
+        }
+#else
         statusColor = lv_palette_main(LV_PALETTE_GREEN);
+#endif
     } else {
         uint8_t availableMinutes = minuteArrayFilled ? MINUTES_FOR_30MIN_CALC : minuteIndex;
         if (availableMinutes < 30) {

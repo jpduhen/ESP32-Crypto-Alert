@@ -435,6 +435,7 @@ bool hasRet30mLive = false;  // Flag: ret_30m kan worden berekend uit live data 
 uint8_t livePct5m = 0;  // % SOURCE_LIVE in actief 5m-secondenvenster (fiveMinutePrices)
 bool hasRet5mLive = false;  // true als 5m-ring gevuld en ≥80% van samples SOURCE_LIVE
 bool hasRet4hLive = false;  // Flag: ret_4h kan worden berekend uit live data (hourly buffer >= 4)
+bool hasRet7dLive = false;  // Flag: 7d-ret uit live uurbuffer (availableHours >= HOURS_FOR_7D); UI JC3248 grafiekbadge
 // Combined flags: beschikbaar vanuit warm-start OF live data
 bool hasRet2h = false;  // hasRet2hWarm || hasRet2hLive
 bool hasRet30m = false;  // hasRet30mWarm || hasRet30mLive
@@ -8646,7 +8647,7 @@ void fetchPrice()
                              ret_1d, hasRet1dWarm ? 1 : 0, availableHours);
                 #endif
             }
-            bool hasRet7dLive = (availableHours >= HOURS_FOR_7D);
+            hasRet7dLive = (availableHours >= HOURS_FOR_7D);
             hasRet7d = hasRet7dWarm || hasRet7dLive;
             if (hasRet7dLive) {
                 ret_7d = calculateReturn7Days();
