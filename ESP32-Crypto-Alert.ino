@@ -9215,6 +9215,22 @@ static void setupDisplay()
     // Alleen 0 en 2 zijn geldig voor 180 graden rotatie
     uint8_t rotation = (displayRotation == 2) ? 2 : 0;
     g_displayBackend->setRotation(rotation);
+#if defined(PLATFORM_ESP32S3_LCDWIKI_28)
+    // Arduino_ILI9341::setRotation zet rotatie 0 op MX|BGR; vendor/docs gebruiken BGR-only (0x08) — MX geeft
+    // horizontale spiegeling. Overschrijf MADCTL na setRotation (zie docs/ILI9341V_Init.txt LCD_direction).
+    extern Arduino_DataBus *bus;
+    {
+        uint8_t madctl;
+        if (rotation == 2) {
+            madctl = ILI9341_MADCTL_MX | ILI9341_MADCTL_MY | ILI9341_MADCTL_BGR;
+        } else {
+            madctl = ILI9341_MADCTL_BGR;
+        }
+        bus->beginWrite();
+        bus->writeC8D8(ILI9341_MADCTL, madctl);
+        bus->endWrite();
+    }
+#endif
     // ESP32-S3 ST7789-boards: standaard geen inversie
     #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
     g_displayBackend->invertDisplay(false); // Super Mini / GEEK: geen inversie nodig (ST7789)

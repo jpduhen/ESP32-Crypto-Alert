@@ -7,6 +7,7 @@
 #if defined(ESP32) || defined(ESP32S3) || defined(ARDUINO_ESP32S3_DEV) || defined(CONFIG_IDF_TARGET_ESP32S3)
 
 #include <Arduino_GFX_Library.h>
+#include "LCDWIKI28_ILI9341V_init.h"
 
 // Pin definitions from LCD wiki
 #define TFT_CS 10              // LCD CS (IO10)
@@ -34,9 +35,16 @@ Arduino_DataBus *bus = new Arduino_ESP32SPI(TFT_DC, TFT_CS, TFT_SCLK, TFT_MOSI, 
 Arduino_DataBus *bus = new Arduino_ESP32SPI(TFT_DC, TFT_CS, TFT_SCLK, TFT_MOSI, TFT_MISO, VSPI /* spi_num */);
 #endif
 
-// Create display instance (ILI9341)
+// Create display instance (ILI9341V)
+// Init: vendor-sequentie uit docs/ILI9341V_Init.txt (gamma/power/VCOM) i.p.v. Arduino_GFX type1-minimum.
+// IPS=false: na tftInit blijft invertDisplay(true) in setupDisplay() nodig (PLATFORM_LCDWIKI28_INVERT_COLORS).
 // Rotation 0 = portrait
-Arduino_GFX *gfx = new Arduino_ILI9341(bus, TFT_RST, 0 /* rotation */, false /* IPS */);
+Arduino_GFX *gfx = new Arduino_ILI9341(
+    bus, TFT_RST, 0 /* rotation */, false /* IPS */,
+    GFX_WIDTH, GFX_HEIGHT,
+    0, 0, 0, 0,
+    lcdwiki28_ili9341v_init_ops,
+    sizeof(lcdwiki28_ili9341v_init_ops));
 
 // LCDWIKI 2.8" kleureninversie (aanbevolen)
 #define PLATFORM_LCDWIKI28_INVERT_COLORS

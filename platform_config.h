@@ -13,8 +13,8 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 5
-#define VERSION_MINOR 112
-#define VERSION_STRING "5.112"
+#define VERSION_MINOR 113
+#define VERSION_STRING "5.113"
 #endif
 
 // TF min/max bronstatus op kaarttitels (LIVE/WARM/MIX) — JC3248, GEEK, LCDwiki 2.8
@@ -31,10 +31,11 @@
 #endif
 
 // --- NTFY runtime-diagnostiek (Fase 1 tracker) ---
-// Master-vlag: alleen op 1 zetten voor handmatige test (startup/periodic/deferred/WS-health); productie-alertdelivery blijft via queue/exclusive.
+// Master-vlag: op 1 = o.a. NTFY “Reboot / setup compleet” na boot + optionele WS-live health ping (zie .ino).
+// Periodic test blijft uit tenzij je CRYPTO_ALERT_NTFY_PERIODIC_TEST op 1 zet in ESP32-Crypto-Alert.ino.
 // Sub-vlaggen staan in ESP32-Crypto-Alert.ino (CRYPTO_ALERT_NTFY_STARTUP_TEST / PERIODIC_TEST).
 #ifndef CRYPTO_ALERT_NTFY_DIAGNOSTICS_RUNTIME
-#define CRYPTO_ALERT_NTFY_DIAGNOSTICS_RUNTIME 0
+#define CRYPTO_ALERT_NTFY_DIAGNOSTICS_RUNTIME 1
 #endif
 
 // --- WebSocket Configuration ---
