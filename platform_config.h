@@ -5,16 +5,23 @@
 // Actief ondersteunde boards
 //#define PLATFORM_ESP32S3_SUPERMINI
 //#define PLATFORM_ESP32S3_GEEK
-//#define PLATFORM_ESP32S3_LCDWIKI_28
-#define PLATFORM_ESP32S3_JC3248W535  // JC3248W535CIY 3.5" QSPI (AXS15231B), 320x480
+#define PLATFORM_ESP32S3_LCDWIKI_28
+//#define PLATFORM_ESP32S3_JC3248W535  // JC3248W535CIY 3.5" QSPI (AXS15231B), 320x480
 //#define PLATFORM_ESP32S3_AMOLED_206
 
 // --- Version Configuration ---
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 5
-#define VERSION_MINOR 111
-#define VERSION_STRING "5.111"
+#define VERSION_MINOR 112
+#define VERSION_STRING "5.112"
+#endif
+
+// TF min/max bronstatus op kaarttitels (LIVE/WARM/MIX) — JC3248, GEEK, LCDwiki 2.8
+#if defined(PLATFORM_ESP32S3_JC3248W535) || defined(PLATFORM_ESP32S3_GEEK) || defined(PLATFORM_ESP32S3_LCDWIKI_28)
+#define UI_HAS_TF_MINMAX_STATUS_UI 1
+#else
+#define UI_HAS_TF_MINMAX_STATUS_UI 0
 #endif
 
 // --- Debug Configuration ---

@@ -867,6 +867,7 @@ static unsigned long lastMinuteUpdate = 0;
 static float firstMinuteAverage = 0.0f; // Eerste minuut gemiddelde prijs als basis voor 30-min berekening
 // Uur-aggregatie buffer voor lange perioden (max 7 dagen)
 float *hourlyAverages = nullptr;
+DataSource *hourlyAveragesSource = nullptr;  // bron per uur (UI 1d/7d: % SOURCE_LIVE in venster)
 uint16_t hourIndex = 0;
 bool hourArrayFilled = false;
 uint8_t minutesSinceHourUpdate = 0;
@@ -7518,6 +7519,62 @@ static inline uint16_t getAvailableHours()
     return calculateAvailableElements(hourArrayFilled, hourIndex, HOURS_FOR_7D);
 }
 
+// % SOURCE_LIVE in de laatste windowHours uren van hourlyAveragesSource (zelfde ring als hourlyAverages)
+uint8_t calcLivePctHourlyLastN(uint16_t windowHours)
+{
+    if (hourlyAverages == nullptr || hourlyAveragesSource == nullptr) {
+        return 0;
+    }
+    if (windowHours == 0 || windowHours > HOURS_FOR_7D) {
+        return 0;
+    }
+    uint16_t availableHours = getAvailableHours();
+    if (availableHours == 0) {
+        return 0;
+    }
+    uint16_t use = (availableHours < windowHours) ? availableHours : windowHours;
+
+    uint16_t lastHourIdx;
+    if (!hourArrayFilled) {
+        if (hourIndex == 0) {
+            return 0;
+        }
+        lastHourIdx = hourIndex - 1;
+    } else {
+        lastHourIdx = getLastWrittenIndex(hourIndex, HOURS_FOR_7D);
+    }
+
+    uint16_t liveCount = 0;
+    for (uint16_t k = 0; k < use; k++) {
+        uint16_t positionsAgo = (use - 1 - k);
+        int32_t idx_temp = getRingBufferIndexAgo(lastHourIdx, positionsAgo, HOURS_FOR_7D);
+        if (idx_temp < 0) {
+            continue;
+        }
+        uint16_t idx = (uint16_t)idx_temp;
+        if (hourlyAveragesSource[idx] == SOURCE_LIVE) {
+            liveCount++;
+        }
+    }
+    return (uint8_t)((liveCount * 100U) / use);
+}
+
+#if UI_HAS_TF_MINMAX_STATUS_UI
+// Min/max snapshot vóór nested-chain (UIController); bron: 0=— 1=LIVE 2=WARM 3=MIX
+float g_uiTfRawMin[7];
+float g_uiTfRawMax[7];
+bool g_uiTfRawValid[7];
+uint8_t g_uiTfMinMaxSrc[7];
+
+void uiResetTfMinMaxSnapshot(void)
+{
+    for (uint8_t i = 0; i < 7; i++) {
+        g_uiTfRawValid[i] = false;
+        g_uiTfMinMaxSrc[i] = 0;
+    }
+}
+#endif
+
 #if defined(PLATFORM_ESP32S3_JC3248W535)
 // 1d-kaart (index 5): 24h gemiddelde + min/max — zelfde uurvenster als calculateLinearTrend1d / ret_1d; fallback naar warmStart1d*
 static bool fill24HourlyStatsFor1dUi(float &outMin, float &outMax, float &outAvg)
@@ -7599,20 +7656,6 @@ static void refreshAveragePrice1dForUi(void)
 // UI-debug (JC3248): welke bron vormde laatste 1d/7d min/max (0=geen, 1=hourly, 2=warmStart)
 uint8_t g_uiLastMinMaxSource1d = 0;
 uint8_t g_uiLastMinMaxSource7d = 0;
-
-// Min/max snapshot vóór centrale nested-chain (UIController); bron: 0=— 1=LIVE 2=WARM 3=MIX
-float g_uiTfRawMin[7];
-float g_uiTfRawMax[7];
-bool g_uiTfRawValid[7];
-uint8_t g_uiTfMinMaxSrc[7];
-
-void uiResetTfMinMaxSnapshot(void)
-{
-    for (uint8_t i = 0; i < 7; i++) {
-        g_uiTfRawValid[i] = false;
-        g_uiTfMinMaxSrc[i] = 0;
-    }
-}
 
 void findMinMaxInLast24Hours(float &minVal, float &maxVal)
 {
@@ -8155,6 +8198,16 @@ static void updateHourlyAverage()
         return;
     }
     hourlyAverages[hourIndex] = hourAvg;
+    if (hourlyAveragesSource != nullptr) {
+        uint16_t liveMinCnt = 0;
+        for (uint16_t i = 1; i <= MINUTES_PER_HOUR; i++) {
+            int32_t midx = getRingBufferIndexAgo(minuteIndex, i, MINUTES_FOR_30MIN_CALC);
+            if (midx >= 0 && midx < MINUTES_FOR_30MIN_CALC && minuteAveragesSource[midx] == SOURCE_LIVE) {
+                liveMinCnt++;
+            }
+        }
+        hourlyAveragesSource[hourIndex] = (liveMinCnt * 100U / MINUTES_PER_HOUR >= 80U) ? SOURCE_LIVE : SOURCE_BINANCE;
+    }
     hourIndex = (hourIndex + 1) % HOURS_FOR_7D;
     if (hourIndex == 0) {
         hourArrayFilled = true;
@@ -9506,6 +9559,23 @@ static void allocateDynamicArrays()
         }
         Serial.printf("[Memory] Hourly buffer gealloceerd: hourlyAverages=%u bytes\n",
                       HOURS_FOR_7D * sizeof(float));
+    }
+    if (hourlyAverages != nullptr && hourlyAveragesSource == nullptr) {
+        if (hasPSRAM()) {
+            hourlyAveragesSource = (DataSource *)heap_caps_malloc(HOURS_FOR_7D * sizeof(DataSource), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        }
+        if (!hourlyAveragesSource) {
+            hourlyAveragesSource = (DataSource *)heap_caps_malloc(HOURS_FOR_7D * sizeof(DataSource), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        }
+        if (!hourlyAveragesSource) {
+            Serial.println(F("[Memory] WARN: hourlyAveragesSource alloc failed; 1d/7d TF-kleur valt terug"));
+        } else {
+            for (uint16_t i = 0; i < HOURS_FOR_7D; i++) {
+                hourlyAveragesSource[i] = SOURCE_BINANCE;
+            }
+            Serial.printf("[Memory] hourlyAveragesSource=%u bytes\n",
+                          (unsigned)(HOURS_FOR_7D * sizeof(DataSource)));
+        }
     }
 }
 
