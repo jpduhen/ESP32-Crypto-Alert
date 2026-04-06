@@ -15,6 +15,7 @@
 #undef MODULE_INCLUDE
 
 #include "../RegimeEngine/RegimeEngine.h"
+#include "../PriceFormat/QuotePriceFormat.h"
 
 static const char* regimeStatusJsonString(bool enabled, RegimeKind k) {
     if (!enabled) {
@@ -454,10 +455,16 @@ void WebServerModule::renderSettingsHTML() {
     // Form start (voor anchor instellen)
     server->sendContent(F("<form method='POST' action='/save'>"));
     
-    // Anchor instellen - helemaal bovenaan
-    snprintf(valueBuf, sizeof(valueBuf), "%.2f", 
-             (currentPrice > 0.0f) ? currentPrice : 
-             ((currentAnchorActive && currentAnchorPrice > 0.0f) ? currentAnchorPrice : 0.0f));
+    // Anchor instellen - helemaal bovenaan (EUR: dynamische formatter, niet %.2f)
+    {
+        const float anchorPrefill = (currentPrice > 0.0f) ? currentPrice
+            : ((currentAnchorActive && currentAnchorPrice > 0.0f) ? currentAnchorPrice : 0.0f);
+        if (isValidPrice(anchorPrefill)) {
+            formatQuotePriceEur(valueBuf, sizeof(valueBuf), anchorPrefill);
+        } else {
+            safeStrncpy(valueBuf, "0", sizeof(valueBuf));
+        }
+    }
     
     server->sendContent(F("<div style='background:#2a2a2a;border:1px solid #444;border-radius:4px;padding:15px;margin:15px 0;'>"));
     snprintf(tmpBuf, sizeof(tmpBuf), "<label style='display:block;margin-top:0;margin-bottom:8px;color:#fff;font-weight:bold;'>%s (EUR):</label>", 
@@ -1261,7 +1268,7 @@ void WebServerModule::renderConfigReadOnlyHTML() {
     server->sendContent(F("function refreshStatus(){fetch('/status').then(function(r){return r.json();}).then(function(d){"));
     snprintf(tmpBuf, sizeof(tmpBuf), "var quote='%s';", quoteCurrency);
     server->sendContent(tmpBuf);
-    server->sendContent(F("var el=document.getElementById('curPrice');if(el)el.textContent=d.price>0?d.price.toFixed(2)+' '+quote:'--';"));
+    server->sendContent(F("var el=document.getElementById('curPrice');if(el)el.textContent=(typeof d.priceText==='string'&&d.priceText.length&&d.priceText!=='-')?d.priceText+' '+quote:((d.price>0)?d.price.toFixed(8)+' '+quote:'--');"));
     server->sendContent(F("el=document.getElementById('trend2h');if(el)el.textContent=d.trend||'--';"));
     server->sendContent(F("el=document.getElementById('trend1d');if(el)el.textContent=d.trendMedium||'--';"));
     server->sendContent(F("el=document.getElementById('trend7d');if(el)el.textContent=d.trendLong||'--';"));
@@ -1274,7 +1281,7 @@ void WebServerModule::renderConfigReadOnlyHTML() {
     server->sendContent(F("el=document.getElementById('ret2h');if(el)el.textContent=d.ret2h!=0?d.ret2h.toFixed(2)+'%':'--';"));
     server->sendContent(F("el=document.getElementById('ret1d');if(el)el.textContent=d.ret1d!=0?d.ret1d.toFixed(2)+'%':'--';"));
     server->sendContent(F("el=document.getElementById('ret7d');if(el)el.textContent=d.ret7d!=0?d.ret7d.toFixed(2)+'%':'--';"));
-    server->sendContent(F("el=document.getElementById('anchor');if(el)el.textContent=d.anchor>0?d.anchor.toFixed(2)+' '+quote:'--';"));
+    server->sendContent(F("el=document.getElementById('anchor');if(el)el.textContent=(typeof d.anchorText==='string'&&d.anchorText.length&&d.anchorText!=='-')?d.anchorText+' '+quote:((d.anchor>0)?d.anchor.toFixed(8)+' '+quote:'--');"));
     server->sendContent(F("el=document.getElementById('anchorDelta');if(el)el.textContent=d.anchorDeltaPct!=0?d.anchorDeltaPct.toFixed(2)+'%':'--';"));
     server->sendContent(F("el=document.getElementById('apiStateHeader');if(el){if(d.apiFresh){el.textContent='';}else{var age=(d.apiAgeMs?Math.round(d.apiAgeMs/1000):0);el.textContent='STALE '+age+'s';}}"));
     server->sendContent(F("}).catch(function(e){var el=document.getElementById('apiStateHeader');if(el)el.textContent='NET?';});}"));
@@ -1387,9 +1394,17 @@ void WebServerModule::renderConfigReadOnlyHTML() {
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
              getText("Live prijsbron (latestKnown)", "Live price source (latestKnown)"), lkSrcStr);
     server->sendContent(tmpBuf);
-    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%.2f %s</span></div>",
-             getText("Live prijs (latestKnown)", "Live price (latestKnown)"), lkPrice, quoteCurrency);
-    server->sendContent(tmpBuf);
+    {
+        char lkFmt[32];
+        if (isValidPrice(lkPrice)) {
+            formatQuotePriceEur(lkFmt, sizeof(lkFmt), lkPrice);
+        } else {
+            safeStrncpy(lkFmt, "--", sizeof(lkFmt));
+        }
+        snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s %s</span></div>",
+                 getText("Live prijs (latestKnown)", "Live price (latestKnown)"), lkFmt, quoteCurrency);
+        server->sendContent(tmpBuf);
+    }
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%lu ms</span></div>",
              getText("Leeftijd live sample", "Live sample age"), static_cast<unsigned long>(lkAgeMs));
     server->sendContent(tmpBuf);
@@ -1410,13 +1425,21 @@ void WebServerModule::renderConfigReadOnlyHTML() {
     snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s</span></div>",
              getText("Regime (snapshot)", "Regime (snapshot)"), regimeStr);
     server->sendContent(tmpBuf);
-    snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%.2f / %.2f / %.2f</span></div>",
-             getText("2h avg / high / low", "2h avg / high / low"), roMetrics.avg2h, roMetrics.high2h, roMetrics.low2h);
-    server->sendContent(tmpBuf);
+    {
+        char a2h[32], h2h[32], l2h[32];
+        formatQuotePriceEur(a2h, sizeof(a2h), roMetrics.avg2h);
+        formatQuotePriceEur(h2h, sizeof(h2h), roMetrics.high2h);
+        formatQuotePriceEur(l2h, sizeof(l2h), roMetrics.low2h);
+        snprintf(tmpBuf, sizeof(tmpBuf), "<div class='status-row'><span class='status-label'>%s</span><span class='status-value'>%s / %s / %s</span></div>",
+                 getText("2h avg / high / low", "2h avg / high / low"), a2h, h2h, l2h);
+        server->sendContent(tmpBuf);
+    }
     snprintf(valueBuf, sizeof(valueBuf), "%.2f", roMetrics.rangePct);
     sendStatusRow(getText("2h range %", "2h range %"), valueBuf);
     if (isValidPrice(currentPrice)) {
-        snprintf(valueBuf, sizeof(valueBuf), "%.2f %s", currentPrice, quoteCurrency);
+        char pxFmt[32];
+        formatQuotePriceEur(pxFmt, sizeof(pxFmt), currentPrice);
+        snprintf(valueBuf, sizeof(valueBuf), "%s %s", pxFmt, quoteCurrency);
     } else {
         safeStrncpy(valueBuf, "--", sizeof(valueBuf));
     }
@@ -1440,8 +1463,15 @@ void WebServerModule::renderConfigReadOnlyHTML() {
     server->sendContent(tmpBuf);
     server->sendContent(F("</div>"));
 
-    snprintf(valueBuf, sizeof(valueBuf), "%.2f",
-             (currentPrice > 0.0f) ? currentPrice : ((currentAnchorActive && currentAnchorPrice > 0.0f) ? currentAnchorPrice : 0.0f));
+    {
+        const float roAnchor = (currentPrice > 0.0f) ? currentPrice
+            : ((currentAnchorActive && currentAnchorPrice > 0.0f) ? currentAnchorPrice : 0.0f);
+        if (isValidPrice(roAnchor)) {
+            formatQuotePriceEur(valueBuf, sizeof(valueBuf), roAnchor);
+        } else {
+            safeStrncpy(valueBuf, "0", sizeof(valueBuf));
+        }
+    }
     server->sendContent(F("<div style='background:#2a2a2a;border:1px solid #444;border-radius:4px;padding:15px;margin:15px 0;'>"));
     snprintf(tmpBuf, sizeof(tmpBuf), "<p style='margin:0 0 8px;color:#888;font-size:12px;'>%s</p>",
              getText("Referentiewaarde zoals op bewerkpagina (geen invoer)", "Reference value as on edit page (no input)"));
@@ -3225,15 +3255,27 @@ void WebServerModule::handleStatus() {
     const RegimeSnapshot regimeSnap = regimeEngineGetSnapshot();
     const char* regimeStrJson = regimeStatusJsonString(regimeEnabledForJson, regimeSnap.committedRegime);
 
-    // JSON buffer (inclusief regime-velden)
-    char jsonBuf[1280];
+    char priceText[32];
+    char anchorText[32];
+    char avg2hText[32];
+    char high2hText[32];
+    char low2hText[32];
+    formatQuotePriceEur(priceText, sizeof(priceText), price);
+    formatQuotePriceEur(anchorText, sizeof(anchorText), anchorPrice);
+    formatQuotePriceEur(avg2hText, sizeof(avg2hText), avg2h);
+    formatQuotePriceEur(high2hText, sizeof(high2hText), high2h);
+    formatQuotePriceEur(low2hText, sizeof(low2hText), low2h);
+
+    // JSON buffer (inclusief regime-velden + geformatteerde EUR-strings)
+    char jsonBuf[2048];
     size_t written = 0;
     
-    // Bouw JSON zonder String-concatenaties (gebruik snprintf met offset)
+    // Bouw JSON zonder String-concatenaties (numeriek: hogere precisie; display: priceText, etc.)
     written = snprintf(jsonBuf, sizeof(jsonBuf),
         "{"
         "\"symbol\":\"%s\","
-        "\"price\":%.2f,"
+        "\"price\":%.8f,"
+        "\"priceText\":\"%s\","
         "\"trend\":\"%s\","
         "\"volatility\":\"%s\","
         "\"volume\":\"%s\","
@@ -3245,11 +3287,15 @@ void WebServerModule::handleStatus() {
         "\"ret7d\":%.2f,"
         "\"trendMedium\":\"%s\","
         "\"trendLong\":\"%s\","
-        "\"anchor\":%.2f,"
+        "\"anchor\":%.8f,"
+        "\"anchorText\":\"%s\","
         "\"anchorDeltaPct\":%.2f,"
-        "\"avg2h\":%.2f,"
-        "\"high2h\":%.2f,"
-        "\"low2h\":%.2f,"
+        "\"avg2h\":%.8f,"
+        "\"avg2hText\":\"%s\","
+        "\"high2h\":%.8f,"
+        "\"high2hText\":\"%s\","
+        "\"low2h\":%.8f,"
+        "\"low2hText\":\"%s\","
         "\"range2hPct\":%.2f,"
         "\"apiFresh\":%s,"
         "\"apiAgeMs\":%lu,"
@@ -3261,6 +3307,7 @@ void WebServerModule::handleStatus() {
         "}",
         bitvavoSymbol,
         price,
+        priceText,
         trend2hText,
         getVolatilityText(volatility),
         getVolumeText(volumeStatus),
@@ -3273,10 +3320,14 @@ void WebServerModule::handleStatus() {
         trend1dText,
         trend7dText,
         anchorPrice,
+        anchorText,
         anchorDeltaPct,
         avg2h,
+        avg2hText,
         high2h,
+        high2hText,
         low2h,
+        low2hText,
         range2hPct,
         apiFresh ? "true" : "false",
         static_cast<unsigned long>(apiAgeMs),
@@ -3622,7 +3673,7 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(F("fetch('/status').then(function(r){return r.json();}).then(function(d){"));
     snprintf(tmpBuf, sizeof(tmpBuf), "var quote='%s';", quoteCurrency);
     server->sendContent(tmpBuf);
-    server->sendContent(F("var el=document.getElementById('curPrice');if(el)el.textContent=d.price>0?d.price.toFixed(2)+' '+quote:'--';"));
+    server->sendContent(F("var el=document.getElementById('curPrice');if(el)el.textContent=(typeof d.priceText==='string'&&d.priceText.length&&d.priceText!=='-')?d.priceText+' '+quote:((d.price>0)?d.price.toFixed(8)+' '+quote:'--');"));
     server->sendContent(F("el=document.getElementById('trend2h');if(el)el.textContent=d.trend||'--';"));
     server->sendContent(F("el=document.getElementById('trend1d');if(el)el.textContent=d.trendMedium||'--';"));
     server->sendContent(F("el=document.getElementById('trend7d');if(el)el.textContent=d.trendLong||'--';"));
@@ -3635,7 +3686,7 @@ void WebServerModule::sendHtmlHeader(const char* platformName, const char* ntfyT
     server->sendContent(F("el=document.getElementById('ret2h');if(el)el.textContent=d.ret2h!=0?d.ret2h.toFixed(2)+'%':'--';"));
     server->sendContent(F("el=document.getElementById('ret1d');if(el)el.textContent=d.ret1d!=0?d.ret1d.toFixed(2)+'%':'--';"));
     server->sendContent(F("el=document.getElementById('ret7d');if(el)el.textContent=d.ret7d!=0?d.ret7d.toFixed(2)+'%':'--';"));
-    server->sendContent(F("el=document.getElementById('anchor');if(el)el.textContent=d.anchor>0?d.anchor.toFixed(2)+' '+quote:'--';"));
+    server->sendContent(F("el=document.getElementById('anchor');if(el)el.textContent=(typeof d.anchorText==='string'&&d.anchorText.length&&d.anchorText!=='-')?d.anchorText+' '+quote:((d.anchor>0)?d.anchor.toFixed(8)+' '+quote:'--');"));
     server->sendContent(F("el=document.getElementById('anchorDelta');if(el)el.textContent=d.anchorDeltaPct!=0?d.anchorDeltaPct.toFixed(2)+'%':'--';"));
     server->sendContent(F("el=document.getElementById('apiStateHeader');if(el){"));
     server->sendContent(F("if(d.apiFresh){el.textContent='';}else{"));
