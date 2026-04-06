@@ -1,0 +1,7 @@
+# ESP-IDF / Arduino-ESP32: wordt bij build samengevoegd met board-defaults.
+#
+# Standaard staat core dump naar flash aan (CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH) terwijl
+# partitions.csv géén DATA/coredump-partitie heeft → elke boot: "No core dump partition found!".
+# Dit project gebruikt geen offline coredump-workflow: bewust naar "none" i.p.v. flash-partitie
+# toevoegen (geen flash/OTA-layout wijzigen).
+CONFIG_ESP_COREDUMP_ENABLE_TO_NONE=y

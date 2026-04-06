@@ -435,31 +435,84 @@ static bool isUsdcQuoteSymbol(const char* symbol)
     return strcmp(symbol + (len - suffixLen), suffix) == 0;
 }
 
-static lv_color_t getChartSeriesColor()
+// Base-deel vóór '-' (Bitvavo "BASE-QUOTE"); leeg bij ontbrekende '-'
+static void getBaseAssetPrefix(const char* symbol, char* out, size_t outSz)
+{
+    if (out == nullptr || outSz == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (symbol == nullptr) {
+        return;
+    }
+    const char* dash = strchr(symbol, '-');
+    if (dash == nullptr) {
+        safeStrncpy(out, symbol, outSz);
+        return;
+    }
+    size_t n = static_cast<size_t>(dash - symbol);
+    if (n >= outSz) {
+        n = outSz - 1;
+    }
+    memcpy(out, symbol, n);
+    out[n] = '\0';
+}
+
+static bool baseAssetEquals(const char* base, const char* expect)
+{
+    if (base == nullptr || expect == nullptr) {
+        return false;
+    }
+    for (; *base && *expect; base++, expect++) {
+        char a = *base;
+        char b = *expect;
+        if (a >= 'a' && a <= 'z') {
+            a = static_cast<char>(a - 32);
+        }
+        if (b >= 'a' && b <= 'z') {
+            b = static_cast<char>(b - 32);
+        }
+        if (a != b) {
+            return false;
+        }
+    }
+    return *base == '\0' && *expect == '\0';
+}
+
+// Quote-accent: EUR-blauw / USDC-groen (header, hoofdprijs, footer — niet de chartlijn)
+static lv_color_t getQuoteAccentColor()
 {
     return isUsdcQuoteSymbol(bitvavoSymbol)
         ? lv_palette_main(LV_PALETTE_GREEN)
         : lv_palette_main(LV_PALETTE_BLUE);
 }
 
-static bool isEthBaseSymbol(const char* symbol)
+// Chart lijn + punten: op BASE-asset (BTC oranje, ETH paars, …)
+static lv_color_t getChartAssetColor()
 {
-    if (symbol == nullptr) {
-        return false;
+    char base[12];
+    getBaseAssetPrefix(bitvavoSymbol, base, sizeof(base));
+    if (baseAssetEquals(base, "BTC")) {
+        return lv_palette_main(LV_PALETTE_ORANGE);
     }
-    const char* dash = strchr(symbol, '-');
-    if (dash == nullptr) {
-        return false;
+    if (baseAssetEquals(base, "ETH")) {
+        return lv_palette_main(LV_PALETTE_PURPLE);
     }
-    size_t baseLen = dash - symbol;
-    return baseLen == 3 && strncmp(symbol, "ETH", 3) == 0;
+    if (baseAssetEquals(base, "SOL")) {
+        return lv_palette_main(LV_PALETTE_YELLOW);
+    }
+    if (baseAssetEquals(base, "ADA")) {
+        return lv_palette_main(LV_PALETTE_RED);
+    }
+    if (baseAssetEquals(base, "XRP")) {
+        return lv_palette_main(LV_PALETTE_CYAN);
+    }
+    return lv_palette_lighten(LV_PALETTE_GREY, 2);
 }
 
 static lv_color_t getChartSeriesLineColor()
 {
-    return isEthBaseSymbol(bitvavoSymbol)
-        ? lv_palette_main(LV_PALETTE_PURPLE)
-        : getChartSeriesColor();
+    return getChartAssetColor();
 }
 
 static const char* getQuoteHexColor()
@@ -469,10 +522,24 @@ static const char* getQuoteHexColor()
 
 static const char* getBaseHexColor()
 {
-    if (isEthBaseSymbol(bitvavoSymbol)) {
-        return "9C27B0"; // lila/paars voor ETH
+    char base[12];
+    getBaseAssetPrefix(bitvavoSymbol, base, sizeof(base));
+    if (baseAssetEquals(base, "BTC")) {
+        return "FF8C00";
     }
-    return "FF8C00"; // oranje voor BTC (default)
+    if (baseAssetEquals(base, "ETH")) {
+        return "9C27B0";
+    }
+    if (baseAssetEquals(base, "SOL")) {
+        return "FDD835";
+    }
+    if (baseAssetEquals(base, "ADA")) {
+        return "F44336";
+    }
+    if (baseAssetEquals(base, "XRP")) {
+        return "00BCD4";
+    }
+    return "BDBDBD";
 }
 
 static void setBtcTitleLabel()
@@ -572,7 +639,7 @@ void UIController::createChart() {
     minRange = p - halfRangeInit;
     lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, minRange, maxRange);
 
-    // Maak één serie aan voor alle punten (kleur afhankelijk van quote currency)
+    // Maak één serie aan (kleur op BASE-asset; quote-accent blijft voor header/hoofdprijs)
     dataSeries = lv_chart_add_series(chart, getChartSeriesLineColor(), LV_CHART_AXIS_PRIMARY_Y);
     ::dataSeries = dataSeries;  // Fase 8.4.3: Synchroniseer met globale pointer
 
@@ -809,7 +876,7 @@ void UIController::createPriceBoxes() {
         #if defined(PLATFORM_ESP32S3_GEEK)
         if (dataIndex == 0) {
             lv_obj_set_style_text_align(priceLbl[dataIndex], LV_TEXT_ALIGN_LEFT, 0);
-            lv_obj_set_style_text_color(priceLbl[dataIndex], getChartSeriesColor(), 0);
+            lv_obj_set_style_text_color(priceLbl[dataIndex], getQuoteAccentColor(), 0);
             lv_obj_align_to(priceLbl[dataIndex], priceTitle[dataIndex], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
         } else {
             lv_obj_align_to(priceLbl[dataIndex], priceTitle[dataIndex], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
@@ -852,7 +919,7 @@ void UIController::createPriceBoxes() {
         #else
         if (dataIndex == 0) {
             lv_obj_set_style_text_align(priceLbl[dataIndex], LV_TEXT_ALIGN_LEFT, 0);
-            lv_obj_set_style_text_color(priceLbl[dataIndex], getChartSeriesColor(), 0);
+            lv_obj_set_style_text_color(priceLbl[dataIndex], getQuoteAccentColor(), 0);
             lv_obj_align_to(priceLbl[dataIndex], priceTitle[dataIndex], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
         } else {
             lv_obj_align_to(priceLbl[dataIndex], priceTitle[dataIndex], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
@@ -1337,8 +1404,8 @@ void UIController::buildUI() {
     createHeaderLabels();
     createPriceBoxes();
     createFooter();
-    applyChartHeaderFooterColors(getChartSeriesColor());
-    applyBtcEurBoxColors(getChartSeriesColor());
+    applyChartHeaderFooterColors(getQuoteAccentColor());
+    applyBtcEurBoxColors(getQuoteAccentColor());
 
     if (!s_loggedFirstUiBuild) {
         Serial.println("[UI] First UI build completed");
@@ -1734,7 +1801,7 @@ void UIController::updateBTCEURCard(bool hasNewData)
     
     // Bitcoin waarde linksonderin volgt quote kleur (EUR blauw, USDC groen)
     if (::priceLbl[0] != nullptr) {
-            lv_obj_set_style_text_color(::priceLbl[0], getChartSeriesColor(), 0);
+            lv_obj_set_style_text_color(::priceLbl[0], getQuoteAccentColor(), 0);
     }
     float activeAnchorPrice = AlertEngine::getActiveAnchorPrice(anchorPrice);
     bool anchorDisplayActive = activeAnchorPrice > 0.0f;
@@ -2073,7 +2140,6 @@ static void uiApplyTfSrcTitleColor(uint8_t idx)
 #if defined(DEBUG_CALCULATIONS) || (DEBUG_UI_TIMEFRAME_MINMAX)
 static uint32_t s_uiTfsrcLogMs = 0;
 #endif
-static uint32_t s_uiNestWarnMs = 0;
 
 void uiFinalizeNestedTfMinMax(UIController* self)
 {
@@ -2103,15 +2169,19 @@ void uiFinalizeNestedTfMinMax(UIController* self)
         const float finMin = cumMin;
         const float finMax = cumMax;
         const float eps = 0.5f;
+        // Nested chain: fin* is cumulatief — breder dan raw voor deze TF is bedoeld; geen productie-WARN.
+#if DEBUG_UI_TIMEFRAME_MINMAX
         if ((finMin < rmin - eps || finMax > rmax + eps) && finMin > 0.0f && finMax > 0.0f) {
+            static uint32_t s_uiNestDbgMs = 0;
             uint32_t now = millis();
-            if (now - s_uiNestWarnMs >= 30000UL) {
-                s_uiNestWarnMs = now;
+            if (now - s_uiNestDbgMs >= 30000UL) {
+                s_uiNestDbgMs = now;
                 Serial.printf(
-                    F("[MINMAX][WARN] nested expand TF%u: raw [%.0f,%.0f] -> display [%.0f,%.0f] (cumulative chain)\n"),
+                    F("[MINMAX][DBG] nested expand TF%u: raw [%.0f,%.0f] -> display [%.0f,%.0f] (cumulative chain)\n"),
                     (unsigned)idx, (double)rmin, (double)rmax, (double)finMin, (double)finMax);
             }
         }
+#endif
         float diff = (finMin > 0.0f && finMax > 0.0f) ? (finMax - finMin) : 0.0f;
         switch (idx) {
             case 1:
@@ -2643,16 +2713,15 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
 // Helper functie om chart section bij te werken
 void UIController::updateChartSection(int32_t currentPrice, bool hasNewPriceData, float refPriceEur)
 {
-    // Update chart kleur als quote currency is gewijzigd
-    static bool lastUsdcQuote = false;
-    bool isUsdcQuote = isUsdcQuoteSymbol(bitvavoSymbol);
-    if (isUsdcQuote != lastUsdcQuote) {
+    // Vernieuw kleuren als markt (symbool) wijzigt: chart op BASE, header/hoofdprijs op quote-accent
+    static char lastBitvavoSymbol[24] = {0};
+    if (strncmp(bitvavoSymbol, lastBitvavoSymbol, sizeof(lastBitvavoSymbol)) != 0) {
         lv_chart_set_series_color(::chart, ::dataSeries, getChartSeriesLineColor());
-        applyChartHeaderFooterColors(getChartSeriesColor());
-        applyBtcEurBoxColors(getChartSeriesColor());
+        applyChartHeaderFooterColors(getQuoteAccentColor());
+        applyBtcEurBoxColors(getQuoteAccentColor());
         setBtcTitleLabel();
         lv_obj_invalidate(::chart);
-        lastUsdcQuote = isUsdcQuote;
+        safeStrncpy(lastBitvavoSymbol, bitvavoSymbol, sizeof(lastBitvavoSymbol));
     }
 
     // Fase 8.7.1: Gebruik globale pointers (synchroniseert met module pointers)
