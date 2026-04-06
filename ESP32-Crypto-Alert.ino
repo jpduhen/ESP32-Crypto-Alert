@@ -172,7 +172,7 @@ struct NtfyPendingItem;
 #define HTTP_TIMEOUT_MS HTTP_READ_TIMEOUT_MS  // Backward compatibility: totale timeout = read timeout
 
 // --- Chart Configuration ---
-// Verticale range: dynamisch via ChartPriceScale.h (halfRange rond live prijs; vroeger vaste PRICE_RANGE 200 cent-eenheden)
+// Verticale range: dynamisch via ChartPriceScale.h (halfRangeEur afhankelijk van spotprijs × S; vroeger vast ±€2)
 #define POINTS_TO_CHART 60      // Number of points on the chart (60 points = 4 minutes at 4000ms API interval)
 
 // --- Timing Configuration ---

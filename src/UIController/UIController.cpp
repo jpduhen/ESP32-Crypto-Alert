@@ -564,7 +564,7 @@ void UIController::createChart() {
         refOpen = (prices[0] > 0.0f) ? prices[0] : 100.0f;
     }
     const float chartScaleInit = getChartPriceScale(refOpen);
-    const int32_t halfRangeInit = chartHalfRangeY(chartScaleInit);
+    const int32_t halfRangeInit = chartHalfRangeY(refOpen, chartScaleInit);
     int32_t p = chartPriceEurToY(refOpen);
     maxRange = p + halfRangeInit;
     minRange = p - halfRangeInit;
@@ -3105,7 +3105,7 @@ void UIController::updateChartRange(int32_t currentPrice, float refPriceEur)
     #define POINTS_TO_CHART 60      // Number of points on the chart (60 points = 2 minutes at 2000ms API interval)
     #endif
 
-    const int32_t halfRange = chartHalfRangeY(getChartPriceScale(refPriceEur));
+    const int32_t halfRange = chartHalfRangeY(refPriceEur, getChartPriceScale(refPriceEur));
     
     int32_t chartMin = INT32_MAX;
     int32_t chartMax = INT32_MIN;
