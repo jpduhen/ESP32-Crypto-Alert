@@ -1750,6 +1750,39 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             // Bereken min en max uit fiveMinutePrices buffer (geoptimaliseerde versie)
                             float minVal, maxVal;
                             findMinMaxInFiveMinutePrices(minVal, maxVal);
+
+#if !DEBUG_BUTTON_ONLY
+                            {
+                                static uint32_t s_lastAlert5mDirLogMs = 0;
+                                constexpr uint32_t kAlert5mDirLogMinMs = 8000UL;
+                                if (now - s_lastAlert5mDirLogMs >= kAlert5mDirLogMinMs ||
+                                    now < s_lastAlert5mDirLogMs) {
+                                    s_lastAlert5mDirLogMs = now;
+                                    const float* fp = priceData.getFiveMinutePrices();
+                                    uint16_t fi = priceData.getFiveMinuteIndex();
+                                    bool fFilled = priceData.getFiveMinuteArrayFilled();
+                                    float refOldest = 0.0f;
+                                    if (fp != nullptr) {
+                                        if (fFilled) {
+                                            refOldest = fp[fi % SECONDS_PER_5MINUTES];
+                                        } else if (fi > 0) {
+                                            refOldest = fp[0];
+                                        }
+                                    }
+                                    const float dispPx = snapshotNotifDisplayPrice();
+                                    const RegimeSnapshot rs5 = regimeEngineGetSnapshot();
+                                    const char* dirLbl = (ret_5m >= 0.0f) ? "OP" : "NEER";
+                                    Serial.printf(
+                                        "[ALERT_5M_DIR] signed_r5=%.4f abs_r5=%.4f th_final=%.4f eff_move5m_base=%.4f "
+                                        "reg_m5=%.4f reg_id=%u disp=%.2f ref_oldest_5m=%.2f rng_min=%.2f rng_max=%.2f "
+                                        "dir=%s rule=sign_ret_5m\n",
+                                        (double)ret_5m, (double)absRet5m, (double)finalMove5mThreshold,
+                                        (double)effThresh.move5m, (double)rm.move5mAlert,
+                                        (unsigned)rs5.committedRegime, (double)dispPx, (double)refOldest,
+                                        (double)minVal, (double)maxVal, dirLbl);
+                                }
+                            }
+#endif
                             
                             // Format message met hergebruik van class buffer
                             getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));

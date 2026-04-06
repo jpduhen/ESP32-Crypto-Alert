@@ -769,9 +769,9 @@ static size_t bitvavoStreamBufferSize = sizeof(bitvavoStreamBufferFallback);
 // LVGL UI buffers en cache (voorkomt herhaalde allocaties en onnodige updates)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
 char priceLblBuffer[18];  // Buffer voor price label (%.2f format, max: "12345.67" = ~8 chars)
-char anchorMaxLabelBuffer[18];  // Buffer voor anchor max label (max: "12345.67" = ~8 chars)
-char anchorLabelBuffer[24];  // Buffer voor anchor label (max: "12345.67" = ~8 chars)
-char anchorMinLabelBuffer[24];  // Buffer voor anchor min label (max: "12345.67" = ~8 chars)
+char anchorMaxLabelBuffer[28];  // o.a. "+%.2f%% %.2f"; sync met ANCHOR_MAX_LABEL_BUFFER_SIZE in UIController.cpp
+char anchorLabelBuffer[32];  // o.a. "%c%.2f%% %.2f"
+char anchorMinLabelBuffer[32];  // o.a. "%.2f%% %.2f"
 // Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
 char priceTitleBuffer[SYMBOL_COUNT][40];  // Buffers voor price titles (48→40 bytes om DRAM te sparen)
 char price1MinMaxLabelBuffer[18];  // Buffer voor 1m max label (max: "12345.67" = ~8 chars)
@@ -3479,6 +3479,39 @@ static float roundToEuro(float price)
         return price;
     }
     return (float)((uint32_t)(price + 0.5f));
+}
+
+// Zelfde regel als UI: alleen BTC-quote op hele euro; overige markten op centen (REST vs grafiek consistent)
+static bool isBtcBaseMarket(const char* symbol)
+{
+    if (symbol == nullptr) {
+        return false;
+    }
+    const char* dash = strchr(symbol, '-');
+    if (dash == nullptr) {
+        return false;
+    }
+    const size_t baseLen = static_cast<size_t>(dash - symbol);
+    return baseLen == 3 && strncmp(symbol, "BTC", 3) == 0;
+}
+
+static float roundToCent(float price)
+{
+    if (price <= 0.0f) {
+        return price;
+    }
+    const float scaled = price * 100.0f;
+    const float rounded = (price >= 0.0f) ? (scaled + 0.5f) : (scaled - 0.5f);
+    return (float)((int)rounded) / 100.0f;
+}
+
+// REST-tickerprijs: align met weergave in de prijsboxen (fetchPrice schrijft prices[0] / latestKnownPrice)
+static float roundRestFetchedQuotePrice(float price)
+{
+    if (isBtcBaseMarket(bitvavoSymbol)) {
+        return roundToEuro(price);
+    }
+    return roundToCent(price);
 }
 
 // Helper: Validate if two prices are valid
@@ -7251,6 +7284,9 @@ float calculateReturn1MinuteReadOnly()
 float calculateReturn5Minutes()
 {
     const float* prices = priceData.getFiveMinutePrices();
+    if (prices == nullptr) {
+        return 0.0f;
+    }
     uint16_t arraySize = SECONDS_PER_5MINUTES;
     uint16_t index = priceData.getFiveMinuteIndex();
     bool filled = priceData.getFiveMinuteArrayFilled();
@@ -7262,7 +7298,16 @@ float calculateReturn5Minutes()
     float spanHours = (count > 1) ? (float)(count - 1) * stepHours : 0.0f;
     float totalHours = (spanHours > (5.0f / 60.0f) || spanHours <= 0.0f) ? (5.0f / 60.0f) : spanHours;
     float ret5m = 0.0f;
-    if (computeRegressionPctFromSeries(prices, count, stepHours, totalHours, ret5m)) {
+    // Ringbuffer: bij gevulde buffer is index 0..count-1 niet chronologisch. Regressie vereist oudste→nieuwste.
+    static float s_chron5m[SECONDS_PER_5MINUTES];
+    const float* series = prices;
+    if (filled) {
+        for (uint16_t i = 0; i < count; i++) {
+            s_chron5m[i] = prices[(index + i) % arraySize];
+        }
+        series = s_chron5m;
+    }
+    if (computeRegressionPctFromSeries(series, count, stepHours, totalHours, ret5m)) {
         return ret5m;
     }
     return 0.0f;
@@ -8513,9 +8558,9 @@ void fetchPrice()
         #endif
         // Gebruik laatste bekende prijs als fallback (al ingesteld als fetched = prices[0])
     } else {
-        // Succesvol opgehaald (alleen REST-prijs afronden; WS runtime-state blijft ongerond)
+        // Succesvol opgehaald: alleen REST-prijs afronden (WS blijft ongerond). Niet-BTC: centen i.p.v. hele euro.
         if (!usedWs) {
-            fetched = roundToEuro(fetched);
+            fetched = roundRestFetchedQuotePrice(fetched);
         }
         #if !DEBUG_BUTTON_ONLY
         if (!usedWs && fetchTime > 1200) {

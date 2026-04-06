@@ -2886,10 +2886,11 @@ void WebServerModule::handleNotifications() {
     server->send(200, "text/html; charset=utf-8", "");
 
     server->sendContent(F("<!DOCTYPE html><html><head><meta charset='UTF-8'>"));
-    // Titel: Notificaties / Notifications
-    server->sendContent(F("<title>"));
-    server->sendContent(getText("Notificaties", "Notifications"));
-    server->sendContent(F("</title>"));
+    // Zelfde titelpatroon als instellingen: Notificaties + symbool + NTFY-topic + firmwareversie
+    char notifTitleBuf[160];
+    snprintf(notifTitleBuf, sizeof(notifTitleBuf), "<title>%s %s %s v%s</title>",
+             getText("Notificaties", "Notifications"), bitvavoSymbol, ntfyTopic, VERSION_STRING);
+    server->sendContent(notifTitleBuf);
     server->sendContent(F("<style>"
                           "body{font-family:Arial;background:#1a1a1a;color:#fff;margin:10px;}"
                           "a{color:#00BCD4;text-decoration:none;}"
@@ -2905,9 +2906,9 @@ void WebServerModule::handleNotifications() {
                           "th:nth-child(4),td:nth-child(4){width:28%;overflow:hidden;text-overflow:ellipsis;text-align:left;}"
                           "th:nth-child(5),td:nth-child(5){width:43%;word-wrap:break-word;word-break:break-word;text-align:left;}"
                           "</style></head><body>"));
-    server->sendContent(F("<h2>"));
-    server->sendContent(getText("Notificaties", "Notifications"));
-    server->sendContent(F("</h2>"));
+    snprintf(notifTitleBuf, sizeof(notifTitleBuf), "<h2>%s %s %s v%s</h2>",
+             getText("Notificaties", "Notifications"), bitvavoSymbol, ntfyTopic, VERSION_STRING);
+    server->sendContent(notifTitleBuf);
     server->sendContent(F("<div><a href='/'>"));
     server->sendContent(getText("Terug naar instellingen", "Back to settings"));
     server->sendContent(F("</a> &middot; <a href='/config'>"));

@@ -14,6 +14,7 @@
 #undef UICONTROLLER_INCLUDE
 
 #include "UIController.h"
+#include <cstdint>  // int32_t — roundToCentUi
 #include <math.h>  // fabsf — vlakke return-kleur in updatePriceCardColor()
 #include <lvgl.h>
 #include "../display/DisplayBackend.h"
@@ -195,8 +196,8 @@ extern float lastAnchorValue;
 extern float lastAnchorMinValue;
 // Buffer sizes (gedefinieerd in .ino)
 #define PRICE_LBL_BUFFER_SIZE 18
-#define ANCHOR_LABEL_BUFFER_SIZE 24
-#define ANCHOR_MAX_LABEL_BUFFER_SIZE 18
+#define ANCHOR_LABEL_BUFFER_SIZE 32
+#define ANCHOR_MAX_LABEL_BUFFER_SIZE 28
 extern char priceLblBuffer[PRICE_LBL_BUFFER_SIZE];
 extern char anchorMaxLabelBuffer[ANCHOR_MAX_LABEL_BUFFER_SIZE];
 extern char anchorLabelBuffer[ANCHOR_LABEL_BUFFER_SIZE];
@@ -1555,13 +1556,52 @@ void UIController::updateVolumeConfirmLabel()
     lv_obj_set_style_text_color(::volumeConfirmLabel, volumeColor, 0);
 }
 
-// Rond prijzen af op hele euro's (0.50 -> omhoog) voor UI-only weergave
+// Rond prijzen af op hele euro's (0.50 -> omhoog) voor UI-only weergave — alleen BTC-quote
 static float roundToEuroUi(float price)
 {
     if (price <= 0.0f) {
         return price;
     }
     return (float)((uint32_t)(price + 0.5f));
+}
+
+// True als het actieve paar BTC als base heeft (BTC-EUR, BTC-USDC, …)
+static bool isBtcBaseSymbol(const char* symbol)
+{
+    if (symbol == nullptr) {
+        return false;
+    }
+    const char* dash = strchr(symbol, '-');
+    if (dash == nullptr) {
+        return false;
+    }
+    size_t baseLen = static_cast<size_t>(dash - symbol);
+    return baseLen == 3 && strncmp(symbol, "BTC", 3) == 0;
+}
+
+// Afronden op cent voor quote-prijs in de UI (niet-BTC bases)
+static float roundToCentUi(float price)
+{
+    if (price <= 0.0f) {
+        return price;
+    }
+    const float scaled = price * 100.0f;
+    const float rounded = (price >= 0.0f) ? (scaled + 0.5f) : (scaled - 0.5f);
+    return (float)((int32_t)rounded) / 100.0f;
+}
+
+// Eén plek voor quote-afronding: BTC → hele euro, overige crypto → centen
+static float roundQuotePriceForUi(float price)
+{
+    if (isBtcBaseSymbol(bitvavoSymbol)) {
+        return roundToEuroUi(price);
+    }
+    return roundToCentUi(price);
+}
+
+static const char* quotePricePrintfSpec()
+{
+    return isBtcBaseSymbol(bitvavoSymbol) ? "%.0f" : "%.2f";
 }
 
 // Fase 8.5.4: updateMediumTrendLabel() naar Module
@@ -1718,11 +1758,15 @@ void UIController::updateBTCEURCard(bool hasNewData)
         displayPrice = (lk > 0.0f) ? lk : px;
     }
     
-    // Update price label alleen als waarde veranderd is (cache check)
-    if (::priceLbl[0] != nullptr && (lastPriceLblValue != displayPrice || lastPriceLblValue < 0.0f)) {
-        snprintf(priceLblBuffer, PRICE_LBL_BUFFER_SIZE, "%.0f", displayPrice);
-        lv_label_set_text(::priceLbl[0], priceLblBuffer);
-        lastPriceLblValue = displayPrice;
+    // Update price label alleen als afgeronde weergave veranderd is (BTC: hele euro; overige: centen)
+    {
+        const float displayRounded = roundQuotePriceForUi(displayPrice);
+        if (::priceLbl[0] != nullptr &&
+            (lastPriceLblValue != displayRounded || lastPriceLblValue < 0.0f)) {
+            snprintf(priceLblBuffer, PRICE_LBL_BUFFER_SIZE, quotePricePrintfSpec(), displayRounded);
+            lv_label_set_text(::priceLbl[0], priceLblBuffer);
+            lastPriceLblValue = displayRounded;
+        }
     }
     
     // Bitcoin waarde linksonderin volgt quote kleur (EUR blauw, USDC groen)
@@ -1746,10 +1790,10 @@ void UIController::updateBTCEURCard(bool hasNewData)
         if (anchorDisplayActive) {
             // Gebruik dynamische take profit waarde
             float takeProfitPrice = activeAnchorPrice * (1.0f + effAnchorUI.takeProfitPct / 100.0f);
-            float takeProfitDisplay = roundToEuroUi(takeProfitPrice);
+            float takeProfitDisplay = roundQuotePriceForUi(takeProfitPrice);
             // Update alleen als waarde veranderd is
             if (lastAnchorMaxValue != takeProfitDisplay || lastAnchorMaxValue < 0.0f) {
-                snprintf(anchorMaxLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "%.0f", takeProfitDisplay);
+                snprintf(anchorMaxLabelBuffer, ANCHOR_MAX_LABEL_BUFFER_SIZE, quotePricePrintfSpec(), takeProfitDisplay);
                 lv_label_set_text(::anchorMaxLabel, anchorMaxLabelBuffer);
                 lastAnchorMaxValue = takeProfitDisplay;
             }
@@ -1765,10 +1809,10 @@ void UIController::updateBTCEURCard(bool hasNewData)
     
     if (::anchorLabel != nullptr) {
         if (anchorDisplayActive) {
-            float anchorDisplay = roundToEuroUi(activeAnchorPrice);
+            float anchorDisplay = roundQuotePriceForUi(activeAnchorPrice);
             // Update alleen als waarde veranderd is
             if (lastAnchorValue != anchorDisplay || lastAnchorValue < 0.0f) {
-                snprintf(anchorLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "%.0f", anchorDisplay);
+                snprintf(anchorLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, quotePricePrintfSpec(), anchorDisplay);
                 lv_label_set_text(::anchorLabel, anchorLabelBuffer);
                 lastAnchorValue = anchorDisplay;
             }
@@ -1786,10 +1830,10 @@ void UIController::updateBTCEURCard(bool hasNewData)
         if (anchorDisplayActive) {
             // Gebruik dynamische max loss waarde
             float stopLossPrice = activeAnchorPrice * (1.0f + effAnchorUI.maxLossPct / 100.0f);
-            float stopLossDisplay = roundToEuroUi(stopLossPrice);
+            float stopLossDisplay = roundQuotePriceForUi(stopLossPrice);
             // Update alleen als waarde veranderd is
             if (lastAnchorMinValue != stopLossDisplay || lastAnchorMinValue < 0.0f) {
-                snprintf(anchorMinLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "%.0f", stopLossDisplay);
+                snprintf(anchorMinLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, quotePricePrintfSpec(), stopLossDisplay);
                 lv_label_set_text(::anchorMinLabel, anchorMinLabelBuffer);
                 lastAnchorMinValue = stopLossDisplay;
             }
@@ -1807,10 +1851,16 @@ void UIController::updateBTCEURCard(bool hasNewData)
         if (anchorDisplayActive) {
             // Toon dynamische take profit waarde (effectief percentage)
             float takeProfitPrice = activeAnchorPrice * (1.0f + effAnchorUI.takeProfitPct / 100.0f);
-            float takeProfitDisplay = roundToEuroUi(takeProfitPrice);
+            float takeProfitDisplay = roundQuotePriceForUi(takeProfitPrice);
             // Update alleen als waarde veranderd is
             if (lastAnchorMaxValue != takeProfitDisplay || lastAnchorMaxValue < 0.0f) {
-                snprintf(anchorMaxLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "+%.2f%% %.0f", effAnchorUI.takeProfitPct, takeProfitDisplay);
+                if (isBtcBaseSymbol(bitvavoSymbol)) {
+                    snprintf(anchorMaxLabelBuffer, ANCHOR_MAX_LABEL_BUFFER_SIZE, "+%.2f%% %.0f",
+                             effAnchorUI.takeProfitPct, takeProfitDisplay);
+                } else {
+                    snprintf(anchorMaxLabelBuffer, ANCHOR_MAX_LABEL_BUFFER_SIZE, "+%.2f%% %.2f",
+                             effAnchorUI.takeProfitPct, takeProfitDisplay);
+                }
                 lv_label_set_text(::anchorMaxLabel, anchorMaxLabelBuffer);
                 lastAnchorMaxValue = takeProfitDisplay;
             }
@@ -1827,20 +1877,25 @@ void UIController::updateBTCEURCard(bool hasNewData)
     if (::anchorLabel != nullptr) {
         if (anchorDisplayActive && displayPrice > 0.0f) {
             float anchorPct = ((displayPrice - activeAnchorPrice) / activeAnchorPrice) * 100.0f;
-            float anchorDisplay = roundToEuroUi(activeAnchorPrice);
+            float anchorDisplay = roundQuotePriceForUi(activeAnchorPrice);
             // Update alleen als waarde veranderd is (check zowel anchorPrice als anchorPct)
             float currentValue = anchorDisplay + anchorPct;  // Combinatie voor cache check
             if (lastAnchorValue != currentValue || lastAnchorValue < 0.0f) {
-                snprintf(anchorLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "%c%.2f%% %.0f",
-                         anchorPct >= 0 ? '+' : '-', fabsf(anchorPct), anchorDisplay);
+                if (isBtcBaseSymbol(bitvavoSymbol)) {
+                    snprintf(anchorLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "%c%.2f%% %.0f",
+                             anchorPct >= 0 ? '+' : '-', fabsf(anchorPct), anchorDisplay);
+                } else {
+                    snprintf(anchorLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "%c%.2f%% %.2f",
+                             anchorPct >= 0 ? '+' : '-', fabsf(anchorPct), anchorDisplay);
+                }
                 lv_label_set_text(::anchorLabel, anchorLabelBuffer);
                 lastAnchorValue = currentValue;
             }
         } else if (anchorDisplayActive) {
-            float anchorDisplay = roundToEuroUi(activeAnchorPrice);
+            float anchorDisplay = roundQuotePriceForUi(activeAnchorPrice);
             // Update alleen als waarde veranderd is
             if (lastAnchorValue != anchorDisplay || lastAnchorValue < 0.0f) {
-                snprintf(anchorLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "%.0f", anchorDisplay);
+                snprintf(anchorLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, quotePricePrintfSpec(), anchorDisplay);
                 lv_label_set_text(::anchorLabel, anchorLabelBuffer);
                 lastAnchorValue = anchorDisplay;
             }
@@ -1858,10 +1913,16 @@ void UIController::updateBTCEURCard(bool hasNewData)
         if (anchorDisplayActive) {
             // Toon dynamische max loss waarde (effectief percentage)
             float stopLossPrice = activeAnchorPrice * (1.0f + effAnchorUI.maxLossPct / 100.0f);
-            float stopLossDisplay = roundToEuroUi(stopLossPrice);
+            float stopLossDisplay = roundQuotePriceForUi(stopLossPrice);
             // Update alleen als waarde veranderd is
             if (lastAnchorMinValue != stopLossDisplay || lastAnchorMinValue < 0.0f) {
-                snprintf(anchorMinLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "%.2f%% %.0f", effAnchorUI.maxLossPct, stopLossDisplay);
+                if (isBtcBaseSymbol(bitvavoSymbol)) {
+                    snprintf(anchorMinLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "%.2f%% %.0f",
+                             effAnchorUI.maxLossPct, stopLossDisplay);
+                } else {
+                    snprintf(anchorMinLabelBuffer, ANCHOR_LABEL_BUFFER_SIZE, "%.2f%% %.2f",
+                             effAnchorUI.maxLossPct, stopLossDisplay);
+                }
                 lv_label_set_text(::anchorMinLabel, anchorMinLabelBuffer);
                 lastAnchorMinValue = stopLossDisplay;
             }
@@ -2538,11 +2599,13 @@ void UIController::updateAveragePriceCard(uint8_t index)
     }
     else if (averagePrices[index] > 0.0f)
     {
-        // Update alleen als waarde veranderd is
-        if (lastPriceLblValueArray[index] != averagePrices[index] || lastPriceLblValueArray[index] < 0.0f) {
-            snprintf(priceLblBufferArray[index], sizeof(priceLblBufferArray[index]), "%.0f", averagePrices[index]);
+        const float avgR = roundQuotePriceForUi(averagePrices[index]);
+        // Update alleen als afgeronde weergave veranderd is
+        if (lastPriceLblValueArray[index] != avgR || lastPriceLblValueArray[index] < 0.0f) {
+            snprintf(priceLblBufferArray[index], sizeof(priceLblBufferArray[index]),
+                     quotePricePrintfSpec(), avgR);
             lv_label_set_text(::priceLbl[index], priceLblBufferArray[index]);
-            lastPriceLblValueArray[index] = averagePrices[index];
+            lastPriceLblValueArray[index] = avgR;
             
             // FASE 7.2: UI Average label update verificatie logging
             #if DEBUG_CALCULATIONS
@@ -2551,7 +2614,7 @@ void UIController::updateAveragePriceCard(uint8_t index)
 #else
             const char* timeframe = (index == 1) ? "1m" : ((index == 2) ? "30m" : ((index == 3) ? "2h" : "?"));
 #endif
-            Serial.printf(F("[UI][Average] %s label updated: %.0f\n"), timeframe, averagePrices[index]);
+            Serial.printf(F("[UI][Average] %s label updated: %s\n"), timeframe, priceLblBufferArray[index]);
             #endif
         }
     }
@@ -2996,30 +3059,33 @@ void UIController::updateMinMaxDiffLabels(lv_obj_t* maxLabel, lv_obj_t* minLabel
                                           float& lastMaxValue, float& lastMinValue, float& lastDiffValue)
 {
     if (minVal > 0.0f && maxVal > 0.0f) {
-        // Update alleen als waarden veranderd zijn
-        if (lastMaxValue != maxVal || lastMaxValue < 0.0f) {
-            snprintf(maxBuffer, 20, "%.0f", maxVal);
+        const float maxR = roundQuotePriceForUi(maxVal);
+        const float minR = roundQuotePriceForUi(minVal);
+        const float diffR = roundQuotePriceForUi(diff);
+        // Update alleen als afgeronde weergave veranderd is (BTC: hele euro; overige: centen)
+        if (lastMaxValue != maxR || lastMaxValue < 0.0f) {
+            snprintf(maxBuffer, 20, quotePricePrintfSpec(), maxR);
             lv_label_set_text(maxLabel, maxBuffer);
-            lastMaxValue = maxVal;
+            lastMaxValue = maxR;
             
             // FASE 7.1: UI Min/Max label update verificatie logging
             #if DEBUG_CALCULATIONS
-            Serial.printf(F("[UI][MinMax] max label updated: %.0f\n"), maxVal);
+            Serial.printf(F("[UI][MinMax] max label updated: %s\n"), maxBuffer);
             #endif
         }
-        if (lastDiffValue != diff || lastDiffValue < 0.0f) {
-            snprintf(diffBuffer, 20, "%.0f", diff);
+        if (lastDiffValue != diffR || lastDiffValue < 0.0f) {
+            snprintf(diffBuffer, 20, quotePricePrintfSpec(), diffR);
             lv_label_set_text(diffLabel, diffBuffer);
-            lastDiffValue = diff;
+            lastDiffValue = diffR;
         }
-        if (lastMinValue != minVal || lastMinValue < 0.0f) {
-            snprintf(minBuffer, 20, "%.0f", minVal);
+        if (lastMinValue != minR || lastMinValue < 0.0f) {
+            snprintf(minBuffer, 20, quotePricePrintfSpec(), minR);
             lv_label_set_text(minLabel, minBuffer);
-            lastMinValue = minVal;
+            lastMinValue = minR;
             
             // FASE 7.1: UI Min/Max label update verificatie logging
             #if DEBUG_CALCULATIONS
-            Serial.printf(F("[UI][MinMax] min label updated: %.0f\n"), minVal);
+            Serial.printf(F("[UI][MinMax] min label updated: %s\n"), minBuffer);
             #endif
         }
     } else {
