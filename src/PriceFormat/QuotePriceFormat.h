@@ -26,6 +26,22 @@ inline const char* quotePricePrintfSpecFor(float price)
     return "%.5f";
 }
 
+// Intern: |mag| > 0; vaste formatstrings i.p.v. dynamische spec (ESP32 printf + %f is hier betrouwbaarder).
+static inline void formatQuotePriceEurMag(char* buf, size_t bufLen, float mag)
+{
+    const float ap = fabsf(mag);
+    const double d = (double)mag;
+    if (ap >= 10000.0f) {
+        snprintf(buf, bufLen, "%.0f", d);
+    } else if (ap >= 100.0f) {
+        snprintf(buf, bufLen, "%.2f", d);
+    } else if (ap >= 1.0f) {
+        snprintf(buf, bufLen, "%.4f", d);
+    } else {
+        snprintf(buf, bufLen, "%.5f", d);
+    }
+}
+
 // Positieve koers (spot); ongeldig / <= 0 -> "-"
 inline void formatQuotePriceEur(char* buf, size_t bufLen, float price)
 {
@@ -36,7 +52,7 @@ inline void formatQuotePriceEur(char* buf, size_t bufLen, float price)
         snprintf(buf, bufLen, "-");
         return;
     }
-    snprintf(buf, bufLen, quotePricePrintfSpecFor(price), (double)price);
+    formatQuotePriceEurMag(buf, bufLen, price);
 }
 
 // Bedragen in EUR die negatief mogen zijn (verschil t.o.v. anker, enz.)
@@ -54,9 +70,8 @@ inline void formatQuotePriceEurSigned(char* buf, size_t bufLen, float price)
         return;
     }
     const float ap = fabsf(price);
-    const char* spec = quotePricePrintfSpecFor(ap);
     char tmp[32];
-    snprintf(tmp, sizeof(tmp), spec, (double)ap);
+    formatQuotePriceEurMag(tmp, sizeof(tmp), ap);
     if (price < 0.0f) {
         snprintf(buf, bufLen, "-%s", tmp);
     } else {
