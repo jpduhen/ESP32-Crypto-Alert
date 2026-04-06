@@ -65,7 +65,7 @@ public:
     void updatePriceCardColor(uint8_t index, float pct);
     
     // Fase 8.7: update*Section() functies naar Module
-    void updateChartSection(int32_t currentPrice, bool hasNewPriceData);
+    void updateChartSection(int32_t currentPrice, bool hasNewPriceData, float refPriceEur);
     void updateHeaderSection();
     void updatePriceCardsSection(bool hasNewPriceData);
     
@@ -132,7 +132,7 @@ private:
     void createFooter();
     
     // Fase 8.11.3: Helper functies (verplaatst vanuit .ino)
-    void updateChartRange(int32_t currentPrice);
+    void updateChartRange(int32_t currentPrice, float refPriceEur);
     
     // Helper functies voor code duplicatie eliminatie
     static void updateMinMaxDiffLabels(lv_obj_t* maxLabel, lv_obj_t* minLabel, lv_obj_t* diffLabel,

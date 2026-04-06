@@ -172,7 +172,7 @@ struct NtfyPendingItem;
 #define HTTP_TIMEOUT_MS HTTP_READ_TIMEOUT_MS  // Backward compatibility: totale timeout = read timeout
 
 // --- Chart Configuration ---
-#define PRICE_RANGE 200         // The range of price for the chart, adjust as needed
+// Verticale range: dynamisch via ChartPriceScale.h (halfRange rond live prijs; vroeger vaste PRICE_RANGE 200 cent-eenheden)
 #define POINTS_TO_CHART 60      // Number of points on the chart (60 points = 4 minutes at 4000ms API interval)
 
 // --- Timing Configuration ---
@@ -686,8 +686,8 @@ static void processWsTextMessage(const char* wsBuf, size_t length);
 
 // Fase 8: UI state - gebruikt door UIController module
 uint8_t symbolIndexToChart = 0; // The symbol index to chart
-uint32_t maxRange;
-uint32_t minRange;
+int32_t maxRange;
+int32_t minRange;
 // chartMaxLabel verwijderd - niet meer nodig
 
 // Fase 8: UI object pointers - gebruikt door UIController module (zie src/UIController/UIController.h)

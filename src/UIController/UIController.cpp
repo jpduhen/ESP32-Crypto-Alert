@@ -14,6 +14,7 @@
 #undef UICONTROLLER_INCLUDE
 
 #include "../PriceFormat/QuotePriceFormat.h"
+#include "ChartPriceScale.h"
 
 #include "UIController.h"
 #include <cstdint>  // int32_t
@@ -95,9 +96,6 @@ extern const lv_font_t lv_font_montserrat_14;
 #ifndef POINTS_TO_CHART
 #define POINTS_TO_CHART 60  // Default value (wordt overschreven door .ino als het later wordt gedefinieerd)
 #endif
-#ifndef PRICE_RANGE
-#define PRICE_RANGE 200  // Default value (wordt overschreven door .ino als het later wordt gedefinieerd)
-#endif
 
 // Forward declarations voor globale variabelen (worden gebruikt door callbacks)
 extern void Serial_println(const char*);
@@ -114,8 +112,8 @@ extern void setDisplayBrigthness();
 // Fase 8.3: createChart() dependencies
 extern float openPrices[];
 extern uint8_t symbolIndexToChart;
-extern uint32_t maxRange;
-extern uint32_t minRange;
+extern int32_t maxRange;
+extern int32_t minRange;
 extern char ntfyTopic[];
 extern void getDeviceIdFromTopic(const char* topic, char* buffer, size_t bufferSize);
 // Fase 8.11.1: createFooter() dependencies (2-regel footer: lblFooterLine*, ramLabel)
@@ -561,9 +559,15 @@ void UIController::createChart() {
     lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
     disableScroll(chart);
     
-    int32_t p = (int32_t)lroundf(openPrices[symbolIndexToChart] * 100.0f);
-    maxRange = p + PRICE_RANGE;
-    minRange = p - PRICE_RANGE;
+    float refOpen = openPrices[symbolIndexToChart];
+    if (!(refOpen > 0.0f)) {
+        refOpen = (prices[0] > 0.0f) ? prices[0] : 100.0f;
+    }
+    const float chartScaleInit = getChartPriceScale(refOpen);
+    const int32_t halfRangeInit = chartHalfRangeY(chartScaleInit);
+    int32_t p = chartPriceEurToY(refOpen);
+    maxRange = p + halfRangeInit;
+    minRange = p - halfRangeInit;
     lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, minRange, maxRange);
 
     // Maak één serie aan voor alle punten (kleur afhankelijk van quote currency)
@@ -2635,7 +2639,7 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
 
 // Fase 8.7.1: updateChartSection() naar Module
 // Helper functie om chart section bij te werken
-void UIController::updateChartSection(int32_t currentPrice, bool hasNewPriceData)
+void UIController::updateChartSection(int32_t currentPrice, bool hasNewPriceData, float refPriceEur)
 {
     // Update chart kleur als quote currency is gewijzigd
     static bool lastUsdcQuote = false;
@@ -2668,8 +2672,8 @@ void UIController::updateChartSection(int32_t currentPrice, bool hasNewPriceData
         newPriceDataAvailable = false;
     }
     
-    // Update chart range
-    this->updateChartRange(currentPrice);
+    // Update chart range (refPriceEur bepaalt schaal / halfRange, los van Y-waarde)
+    this->updateChartRange(currentPrice, refPriceEur);
     
     // Update chart title (device-id in titel waar van toepassing)
     if (::chartTitle != nullptr) {
@@ -2720,7 +2724,7 @@ void UIController::updateUI()
         safeMutexGive(dataMutex, "UI chart snapshot");
         chartPriceFloat = (lk > 0.0f) ? lk : px;
     }
-    int32_t p = (int32_t)lroundf(chartPriceFloat * 100.0f);
+    int32_t p = chartPriceEurToY(chartPriceFloat);
     
     // Bepaal of er nieuwe data is op basis van timestamp
     // Bij 2000ms interval + retries kan call tot ~3000ms duren, dus marge van 3000ms
@@ -2732,7 +2736,7 @@ void UIController::updateUI()
     }
     
     // Update UI sections (gebruik module versies)
-    updateChartSection(p, hasNewPriceData);
+    updateChartSection(p, hasNewPriceData, chartPriceFloat);
     updateHeaderSection();
     updatePriceCardsSection(hasNewPriceData);
     updateFooter();
@@ -3095,15 +3099,13 @@ void UIController::updatePriceCardsSection(bool hasNewPriceData)
 
 // Fase 8.11.3: updateChartRange() verplaatst vanuit .ino naar UIController module
 // Helper functie om chart range te berekenen en bij te werken
-void UIController::updateChartRange(int32_t currentPrice)
+void UIController::updateChartRange(int32_t currentPrice, float refPriceEur)
 {
-    // Constants (gedefinieerd in .ino)
-    #ifndef PRICE_RANGE
-    #define PRICE_RANGE 200         // The range of price for the chart, adjust as needed
-    #endif
     #ifndef POINTS_TO_CHART
     #define POINTS_TO_CHART 60      // Number of points on the chart (60 points = 2 minutes at 2000ms API interval)
     #endif
+
+    const int32_t halfRange = chartHalfRangeY(getChartPriceScale(refPriceEur));
     
     int32_t chartMin = INT32_MAX;
     int32_t chartMax = INT32_MIN;
@@ -3132,8 +3134,8 @@ void UIController::updateChartRange(int32_t currentPrice)
         
         if (chartMin == INT32_MAX || chartMax == INT32_MIN || chartMin > chartMax)
         {
-            chartMin = chartAverage - PRICE_RANGE;
-            chartMax = chartAverage + PRICE_RANGE;
+            chartMin = chartAverage - halfRange;
+            chartMax = chartAverage + halfRange;
         }
         
         if (chartMin == chartMax)
@@ -3159,20 +3161,20 @@ void UIController::updateChartRange(int32_t currentPrice)
         if (maxRange < 0) maxRange = 0;
         if (minRange >= maxRange)
         {
-            int32_t fallbackMargin = PRICE_RANGE / 20;
+            int32_t fallbackMargin = halfRange / 20;
             if (fallbackMargin < 10) fallbackMargin = 10;
-            minRange = chartAverage - PRICE_RANGE - fallbackMargin;
-            maxRange = chartAverage + PRICE_RANGE + fallbackMargin;
+            minRange = chartAverage - halfRange - fallbackMargin;
+            maxRange = chartAverage + halfRange + fallbackMargin;
             if (minRange < 0) minRange = 0;
         }
     }
     else
     {
         chartAverage = currentPrice;
-        int32_t margin = PRICE_RANGE / 20;
+        int32_t margin = halfRange / 20;
         if (margin < 10) margin = 10;
-        minRange = currentPrice - PRICE_RANGE - margin;
-        maxRange = currentPrice + PRICE_RANGE + margin;
+        minRange = currentPrice - halfRange - margin;
+        maxRange = currentPrice + halfRange + margin;
     }
     
     // Gebruik member pointer i.p.v. globale pointer
