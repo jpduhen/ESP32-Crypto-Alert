@@ -559,6 +559,8 @@ void UIController::createChart() {
     lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
     disableScroll(chart);
     
+    // Initiële Y-range: zelfde EUR→chart-eenheden en dynamische half-range als updateChartRange()
+    // (ChartPriceScale.h). Gebruik geen oude cent-schaal open*100 of vaste PRICE_RANGE.
     float refOpen = openPrices[symbolIndexToChart];
     if (!(refOpen > 0.0f)) {
         refOpen = (prices[0] > 0.0f) ? prices[0] : 100.0f;
