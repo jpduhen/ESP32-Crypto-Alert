@@ -33,6 +33,9 @@ static const char* regimeStatusJsonString(bool enabled, RegimeKind k) {
     }
 }
 
+// Web_Task roept HTTP-handlers sequentieel af (geen parallelle clients in de praktijk).
+// Grote char-buffers daarom als function-static i.p.v. op de stack — zelfde output, minder stackdruk.
+
 // Forward declarations voor dependencies
 extern WebServer server;  // Globale WebServer instance (gedefinieerd in .ino)
 extern TrendDetector trendDetector;
@@ -300,9 +303,9 @@ static void sendRoEscaped(WebServer* srv, const char* label, const char* raw) {
     if (srv == nullptr) {
         return;
     }
-    char esc[160];
+    static char esc[160];
+    static char line[400];
     webHtmlEscapeText(raw, esc, sizeof(esc));
-    char line[400];
     snprintf(line, sizeof(line),
              "<div class='status-row'><span class='status-label'>%s:</span><span class='status-value'>%s</span></div>",
              label, esc);
@@ -444,8 +447,8 @@ void WebServerModule::renderSettingsHTML() {
     sendHtmlHeader(platformName, ntfyTopic);
     
     // Temporary buffer voor variabele waarden
-    char tmpBuf[256];
-    char valueBuf[64];
+    static char tmpBuf[256];
+    static char valueBuf[64];
     char quoteCurrency[8] = "EUR";
     const char* dash = strchr(bitvavoSymbol, '-');
     if (dash != nullptr && *(dash + 1) != '\0') {
@@ -1114,7 +1117,7 @@ void WebServerModule::renderSettingsHTML() {
                  getText("MQTT wachtwoord (optioneel)", "MQTT password (optional)"));
     
     // MQTT Topic Prefix (read-only, ter referentie)
-    char mqttPrefix[64];
+    static char mqttPrefix[64];
     getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
     snprintf(tmpBuf, sizeof(tmpBuf), "<div style='margin:15px 0;padding:10px;background:#2a2a2a;border:1px solid #444;border-radius:4px;'>");
     server->sendContent(tmpBuf);
@@ -1221,8 +1224,8 @@ void WebServerModule::renderConfigReadOnlyHTML() {
     platformName = "Unknown";
 #endif
 
-    char tmpBuf[384];
-    char valueBuf[96];
+    static char tmpBuf[384];
+    static char valueBuf[96];
     char quoteCurrency[8] = "EUR";
     const char* dash = strchr(bitvavoSymbol, '-');
     if (dash != nullptr && *(dash + 1) != '\0') {
@@ -1829,9 +1832,9 @@ void WebServerModule::renderConfigReadOnlyHTML() {
         sendStatusRow(getText("MQTT Port", "MQTT Port"), valueBuf);
         sendRoEscaped(server, getText("MQTT User", "MQTT User"), mqttUser);
         sendRoEscaped(server, getText("MQTT Password", "MQTT Password"), mqttPass);
-        char mqttPrefix[64];
-        getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
-        sendRoEscaped(server, getText("MQTT Topic Prefix", "MQTT Topic Prefix"), mqttPrefix);
+        static char mqttPrefixRo[64];
+        getMqttTopicPrefix(mqttPrefixRo, sizeof(mqttPrefixRo));
+        sendRoEscaped(server, getText("MQTT Topic Prefix", "MQTT Topic Prefix"), mqttPrefixRo);
         sendStatusRow(getText("Home Assistant MQTT Discovery", "Home Assistant MQTT Discovery"),
                       getText("Ja (via topic-prefix / retain)", "Yes (via topic prefix / retain)"));
         sendSectionFooter();
@@ -2431,7 +2434,7 @@ void WebServerModule::handleNotFound() {
     
     // Performance optimalisatie: gebruik char buffer i.p.v. String concatenatie
     // Max URI length + method + args info = ~512 bytes
-    char message[512];
+    static char message[512];
     snprintf(message, sizeof(message), "File Not Found\n\nURI: %s\nMethod: %s\nArguments: %d\n",
              server->uri().c_str(), 
              (server->method() == HTTP_GET) ? "GET" : "POST",
@@ -2466,7 +2469,7 @@ void WebServerModule::handleSettingsExport() {
     server->setContentLength(CONTENT_LENGTH_UNKNOWN);
     server->send(200, "text/plain; charset=utf-8", "");
 
-    char line[384];
+    static char line[384];
     const unsigned long nowMs = millis();
 
     float snapPrice0 = 0.0f;
@@ -2888,7 +2891,7 @@ void WebServerModule::handleSettingsExport() {
     snprintf(line, sizeof(line), "mqttPass: %s\n", mqttPass);
     server->sendContent(line);
     {
-        char mqttPrefix[64];
+        static char mqttPrefix[64];
         getMqttTopicPrefix(mqttPrefix, sizeof(mqttPrefix));
         snprintf(line, sizeof(line), "mqttTopicPrefix: %s\n\n", mqttPrefix);
         server->sendContent(line);
@@ -2917,7 +2920,7 @@ void WebServerModule::handleNotifications() {
 
     server->sendContent(F("<!DOCTYPE html><html><head><meta charset='UTF-8'>"));
     // Zelfde titelpatroon als instellingen: Notificaties + symbool + NTFY-topic + firmwareversie
-    char notifTitleBuf[160];
+    static char notifTitleBuf[160];
     snprintf(notifTitleBuf, sizeof(notifTitleBuf), "<title>%s %s %s v%s</title>",
              getText("Notificaties", "Notifications"), bitvavoSymbol, ntfyTopic, VERSION_STRING);
     server->sendContent(notifTitleBuf);
@@ -2946,7 +2949,7 @@ void WebServerModule::handleNotifications() {
     server->sendContent(F("</a></div>"));
 
     uint8_t count = getNotificationLogCount();
-    char buf[256];
+    static char buf[256];
 
     snprintf(buf, sizeof(buf), "<p>%u %s</p>",
              static_cast<unsigned>(count),
@@ -2972,8 +2975,8 @@ void WebServerModule::handleNotifications() {
     #define WEB_NOTIF_MSG_MAX    160
 
     for (uint8_t i = 0; i < count; ++i) {
-        char title[WEB_NOTIF_TITLE_MAX];
-        char message[WEB_NOTIF_MSG_MAX];
+        static char title[WEB_NOTIF_TITLE_MAX];
+        static char message[WEB_NOTIF_MSG_MAX];
         uint32_t timeMs = 0;
         uint8_t sent = 0;
         if (!getNotificationLogEntry(i, title, sizeof(title),
@@ -3267,7 +3270,7 @@ void WebServerModule::handleStatus() {
     formatQuotePriceEur(low2hText, sizeof(low2hText), low2h);
 
     // JSON buffer (inclusief regime-velden + geformatteerde EUR-strings)
-    char jsonBuf[2048];
+    static char jsonBuf[2048];
     size_t written = 0;
     
     // Bouw JSON zonder String-concatenaties (numeriek: hogere precisie; display: priceText, etc.)

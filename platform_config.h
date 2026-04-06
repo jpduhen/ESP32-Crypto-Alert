@@ -13,8 +13,8 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 5
-#define VERSION_MINOR 120
-#define VERSION_STRING "5.120"
+#define VERSION_MINOR 121
+#define VERSION_STRING "5.121"
 #endif
 
 // TF min/max bronstatus op kaarttitels (LIVE/WARM/MIX) — JC3248, GEEK, LCDwiki 2.8

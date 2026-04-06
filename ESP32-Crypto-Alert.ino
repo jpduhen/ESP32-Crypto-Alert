@@ -9617,6 +9617,11 @@ static void startFreeRTOSTasks()
     const uint32_t apiTaskStack = 10240;  // ESP32-S3: meer stack voor API task
     const uint32_t uiTaskStack = 10240;   // ESP32-S3: meer stack voor UI task
     const uint32_t webTaskStack = 6144;   // ESP32-S3: meer stack voor web task
+    #elif defined(PLATFORM_ESP32S3_LCDWIKI_28)
+    const uint32_t apiTaskStack = 8192;
+    const uint32_t uiTaskStack = 8192;
+    // Grotere marge na canary Web_Task; grote webbuffers staan nu deels static in WebServer.cpp
+    const uint32_t webTaskStack = 8192;
     #else
     const uint32_t apiTaskStack = 8192;   // ESP32: standaard stack
     const uint32_t uiTaskStack = 8192;    // ESP32: standaard stack
@@ -10418,6 +10423,11 @@ void uiTask(void *parameter)
     }
 }
 
+// Stack-HWM logging voor Web_Task (vrij resterend stack in bytes). Standaard uit; zet op 1 voor diagnose.
+#ifndef WEB_TASK_STACK_LOG
+#define WEB_TASK_STACK_LOG 0
+#endif
+
 // FreeRTOS Task: Web server op Core 0 (server.handleClient() continu, data update elke 5 seconden)
 void webTask(void *parameter)
 {
@@ -10425,6 +10435,10 @@ void webTask(void *parameter)
     const TickType_t frequency = pdMS_TO_TICKS(100); // Server handle elke 100ms voor responsiviteit
     
     Serial.println("[Web Task] Gestart op Core 0");
+#if WEB_TASK_STACK_LOG
+    Serial.printf("[STACK][Web] HWM=%u bytes (task start)\n",
+                  (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
+#endif
     
     // Wacht tot WiFi verbonden is voordat we beginnen
     while (WiFi.status() != WL_CONNECTED) {
@@ -10433,13 +10447,31 @@ void webTask(void *parameter)
     }
     
     Serial.println("[Web Task] WiFi verbonden, start web server");
-    
+    // setupWebServer() draait al in setup() (wifiConnectionAndFetchPrice); deze HWM is vóór eerste handleClient()
+#if WEB_TASK_STACK_LOG
+    Serial.printf("[STACK][Web] HWM=%u bytes (before first handleClient; setupWebServer ran on setup stack)\n",
+                  (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
+#endif
+
+    static unsigned long s_lastWebStackLogMs = 0;
+    const unsigned long WEB_STACK_LOG_INTERVAL_MS = 30000;
+#if WEB_TASK_STACK_LOG
+    static bool s_loggedHwmAfterFirstHandle = false;
+#endif
+
     for (;;)
     {
         // Handle web server requests alleen als WiFi verbonden is
         // Fase 9.1.2: Gebruik module versie
         if (WiFi.status() == WL_CONNECTED) {
             webServerModule.handleClient();
+#if WEB_TASK_STACK_LOG
+            if (!s_loggedHwmAfterFirstHandle) {
+                s_loggedHwmAfterFirstHandle = true;
+                Serial.printf("[STACK][Web] HWM=%u bytes (after first handleClient iteration)\n",
+                              (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
+            }
+#endif
         } else {
             // WiFi verbinding verloren, wacht op reconnect
             Serial.println("[Web Task] WiFi verbinding verloren, wachten op reconnect...");
@@ -10448,6 +10480,17 @@ void webTask(void *parameter)
             }
             Serial.println("[Web Task] WiFi weer verbonden");
         }
+
+#if WEB_TASK_STACK_LOG
+        {
+            const unsigned long nowMs = millis();
+            if (s_lastWebStackLogMs == 0 || (nowMs - s_lastWebStackLogMs) >= WEB_STACK_LOG_INTERVAL_MS) {
+                s_lastWebStackLogMs = nowMs;
+                Serial.printf("[STACK][Web] HWM=%u bytes (periodic)\n",
+                              (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
+            }
+        }
+#endif
         
         vTaskDelayUntil(&lastWakeTime, frequency);
     }
