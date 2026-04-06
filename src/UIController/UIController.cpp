@@ -3081,7 +3081,8 @@ void UIController::updateMinMaxDiffLabels(lv_obj_t* maxLabel, lv_obj_t* minLabel
             #endif
         }
         if (lastDiffValue != diff || lastDiffValue < 0.0f) {
-            formatQuotePriceEur(diffBuffer, 24, diff);
+            // Zelfde printf-tier als top/dal: referentie = maxVal (zelfde prijsorde als het bereik)
+            formatQuotePriceEurAtReferenceTier(diffBuffer, 24, diff, maxVal);
             lv_label_set_text(diffLabel, diffBuffer);
             lastDiffValue = diff;
         }
