@@ -12,6 +12,8 @@
 #include "../../platform_config.h"
 #undef MODULE_INCLUDE
 
+#include "../PriceFormat/QuotePriceFormat.h"
+
 // SettingsStore module (Fase 6.1.10: voor AlertThresholds en NotificationCooldowns structs)
 #include "../SettingsStore/SettingsStore.h"
 
@@ -314,15 +316,6 @@ static void alertTraceDispNotifSnap(uint32_t nowMs, float* outDisp, const char**
 }
 #endif
 
-// Rond prijzen af op hele euro's (0.50 -> omhoog) voor NTFY-teksten
-static float roundToEuroNotif(float price)
-{
-    if (price <= 0.0f) {
-        return price;
-    }
-    return (float)((uint32_t)(price + 0.5f));
-}
-
 // Alleen voor weergave in NTFY-teksten: live snapshot, zelfde discipline als UI
 static float snapshotNotifDisplayPrice(void)
 {
@@ -505,25 +498,32 @@ void AlertEngine::formatNotificationMessage(char* msg, size_t msgSize, float ret
 {
     // FASE 8.1: Notificatie waarden verificatie logging
     #if DEBUG_CALCULATIONS
-    Serial.printf(F("[Notify][Format] ret=%.2f%%, direction=%s, minVal=%.0f, maxVal=%.0f, price=%.0f\n"),
-                 ret, direction, roundToEuroNotif(minVal), roundToEuroNotif(maxVal), roundToEuroNotif(snapshotNotifDisplayPrice()));
+    {
+        char _dmin[32], _dmax[32], _dpx[32];
+        formatQuotePriceEur(_dmin, sizeof(_dmin), minVal);
+        formatQuotePriceEur(_dmax, sizeof(_dmax), maxVal);
+        formatQuotePriceEur(_dpx, sizeof(_dpx), snapshotNotifDisplayPrice());
+        Serial.printf(F("[Notify][Format] ret=%.2f%%, direction=%s, minVal=%s, maxVal=%s, price=%s\n"),
+                     ret, direction, _dmin, _dmax, _dpx);
+    }
     #endif
     
     // Static functie: gebruik lokale buffer (kan geen instance members gebruiken)
     char timestamp[32];
     getFormattedTimestamp(timestamp, sizeof(timestamp));
     
-    float priceRounded = roundToEuroNotif(snapshotNotifDisplayPrice());
-    float minRounded = roundToEuroNotif(minVal);
-    float maxRounded = roundToEuroNotif(maxVal);
+    char priceStr[32], minStr[32], maxStr[32];
+    formatQuotePriceEur(priceStr, sizeof(priceStr), snapshotNotifDisplayPrice());
+    formatQuotePriceEur(minStr, sizeof(minStr), minVal);
+    formatQuotePriceEur(maxStr, sizeof(maxStr), maxVal);
     if (ret >= 0) {
         snprintf(msg, msgSize, 
-                "%s UP %s: +%.2f%%\nPrijs %s: %.0f\nTop: %.0f Dal: %.0f", 
-                direction, direction, ret, timestamp, priceRounded, maxRounded, minRounded);
+                "%s UP %s: +%.2f%%\nPrijs %s: %s\nTop: %s Dal: %s", 
+                direction, direction, ret, timestamp, priceStr, maxStr, minStr);
     } else {
         snprintf(msg, msgSize, 
-                "%s DOWN %s: %.2f%%\nPrijs %s: %.0f\nTop: %.0f Dal: %.0f", 
-                direction, direction, ret, timestamp, priceRounded, maxRounded, minRounded);
+                "%s DOWN %s: %.2f%%\nPrijs %s: %s\nTop: %s Dal: %s", 
+                direction, direction, ret, timestamp, priceStr, maxStr, minStr);
     }
 }
 
@@ -541,8 +541,13 @@ bool AlertEngine::sendAlertNotification(float ret, float threshold, float strong
     
     // FASE 8.1: Notificatie waarden verificatie logging
     #if DEBUG_CALCULATIONS
-    Serial.printf(F("[Notify][Send] %s alert: ret=%.2f%%, threshold=%.2f%%, minVal=%.0f, maxVal=%.0f, direction=%s\n"),
-                 alertType, ret, threshold, roundToEuroNotif(minVal), roundToEuroNotif(maxVal), direction);
+    {
+        char _dmin[32], _dmax[32];
+        formatQuotePriceEur(_dmin, sizeof(_dmin), minVal);
+        formatQuotePriceEur(_dmax, sizeof(_dmax), maxVal);
+        Serial.printf(F("[Notify][Send] %s alert: ret=%.2f%%, threshold=%.2f%%, minVal=%s, maxVal=%s, direction=%s\n"),
+                     alertType, ret, threshold, _dmin, _dmax, direction);
+    }
     #endif
     
     // Static functie: gebruik lokale buffers (kan geen instance members gebruiken)
@@ -774,21 +779,22 @@ bool AlertEngine::checkAndSendConfluenceAlert(unsigned long now, float ret_30m)
     else if (strcmp(trendText, "DOWN") == 0) trendTextTranslated = getText("NEER", "DOWN");
     else if (strcmp(trendText, "SIDEWAYS") == 0) trendTextTranslated = getText("ZIJWAARTS", "SIDEWAYS");
     
-    float confluencePriceRounded = roundToEuroNotif(snapshotNotifDisplayPrice());
+    char cfPriceStr[32];
+    formatQuotePriceEur(cfPriceStr, sizeof(cfPriceStr), snapshotNotifDisplayPrice());
     if (direction == EVENT_UP) {
         snprintf(msgBuffer, sizeof(msgBuffer),
-                 "%s: %.0f (%s)\n%s\n1m: +%.2f%%\n5m: +%.2f%%\n30m %s: %s (%+.2f%%)",
+                 "%s: %s (%s)\n%s\n1m: +%.2f%%\n5m: +%.2f%%\n30m %s: %s (%+.2f%%)",
                  safeFmtStr(getText("Live prijs", "Live price")),
-                 confluencePriceRounded, timestampBuffer,
+                 cfPriceStr, timestampBuffer,
                  getText("Eensgezind OMHOOG", "Confluence UP"),
                  last1mEvent.magnitude,
                  last5mEvent.magnitude,
                  getText("Trend", "Trend"), trendTextTranslated, ret_30m);
     } else {
         snprintf(msgBuffer, sizeof(msgBuffer),
-                 "%s: %.0f (%s)\n%s\n1m: %.2f%%\n5m: %.2f%%\n30m %s: %s (%.2f%%)",
+                 "%s: %s (%s)\n%s\n1m: %.2f%%\n5m: %.2f%%\n30m %s: %s (%.2f%%)",
                  safeFmtStr(getText("Live prijs", "Live price")),
-                 confluencePriceRounded, timestampBuffer,
+                 cfPriceStr, timestampBuffer,
                  getText("Eensgezind OMLAAG", "Confluence DOWN"),
                  -last1mEvent.magnitude,
                  -last5mEvent.magnitude,
@@ -912,23 +918,30 @@ void AlertEngine::formatNotificationMessageInternal(float ret, const char* direc
                                                     float minVal, float maxVal, const char* timeframe) {
     // FASE 8.1: Notificatie waarden verificatie logging (internal)
     #if DEBUG_CALCULATIONS
-    Serial.printf(F("[Notify][FormatInternal] timeframe=%s, ret=%.2f%%, direction=%s, minVal=%.0f, maxVal=%.0f, price=%.0f\n"),
-                 timeframe, ret, direction, roundToEuroNotif(minVal), roundToEuroNotif(maxVal), roundToEuroNotif(snapshotNotifDisplayPrice()));
+    {
+        char _dmin[32], _dmax[32], _dpx[32];
+        formatQuotePriceEur(_dmin, sizeof(_dmin), minVal);
+        formatQuotePriceEur(_dmax, sizeof(_dmax), maxVal);
+        formatQuotePriceEur(_dpx, sizeof(_dpx), snapshotNotifDisplayPrice());
+        Serial.printf(F("[Notify][FormatInternal] timeframe=%s, ret=%.2f%%, direction=%s, minVal=%s, maxVal=%s, price=%s\n"),
+                     timeframe, ret, direction, _dmin, _dmax, _dpx);
+    }
     #endif
     
     getFormattedTimestamp(timestampBuffer, sizeof(timestampBuffer));
     
-    float priceRounded = roundToEuroNotif(snapshotNotifDisplayPrice());
-    float minRounded = roundToEuroNotif(minVal);
-    float maxRounded = roundToEuroNotif(maxVal);
+    char priceStr[32], minStr[32], maxStr[32];
+    formatQuotePriceEur(priceStr, sizeof(priceStr), snapshotNotifDisplayPrice());
+    formatQuotePriceEur(minStr, sizeof(minStr), minVal);
+    formatQuotePriceEur(maxStr, sizeof(maxStr), maxVal);
     if (ret >= 0) {
         snprintf(msgBuffer, sizeof(msgBuffer), 
-                "%s UP %s: +%.2f%%\nPrijs %s: %.0f\nTop: %.0f Dal: %.0f", 
-                timeframe, direction, ret, timestampBuffer, priceRounded, maxRounded, minRounded);
+                "%s UP %s: +%.2f%%\nPrijs %s: %s\nTop: %s Dal: %s", 
+                timeframe, direction, ret, timestampBuffer, priceStr, maxStr, minStr);
     } else {
         snprintf(msgBuffer, sizeof(msgBuffer), 
-                "%s DOWN %s: %.2f%%\nPrijs %s: %.0f\nTop: %.0f Dal: %.0f", 
-                timeframe, direction, ret, timestampBuffer, priceRounded, maxRounded, minRounded);
+                "%s DOWN %s: %.2f%%\nPrijs %s: %s\nTop: %s Dal: %s", 
+                timeframe, direction, ret, timestampBuffer, priceStr, maxStr, minStr);
     }
 }
 
@@ -1205,31 +1218,38 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                     
                             // FASE 8.1: Notificatie waarden verificatie logging (1m spike)
                             #if DEBUG_CALCULATIONS
-                            Serial.printf(F("[Notify][1mSpike] ret_1m=%.2f%%, ret_5m=%.2f%%, minVal=%.0f, maxVal=%.0f, price=%.0f\n"),
-                                         ret_1m, ret_5m, roundToEuroNotif(minVal), roundToEuroNotif(maxVal), roundToEuroNotif(snapshotNotifDisplayPrice()));
+                            {
+                                char _dmin[32], _dmax[32], _dpx[32];
+                                formatQuotePriceEur(_dmin, sizeof(_dmin), minVal);
+                                formatQuotePriceEur(_dmax, sizeof(_dmax), maxVal);
+                                formatQuotePriceEur(_dpx, sizeof(_dpx), snapshotNotifDisplayPrice());
+                                Serial.printf(F("[Notify][1mSpike] ret_1m=%.2f%%, ret_5m=%.2f%%, minVal=%s, maxVal=%s, price=%s\n"),
+                                             ret_1m, ret_5m, _dmin, _dmax, _dpx);
+                            }
                             #endif
                             
                             // Format message met hergebruik van class buffer
                             getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
-                    float spikePriceRounded = roundToEuroNotif(snapshotNotifDisplayPrice());
-                    float spikeMinRounded = roundToEuroNotif(minVal);
-                    float spikeMaxRounded = roundToEuroNotif(maxVal);
+                    char spikePriceStr[32], spikeMinStr[32], spikeMaxStr[32];
+                    formatQuotePriceEur(spikePriceStr, sizeof(spikePriceStr), snapshotNotifDisplayPrice());
+                    formatQuotePriceEur(spikeMinStr, sizeof(spikeMinStr), minVal);
+                    formatQuotePriceEur(spikeMaxStr, sizeof(spikeMaxStr), maxVal);
                     if (ret_1m >= 0) {
                                 snprintf(msgBuffer, sizeof(msgBuffer), 
-                                         "%s: %.0f (%s)\n1m %s spike: +%.2f%% (5m: +%.2f%%)\n1m %s: %.0f\n1m %s: %.0f",
+                                         "%s: %s (%s)\n1m %s spike: +%.2f%% (5m: +%.2f%%)\n1m %s: %s\n1m %s: %s",
                                          safeFmtStr(getText("Live prijs", "Live price")),
-                                         spikePriceRounded, timestampBuffer,
+                                         spikePriceStr, timestampBuffer,
                                          getText("OP", "UP"), ret_1m, ret_5m,
-                                         getText("Top", "Top"), spikeMaxRounded,
-                                         getText("Dal", "Low"), spikeMinRounded);
+                                         getText("Top", "Top"), spikeMaxStr,
+                                         getText("Dal", "Low"), spikeMinStr);
                     } else {
                                 snprintf(msgBuffer, sizeof(msgBuffer), 
-                                         "%s: %.0f (%s)\n1m %s spike: %.2f%% (5m: %.2f%%)\n1m %s: %.0f\n1m %s: %.0f",
+                                         "%s: %s (%s)\n1m %s spike: %.2f%% (5m: %.2f%%)\n1m %s: %s\n1m %s: %s",
                                          safeFmtStr(getText("Live prijs", "Live price")),
-                                         spikePriceRounded, timestampBuffer,
+                                         spikePriceStr, timestampBuffer,
                                          getText("NEER", "DOWN"), ret_1m, ret_5m,
-                                         getText("Top", "Top"), spikeMaxRounded,
-                                         getText("Dal", "Low"), spikeMinRounded);
+                                         getText("Top", "Top"), spikeMaxStr,
+                                         getText("Dal", "Low"), spikeMinStr);
                             }
                             appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange1m);
                     
@@ -1273,12 +1293,17 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                                     const char* dS = "na";
                                     char dAge[20];
                                     alertTraceDispNotifSnap(msn, &dP, &dS, dAge, sizeof(dAge));
-                                    Serial.printf(
-                                        "[ALERT_TRACE] id=%lu type=1m_spike phase=send_start ms=%lu disp=%.0f disp_src=%s disp_age_ms=%s min=%.0f max=%.0f det_ms=%lu\n",
+                                    {
+                                        char _td[32], _tn[32], _tx[32];
+                                        formatQuotePriceEur(_td, sizeof(_td), snapshotNotifDisplayPrice());
+                                        formatQuotePriceEur(_tn, sizeof(_tn), minVal);
+                                        formatQuotePriceEur(_tx, sizeof(_tx), maxVal);
+                                        Serial.printf(
+                                        "[ALERT_TRACE] id=%lu type=1m_spike phase=send_start ms=%lu disp=%s disp_src=%s disp_age_ms=%s min=%s max=%s det_ms=%lu\n",
                                         (unsigned long)tr1m, (unsigned long)msn,
-                                        (double)roundToEuroNotif(snapshotNotifDisplayPrice()), dS, dAge,
-                                        (double)roundToEuroNotif(minVal), (double)roundToEuroNotif(maxVal),
+                                        _td, dS, dAge, _tn, _tx,
                                         (unsigned long)tr1m_det_ms);
+                                    }
                                 }
 #endif
                                 bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
@@ -1397,7 +1422,8 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                         Serial.println(F("[PhaseC] standalone_enter"));
                         #endif
                         getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
-                        const float spikePriceRoundedS = roundToEuroNotif(snapshotNotifDisplayPrice());
+                        char spikePriceStrS[32];
+                        formatQuotePriceEur(spikePriceStrS, sizeof(spikePriceStrS), snapshotNotifDisplayPrice());
                         const char* lineStandalone = safeFmtStr(getText(
                             "Standalone (geen 5m bevestiging)", "Standalone (no 5m confirmation)"));
                         const char* tsS = safeFmtStr(timestampBuffer);
@@ -1407,9 +1433,9 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                         Serial.println(F("[PhaseC] standalone_before_format"));
                         #endif
                         snprintf(msgBuffer, sizeof(msgBuffer),
-                                 "%s: %.0f (%s)\n%s\n1m: %+.2f%%",
+                                 "%s: %s (%s)\n%s\n1m: %+.2f%%",
                                  safeFmtStr(getText("Live prijs", "Live price")),
-                                 spikePriceRoundedS, tsS, lineStandalone, ret_1m);
+                                 spikePriceStrS, tsS, lineStandalone, ret_1m);
                         const char* colorTagS =
                             determineColorTag(ret_1m, standalone1mTh, standalone1mTh * 1.5f);
                         buildDirectionalMinuteAlertTitle(titleBuffer, sizeof(titleBuffer), ret_1m >= 0.0f,
@@ -1450,12 +1476,15 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                                 const char* dS = "na";
                                 char dAge[20];
                                 alertTraceDispNotifSnap(mse, &dP, &dS, dAge, sizeof(dAge));
-                                Serial.printf(
-                                    "[ALERT_TRACE] id=%lu type=1m_energiek phase=send_start ms=%lu disp=%.0f disp_src=%s disp_age_ms=%s min=%.0f max=%.0f det_ms=%lu\n",
+                                {
+                                    char _ed[32];
+                                    formatQuotePriceEur(_ed, sizeof(_ed), snapshotNotifDisplayPrice());
+                                    Serial.printf(
+                                    "[ALERT_TRACE] id=%lu type=1m_energiek phase=send_start ms=%lu disp=%s disp_src=%s disp_age_ms=%s min=%s max=%s det_ms=%lu\n",
                                     (unsigned long)tr1e, (unsigned long)mse,
-                                    (double)roundToEuroNotif(snapshotNotifDisplayPrice()), dS, dAge,
-                                    (double)roundToEuroNotif(spikePriceRoundedS), (double)roundToEuroNotif(spikePriceRoundedS),
+                                    _ed, dS, dAge, _ed, _ed,
                                     (unsigned long)tr1e_det_ms);
+                                }
                             }
 #endif
                             bool sentS = sendNotification(titleBuffer, msgBuffer, safeFmtStr(colorTagS));
@@ -1548,25 +1577,26 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
             
                     // Format message met hergebruik van class buffer
                     getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
-            float movePriceRounded = roundToEuroNotif(snapshotNotifDisplayPrice());
-            float moveMinRounded = roundToEuroNotif(minVal);
-            float moveMaxRounded = roundToEuroNotif(maxVal);
+            char movePriceStr[32], moveMinStr[32], moveMaxStr[32];
+            formatQuotePriceEur(movePriceStr, sizeof(movePriceStr), snapshotNotifDisplayPrice());
+            formatQuotePriceEur(moveMinStr, sizeof(moveMinStr), minVal);
+            formatQuotePriceEur(moveMaxStr, sizeof(moveMaxStr), maxVal);
             if (ret_30m >= 0) {
                         snprintf(msgBuffer, sizeof(msgBuffer), 
-                                 "%s: %.0f (%s)\n30m %s move: +%.2f%% (5m: +%.2f%%)\n30m %s: %.0f\n30m %s: %.0f",
+                                 "%s: %s (%s)\n30m %s move: +%.2f%% (5m: +%.2f%%)\n30m %s: %s\n30m %s: %s",
                                  safeFmtStr(getText("Live prijs", "Live price")),
-                                 movePriceRounded, timestampBuffer,
+                                 movePriceStr, timestampBuffer,
                                  getText("OP", "UP"), ret_30m, ret_5m,
-                                 getText("Top", "Top"), moveMaxRounded,
-                                 getText("Dal", "Low"), moveMinRounded);
+                                 getText("Top", "Top"), moveMaxStr,
+                                 getText("Dal", "Low"), moveMinStr);
             } else {
                         snprintf(msgBuffer, sizeof(msgBuffer), 
-                                 "%s: %.0f (%s)\n30m %s move: %.2f%% (5m: %.2f%%)\n30m %s: %.0f\n30m %s: %.0f",
+                                 "%s: %s (%s)\n30m %s move: %.2f%% (5m: %.2f%%)\n30m %s: %s\n30m %s: %s",
                                  safeFmtStr(getText("Live prijs", "Live price")),
-                                 movePriceRounded, timestampBuffer,
+                                 movePriceStr, timestampBuffer,
                                  getText("NEER", "DOWN"), ret_30m, ret_5m,
-                                 getText("Top", "Top"), moveMaxRounded,
-                                 getText("Dal", "Low"), moveMinRounded);
+                                 getText("Top", "Top"), moveMaxStr,
+                                 getText("Dal", "Low"), moveMinStr);
                     }
                     appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange5m,
                                           safeFmtStr(getText("5m candle — volume/range",
@@ -1620,12 +1650,17 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             const char* dS = "na";
                             char dAge[20];
                             alertTraceDispNotifSnap(ms3, &dP, &dS, dAge, sizeof(dAge));
-                            Serial.printf(
-                                "[ALERT_TRACE] id=%lu type=30m_move phase=send_start ms=%lu disp=%.0f disp_src=%s disp_age_ms=%s min=%.0f max=%.0f det_ms=%lu\n",
+                            {
+                                char _30d[32], _30n[32], _30x[32];
+                                formatQuotePriceEur(_30d, sizeof(_30d), snapshotNotifDisplayPrice());
+                                formatQuotePriceEur(_30n, sizeof(_30n), minVal);
+                                formatQuotePriceEur(_30x, sizeof(_30x), maxVal);
+                                Serial.printf(
+                                "[ALERT_TRACE] id=%lu type=30m_move phase=send_start ms=%lu disp=%s disp_src=%s disp_age_ms=%s min=%s max=%s det_ms=%lu\n",
                                 (unsigned long)tr30, (unsigned long)ms3,
-                                (double)roundToEuroNotif(snapshotNotifDisplayPrice()), dS, dAge,
-                                (double)roundToEuroNotif(minVal), (double)roundToEuroNotif(maxVal),
+                                _30d, dS, dAge, _30n, _30x,
                                 (unsigned long)tr30_det_ms);
+                            }
                         }
 #endif
                         bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
@@ -1772,14 +1807,18 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                                     const float dispPx = snapshotNotifDisplayPrice();
                                     const RegimeSnapshot rs5 = regimeEngineGetSnapshot();
                                     const char* dirLbl = (ret_5m >= 0.0f) ? "OP" : "NEER";
+                                    char _5d[32], _5r[32], _5n[32], _5x[32];
+                                    formatQuotePriceEur(_5d, sizeof(_5d), dispPx);
+                                    formatQuotePriceEur(_5r, sizeof(_5r), refOldest);
+                                    formatQuotePriceEur(_5n, sizeof(_5n), minVal);
+                                    formatQuotePriceEur(_5x, sizeof(_5x), maxVal);
                                     Serial.printf(
                                         "[ALERT_5M_DIR] signed_r5=%.4f abs_r5=%.4f th_final=%.4f eff_move5m_base=%.4f "
-                                        "reg_m5=%.4f reg_id=%u disp=%.2f ref_oldest_5m=%.2f rng_min=%.2f rng_max=%.2f "
+                                        "reg_m5=%.4f reg_id=%u disp=%s ref_oldest_5m=%s rng_min=%s rng_max=%s "
                                         "dir=%s rule=sign_ret_5m\n",
                                         (double)ret_5m, (double)absRet5m, (double)finalMove5mThreshold,
                                         (double)effThresh.move5m, (double)rm.move5mAlert,
-                                        (unsigned)rs5.committedRegime, (double)dispPx, (double)refOldest,
-                                        (double)minVal, (double)maxVal, dirLbl);
+                                        (unsigned)rs5.committedRegime, _5d, _5r, _5n, _5x, dirLbl);
                                 }
                             }
 #endif
@@ -1787,25 +1826,26 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                             // Format message met hergebruik van class buffer
                             getFormattedTimestampForNotification(timestampBuffer, sizeof(timestampBuffer));
                             // ret_30m is beschikbaar in checkAndNotify scope
-                    float move5mPriceRounded = roundToEuroNotif(snapshotNotifDisplayPrice());
-                    float move5mMinRounded = roundToEuroNotif(minVal);
-                    float move5mMaxRounded = roundToEuroNotif(maxVal);
+                    char move5mPriceStr[32], move5mMinStr[32], move5mMaxStr[32];
+                    formatQuotePriceEur(move5mPriceStr, sizeof(move5mPriceStr), snapshotNotifDisplayPrice());
+                    formatQuotePriceEur(move5mMinStr, sizeof(move5mMinStr), minVal);
+                    formatQuotePriceEur(move5mMaxStr, sizeof(move5mMaxStr), maxVal);
                     if (ret_5m >= 0) {
                                 snprintf(msgBuffer, sizeof(msgBuffer), 
-                                         "%s: %.0f (%s)\n5m %s move: +%.2f%% (30m: %+.2f%%)\n5m %s: %.0f\n5m %s: %.0f",
+                                         "%s: %s (%s)\n5m %s move: +%.2f%% (30m: %+.2f%%)\n5m %s: %s\n5m %s: %s",
                                          safeFmtStr(getText("Live prijs", "Live price")),
-                                         move5mPriceRounded, timestampBuffer,
+                                         move5mPriceStr, timestampBuffer,
                                          getText("OP", "UP"), ret_5m, ret_30m,
-                                         getText("Top", "Top"), move5mMaxRounded,
-                                         getText("Dal", "Low"), move5mMinRounded);
+                                         getText("Top", "Top"), move5mMaxStr,
+                                         getText("Dal", "Low"), move5mMinStr);
                     } else {
                                 snprintf(msgBuffer, sizeof(msgBuffer), 
-                                         "%s: %.0f (%s)\n5m %s move: %.2f%% (30m: %+.2f%%)\n5m %s: %.0f\n5m %s: %.0f",
+                                         "%s: %s (%s)\n5m %s move: %.2f%% (30m: %+.2f%%)\n5m %s: %s\n5m %s: %s",
                                          safeFmtStr(getText("Live prijs", "Live price")),
-                                         move5mPriceRounded, timestampBuffer,
+                                         move5mPriceStr, timestampBuffer,
                                          getText("NEER", "DOWN"), ret_5m, ret_30m,
-                                         getText("Top", "Top"), move5mMaxRounded,
-                                         getText("Dal", "Low"), move5mMinRounded);
+                                         getText("Top", "Top"), move5mMaxStr,
+                                         getText("Dal", "Low"), move5mMinStr);
                             }
                             appendVolumeRangeInfo(msgBuffer, sizeof(msgBuffer), volumeRange5m);
                     
@@ -1849,12 +1889,17 @@ void AlertEngine::checkAndNotify(float ret_1m, float ret_5m, float ret_30m)
                                     const char* dS = "na";
                                     char dAge[20];
                                     alertTraceDispNotifSnap(ms5, &dP, &dS, dAge, sizeof(dAge));
-                                    Serial.printf(
-                                        "[ALERT_TRACE] id=%lu type=5m_move phase=send_start ms=%lu disp=%.0f disp_src=%s disp_age_ms=%s min=%.0f max=%.0f det_ms=%lu\n",
+                                    {
+                                        char _5td[32], _5tn[32], _5tx[32];
+                                        formatQuotePriceEur(_5td, sizeof(_5td), snapshotNotifDisplayPrice());
+                                        formatQuotePriceEur(_5tn, sizeof(_5tn), minVal);
+                                        formatQuotePriceEur(_5tx, sizeof(_5tx), maxVal);
+                                        Serial.printf(
+                                        "[ALERT_TRACE] id=%lu type=5m_move phase=send_start ms=%lu disp=%s disp_src=%s disp_age_ms=%s min=%s max=%s det_ms=%lu\n",
                                         (unsigned long)tr5, (unsigned long)ms5,
-                                        (double)roundToEuroNotif(snapshotNotifDisplayPrice()), dS, dAge,
-                                        (double)roundToEuroNotif(minVal), (double)roundToEuroNotif(maxVal),
+                                        _5td, dS, dAge, _5tn, _5tx,
                                         (unsigned long)tr5_det_ms);
+                                    }
                                 }
 #endif
                                 bool sent = sendNotification(titleBuffer, msgBuffer, colorTag);
@@ -1956,7 +2001,7 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
     
     // Static functie: gebruik lokale buffers (title 80 voor emoji-prefix)
     char title[80];
-    char msg[200];  // Verhoogd om volledige notificatieteksten te ondersteunen
+    char msg[280];  // Ruimte voor dynamisch EUR-format (meerdere prijzen per regel)
     char timestamp[32];
     
     #if DEBUG_2H_ALERTS
@@ -1972,10 +2017,16 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
         float distPct = absf((lastPrice - metrics.avg2h) / metrics.avg2h * 100.0f);
         bool condTouch = distPct <= alert2HThresholds.meanTouchBandPct;
         
-        Serial.printf("[2H-DBG] price=%.0f avg2h=%.0f high2h=%.0f low2h=%.0f rangePct=%.2f%% anchor=%.0f\n",
-                     roundToEuroNotif(lastPrice), roundToEuroNotif(metrics.avg2h),
-                     roundToEuroNotif(metrics.high2h), roundToEuroNotif(metrics.low2h),
-                     metrics.rangePct, roundToEuroNotif(activeAnchorPrice));
+        {
+            char _lp[32], _av[32], _hi[32], _lo[32], _an[32];
+            formatQuotePriceEur(_lp, sizeof(_lp), lastPrice);
+            formatQuotePriceEur(_av, sizeof(_av), metrics.avg2h);
+            formatQuotePriceEur(_hi, sizeof(_hi), metrics.high2h);
+            formatQuotePriceEur(_lo, sizeof(_lo), metrics.low2h);
+            formatQuotePriceEur(_an, sizeof(_an), activeAnchorPrice);
+            Serial.printf("[2H-DBG] price=%s avg2h=%s high2h=%s low2h=%s rangePct=%.2f%% anchor=%s\n",
+                         _lp, _av, _hi, _lo, metrics.rangePct, _an);
+        }
         Serial.printf("[2H-DBG] cond: breakUp=%d breakDown=%d compress=%d touch=%d\n",
                      condBreakUp ? 1 : 0, condBreakDown ? 1 : 0, condCompress ? 1 : 0, condTouch ? 1 : 0);
         lastDebugLogMs = now;
@@ -2028,25 +2079,31 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                 logSecondary2hThrottlePrecheckRateLimited(ALERT2H_COMPRESS, now);
             } else {
             #if DEBUG_2H_ALERTS
-            Serial.printf("[ALERT2H] range_compress sent: range=%.2f%% < %.2f%% (avg=%.0f high=%.0f low=%.0f)\n",
-                         metrics.rangePct, alert2HThresholds.compressThresholdPct,
-                         roundToEuroNotif(metrics.avg2h), roundToEuroNotif(metrics.high2h),
-                         roundToEuroNotif(metrics.low2h));
+            {
+                char _ca[32], _ch[32], _cl[32];
+                formatQuotePriceEur(_ca, sizeof(_ca), metrics.avg2h);
+                formatQuotePriceEur(_ch, sizeof(_ch), metrics.high2h);
+                formatQuotePriceEur(_cl, sizeof(_cl), metrics.low2h);
+                Serial.printf("[ALERT2H] range_compress sent: range=%.2f%% < %.2f%% (avg=%s high=%s low=%s)\n",
+                             metrics.rangePct, alert2HThresholds.compressThresholdPct,
+                             _ca, _ch, _cl);
+            }
             #endif
             getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
             // 🟨 ↕️ 👀 BTC-EUR 2h Compressie
             snprintf(title, sizeof(title), "\xF0\x9F\x9F\xA8 \xE2\x86\x95\xEF\xB8\x8F \xF0\x9F\x91\x80 %s 2h %s",
                      bitvavoSymbol, getText("Compressie", "Compression"));
-            float priceRounded = roundToEuroNotif(lastPrice);
-            float highRounded = roundToEuroNotif(metrics.high2h);
-            float avgRounded = roundToEuroNotif(metrics.avg2h);
-            float lowRounded = roundToEuroNotif(metrics.low2h);
-            snprintf(msg, sizeof(msg), "%.0f (%s)\n%s: %.2f%% (<%.2f%%)\n2h %s: %.0f\n2h %s: %.0f\n2h %s: %.0f",
-                     priceRounded, timestamp,
+            char priceStr[32], highStr[32], avgStr[32], lowStr[32];
+            formatQuotePriceEur(priceStr, sizeof(priceStr), lastPrice);
+            formatQuotePriceEur(highStr, sizeof(highStr), metrics.high2h);
+            formatQuotePriceEur(avgStr, sizeof(avgStr), metrics.avg2h);
+            formatQuotePriceEur(lowStr, sizeof(lowStr), metrics.low2h);
+            snprintf(msg, sizeof(msg), "%s (%s)\n%s: %.2f%% (<%.2f%%)\n2h %s: %s\n2h %s: %s\n2h %s: %s",
+                     priceStr, timestamp,
                      getText("Band", "Range"), metrics.rangePct, alert2HThresholds.compressThresholdPct,
-                     getText("Top", "High"), highRounded,
-                     getText("Gem", "Avg"), avgRounded,
-                     getText("Dal", "Low"), lowRounded);
+                     getText("Top", "High"), highStr,
+                     getText("Gem", "Avg"), avgStr,
+                     getText("Dal", "Low"), lowStr);
             // FASE X.2: dispatch2HNotification geeft expliciet pending vs blocked (bool-wrapper blijft voor legacy)
             {
                 const Alert2HDispatchResult dr = dispatch2HNotification(
@@ -2087,8 +2144,13 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
             } else {
             const char* direction = (gAlert2H.getMeanFarSide() > 0) ? "from above" : "from below";
             #if DEBUG_2H_ALERTS
-            Serial.printf("[ALERT2H] mean_touch sent: price=%.0f touched avg2h=%.0f after %.2f%% away (%s)\n",
-                         roundToEuroNotif(lastPrice), roundToEuroNotif(metrics.avg2h), distPct, direction);
+            {
+                char _mp[32], _ma[32];
+                formatQuotePriceEur(_mp, sizeof(_mp), lastPrice);
+                formatQuotePriceEur(_ma, sizeof(_ma), metrics.avg2h);
+                Serial.printf("[ALERT2H] mean_touch sent: price=%s touched avg2h=%s after %.2f%% away (%s)\n",
+                             _mp, _ma, distPct, direction);
+            }
             #endif
             getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
             // from above: 🟦 ⤵️ 👀 ... ; from below: 🟦 ⤴️ 👀 ...
@@ -2102,9 +2164,10 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
             const char* directionText = (gAlert2H.getMeanFarSide() > 0) ? 
                                         getText("van boven", "from above") : 
                                         getText("van onderen", "from below");
-            float priceRounded = roundToEuroNotif(lastPrice);
-            snprintf(msg, sizeof(msg), "%.0f (%s)\n%s 2h %s %s\n%s %.2f%% %s",
-                     priceRounded, timestamp,
+            char priceStrMt[32];
+            formatQuotePriceEur(priceStrMt, sizeof(priceStrMt), lastPrice);
+            snprintf(msg, sizeof(msg), "%s (%s)\n%s 2h %s %s\n%s %.2f%% %s",
+                     priceStrMt, timestamp,
                      getText("Raakt", "Touched"), getText("gem.", "avg"), directionText,
                      getText("na", "after"), distPct, getText("verwijdering", "away"));
             // FASE X.2: expliciet dispatch-result (pending = event geconsumeerd voor family-state)
@@ -2144,9 +2207,15 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                 logSecondary2hThrottlePrecheckRateLimited(ALERT2H_ANCHOR_CTX, now);
             } else {
             #if DEBUG_2H_ALERTS
-            Serial.printf("[ALERT2H] anchor_context sent: anchor=%.0f outside 2h [%.0f..%.0f] (avg=%.0f)\n",
-                         roundToEuroNotif(activeAnchorPrice), roundToEuroNotif(metrics.low2h),
-                         roundToEuroNotif(metrics.high2h), roundToEuroNotif(metrics.avg2h));
+            {
+                char _aa[32], _al[32], _ah[32], _aav[32];
+                formatQuotePriceEur(_aa, sizeof(_aa), activeAnchorPrice);
+                formatQuotePriceEur(_al, sizeof(_al), metrics.low2h);
+                formatQuotePriceEur(_ah, sizeof(_ah), metrics.high2h);
+                formatQuotePriceEur(_aav, sizeof(_aav), metrics.avg2h);
+                Serial.printf("[ALERT2H] anchor_context sent: anchor=%s outside 2h [%s..%s] (avg=%s)\n",
+                             _aa, _al, _ah, _aav);
+            }
             #endif
             getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
             // anchor above band: 🟫 ⏫️ 👀 ... ; anchor below band: 🟫 ⏬️ 👀 ...
@@ -2157,17 +2226,18 @@ void AlertEngine::check2HNotifications(float lastPrice, float anchorPrice)
                 snprintf(title, sizeof(title), "\xF0\x9F\x9F\xAB \xE2\x8F\xAC\xEF\xB8\x8F \xF0\x9F\x91\x80 %s %s 2h",
                          bitvavoSymbol, getText("Anker buiten", "Anchor outside"));
             }
-            float priceRounded = roundToEuroNotif(lastPrice);
-            float anchorRounded = roundToEuroNotif(activeAnchorPrice);
-            float highRounded = roundToEuroNotif(metrics.high2h);
-            float avgRounded = roundToEuroNotif(metrics.avg2h);
-            float lowRounded = roundToEuroNotif(metrics.low2h);
-            snprintf(msg, sizeof(msg), "%.0f (%s)\n%s %.0f %s 2h\n2h %s: %.0f\n2h %s: %.0f\n2h %s: %.0f",
-                     priceRounded, timestamp,
-                     getText("Anker", "Anchor"), anchorRounded, getText("outside", "outside"),
-                     getText("Top", "High"), highRounded,
-                     getText("Gem", "Avg"), avgRounded,
-                     getText("Dal", "Low"), lowRounded);
+            char acP[32], acA[32], acH[32], acG[32], acL[32];
+            formatQuotePriceEur(acP, sizeof(acP), lastPrice);
+            formatQuotePriceEur(acA, sizeof(acA), activeAnchorPrice);
+            formatQuotePriceEur(acH, sizeof(acH), metrics.high2h);
+            formatQuotePriceEur(acG, sizeof(acG), metrics.avg2h);
+            formatQuotePriceEur(acL, sizeof(acL), metrics.low2h);
+            snprintf(msg, sizeof(msg), "%s (%s)\n%s %s %s 2h\n2h %s: %s\n2h %s: %s\n2h %s: %s",
+                     acP, timestamp,
+                     getText("Anker", "Anchor"), acA, getText("outside", "outside"),
+                     getText("Top", "High"), acH,
+                     getText("Gem", "Avg"), acG,
+                     getText("Dal", "Low"), acL);
             // FASE X.2: expliciet dispatch-result
             {
                 const Alert2HDispatchResult dr = dispatch2HNotification(
@@ -2197,7 +2267,7 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
                                              const TwoHMetrics& metrics, uint32_t now) {
     // Static functie: gebruik lokale buffers (title 80 voor emoji-prefix)
     char title[80];
-    char msg[200];  // Verhoogd om volledige notificatieteksten te ondersteunen
+    char msg[280];  // Ruimte voor dynamisch EUR-format (meerdere prijzen per regel)
     char timestamp[32];
     
     // Gebruik timestamp voor notificatie formaat
@@ -2205,38 +2275,50 @@ void AlertEngine::send2HBreakoutNotification(bool isUp, float lastPrice, float t
     
     if (isUp) {
         #if DEBUG_2H_ALERTS
-        Serial.printf("[ALERT2H] breakout_up sent: price=%.0f > high2h=%.0f (avg=%.0f, range=%.2f%%)\n",
-                     roundToEuroNotif(lastPrice), roundToEuroNotif(metrics.high2h),
-                     roundToEuroNotif(metrics.avg2h), metrics.rangePct);
+        {
+            char _bp[32], _bh[32], _ba[32];
+            formatQuotePriceEur(_bp, sizeof(_bp), lastPrice);
+            formatQuotePriceEur(_bh, sizeof(_bh), metrics.high2h);
+            formatQuotePriceEur(_ba, sizeof(_ba), metrics.avg2h);
+            Serial.printf("[ALERT2H] breakout_up sent: price=%s > high2h=%s (avg=%s, range=%.2f%%)\n",
+                         _bp, _bh, _ba, metrics.rangePct);
+        }
         #endif
         // 🟪 ⏫️ ⚠️ BTC-EUR 2h breakout
         snprintf(title, sizeof(title), "\xF0\x9F\x9F\xAA \xE2\x8F\xAB\xEF\xB8\x8F \xE2\x9A\xA0\xEF\xB8\x8F %s 2h %s",
                  bitvavoSymbol, getText("breakout", "breakout"));
-        float priceRounded = roundToEuroNotif(lastPrice);
-        float highRounded = roundToEuroNotif(metrics.high2h);
-        float avgRounded = roundToEuroNotif(metrics.avg2h);
-        snprintf(msg, sizeof(msg), "%.0f (%s)\n%s > 2h %s %.0f\n%s: %.0f %s: %.2f%%",
-                 priceRounded, timestamp,
-                 getText("Prijs", "Price"), getText("Top", "High"), highRounded,
-                 getText("Gem", "Avg"), avgRounded, getText("Band", "Range"), metrics.rangePct);
+        char buP[32], buH[32], buA[32];
+        formatQuotePriceEur(buP, sizeof(buP), lastPrice);
+        formatQuotePriceEur(buH, sizeof(buH), metrics.high2h);
+        formatQuotePriceEur(buA, sizeof(buA), metrics.avg2h);
+        snprintf(msg, sizeof(msg), "%s (%s)\n%s > 2h %s %s\n%s: %s %s: %.2f%%",
+                 buP, timestamp,
+                 getText("Prijs", "Price"), getText("Top", "High"), buH,
+                 getText("Gem", "Avg"), buA, getText("Band", "Range"), metrics.rangePct);
         // FASE X.2: Gebruik throttling wrapper (Breakout mag altijd door). Tag congruent met title: 🟪
         send2HNotification(ALERT2H_BREAKOUT_UP, title, msg, "\xF0\x9F\x9F\xAA", lastPrice, threshold, "break_lvl");  // 🟪
     } else {
         #if DEBUG_2H_ALERTS
-        Serial.printf("[ALERT2H] breakdown_down sent: price=%.0f < low2h=%.0f (avg=%.0f, range=%.2f%%)\n",
-                     roundToEuroNotif(lastPrice), roundToEuroNotif(metrics.low2h),
-                     roundToEuroNotif(metrics.avg2h), metrics.rangePct);
+        {
+            char _dp[32], _dl[32], _da[32];
+            formatQuotePriceEur(_dp, sizeof(_dp), lastPrice);
+            formatQuotePriceEur(_dl, sizeof(_dl), metrics.low2h);
+            formatQuotePriceEur(_da, sizeof(_da), metrics.avg2h);
+            Serial.printf("[ALERT2H] breakdown_down sent: price=%s < low2h=%s (avg=%s, range=%.2f%%)\n",
+                         _dp, _dl, _da, metrics.rangePct);
+        }
         #endif
         // 🟥 ⏬️ ⚠️ BTC-EUR 2h breakdown
         snprintf(title, sizeof(title), "\xF0\x9F\x9F\xA5 \xE2\x8F\xAC\xEF\xB8\x8F \xE2\x9A\xA0\xEF\xB8\x8F %s 2h %s",
                  bitvavoSymbol, getText("breakdown", "breakdown"));
-        float priceRounded = roundToEuroNotif(lastPrice);
-        float lowRounded = roundToEuroNotif(metrics.low2h);
-        float avgRounded = roundToEuroNotif(metrics.avg2h);
-        snprintf(msg, sizeof(msg), "%.0f (%s)\n%s < 2h %s: %.0f\n%s: %.0f %s: %.2f%%",
-                 priceRounded, timestamp,
-                 getText("Prijs", "Price"), getText("Dal", "Low"), lowRounded,
-                 getText("Gem", "Avg"), avgRounded, getText("Band", "Range"), metrics.rangePct);
+        char bdP[32], bdL[32], bdA[32];
+        formatQuotePriceEur(bdP, sizeof(bdP), lastPrice);
+        formatQuotePriceEur(bdL, sizeof(bdL), metrics.low2h);
+        formatQuotePriceEur(bdA, sizeof(bdA), metrics.avg2h);
+        snprintf(msg, sizeof(msg), "%s (%s)\n%s < 2h %s: %s\n%s: %s %s: %.2f%%",
+                 bdP, timestamp,
+                 getText("Prijs", "Price"), getText("Dal", "Low"), bdL,
+                 getText("Gem", "Avg"), bdA, getText("Band", "Range"), metrics.rangePct);
         // FASE X.2: Gebruik throttling wrapper (Breakdown mag altijd door). Tag congruent met title: 🟥
         send2HNotification(ALERT2H_BREAKOUT_DOWN, title, msg, "\xF0\x9F\x9F\xA5", lastPrice, threshold, "break_lvl");  // 🟥
     }
@@ -2542,15 +2624,19 @@ static bool flushPendingSecondaryAlertInternal(uint32_t now) {
     const char* dS = "na";
     char dAge[20];
     alertTraceDispNotifSnap(msF, &dP, &dS, dAge, sizeof(dAge));
-    Serial.printf(
-        "[ALERT_TRACE] id=%lu type=%s phase=send_start ms=%lu disp=%.0f disp_src=%s disp_age_ms=%s min=%.4g max=%.4g "
+    {
+        char _fd[32];
+        formatQuotePriceEur(_fd, sizeof(_fd), snapshotNotifDisplayPrice());
+        Serial.printf(
+        "[ALERT_TRACE] id=%lu type=%s phase=send_start ms=%lu disp=%s disp_src=%s disp_age_ms=%s min=%.4g max=%.4g "
         "orig_det_ms=%lu orig_trig_pri=%.2f orig_trig_src=%s orig_trace_id=%lu pend_created_ms=%lu pend_age_ms=%lu detail=2h_flush_pending\n",
         (unsigned long)trFl, alert2HRuleTag(pendingSecondaryType), (unsigned long)msF,
-        (double)roundToEuroNotif(snapshotNotifDisplayPrice()), dS, dAge, 0.0, 0.0,
+        _fd, dS, dAge, 0.0, 0.0,
         (unsigned long)pendingSecondaryTraceDetMs, (double)pendingSecondaryTraceTrigPrice,
         (pendingSecondaryTraceTrigSrc[0] != '\0') ? pendingSecondaryTraceTrigSrc : "na",
         (unsigned long)pendingSecondaryTraceAlertId, (unsigned long)pendingSecondaryCreatedMillis,
         (unsigned long)pendAge);
+    }
 #endif
     bool result = sendNotification(pendingSecondaryTitle, pendingSecondaryMsg, pendingSecondaryColorTag);
 #if DEBUG_ALERT_TRACE
@@ -2651,11 +2737,15 @@ Alert2HDispatchResult AlertEngine::dispatch2HNotification(Alert2HType alertType,
             const char* dS = "na";
             char dAge[20];
             alertTraceDispNotifSnap(msP, &dP, &dS, dAge, sizeof(dAge));
-            Serial.printf(
-                "[ALERT_TRACE] id=%lu type=%s phase=send_start ms=%lu disp=%.0f disp_src=%s disp_age_ms=%s min=%.4g max=%.4g det_ms=%lu detail=2h_primary_direct\n",
+            {
+                char _pd[32];
+                formatQuotePriceEur(_pd, sizeof(_pd), snapshotNotifDisplayPrice());
+                Serial.printf(
+                "[ALERT_TRACE] id=%lu type=%s phase=send_start ms=%lu disp=%s disp_src=%s disp_age_ms=%s min=%.4g max=%.4g det_ms=%lu detail=2h_primary_direct\n",
                 (unsigned long)tr2h, alert2HRuleTag(alertType), (unsigned long)msP,
-                (double)roundToEuroNotif(snapshotNotifDisplayPrice()), dS, dAge, (double)auditPrimary,
+                _pd, dS, dAge, (double)auditPrimary,
                 (double)auditThreshold, (unsigned long)tr2h_det_ms);
+            }
         }
 #endif
         bool result = sendNotification(title, msg, colorTag);
@@ -2911,8 +3001,12 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
         unsigned long nowMs = millis();
         if (nowMs - lastWsEmaLogMs >= 60000UL) {
             lastWsEmaLogMs = nowMs;
-            Serial.printf("[ANCHOR][AUTO] WS EMA used: ema4h=%.0f ema1d=%.0f\n",
-                         roundToEuroNotif(ema4hValue), roundToEuroNotif(ema1dValue));
+            {
+                char _e4[32], _e1[32];
+                formatQuotePriceEur(_e4, sizeof(_e4), ema4hValue);
+                formatQuotePriceEur(_e1, sizeof(_e1), ema1dValue);
+                Serial.printf("[ANCHOR][AUTO] WS EMA used: ema4h=%s ema1d=%s\n", _e4, _e1);
+            }
         }
     } else {
         // Fetch 4h candles
@@ -2996,12 +3090,20 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
         float minAnchor = currentPrice * (1.0f - AUTO_ANCHOR_MAX_BELOW_CURRENT_PCT / 100.0f);
         if (newAutoAnchor > maxAnchor) {
             newAutoAnchor = maxAnchor;
-            Serial.printf("[ANCHOR][AUTO] Gecapped naar max %.0f (2%% boven koers %.0f)\n",
-                          roundToEuroNotif(newAutoAnchor), roundToEuroNotif(currentPrice));
+            {
+                char _na[32], _cp[32];
+                formatQuotePriceEur(_na, sizeof(_na), newAutoAnchor);
+                formatQuotePriceEur(_cp, sizeof(_cp), currentPrice);
+                Serial.printf("[ANCHOR][AUTO] Gecapped naar max %s (2%% boven koers %s)\n", _na, _cp);
+            }
         } else if (newAutoAnchor < minAnchor) {
             newAutoAnchor = minAnchor;
-            Serial.printf("[ANCHOR][AUTO] Gecapped naar min %.0f (3%% onder koers %.0f)\n",
-                          roundToEuroNotif(newAutoAnchor), roundToEuroNotif(currentPrice));
+            {
+                char _na[32], _cp[32];
+                formatQuotePriceEur(_na, sizeof(_na), newAutoAnchor);
+                formatQuotePriceEur(_cp, sizeof(_cp), currentPrice);
+                Serial.printf("[ANCHOR][AUTO] Gecapped naar min %s (3%% onder koers %s)\n", _na, _cp);
+            }
         }
     }
     
@@ -3048,8 +3150,11 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
             // BELANGRIJK: shouldUpdateUI=false en skipNotifications=true om deadlocks te voorkomen
             bool anchorSet = anchorSystem.setAnchorPrice(newAutoAnchor, false, true);
             if (anchorSet) {
-                Serial.printf("[ANCHOR][AUTO] Anchor ingesteld: %.0f (take profit/max loss worden getoond)\n",
-                              roundToEuroNotif(newAutoAnchor));
+                {
+                    char _as[32];
+                    formatQuotePriceEur(_as, sizeof(_as), newAutoAnchor);
+                    Serial.printf("[ANCHOR][AUTO] Anchor ingesteld: %s (take profit/max loss worden getoond)\n", _as);
+                }
                 
                 // Stuur optionele notificatie als enabled
                 if (alert2HThresholds.getAutoAnchorNotifyEnabled()) {
@@ -3058,10 +3163,11 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
                     char msg[120];  // Verhoogd van 80 naar 120 bytes voor langere notificaties
                     getFormattedTimestampForNotification(timestamp, sizeof(timestamp));
                     snprintf(title, sizeof(title), "%s %s", bitvavoSymbol, getText("Auto Anker", "Auto Anchor"));
-                    float anchorRounded = roundToEuroNotif(newAutoAnchor);
-                    snprintf(msg, sizeof(msg), "%.0f (%s)\n%s: %.0f", 
-                             anchorRounded, timestamp,
-                             getText("Bijgewerkt", "Updated"), anchorRounded);
+                    char anchorStr[32];
+                    formatQuotePriceEur(anchorStr, sizeof(anchorStr), newAutoAnchor);
+                    snprintf(msg, sizeof(msg), "%s (%s)\n%s: %s", 
+                             anchorStr, timestamp,
+                             getText("Bijgewerkt", "Updated"), anchorStr);
                     bool sent = sendNotification(title, msg, "\xF0\x9F\x9F\xAB");  // 🟫
                     if (!sent) {
                         Serial.println("[ANCHOR][AUTO] WARN: Auto anchor notificatie niet verstuurd");
@@ -3072,16 +3178,26 @@ bool AlertEngine::maybeUpdateAutoAnchor(bool force) {
             }
         }
         
-        Serial.printf("[ANCHOR][AUTO] ema4h=%.0f ema1d=%.0f trend=%.2f%% w4h=%.2f new=%.0f last=%.0f decision=COMMIT\n",
-                     roundToEuroNotif(ema4hValue), roundToEuroNotif(ema1dValue),
-                     trendDeltaPct, w4h,
-                     roundToEuroNotif(newAutoAnchor), roundToEuroNotif(lastAutoAnchor));
+        {
+            char _e4[32], _e1[32], _nw[32], _ls[32];
+            formatQuotePriceEur(_e4, sizeof(_e4), ema4hValue);
+            formatQuotePriceEur(_e1, sizeof(_e1), ema1dValue);
+            formatQuotePriceEur(_nw, sizeof(_nw), newAutoAnchor);
+            formatQuotePriceEur(_ls, sizeof(_ls), lastAutoAnchor);
+            Serial.printf("[ANCHOR][AUTO] ema4h=%s ema1d=%s trend=%.2f%% w4h=%.2f new=%s last=%s decision=COMMIT\n",
+                         _e4, _e1, trendDeltaPct, w4h, _nw, _ls);
+        }
         return true;
     } else {
-        Serial.printf("[ANCHOR][AUTO] ema4h=%.0f ema1d=%.0f trend=%.2f%% w4h=%.2f new=%.0f last=%.0f decision=SKIP\n",
-                     roundToEuroNotif(ema4hValue), roundToEuroNotif(ema1dValue),
-                     trendDeltaPct, w4h,
-                     roundToEuroNotif(newAutoAnchor), roundToEuroNotif(lastAutoAnchor));
+        {
+            char _e4[32], _e1[32], _nw[32], _ls[32];
+            formatQuotePriceEur(_e4, sizeof(_e4), ema4hValue);
+            formatQuotePriceEur(_e1, sizeof(_e1), ema1dValue);
+            formatQuotePriceEur(_nw, sizeof(_nw), newAutoAnchor);
+            formatQuotePriceEur(_ls, sizeof(_ls), lastAutoAnchor);
+            Serial.printf("[ANCHOR][AUTO] ema4h=%s ema1d=%s trend=%.2f%% w4h=%.2f new=%s last=%s decision=SKIP\n",
+                         _e4, _e1, trendDeltaPct, w4h, _nw, _ls);
+        }
         return false;
     }
 }

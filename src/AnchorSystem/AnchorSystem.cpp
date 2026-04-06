@@ -1,6 +1,7 @@
 #include "AnchorSystem.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include "../PriceFormat/QuotePriceFormat.h"
 
 // Forward declarations voor dependencies (worden later via modules)
 extern float openPrices[];  // Voor setAnchorPrice
@@ -42,15 +43,6 @@ AnchorSystem::AnchorSystem() {
     downtrendTakeProfitMultiplier = 1.0f;
     
     // Buffers verwijderd om DRAM overflow te voorkomen - gebruik lokale buffers
-}
-
-// Rond prijzen af op hele euro's (0.50 -> omhoog) voor NTFY-teksten
-static float roundToEuroNotif(float price)
-{
-    if (price <= 0.0f) {
-        return price;
-    }
-    return (float)((uint32_t)(price + 0.5f));
 }
 
 static float snapshotNotifDisplayPriceAnchor(void)
@@ -184,24 +176,25 @@ void AnchorSystem::formatAnchorNotification(AnchorEventType eventType, float anc
                  "\xE2\x8F\xAB\xEF\xB8\x8F\xE2\x9A\x93\xEF\xB8\x8F\xE2\x9A\xA0\xEF\xB8\x8F %s %s: %s",
                  bitvavoSymbol,
                  getText("Anker", "Anchor"), getText("Winstpakker", "Take Profit"));
-        float priceRounded = roundToEuroNotif(curSnap);
-        float anchorRounded = roundToEuroNotif(this->anchorPrice);
-        float profitRounded = roundToEuroNotif(curSnap - this->anchorPrice);
+        char priceStr[32], anchorStr[32], profitStr[32];
+        formatQuotePriceEur(priceStr, sizeof(priceStr), curSnap);
+        formatQuotePriceEur(anchorStr, sizeof(anchorStr), this->anchorPrice);
+        formatQuotePriceEurSigned(profitStr, sizeof(profitStr), curSnap - this->anchorPrice);
         if (this->trendAdaptiveAnchorsEnabled) {
             snprintf(msgBuffer, msgSize, 
-                     "%.0f (%s)\n%s: %s\n%s: %.0f | %s: +%.0f\nTP: +%.2f%% (%s: +%.2f%%, %s: +%.2f%%)",
-                     priceRounded, timestampBuffer,
+                     "%s (%s)\n%s: %s\n%s: %s | %s: +%s\nTP: +%.2f%% (%s: +%.2f%%, %s: +%.2f%%)",
+                     priceStr, timestampBuffer,
                      getText("Trend", "Trend"), trendNameTranslated,
-                     getText("Anker", "Anchor"), anchorRounded,
-                     getText("Winst", "Profit"), profitRounded,
+                     getText("Anker", "Anchor"), anchorStr,
+                     getText("Winst", "Profit"), profitStr,
                      anchorPct, getText("thr", "thr"), effAnchor.takeProfitPct,
                      getText("basis", "basis"), this->anchorTakeProfit);
         } else {
             snprintf(msgBuffer, msgSize, 
-                     "%.0f (%s)\n%s: %.0f | %s: +%.0f\nTP: +%.2f%% (%s: +%.2f%%)",
-                     priceRounded, timestampBuffer,
-                     getText("Anker", "Anchor"), anchorRounded,
-                     getText("Winst", "Profit"), profitRounded,
+                     "%s (%s)\n%s: %s | %s: +%s\nTP: +%.2f%% (%s: +%.2f%%)",
+                     priceStr, timestampBuffer,
+                     getText("Anker", "Anchor"), anchorStr,
+                     getText("Winst", "Profit"), profitStr,
                      anchorPct, getText("thr", "thr"), effAnchor.takeProfitPct);
         }
     } else {  // ANCHOR_EVENT_MAX_LOSS
@@ -210,24 +203,25 @@ void AnchorSystem::formatAnchorNotification(AnchorEventType eventType, float anc
                  "\xE2\x8F\xAC\xEF\xB8\x8F\xE2\x9A\x93\xEF\xB8\x8F\xE2\x9A\xA0\xEF\xB8\x8F %s %s: %s",
                  bitvavoSymbol,
                  getText("Anker", "Anchor"), getText("Verliesbeperker", "Max Loss"));
-        float priceRounded = roundToEuroNotif(curSnap);
-        float anchorRounded = roundToEuroNotif(this->anchorPrice);
-        float lossRounded = roundToEuroNotif(curSnap - this->anchorPrice);
+        char priceStrMl[32], anchorStrMl[32], lossStr[32];
+        formatQuotePriceEur(priceStrMl, sizeof(priceStrMl), curSnap);
+        formatQuotePriceEur(anchorStrMl, sizeof(anchorStrMl), this->anchorPrice);
+        formatQuotePriceEurSigned(lossStr, sizeof(lossStr), curSnap - this->anchorPrice);
         if (this->trendAdaptiveAnchorsEnabled) {
             snprintf(msgBuffer, msgSize, 
-                     "%.0f (%s)\n%s: %s\n%s: %.0f | %s: %.0f\nML: %.2f%% (%s: %.2f%%, %s: %.2f%%)",
-                     priceRounded, timestampBuffer,
+                     "%s (%s)\n%s: %s\n%s: %s | %s: %s\nML: %.2f%% (%s: %.2f%%, %s: %.2f%%)",
+                     priceStrMl, timestampBuffer,
                      getText("Trend", "Trend"), trendNameTranslated,
-                     getText("Anker", "Anchor"), anchorRounded,
-                     getText("Verlies", "Loss"), lossRounded,
+                     getText("Anker", "Anchor"), anchorStrMl,
+                     getText("Verlies", "Loss"), lossStr,
                      anchorPct, getText("thr", "thr"), effAnchor.maxLossPct,
                      getText("basis", "basis"), this->anchorMaxLoss);
         } else {
             snprintf(msgBuffer, msgSize, 
-                     "%.0f (%s)\n%s: %.0f | %s: %.0f\nML: %.2f%% (%s: %.2f%%)",
-                     priceRounded, timestampBuffer,
-                     getText("Anker", "Anchor"), anchorRounded,
-                     getText("Verlies", "Loss"), lossRounded,
+                     "%s (%s)\n%s: %s | %s: %s\nML: %.2f%% (%s: %.2f%%)",
+                     priceStrMl, timestampBuffer,
+                     getText("Anker", "Anchor"), anchorStrMl,
+                     getText("Verlies", "Loss"), lossStr,
                      anchorPct, getText("thr", "thr"), effAnchor.maxLossPct);
         }
     }
@@ -241,7 +235,7 @@ void AnchorSystem::sendAnchorAlert(AnchorEventType eventType, float anchorPct,
     // Gebruik lokale buffers (stack geheugen i.p.v. DRAM)
     char timestamp[32];
     char title[40];
-    char msg[140];
+    char msg[280];
     
     formatAnchorNotification(eventType, anchorPct, effAnchor, trendName,
                            msg, sizeof(msg), title, sizeof(title), timestamp, sizeof(timestamp));
@@ -272,9 +266,13 @@ void AnchorSystem::sendAnchorAlert(AnchorEventType eventType, float anchorPct,
     const char* eventName = (eventType == ANCHOR_EVENT_TAKE_PROFIT) ? "Take profit" : "Max loss";
     float threshold = (eventType == ANCHOR_EVENT_TAKE_PROFIT) ? effAnchor.takeProfitPct : effAnchor.maxLossPct;
     float baseThreshold = (eventType == ANCHOR_EVENT_TAKE_PROFIT) ? this->anchorTakeProfit : this->anchorMaxLoss;
-    Serial_printf(F("[Anchor] %s notificatie verzonden: %.2f%% (threshold: %.2f%%, basis: %.2f%%, trend: %s, anchor: %.0f, prijs: %.0f)\n"),
-                 eventName, anchorPct, threshold, baseThreshold, trendName,
-                 roundToEuroNotif(this->anchorPrice), roundToEuroNotif(snapshotNotifDisplayPriceAnchor()));
+    {
+        char _an[32], _px[32];
+        formatQuotePriceEur(_an, sizeof(_an), this->anchorPrice);
+        formatQuotePriceEur(_px, sizeof(_px), snapshotNotifDisplayPriceAnchor());
+        Serial_printf(F("[Anchor] %s notificatie verzonden: %.2f%% (threshold: %.2f%%, basis: %.2f%%, trend: %s, anchor: %s, prijs: %s)\n"),
+                     eventName, anchorPct, threshold, baseThreshold, trendName, _an, _px);
+    }
     #endif
     
     // Publiceer event naar MQTT
@@ -390,7 +388,11 @@ bool AnchorSystem::setAnchorPrice(float anchorValue, bool shouldUpdateUI, bool s
             if (isValidPrice(prices[0]) && !isnan(prices[0]) && !isinf(prices[0])) {
                 priceToSet = prices[0];
                 #if !DEBUG_BUTTON_ONLY
-                Serial_printf(F("[Anchor] Gebruik huidige prijs als anchor: %.0f\n"), roundToEuroNotif(priceToSet));
+                {
+                    char _ps[32];
+                    formatQuotePriceEur(_ps, sizeof(_ps), priceToSet);
+                    Serial_printf(F("[Anchor] Gebruik huidige prijs als anchor: %s\n"), _ps);
+                }
                 #endif
             } else {
                 #if !DEBUG_BUTTON_ONLY
@@ -444,7 +446,11 @@ bool AnchorSystem::setAnchorPrice(float anchorValue, bool shouldUpdateUI, bool s
         anchorMaxLossSent = false;
         
         #if !DEBUG_BUTTON_ONLY
-        Serial_printf(F("[Anchor] Anchor set: anchorPrice = %.0f\n"), roundToEuroNotif(this->anchorPrice));
+        {
+            char _as[32];
+            formatQuotePriceEur(_as, sizeof(_as), this->anchorPrice);
+            Serial_printf(F("[Anchor] Anchor set: anchorPrice = %s\n"), _as);
+        }
         #endif
         
         safeMutexGive(dataMutex, "setAnchorPrice");
@@ -466,14 +472,16 @@ bool AnchorSystem::setAnchorPrice(float anchorValue, bool shouldUpdateUI, bool s
             // Stuur NTFY notificatie met lokale buffers (stack geheugen i.p.v. DRAM)
             char timestamp[32];
             char title[40];
-            char msg[80];
+            char msg[96];
             getFormattedTimestamp(timestamp, sizeof(timestamp));
             // Anchor Set: 🟫 ⚓️ BTC-EUR Anchor Set
             snprintf(title, sizeof(title), "%s %s %s Anchor Set",
                      "\xF0\x9F\x9F\xAB",         // 🟫
                      "\xE2\x9A\x93\xEF\xB8\x8F", // ⚓️
                      bitvavoSymbol);
-            snprintf(msg, sizeof(msg), "%s: %.2f EUR", timestamp, priceToSet);
+            char pSet[32];
+            formatQuotePriceEur(pSet, sizeof(pSet), priceToSet);
+            snprintf(msg, sizeof(msg), "%s: %s EUR", timestamp, pSet);
             // Phase 1: Anchor Set (geen TP/ML) → anchor-specifieke tag 🟫
             sendNotification(title, msg, "\xF0\x9F\x9F\xAB");  // 🟫
         }

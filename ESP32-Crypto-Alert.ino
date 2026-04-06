@@ -90,6 +90,7 @@ struct NtfyPendingItem;
 
 // UIController module (Fase 8: UI Module refactoring)
 #include "src/UIController/UIController.h"
+#include "src/PriceFormat/QuotePriceFormat.h"
 
 // ArduinoJson support (optioneel - als library niet beschikbaar is, gebruik handmatige parsing)
 // Probeer ArduinoJson te includen - als het niet beschikbaar is, gebruik handmatige parsing
@@ -768,31 +769,31 @@ static size_t bitvavoStreamBufferSize = sizeof(bitvavoStreamBufferFallback);
 
 // LVGL UI buffers en cache (voorkomt herhaalde allocaties en onnodige updates)
 // Fase 8.6.1: static verwijderd zodat UIController module deze kan gebruiken
-char priceLblBuffer[18];  // Buffer voor price label (%.2f format, max: "12345.67" = ~8 chars)
-char anchorMaxLabelBuffer[28];  // o.a. "+%.2f%% %.2f"; sync met ANCHOR_MAX_LABEL_BUFFER_SIZE in UIController.cpp
-char anchorLabelBuffer[32];  // o.a. "%c%.2f%% %.2f"
-char anchorMinLabelBuffer[32];  // o.a. "%.2f%% %.2f"
+char priceLblBuffer[32];  // dynamisch EUR-format (tot 5 decimalen); sync PRICE_LBL_BUFFER_SIZE in UIController.cpp
+char anchorMaxLabelBuffer[48];  // o.a. "+%.2f%% <prijs>"; sync ANCHOR_MAX_LABEL_BUFFER_SIZE in UIController.cpp
+char anchorLabelBuffer[48];
+char anchorMinLabelBuffer[48];
 // Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
 char priceTitleBuffer[SYMBOL_COUNT][40];  // Buffers voor price titles (48→40 bytes om DRAM te sparen)
-char price1MinMaxLabelBuffer[18];  // Buffer voor 1m max label (max: "12345.67" = ~8 chars)
-char price1MinMinLabelBuffer[18];  // Buffer voor 1m min label (max: "12345.67" = ~8 chars)
-char price1MinDiffLabelBuffer[18];  // Buffer voor 1m diff label (max: "12345.67" = ~8 chars)
-char price30MinMaxLabelBuffer[18];  // Buffer voor 30m max label (max: "12345.67" = ~8 chars)
-char price30MinMinLabelBuffer[20];  // Buffer voor 30m min label (max: "12345.67" = ~8 chars)
-char price30MinDiffLabelBuffer[20];  // Buffer voor 30m diff label (max: "12345.67" = ~8 chars)
-char price2HMaxLabelBuffer[20];  // Buffer voor 2h max label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
-char price2HMinLabelBuffer[20];  // Buffer voor 2h min label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
-char price2HDiffLabelBuffer[20];  // Buffer voor 2h diff label (max: "12345.67" = ~8 chars, altijd gedefinieerd)
+char price1MinMaxLabelBuffer[24];
+char price1MinMinLabelBuffer[24];
+char price1MinDiffLabelBuffer[24];
+char price30MinMaxLabelBuffer[24];
+char price30MinMinLabelBuffer[24];
+char price30MinDiffLabelBuffer[32];
+char price2HMaxLabelBuffer[24];
+char price2HMinLabelBuffer[24];
+char price2HDiffLabelBuffer[24];
 #if defined(PLATFORM_ESP32S3_JC3248W535)
-char price5mMaxLabelBuffer[20];
-char price5mMinLabelBuffer[20];
-char price5mDiffLabelBuffer[20];
-char price1dMaxLabelBuffer[20];
-char price1dMinLabelBuffer[20];
-char price1dDiffLabelBuffer[20];
-char price7dMaxLabelBuffer[20];
-char price7dMinLabelBuffer[20];
-char price7dDiffLabelBuffer[20];
+char price5mMaxLabelBuffer[24];
+char price5mMinLabelBuffer[24];
+char price5mDiffLabelBuffer[24];
+char price1dMaxLabelBuffer[24];
+char price1dMinLabelBuffer[24];
+char price1dDiffLabelBuffer[24];
+char price7dMaxLabelBuffer[24];
+char price7dMinLabelBuffer[24];
+char price7dDiffLabelBuffer[24];
 #endif
 
 // Cache laatste waarden (alleen updaten als veranderd)
@@ -823,7 +824,7 @@ float lastPrice7dMinValue = -1.0f;
 float lastPrice7dDiffValue = -1.0f;
 #endif
 char lastPriceTitleText[SYMBOL_COUNT][32] = {""};  // Cache voor price titles (max: "30 min  +12.34%" = ~20 chars, verkleind van 48 naar 32 bytes)
-char priceLblBufferArray[SYMBOL_COUNT][24];  // Buffers voor average price labels (max: "12345.67" = ~8 chars)
+char priceLblBufferArray[SYMBOL_COUNT][32];
 static char footerRssiBuffer[10];  // Buffer voor footer RSSI
 static char footerRamBuffer[10];  // Buffer voor footer RAM
 // Fase 8.6.2: static verwijderd zodat UIController module deze kan gebruiken
@@ -3472,46 +3473,10 @@ bool isValidPrice(float price)
     return !isnan(price) && !isinf(price) && price > 0.0f;
 }
 
-// Rond prijzen af op hele euro's (0.50 -> omhoog)
-static float roundToEuro(float price)
-{
-    if (price <= 0.0f) {
-        return price;
-    }
-    return (float)((uint32_t)(price + 0.5f));
-}
-
-// Zelfde regel als UI: alleen BTC-quote op hele euro; overige markten op centen (REST vs grafiek consistent)
-static bool isBtcBaseMarket(const char* symbol)
-{
-    if (symbol == nullptr) {
-        return false;
-    }
-    const char* dash = strchr(symbol, '-');
-    if (dash == nullptr) {
-        return false;
-    }
-    const size_t baseLen = static_cast<size_t>(dash - symbol);
-    return baseLen == 3 && strncmp(symbol, "BTC", 3) == 0;
-}
-
-static float roundToCent(float price)
-{
-    if (price <= 0.0f) {
-        return price;
-    }
-    const float scaled = price * 100.0f;
-    const float rounded = (price >= 0.0f) ? (scaled + 0.5f) : (scaled - 0.5f);
-    return (float)((int)rounded) / 100.0f;
-}
-
-// REST-tickerprijs: align met weergave in de prijsboxen (fetchPrice schrijft prices[0] / latestKnownPrice)
+// REST-tickerprijs: volledige float behouden (weergave via gedeeld QuotePriceFormat)
 static float roundRestFetchedQuotePrice(float price)
 {
-    if (isBtcBaseMarket(bitvavoSymbol)) {
-        return roundToEuro(price);
-    }
-    return roundToCent(price);
+    return price;
 }
 
 // Helper: Validate if two prices are valid
@@ -4872,7 +4837,6 @@ static void ntfyDeferredStartupTestIfPending(void)
 
 void publishMqttAnchorEvent(float anchor_price, const char* event_type) {
     if (!mqttConnected) return;
-    float anchorRounded = roundToEuro(anchor_price);
     
     // Haal lokale tijd op
     struct tm timeinfo;
@@ -4885,11 +4849,13 @@ void publishMqttAnchorEvent(float anchor_price, const char* event_type) {
         snprintf(timeStr, sizeof(timeStr), "%lu", millis());
     }
     
-    // Maak JSON payload
+    // Maak JSON payload (prijs als getal met dynamische precisie)
+    char priceStr[32];
+    formatQuotePriceEur(priceStr, sizeof(priceStr), anchor_price);
     char payload[256];
     snprintf(payload, sizeof(payload),
-             "{\"time\":\"%s\",\"price\":%.0f,\"event\":\"%s\"}",
-             timeStr, anchorRounded, event_type);
+             "{\"time\":\"%s\",\"price\":%s,\"event\":\"%s\"}",
+             timeStr, priceStr, event_type);
     
     // Geoptimaliseerd: gebruik char array i.p.v. String
     char topic[128];
@@ -4900,13 +4866,13 @@ void publishMqttAnchorEvent(float anchor_price, const char* event_type) {
     
     // Try direct publish, queue if failed
     if (mqttConnected && mqttClient.publish(topic, payload, false)) {
-        Serial_printf(F("[MQTT] Anchor event gepubliceerd: %s (prijs: %.0f, event: %s)\n"),
-                     timeStr, anchorRounded, event_type);
+        Serial_printf(F("[MQTT] Anchor event gepubliceerd: %s (prijs: %s, event: %s)\n"),
+                     timeStr, priceStr, event_type);
     } else {
         // Queue message if not connected or publish failed
         enqueueMqttMessage(topic, payload, false);
-        Serial_printf(F("[MQTT] Anchor event in queue: %s (prijs: %.0f, event: %s)\n"),
-                     timeStr, anchorRounded, event_type);
+        Serial_printf(F("[MQTT] Anchor event in queue: %s (prijs: %s, event: %s)\n"),
+                     timeStr, priceStr, event_type);
     }
 }
 
@@ -6074,8 +6040,7 @@ void publishMqttSettings() {
     }
     
     if (anchorValueToPublish > 0.0f) {
-        float anchorRounded = roundToEuro(anchorValueToPublish);
-        snprintf(valueBufferAnchor, sizeof(valueBufferAnchor), "%.0f", anchorRounded);
+        formatQuotePriceEur(valueBufferAnchor, sizeof(valueBufferAnchor), anchorValueToPublish);
         enqueueMqttMessage(topicBufferAnchor, valueBufferAnchor, true);
     }
 }
