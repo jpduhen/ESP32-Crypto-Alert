@@ -13,8 +13,8 @@
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 6
-#define VERSION_MINOR 3
-#define VERSION_STRING "6.003"
+#define VERSION_MINOR 5
+#define VERSION_STRING "6.005"
 #endif
 
 // TF min/max bronstatus op kaarttitels (LIVE/WARM/MIX) — JC3248, GEEK, LCDwiki 2.8
@@ -40,7 +40,7 @@
 
 // --- Boot / WAN-isolatie (A/B-diagnose; productietestbuild: alles uit / normaal gedrag) ---
 #ifndef BOOT_DIAG_DISABLE_MQTT_START
-#define BOOT_DIAG_DISABLE_MQTT_START 0
+#define BOOT_DIAG_DISABLE_MQTT_START 1
 #endif
 #ifndef BOOT_DIAG_DISABLE_NTFY_STARTUP_TEST
 #define BOOT_DIAG_DISABLE_NTFY_STARTUP_TEST 0
@@ -67,13 +67,27 @@
 
 // webTask: sla handleClient volledig over (alleen A/B; default uit). Genegeerd als HANDLECLIENT_INTERVAL_MS > 0.
 #ifndef BOOT_DIAG_WEBTASK_SKIP_HANDLECLIENT
-#define BOOT_DIAG_WEBTASK_SKIP_HANDLECLIENT 0
+#define BOOT_DIAG_WEBTASK_SKIP_HANDLECLIENT 1
 #endif
 // webTask: vaste min. ms tussen handleClient()-calls (alleen A/B-reproduceerbaarheid).
 // 0 = productie: idle/burst-scheduler in ESP32-Crypto-Alert.ino (webTask). >0 = vast interval, negeert idle/burst.
 #undef BOOT_DIAG_WEBTASK_HANDLECLIENT_INTERVAL_MS
 #ifndef BOOT_DIAG_WEBTASK_HANDLECLIENT_INTERVAL_MS
 #define BOOT_DIAG_WEBTASK_HANDLECLIENT_INTERVAL_MS 0
+#endif
+
+// A/B: vroege candle-REST alleen na vaste tijd sinds s_bootFlowEpochMs (geen vrijgave via WS-ticker in deze test).
+#ifndef CRYPTO_ALERT_CANDLE_BOOT_GUARD_MS
+#define CRYPTO_ALERT_CANDLE_BOOT_GUARD_MS 120000UL
+#endif
+
+// --- MQTT initial enable (productie) ---
+// Geen BootNet MQTT-staging. Eerste connect pas na health gate in connectMQTT (WS-ticker + REST-OK + geen REST-fail + min. tijd).
+#ifndef MQTT_INITIAL_ENABLE_MIN_EPOCH_MS
+#define MQTT_INITIAL_ENABLE_MIN_EPOCH_MS 20000UL
+#endif
+#ifndef MQTT_INITIAL_ENABLE_REST_OK_COUNT
+#define MQTT_INITIAL_ENABLE_REST_OK_COUNT 2
 #endif
 
 // --- WebSocket Configuration ---

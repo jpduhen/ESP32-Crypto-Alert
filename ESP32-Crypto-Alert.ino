@@ -1114,7 +1114,10 @@ unsigned long lastMqttReconnectAttempt = 0;
 #ifndef CRYPTO_ALERT_BOOTNET_WS_EXTRA_DELAY_MS
 #define CRYPTO_ALERT_BOOTNET_WS_EXTRA_DELAY_MS 2000UL
 #endif
-static unsigned long s_bootNetMqttGateUntilMs = 0; // 0 = geen gate (of al voorbij)
+static bool s_mqttInitialOrchestrationDone = false; // na BootNet-timestamp in setup (vóór: geen MQTT)
+static uint8_t s_postTasksRestFetchOkCount = 0; // succesvolle Bitvavo REST price-fetches na orchestratie (cap op gate-drempel)
+static bool s_mqttGateExternalRestFailSinceTasks = false; // REST price-fetch gefaald na start tasks
+static bool s_mqttInitialHealthGateLogged = false;
 static unsigned long s_bootNetWsGateUntilMs = 0;
 
 // Boot-netwerk: één duidelijke WS-start eigenaar (apiTask staged path) + isolatie NTFY-exclusive tot eerste echte ticker.
@@ -1127,6 +1130,7 @@ static unsigned long s_bootNetWsGateUntilMs = 0;
 #ifndef BOOT_WS_SELFHEAL_COOLDOWN_MS
 #define BOOT_WS_SELFHEAL_COOLDOWN_MS 90000UL
 #endif
+// CRYPTO_ALERT_CANDLE_BOOT_GUARD_MS: zie platform_config.h (epoch-only guard in fetchBitvavoCandles).
 static unsigned long s_bootFlowEpochMs = 0;
 static unsigned long s_bootStagedWsInitMs = 0;
 static unsigned long g_bootFirstWsTickerRxMs = 0;
@@ -1304,15 +1308,19 @@ int fetchBitvavoCandles(const char* symbol, const char* interval, uint16_t limit
         return -1;
     }
 
-    // Vroege boot: geen candle-HTTP gelijk met MQTT-connect (zelfde netwerk-slot / connection refused).
-    if (s_bootNetMqttGateUntilMs != 0 && millis() < s_bootNetMqttGateUntilMs) {
-        static unsigned long s_lastBootNetCandleMqttGateLogMs = 0;
-        const unsigned long now = millis();
-        if (now - s_lastBootNetCandleMqttGateLogMs >= 4000UL) {
-            Serial.println(F("[BootNet] Candle fetch delayed due to MQTT boot gate"));
-            s_lastBootNetCandleMqttGateLogMs = now;
+    // Post-task vroege fase: candle-HTTP alleen na vaste Δt sinds s_bootFlowEpochMs (A/B: geen vrijgave via WS-ticker; fetchPrice ongewijzigd).
+    if (s_bootFlowEpochMs != 0) {
+        const unsigned long nowCg = millis();
+        const bool candleGuardAllow =
+            (nowCg - s_bootFlowEpochMs >= CRYPTO_ALERT_CANDLE_BOOT_GUARD_MS);
+        if (!candleGuardAllow) {
+            static unsigned long s_lastCandleGuardLogMs = 0;
+            if (nowCg - s_lastCandleGuardLogMs >= 5000UL) {
+                s_lastCandleGuardLogMs = nowCg;
+                Serial.println(F("[BOOT_DIAG] candle fetch deferred (epoch-only guard)"));
+            }
+            return 0;
         }
-        return 0;
     }
 
     // M1: Heap telemetry vóór URL build
@@ -6832,18 +6840,34 @@ void connectMQTT() {
     }
     return;
 #endif
-    // Eerste MQTT-connect uitstellen tot na warmstart/setup (loop + WiFi-reconnect pad).
-    if (s_bootNetMqttGateUntilMs != 0 && millis() < s_bootNetMqttGateUntilMs) {
+    if (!s_mqttInitialOrchestrationDone) {
         return;
     }
-    if (s_bootNetMqttGateUntilMs != 0) {
-        static bool s_mqttStagedMilestone = false;
-        if (!s_mqttStagedMilestone) {
-            s_mqttStagedMilestone = true;
-            Serial.println(F("[NETDIAG2] milestone: staged MQTT connect attempt"));
+    // Eerste MQTT-connect: health gate (geen pure delay; los van BootNet).
+    {
+        const unsigned long nowMs = millis();
+#if WS_ENABLED && WS_LIB_AVAILABLE
+        const bool wsTickerOk = (g_bootFirstWsTickerRxMs != 0);
+#else
+        const bool wsTickerOk = true; // geen WS-build: gate op REST+epoch alleen
+#endif
+        const bool restOkEnough =
+            (s_postTasksRestFetchOkCount >= MQTT_INITIAL_ENABLE_REST_OK_COUNT);
+        const bool noRestFail = !s_mqttGateExternalRestFailSinceTasks;
+        const bool epochOk = (s_bootFlowEpochMs != 0) &&
+                               (nowMs - s_bootFlowEpochMs >= MQTT_INITIAL_ENABLE_MIN_EPOCH_MS);
+        if (!wsTickerOk || !restOkEnough || !noRestFail || !epochOk) {
+            return;
         }
-        Serial.println(F("[BootNet] MQTT start now"));
-        s_bootNetMqttGateUntilMs = 0;
+        if (!s_mqttInitialHealthGateLogged) {
+            s_mqttInitialHealthGateLogged = true;
+            Serial_printf(
+                F("[MQTT] initial enable: health gate OK (WS ticker=%lu rest_ok=%u/%u epoch>=%lums)\n"),
+                (unsigned long)g_bootFirstWsTickerRxMs,
+                (unsigned)s_postTasksRestFetchOkCount,
+                (unsigned)MQTT_INITIAL_ENABLE_REST_OK_COUNT,
+                (unsigned long)MQTT_INITIAL_ENABLE_MIN_EPOCH_MS);
+        }
     }
 
     mqttClient.setServer(mqttHost, mqttPort);
@@ -8768,6 +8792,9 @@ void fetchPrice()
         #if !DEBUG_BUTTON_ONLY
         Serial.printf("[API] WARN -> %s leeg response (tijd: %lu ms) - mogelijk timeout of netwerkprobleem\n", bitvavoSymbol, fetchTime);
         #endif
+        if (s_mqttInitialOrchestrationDone && !usedWs) {
+            s_mqttGateExternalRestFailSinceTasks = true;
+        }
         // Gebruik laatste bekende prijs als fallback (al ingesteld als fetched = prices[0])
     } else {
         // Succesvol opgehaald: alleen REST-prijs afronden (WS blijft ongerond). Niet-BTC: centen i.p.v. hele euro.
@@ -8804,7 +8831,11 @@ void fetchPrice()
                 s_netdiagFirstRestOkMs = lastApiMs;
                 Serial_printf(F("[NETDIAG] first REST OK wall_ms=%lu\n"), (unsigned long)s_netdiagFirstRestOkMs);
             }
-            
+            if (s_mqttInitialOrchestrationDone && !usedWs &&
+                s_postTasksRestFetchOkCount < MQTT_INITIAL_ENABLE_REST_OK_COUNT) {
+                s_postTasksRestFetchOkCount++;
+            }
+
             prices[0] = fetched;
             
             // Update anchor min/max als anchor actief is
@@ -10142,12 +10173,12 @@ void setup()
 
     {
         const unsigned long t = millis();
-        s_bootNetMqttGateUntilMs = t + CRYPTO_ALERT_BOOTNET_MQTT_DELAY_MS;
         s_bootNetWsGateUntilMs = t + CRYPTO_ALERT_BOOTNET_MQTT_DELAY_MS + CRYPTO_ALERT_BOOTNET_WS_EXTRA_DELAY_MS;
+        s_mqttInitialOrchestrationDone = true;
         Serial.printf(
-            F("[BootNet] staged startup: MQTT +%lums, WS +%lums (extra) after setup\n"),
-            (unsigned long)CRYPTO_ALERT_BOOTNET_MQTT_DELAY_MS,
-            (unsigned long)(CRYPTO_ALERT_BOOTNET_MQTT_DELAY_MS + CRYPTO_ALERT_BOOTNET_WS_EXTRA_DELAY_MS));
+            F("[BootNet] staged startup: WS +%lums; MQTT eerste connect via health gate (min epoch %lums, geen BootNet MQTT)\n"),
+            (unsigned long)(CRYPTO_ALERT_BOOTNET_MQTT_DELAY_MS + CRYPTO_ALERT_BOOTNET_WS_EXTRA_DELAY_MS),
+            (unsigned long)MQTT_INITIAL_ENABLE_MIN_EPOCH_MS);
     }
 }
 
@@ -10951,7 +10982,8 @@ void webTask(void *parameter)
         }
 #endif
 
-#if BOOT_DIAG_WEBTASK_HANDLECLIENT_INTERVAL_MS > 0 || BOOT_DIAG_WEBTASK_SKIP_HANDLECLIENT
+// Alleen vast interval-diagnose: 100 ms wake; productie én SKIP_HANDLECLIENT: zelfde cadans als WEB_TASK_WAKE_MS.
+#if BOOT_DIAG_WEBTASK_HANDLECLIENT_INTERVAL_MS > 0
         const TickType_t periodTicks = pdMS_TO_TICKS(100);
 #else
         const TickType_t periodTicks = pdMS_TO_TICKS(WEB_TASK_WAKE_MS);
@@ -10998,31 +11030,17 @@ void loop()
             }
         } else if (WiFi.status() == WL_CONNECTED) {
             unsigned long now = millis();
-            // Boot: MQTT-connect nog niet — wacht tot gate voorbij is (geen reconnect-teller verhogen).
-            if (s_bootNetMqttGateUntilMs != 0 && now < s_bootNetMqttGateUntilMs) {
-                static bool s_bootNetMqttHoldLogged = false;
-                if (!s_bootNetMqttHoldLogged) {
-                    Serial.printf(
-                        F("[BootNet] MQTT delayed start (wait ~%lu ms)\n"),
-                        (unsigned long)(s_bootNetMqttGateUntilMs - now));
-                    s_bootNetMqttHoldLogged = true;
-                }
-            } else {
-                // Probeer MQTT reconnect als WiFi verbonden is (met exponential backoff)
-                // Bereken reconnect interval met exponential backoff
-                unsigned long reconnectInterval = MQTT_RECONNECT_INTERVAL;
-                if (mqttReconnectAttemptCount >= MAX_MQTT_RECONNECT_ATTEMPTS) {
-                    // Exponential backoff: interval verdubbelt bij elke mislukte poging
-                    // Max backoff: 8x het basis interval (3 extra pogingen = 2^3 = 8x)
-                    uint8_t backoffMultiplier = 1 << min((mqttReconnectAttemptCount - MAX_MQTT_RECONNECT_ATTEMPTS), 3);
-                    reconnectInterval = MQTT_RECONNECT_INTERVAL * backoffMultiplier;
-                }
+            // Probeer MQTT reconnect als WiFi verbonden is (met exponential backoff); init-delay zit in connectMQTT().
+            unsigned long reconnectInterval = MQTT_RECONNECT_INTERVAL;
+            if (mqttReconnectAttemptCount >= MAX_MQTT_RECONNECT_ATTEMPTS) {
+                uint8_t backoffMultiplier = 1 << min((mqttReconnectAttemptCount - MAX_MQTT_RECONNECT_ATTEMPTS), 3);
+                reconnectInterval = MQTT_RECONNECT_INTERVAL * backoffMultiplier;
+            }
 
-                if (lastMqttReconnectAttempt == 0 || (now - lastMqttReconnectAttempt >= reconnectInterval)) {
-                    lastMqttReconnectAttempt = now;
-                    mqttReconnectAttemptCount++;
-                    connectMQTT();
-                }
+            if (lastMqttReconnectAttempt == 0 || (now - lastMqttReconnectAttempt >= reconnectInterval)) {
+                lastMqttReconnectAttempt = now;
+                mqttReconnectAttemptCount++;
+                connectMQTT();
             }
         }
     }
