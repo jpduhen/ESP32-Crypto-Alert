@@ -346,7 +346,12 @@ void WebServerModule::begin() {
 void WebServerModule::setupWebServer() {
     // Gebruik globale server instance
     server = &::server;
-    
+
+#if BOOT_DIAG_DISABLE_WEBSERVER_INIT
+    Serial.println(F("[BOOT_DIAG] WebServer init skipped (no routes, no begin)"));
+    return;
+#endif
+
     Serial.println(F("[WebServer] Routes registreren..."));
     server->on("/", [this]() {
         notifyWebActivity();

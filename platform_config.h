@@ -67,13 +67,18 @@
 
 // webTask: sla handleClient volledig over (alleen A/B; default uit). Genegeerd als HANDLECLIENT_INTERVAL_MS > 0.
 #ifndef BOOT_DIAG_WEBTASK_SKIP_HANDLECLIENT
-#define BOOT_DIAG_WEBTASK_SKIP_HANDLECLIENT 1
+#define BOOT_DIAG_WEBTASK_SKIP_HANDLECLIENT 0
 #endif
 // webTask: vaste min. ms tussen handleClient()-calls (alleen A/B-reproduceerbaarheid).
 // 0 = productie: idle/burst-scheduler in ESP32-Crypto-Alert.ino (webTask). >0 = vast interval, negeert idle/burst.
 #undef BOOT_DIAG_WEBTASK_HANDLECLIENT_INTERVAL_MS
 #ifndef BOOT_DIAG_WEBTASK_HANDLECLIENT_INTERVAL_MS
-#define BOOT_DIAG_WEBTASK_HANDLECLIENT_INTERVAL_MS 0
+#define BOOT_DIAG_WEBTASK_HANDLECLIENT_INTERVAL_MS 1000
+#endif
+
+// A/B: setupWebServer() registreert geen routes en roept geen server->begin() — handleClient() kan nog wel draaien.
+#ifndef BOOT_DIAG_DISABLE_WEBSERVER_INIT
+#define BOOT_DIAG_DISABLE_WEBSERVER_INIT 1
 #endif
 
 // A/B: vroege candle-REST alleen na vaste tijd sinds s_bootFlowEpochMs (geen vrijgave via WS-ticker in deze test).
