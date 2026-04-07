@@ -167,6 +167,8 @@ const char* SettingsStore::PREF_KEY_NTFY_TOPIC = "ntfyTopic";
 const char* SettingsStore::PREF_KEY_BITVAVO_SYMBOL = "bitvavoSymbol";
 const char* SettingsStore::PREF_KEY_LANGUAGE = "language";
 const char* SettingsStore::PREF_KEY_DISPLAY_ROTATION = "displayRotation";
+const char* SettingsStore::PREF_KEY_CHART_COLOR_MODE = "chartColorMode";
+const char* SettingsStore::PREF_KEY_CHART_COLOR_MANUAL = "chartColorManual";
 const char* SettingsStore::PREF_KEY_TH1_UP = "th1Up";
 const char* SettingsStore::PREF_KEY_TH1_DOWN = "th1Down";
 const char* SettingsStore::PREF_KEY_TH30_UP = "th30Up";
@@ -379,7 +381,11 @@ CryptoMonitorSettings::CryptoMonitorSettings() {
     bitvavoSymbol[sizeof(bitvavoSymbol) - 1] = '\0';
     language = DEFAULT_LANGUAGE;
     displayRotation = DISPLAY_ROTATION_DEFAULT;  // Default: platform-specifieke rotatie
-    
+    strncpy(chartColorMode, "auto", sizeof(chartColorMode) - 1);
+    chartColorMode[sizeof(chartColorMode) - 1] = '\0';
+    strncpy(chartColorManual, "orange", sizeof(chartColorManual) - 1);
+    chartColorManual[sizeof(chartColorManual) - 1] = '\0';
+
     // Alert thresholds defaults
     alertThresholds.spike1m = SPIKE_1M_THRESHOLD_DEFAULT;
     alertThresholds.spike5m = SPIKE_5M_THRESHOLD_DEFAULT;
@@ -576,7 +582,12 @@ CryptoMonitorSettings SettingsStore::load() {
         rotation = (legacyRotation == 2) ? 2 : 0;
     }
     settings.displayRotation = rotation;
-    
+
+    loadStringPreference(PREF_KEY_CHART_COLOR_MODE, settings.chartColorMode,
+                        sizeof(settings.chartColorMode), "auto");
+    loadStringPreference(PREF_KEY_CHART_COLOR_MANUAL, settings.chartColorManual,
+                        sizeof(settings.chartColorManual), "orange");
+
     // Load alert thresholds
     settings.alertThresholds.threshold1MinUp = prefs.getFloat(PREF_KEY_TH1_UP, THRESHOLD_1MIN_UP_DEFAULT);
     settings.alertThresholds.threshold1MinDown = prefs.getFloat(PREF_KEY_TH1_DOWN, THRESHOLD_1MIN_DOWN_DEFAULT);
@@ -820,7 +831,9 @@ void SettingsStore::save(const CryptoMonitorSettings& settings) {
     prefs.putString(PREF_KEY_BITVAVO_SYMBOL, settings.bitvavoSymbol);
     prefs.putUChar(PREF_KEY_LANGUAGE, settings.language);
     prefs.putUChar(PREF_KEY_DISPLAY_ROTATION, settings.displayRotation);
-    
+    prefs.putString(PREF_KEY_CHART_COLOR_MODE, settings.chartColorMode);
+    prefs.putString(PREF_KEY_CHART_COLOR_MANUAL, settings.chartColorManual);
+
     // Save alert thresholds
     prefs.putFloat(PREF_KEY_TH1_UP, settings.alertThresholds.threshold1MinUp);
     prefs.putFloat(PREF_KEY_TH1_DOWN, settings.alertThresholds.threshold1MinDown);

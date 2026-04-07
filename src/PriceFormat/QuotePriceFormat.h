@@ -55,6 +55,30 @@ inline void formatQuotePriceEur(char* buf, size_t bufLen, float price)
     formatQuotePriceEurMag(buf, bufLen, price);
 }
 
+// Zelfde printf-tier als top/dal: precisie afgeleid van referencePrice (spotregime), niet van |amount|.
+// Gebruik voor range-diff zodat BTC-diff "42" blijft als top/dal in hele euro's staan.
+inline void formatQuotePriceEurAtReferenceTier(char* buf, size_t bufLen, float amount, float referencePrice)
+{
+    if (bufLen == 0) {
+        return;
+    }
+    if (!isfinite(amount) || !isfinite(referencePrice) || referencePrice <= 0.0f) {
+        snprintf(buf, bufLen, "-");
+        return;
+    }
+    const float tierRef = fabsf(referencePrice);
+    const double d = static_cast<double>(amount);
+    if (tierRef >= 10000.0f) {
+        snprintf(buf, bufLen, "%.0f", d);
+    } else if (tierRef >= 100.0f) {
+        snprintf(buf, bufLen, "%.2f", d);
+    } else if (tierRef >= 1.0f) {
+        snprintf(buf, bufLen, "%.4f", d);
+    } else {
+        snprintf(buf, bufLen, "%.5f", d);
+    }
+}
+
 // Bedragen in EUR die negatief mogen zijn (verschil t.o.v. anker, enz.)
 inline void formatQuotePriceEurSigned(char* buf, size_t bufLen, float price)
 {

@@ -5,16 +5,16 @@
 // Actief ondersteunde boards
 //#define PLATFORM_ESP32S3_SUPERMINI
 //#define PLATFORM_ESP32S3_GEEK
-#define PLATFORM_ESP32S3_LCDWIKI_28
-//#define PLATFORM_ESP32S3_JC3248W535  // JC3248W535CIY 3.5" QSPI (AXS15231B), 320x480
+//#define PLATFORM_ESP32S3_LCDWIKI_28
+#define PLATFORM_ESP32S3_JC3248W535  // JC3248W535CIY 3.5" QSPI (AXS15231B), 320x480
 //#define PLATFORM_ESP32S3_AMOLED_206
 
 // --- Version Configuration ---
 // Versie wordt hier gedefinieerd zodat het beschikbaar is voor alle modules
 #ifndef VERSION_STRING
 #define VERSION_MAJOR 6
-#define VERSION_MINOR 1
-#define VERSION_STRING "6.1"
+#define VERSION_MINOR 3
+#define VERSION_STRING "6.003"
 #endif
 
 // TF min/max bronstatus op kaarttitels (LIVE/WARM/MIX) — JC3248, GEEK, LCDwiki 2.8
@@ -35,7 +35,45 @@
 // Periodic test blijft uit tenzij je CRYPTO_ALERT_NTFY_PERIODIC_TEST op 1 zet in ESP32-Crypto-Alert.ino.
 // Sub-vlaggen staan in ESP32-Crypto-Alert.ino (CRYPTO_ALERT_NTFY_STARTUP_TEST / PERIODIC_TEST).
 #ifndef CRYPTO_ALERT_NTFY_DIAGNOSTICS_RUNTIME
-#define CRYPTO_ALERT_NTFY_DIAGNOSTICS_RUNTIME 1
+#define CRYPTO_ALERT_NTFY_DIAGNOSTICS_RUNTIME 0
+#endif
+
+// --- Boot / WAN-isolatie (A/B-diagnose; productietestbuild: alles uit / normaal gedrag) ---
+#ifndef BOOT_DIAG_DISABLE_MQTT_START
+#define BOOT_DIAG_DISABLE_MQTT_START 0
+#endif
+#ifndef BOOT_DIAG_DISABLE_NTFY_STARTUP_TEST
+#define BOOT_DIAG_DISABLE_NTFY_STARTUP_TEST 0
+#endif
+#ifndef BOOT_DIAG_DISABLE_WEB_TASK
+#define BOOT_DIAG_DISABLE_WEB_TASK 0
+#endif
+#ifndef BOOT_DIAG_DISABLE_WS_BOOT_START
+#define BOOT_DIAG_DISABLE_WS_BOOT_START 0
+#endif
+
+// Periodieke LAN vs WAN netwerkdiagnose ([NETDIAG2] in Serial). Productietestbuild: uit.
+#ifndef CRYPTO_ALERT_NETDIAG2_ENABLED
+#define CRYPTO_ALERT_NETDIAG2_ENABLED 0
+#endif
+#ifndef CRYPTO_ALERT_NETDIAG2_INTERVAL_MS
+#define CRYPTO_ALERT_NETDIAG2_INTERVAL_MS 45000UL
+#endif
+
+// uiTask: LVGL/updateUI zeldzamer (alleen A/B-diagnose). Productietestbuild: uit.
+#ifndef BOOT_DIAG_MINIMAL_UI_LOAD
+#define BOOT_DIAG_MINIMAL_UI_LOAD 0
+#endif
+
+// webTask: sla handleClient volledig over (alleen A/B; default uit). Genegeerd als HANDLECLIENT_INTERVAL_MS > 0.
+#ifndef BOOT_DIAG_WEBTASK_SKIP_HANDLECLIENT
+#define BOOT_DIAG_WEBTASK_SKIP_HANDLECLIENT 0
+#endif
+// webTask: vaste min. ms tussen handleClient()-calls (alleen A/B-reproduceerbaarheid).
+// 0 = productie: idle/burst-scheduler in ESP32-Crypto-Alert.ino (webTask). >0 = vast interval, negeert idle/burst.
+#undef BOOT_DIAG_WEBTASK_HANDLECLIENT_INTERVAL_MS
+#ifndef BOOT_DIAG_WEBTASK_HANDLECLIENT_INTERVAL_MS
+#define BOOT_DIAG_WEBTASK_HANDLECLIENT_INTERVAL_MS 0
 #endif
 
 // --- WebSocket Configuration ---
@@ -58,7 +96,7 @@
 
 // Alertketen: compacte trace (grep op [ALERT_TRACE]); alleen logging, geen gedrag
 #ifndef DEBUG_ALERT_TRACE
-#define DEBUG_ALERT_TRACE 1
+#define DEBUG_ALERT_TRACE 0
 #endif
 
 // UI: compacte Serial-log per timeframe-min/max (raw vs live-merge); los van DEBUG_CALCULATIONS om DRAM te sparen

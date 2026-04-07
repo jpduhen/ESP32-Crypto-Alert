@@ -9,6 +9,7 @@
 #include "platform_config.h"
 
 #include <WiFi.h>                   // Included with Espressif ESP32 Dev Module
+#include <WiFiClient.h>             // Korte TCP-probes voor [NETDIAG2] (LAN/WAN)
 #include <WiFiClientSecure.h>       // TLS client for HTTPS (NTFY)
 #include <HTTPClient.h>             // Included with Espressif ESP32 Dev Module
 #include <WiFiManager.h>            // Install "WiFiManager" with the Library Manager
@@ -967,6 +968,8 @@ static const unsigned long WS_RECONNECT_GRACE_CANDLES_MS = 15000UL;
 static const unsigned long CANDLE_REST_CONNECT_BACKOFF_MS = 30000UL;
 // Fase 5.1: static verwijderd zodat TrendDetector module deze variabele kan gebruiken
 char bitvavoSymbol[16] = BITVAVO_SYMBOL_DEFAULT;  // Bitvavo symbool (max 15 karakters, bijv. BTC-EUR, ETH-EUR)
+char chartColorMode[8] = "auto";    // "auto" | "manual" — alleen grafieklijn/punten (WebUI)
+char chartColorManual[16] = "orange"; // orange|purple|yellow|red|cyan|blue|green|white
 
 // Alert thresholds in struct voor betere organisatie
 // Fase 6.1: AlertEngine module gebruikt deze struct (extern declaration in AlertEngine.cpp)
@@ -1113,6 +1116,31 @@ unsigned long lastMqttReconnectAttempt = 0;
 #endif
 static unsigned long s_bootNetMqttGateUntilMs = 0; // 0 = geen gate (of al voorbij)
 static unsigned long s_bootNetWsGateUntilMs = 0;
+
+// Boot-netwerk: één duidelijke WS-start eigenaar (apiTask staged path) + isolatie NTFY-exclusive tot eerste echte ticker.
+#ifndef BOOT_NTFY_EXCL_BLOCK_TIMEOUT_MS
+#define BOOT_NTFY_EXCL_BLOCK_TIMEOUT_MS 120000UL
+#endif
+#ifndef BOOT_WS_SELFHEAL_AFTER_MS
+#define BOOT_WS_SELFHEAL_AFTER_MS 40000UL
+#endif
+#ifndef BOOT_WS_SELFHEAL_COOLDOWN_MS
+#define BOOT_WS_SELFHEAL_COOLDOWN_MS 90000UL
+#endif
+static unsigned long s_bootFlowEpochMs = 0;
+static unsigned long s_bootStagedWsInitMs = 0;
+static unsigned long g_bootFirstWsTickerRxMs = 0;
+static unsigned long s_bootLastWsTextRxMs = 0;
+static unsigned long s_netdiagFirstRestOkMs = 0;
+static uint8_t s_bootWsSelfHealAttempts = 0;
+static unsigned long s_bootWsSelfHealLastMs = 0;
+
+#if CRYPTO_ALERT_NETDIAG2_ENABLED
+static unsigned long s_netdiag2LastRunMs = 0;
+static unsigned long s_netdiag2LastDnsOkMs = 0;
+static unsigned long s_netdiag2LastLanTcpOkMs = 0;
+static unsigned long s_netdiag2LastWanTcpOkMs = 0;
+#endif
 
 // API boot-settle: korte pauze vóór vroege Bitvavo/HTTP om connection refused te verminderen.
 #ifndef CRYPTO_ALERT_BOOTNET_API_SETTLE_MS
@@ -3103,6 +3131,7 @@ static void maybeInitWebSocketAfterWarmStart()
                              bitvavoSymbol);
                     wsClientPtr->sendTXT(payloadBuf);
                     Serial.println(F("[WS] Subscribe sent"));
+                    Serial.println(F("[WSBOOT] subscribed (live = first ticker price, not control-only)"));
                     g_wsSubscribeSentAfterConnect = true;
                 }
                 lastWsReconnectMs = millis();
@@ -3158,6 +3187,8 @@ static void processWsTextMessage(const char* wsBuf, size_t length)
     if (wsBuf == nullptr || length == 0) {
         return;
     }
+
+    s_bootLastWsTextRxMs = millis();
 
     // Candle updates (WS) -> update lastKline1m/5m voor volume UI
     if (strstr(wsBuf, "\"event\":\"candle\"") != nullptr) {
@@ -3351,6 +3382,24 @@ static void processWsTextMessage(const char* wsBuf, size_t length)
     const bool hasBid = parseWsPriceField("\"bestBid\":\"", parsedBid);
     const bool hasAsk = parseWsPriceField("\"bestAsk\":\"", parsedAsk);
 
+    // Voor boot-live: prijsvelden alleen tellen als market in dit bericht het actieve symbool is
+    char wsMsgMarket[16] = {0};
+    {
+        const char* mkKey = "\"market\":\"";
+        const char* posMk = strstr(wsBuf, mkKey);
+        if (posMk != nullptr) {
+            posMk += strlen(mkKey);
+            size_t i = 0;
+            while (i < sizeof(wsMsgMarket) - 1 && posMk[i] && posMk[i] != '"') {
+                wsMsgMarket[i] = posMk[i];
+                i++;
+            }
+            wsMsgMarket[i] = '\0';
+        }
+    }
+    const bool tickerMarketMatches =
+        (wsMsgMarket[0] != '\0' && strcmp(wsMsgMarket, bitvavoSymbol) == 0);
+
     const unsigned long wsNowMs = millis();
     bool spreadValidThisTick = false;
     float spreadThisTick = 0.0f;
@@ -3418,6 +3467,14 @@ static void processWsTextMessage(const char* wsBuf, size_t length)
         if (!wsHasSeenFirstLiveMessage) {
             wsHasSeenFirstLiveMessage = true;
             wsLiveSinceMs = wsNowMs;
+        }
+        if (g_bootFirstWsTickerRxMs == 0 && tickerMarketMatches) {
+            g_bootFirstWsTickerRxMs = wsNowMs;
+            Serial_printf(
+                F("[WSBOOT] first ticker price RX (boot live) market=%s ms=%lu msgs=%lu\n"),
+                bitvavoSymbol,
+                (unsigned long)g_bootFirstWsTickerRxMs,
+                (unsigned long)wsMsgCount);
         }
     }
 
@@ -3759,6 +3816,82 @@ static void checkHeapTelemetry();
 void formatIPAddress(IPAddress ip, char *buffer, size_t bufferSize) {
     snprintf(buffer, bufferSize, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
 }
+
+#if CRYPTO_ALERT_NETDIAG2_ENABLED
+// Compact LAN vs WAN: DNS + TCP naar Bitvavo-IP, TCP naar MQTT-broker (meestal LAN).
+// Geen netMutex: korte sockets; parallel aan HTTPClient in apiTask — alleen diagnose.
+static void netDiag2MaybeRun(void)
+{
+    if (WiFi.status() != WL_CONNECTED) {
+        return;
+    }
+    const unsigned long now = millis();
+    if (s_netdiag2LastRunMs != 0 &&
+        (now - s_netdiag2LastRunMs) < CRYPTO_ALERT_NETDIAG2_INTERVAL_MS) {
+        return;
+    }
+    s_netdiag2LastRunMs = now;
+
+    char ipStr[16];
+    char gwStr[16];
+    char dnsStr[16];
+    formatIPAddress(WiFi.localIP(), ipStr, sizeof(ipStr));
+    formatIPAddress(WiFi.gatewayIP(), gwStr, sizeof(gwStr));
+    formatIPAddress(WiFi.dnsIP(), dnsStr, sizeof(dnsStr));
+
+    Serial_printf(
+        F("[NETDIAG2] WiFi=ok ip=%s gw=%s dns_cfg=%s rssi=%d lastApiMs=%lu firstRestOkMs=%lu firstTickerMs=%lu\n"),
+        ipStr,
+        gwStr,
+        dnsStr,
+        (int)WiFi.RSSI(),
+        (unsigned long)lastApiMs,
+        (unsigned long)s_netdiagFirstRestOkMs,
+        (unsigned long)g_bootFirstWsTickerRxMs);
+
+    IPAddress bvIp;
+    if (WiFi.hostByName("api.bitvavo.com", bvIp)) {
+        s_netdiag2LastDnsOkMs = now;
+        char bvs[16];
+        formatIPAddress(bvIp, bvs, sizeof(bvs));
+        Serial_printf(F("[NETDIAG2] DNS api.bitvavo.com -> %s OK\n"), bvs);
+
+        WiFiClient wc;
+        wc.setTimeout(4000);
+        if (wc.connect(bvIp, 443)) {
+            s_netdiag2LastWanTcpOkMs = now;
+            Serial_printf(F("[NETDIAG2] WAN TCP :443 to Bitvavo IP %s OK (TLS niet getest)\n"), bvs);
+            wc.stop();
+        } else {
+            Serial_println(F("[NETDIAG2] WAN TCP :443 to Bitvavo IP FAIL (na DNS OK)"));
+        }
+    } else {
+        Serial_println(F("[NETDIAG2] DNS api.bitvavo.com FAIL"));
+    }
+
+    WiFiClient mq;
+    mq.setTimeout(3000);
+    if (mq.connect(mqttHost, mqttPort)) {
+        s_netdiag2LastLanTcpOkMs = now;
+        Serial_printf(F("[NETDIAG2] LAN TCP MQTT broker %s:%u OK\n"),
+                      mqttHost,
+                      (unsigned)mqttPort);
+        mq.stop();
+    } else {
+        Serial_printf(F("[NETDIAG2] LAN TCP MQTT broker %s:%u FAIL\n"),
+                      mqttHost,
+                      (unsigned)mqttPort);
+    }
+
+    Serial_printf(
+        F("[NETDIAG2] stamps: dns_ok_ms=%lu wan_tcp_ok_ms=%lu lan_tcp_ok_ms=%lu\n"),
+        (unsigned long)s_netdiag2LastDnsOkMs,
+        (unsigned long)s_netdiag2LastWanTcpOkMs,
+        (unsigned long)s_netdiag2LastLanTcpOkMs);
+}
+#else
+static void netDiag2MaybeRun(void) {}
+#endif
 
 // ============================================================================
 // Heap Telemetry Functions
@@ -4241,6 +4374,94 @@ static bool ntfyHasFlushablePendingForExclusive(void)
     return has;
 }
 
+// Boot: blokkeer NTFY-exclusive pad dat WS stopt/herstart totdat eerste echte ticker- prijs binnen is (of timeout).
+// Voorkomt race: startup-queue → [NTFY][EXCL] → RESTARTING_WS → maybeInit/beginSSL vóór staged BootNet WS-gate.
+static bool bootShouldBlockNtfyExclusiveWs(void)
+{
+#if !WS_ENABLED || !WS_LIB_AVAILABLE
+    return false;
+#else
+    if (g_bootFirstWsTickerRxMs != 0) {
+        return false;
+    }
+    const unsigned long now = millis();
+    if (s_bootFlowEpochMs == 0) {
+        return true;
+    }
+    if (now - s_bootFlowEpochMs >= BOOT_NTFY_EXCL_BLOCK_TIMEOUT_MS) {
+        return false;
+    }
+    return true;
+#endif
+}
+
+#if WS_ENABLED && WS_LIB_AVAILABLE
+// Eén schone reconnect na staged WS-init als er geen ticker-prijs binnenkomt (USB-voeding / timing).
+static void bootWsSelfHealIfStalled(void)
+{
+    if (g_netExclusiveNtfyMode != NET_MODE_NORMAL) {
+        return;
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+        return;
+    }
+    if (lastApiMs == 0) {
+        return;
+    }
+    if (!wsInitialized || wsClientPtr == nullptr) {
+        return;
+    }
+    if (g_bootFirstWsTickerRxMs != 0) {
+        return;
+    }
+    if (s_bootStagedWsInitMs == 0) {
+        // Onderscheid: WS nog nooit gestart (geen staged maybeInit) vs gestart maar geen ticker
+        static unsigned long s_lastDiagNoStagedLogMs = 0;
+        const unsigned long nowDiag = millis();
+        if (s_bootFlowEpochMs != 0 && nowDiag - s_bootFlowEpochMs >= 12000UL &&
+            (nowDiag - s_lastDiagNoStagedLogMs >= 30000UL)) {
+            s_lastDiagNoStagedLogMs = nowDiag;
+            Serial_println(F("[WSBOOT] diag: staged WS start not attempted yet (BootNet gate / first REST path)"));
+        }
+        return;
+    }
+    const unsigned long now = millis();
+    if (now - s_bootStagedWsInitMs < BOOT_WS_SELFHEAL_AFTER_MS) {
+        return;
+    }
+    static const uint8_t kMaxHeal = 2;
+    if (s_bootWsSelfHealAttempts >= kMaxHeal) {
+        return;
+    }
+    if (s_bootWsSelfHealAttempts > 0 && (now - s_bootWsSelfHealLastMs) < BOOT_WS_SELFHEAL_COOLDOWN_MS) {
+        return;
+    }
+
+    s_bootWsSelfHealAttempts++;
+    s_bootWsSelfHealLastMs = now;
+    const unsigned long stallAge = now - s_bootStagedWsInitMs;
+    Serial_printf(
+        F("[SELFHEAL][WSBOOT] stalled: no ticker price yet (stall_age=%lu ms, attempt=%u, wsMsgs=%lu) clean reconnect\n"),
+        (unsigned long)stallAge,
+        (unsigned)s_bootWsSelfHealAttempts,
+        (unsigned long)wsMsgCount);
+    g_wsSubscribeSentAfterConnect = false;
+    netMutexLock("[SELFHEAL][WSBOOT] disconnect");
+    wsClientPtr->disconnect();
+    netMutexUnlock("[SELFHEAL][WSBOOT] disconnect");
+    wsConnected = false;
+    wsConnecting = false;
+    netMutexLock("[SELFHEAL][WSBOOT] beginSSL");
+    wsClientPtr->setReconnectInterval(5000);
+    wsClientPtr->beginSSL(WS_HOST, WS_PORT, WS_PATH);
+    netMutexUnlock("[SELFHEAL][WSBOOT] beginSSL");
+    wsConnecting = true;
+    wsConnectStartMs = now;
+}
+#else
+static void bootWsSelfHealIfStalled(void) {}
+#endif
+
 // --- Exclusive NTFY orchestration (apiTask only) — productie-WS rond delivery ---
 static bool ntfyExclusiveShouldSkipWsStopPhase(void)
 {
@@ -4685,6 +4906,13 @@ static void ntfyStartupTestIfEnabled(void)
     snprintf(title, sizeof(title), "Reboot - %s", VERSION_STRING);
     snprintf(body, sizeof(body), "[%s] Setup compleet", hhmmss);
 
+    {
+        static bool s_ntfyStartupMilestone = false;
+        if (!s_ntfyStartupMilestone) {
+            s_ntfyStartupMilestone = true;
+            Serial.println(F("[NETDIAG2] milestone: NTFY startup test attempt"));
+        }
+    }
     Serial_println(F("[NTFY][test] startup test queued"));
 
     const char *tag = "☑️♻️";
@@ -5044,7 +5272,9 @@ static void loadSettings()
     safeStrncpy(symbol0, bitvavoSymbol, sizeof(symbol0));
     language = settings.language;
     displayRotation = settings.displayRotation;
-    
+    safeStrncpy(chartColorMode, settings.chartColorMode, sizeof(chartColorMode));
+    safeStrncpy(chartColorManual, settings.chartColorManual, sizeof(chartColorManual));
+
     // Copy alert thresholds
     alertThresholds = settings.alertThresholds;
     
@@ -5160,7 +5390,9 @@ void saveSettings()
     safeStrncpy(settings.bitvavoSymbol, bitvavoSymbol, sizeof(settings.bitvavoSymbol));
     settings.language = language;
     settings.displayRotation = displayRotation;
-    
+    safeStrncpy(settings.chartColorMode, chartColorMode, sizeof(settings.chartColorMode));
+    safeStrncpy(settings.chartColorManual, chartColorManual, sizeof(settings.chartColorManual));
+
     // Copy alert thresholds
     settings.alertThresholds = alertThresholds;
     
@@ -6590,11 +6822,26 @@ void publishMqttDiscovery() {
 // MQTT connect functie (niet-blokkerend)
 void connectMQTT() {
     if (mqttConnected) return;
+#if BOOT_DIAG_DISABLE_MQTT_START
+    {
+        static bool s_bootDiagMqttOnce = false;
+        if (!s_bootDiagMqttOnce) {
+            s_bootDiagMqttOnce = true;
+            Serial.println(F("[BOOT_DIAG] MQTT connect disabled (BOOT_DIAG_DISABLE_MQTT_START)"));
+        }
+    }
+    return;
+#endif
     // Eerste MQTT-connect uitstellen tot na warmstart/setup (loop + WiFi-reconnect pad).
     if (s_bootNetMqttGateUntilMs != 0 && millis() < s_bootNetMqttGateUntilMs) {
         return;
     }
     if (s_bootNetMqttGateUntilMs != 0) {
+        static bool s_mqttStagedMilestone = false;
+        if (!s_mqttStagedMilestone) {
+            s_mqttStagedMilestone = true;
+            Serial.println(F("[NETDIAG2] milestone: staged MQTT connect attempt"));
+        }
         Serial.println(F("[BootNet] MQTT start now"));
         s_bootNetMqttGateUntilMs = 0;
     }
@@ -8553,6 +8800,10 @@ void fetchPrice()
             if (openPrices[0] == 0)
                 openPrices[0] = fetched; // capture session open once
             lastApiMs = millis();
+            if (s_netdiagFirstRestOkMs == 0) {
+                s_netdiagFirstRestOkMs = lastApiMs;
+                Serial_printf(F("[NETDIAG] first REST OK wall_ms=%lu\n"), (unsigned long)s_netdiagFirstRestOkMs);
+            }
             
             prices[0] = fetched;
             
@@ -9136,6 +9387,53 @@ static void logBootStage(const char* stage)
     Serial_printf(F("[Boot] %s @%lu ms (+%lu)\n"), stage, sinceStart, sinceLast);
 }
 
+// Eén regel: compile-time BOOT_DIAG/NETDIAG2-flags (A/B-serial log).
+static void logBootDiagConfigOnce(void)
+{
+    static bool s_logged = false;
+    if (s_logged) {
+        return;
+    }
+    s_logged = true;
+    // Direct Serial.printf: blijft zichtbaar ook bij DEBUG_BUTTON_ONLY (Serial_printf is daar een no-op).
+    Serial.printf(
+        "[BOOT_DIAG] config: mqtt=%s web=%s ntfy_startup=%s ws_boot=%s netdiag2=%s min_ui=%s\n",
+#if BOOT_DIAG_DISABLE_MQTT_START
+        "off",
+#else
+        "on",
+#endif
+#if BOOT_DIAG_DISABLE_WEB_TASK
+        "off",
+#else
+        "on",
+#endif
+#if BOOT_DIAG_DISABLE_NTFY_STARTUP_TEST
+        "off",
+#else
+        "on",
+#endif
+#if BOOT_DIAG_DISABLE_WS_BOOT_START
+        "off",
+#else
+        "on",
+#endif
+#if CRYPTO_ALERT_NETDIAG2_ENABLED
+        "on",
+#else
+        "off",
+#endif
+#if BOOT_DIAG_MINIMAL_UI_LOAD
+        "on"
+#else
+        "off"
+#endif
+    );
+#if BOOT_DIAG_MINIMAL_UI_LOAD
+    Serial.printf("[BOOT_DIAG] minimal UI load active\n");
+#endif
+}
+
 static void setupSerialAndDevice()
 {
     // ESP32-S3 fix: Serial moet als ALLER EERSTE worden geïnitialiseerd
@@ -9668,6 +9966,7 @@ static void startFreeRTOSTasks()
     );
 
     // Core 2: Web server (elke 5 seconden, maar server.handleClient() continu)
+#if !BOOT_DIAG_DISABLE_WEB_TASK
     xTaskCreatePinnedToCore(
         webTask,           // Task function
         "Web_Task",        // Task name
@@ -9677,6 +9976,9 @@ static void startFreeRTOSTasks()
         NULL,              // Task handle
         0                  // Core 0 (Arduino loop core)
     );
+#else
+    Serial.println(F("[BOOT_DIAG] Web_Task not started (BOOT_DIAG_DISABLE_WEB_TASK)"));
+#endif
 
     Serial.println("[FreeRTOS] Tasks gestart op Core 1 (API) en Core 0 (UI/Web)");
     
@@ -9688,6 +9990,7 @@ void setup()
 {
     // Setup in logical sections for better readability and maintainability
     setupSerialAndDevice();
+    logBootDiagConfigOnce();
     logBootStage("after serial+device");
     setupDisplay();
     logBootStage("after display");
@@ -9800,7 +10103,11 @@ void setup()
     logBootStage("after warmstart");
     
     // Diagnostiek: startup-NTFY-test na warmstart (no-op tenzij CRYPTO_ALERT_NTFY_DIAGNOSTICS_RUNTIME + STARTUP_TEST).
+#if !BOOT_DIAG_DISABLE_NTFY_STARTUP_TEST
     ntfyStartupTestIfEnabled();
+#else
+    Serial.println(F("[BOOT_DIAG] NTFY startup test skipped (BOOT_DIAG_DISABLE_NTFY_STARTUP_TEST)"));
+#endif
     
     // WS init wordt uitgesteld tot na de eerste succesvolle API-prijs
     
@@ -9820,10 +10127,18 @@ void setup()
     }
     logBootStage("after first render");
     
+    Serial_printf(
+        F("[NETDIAG2] milestone: before startFreeRTOSTasks lastApiMs=%lu firstRestOkMs=%lu\n"),
+        (unsigned long)lastApiMs,
+        (unsigned long)s_netdiagFirstRestOkMs);
     // Start FreeRTOS tasks NA buildUI() en NA warm-start
     // Warm-start heeft exclusieve toegang tijdens setup (geen race conditions mogelijk)
     startFreeRTOSTasks();
+    Serial.println(F("[NETDIAG2] milestone: after startFreeRTOSTasks"));
     logBootStage("after tasks");
+
+    s_bootFlowEpochMs = millis();
+    Serial_printf(F("[BOOTFLOW] network orchestration epoch wall_ms=%lu\n"), (unsigned long)s_bootFlowEpochMs);
 
     {
         const unsigned long t = millis();
@@ -10203,6 +10518,11 @@ void apiTask(void *parameter)
     static bool wsInitAttempted = false;
     for (;;)
     {
+        static bool s_apiFirstLoopMilestone = false;
+        if (!s_apiFirstLoopMilestone) {
+            s_apiFirstLoopMilestone = true;
+            Serial.println(F("[NETDIAG2] milestone: apiTask first loop"));
+        }
         uint32_t t0 = millis();
         
         // M1: Rate-limited heap telemetry in apiTask (elke 60s)
@@ -10213,10 +10533,14 @@ void apiTask(void *parameter)
         
         // Controleer WiFi status voordat we een request doet
         if (WiFi.status() == WL_CONNECTED) {
+            bootWsSelfHealIfStalled();
+            netDiag2MaybeRun();
             if (g_netExclusiveNtfyMode != NET_MODE_NORMAL) {
                 apiTaskNtfyExclusiveStateMachine();
             } else {
-                if (ntfyHasFlushablePendingForExclusive()) {
+                const bool ntfyWantExclusive = ntfyHasFlushablePendingForExclusive();
+                const bool ntfyBootBlocked = ntfyWantExclusive && bootShouldBlockNtfyExclusiveWs();
+                if (ntfyWantExclusive && !ntfyBootBlocked) {
                     Serial_println(F("[NTFY][EXCL] enter"));
                     if (ntfyExclusiveShouldSkipWsStopPhase()) {
                         g_netExclusiveNtfyMode = NET_MODE_NTFY_EXCLUSIVE_SENDING;
@@ -10228,10 +10552,29 @@ void apiTask(void *parameter)
                         wsStopForNtfyExclusive();
                     }
                 } else {
+                    if (ntfyBootBlocked) {
+                        static unsigned long s_lastNtfyBootBlockLogMs = 0;
+                        const unsigned long tLog = millis();
+                        if (tLog - s_lastNtfyBootBlockLogMs >= 8000UL) {
+                            s_lastNtfyBootBlockLogMs = tLog;
+                            Serial_println(
+                                F("[BOOTFLOW] NTFY exclusive WS-path deferred until first WS ticker (or boot timeout)"));
+                        }
+                    }
                     // Voer 1 API call uit (alleen buiten NTFY-exclusive slot)
                     fetchPrice();
 
                     // WS init pas na eerste succesvolle API-prijs (en warm-start klaar), en na boot-net gate (na MQTT-fase).
+#if BOOT_DIAG_DISABLE_WS_BOOT_START
+                    if (!wsInitAttempted && lastApiMs > 0) {
+                        static bool s_bootDiagWsSkipOnce = false;
+                        if (!s_bootDiagWsSkipOnce) {
+                            s_bootDiagWsSkipOnce = true;
+                            wsInitAttempted = true;
+                            Serial.println(F("[BOOT_DIAG] WS boot start skipped (BOOT_DIAG_DISABLE_WS_BOOT_START)"));
+                        }
+                    }
+#else
                     if (!wsInitAttempted && lastApiMs > 0) {
                         if (s_bootNetWsGateUntilMs != 0 && millis() < s_bootNetWsGateUntilMs) {
                             static bool s_bootNetWsHoldLogged = false;
@@ -10246,10 +10589,23 @@ void apiTask(void *parameter)
                                 Serial.println(F("[BootNet] WS start now"));
                                 s_bootNetWsGateUntilMs = 0;
                             }
+                            {
+                                static bool s_wsBootMilestone = false;
+                                if (!s_wsBootMilestone) {
+                                    s_wsBootMilestone = true;
+                                    Serial.println(F("[NETDIAG2] milestone: staged WS boot connect attempt"));
+                                }
+                            }
                             maybeInitWebSocketAfterWarmStart();
                             wsInitAttempted = true;
+                            if (s_bootStagedWsInitMs == 0) {
+                                s_bootStagedWsInitMs = millis();
+                                Serial_printf(F("[BOOTFLOW] staged WS start (owner=apiTask) wall_ms=%lu\n"),
+                                              (unsigned long)s_bootStagedWsInitMs);
+                            }
                         }
                     }
+#endif
                     updateLatestKlineMetricsIfNeeded();
 
                     // C1: Verwerk pending anchor setting (network-safe: gebeurt in apiTask waar HTTPS calls al zijn)
@@ -10348,9 +10704,11 @@ void uiTask(void *parameter)
 {
     TickType_t lastWakeTime = xTaskGetTickCount();
     const TickType_t frequency = pdMS_TO_TICKS(UPDATE_UI_INTERVAL);
+#if !BOOT_DIAG_MINIMAL_UI_LOAD
     // LVGL task handler: vaker aanroepen voor vloeiende rendering op ESP32-S3
     const TickType_t lvglFrequency = pdMS_TO_TICKS(3); // elke 3 ms
     TickType_t lastLvglTime = xTaskGetTickCount();
+#endif
     
     Serial.println("[UI Task] Gestart op Core 0");
     
@@ -10367,6 +10725,31 @@ void uiTask(void *parameter)
         // Apply deferred display rotation on UI core
         applyPendingDisplayRotation();
         
+#if BOOT_DIAG_MINIMAL_UI_LOAD
+        {
+            const unsigned long nowMs = millis();
+            static unsigned long s_diagLastLvglMs = 0;
+            static unsigned long s_diagLastUpdateUiMs = 0;
+            const unsigned long kDiagLvglMs = 3000UL;
+            const unsigned long kDiagUpdateUiMs = 12000UL;
+
+            if (nowMs - s_diagLastLvglMs >= kDiagLvglMs) {
+                s_diagLastLvglMs = nowMs;
+                lv_task_handler();
+            }
+
+            const TickType_t mutexTimeout = pdMS_TO_TICKS(50);
+            if (dataMutex == nullptr || xSemaphoreTake(dataMutex, 0) == pdTRUE) {
+                if (dataMutex != nullptr) {
+                    xSemaphoreGive(dataMutex);
+                }
+                if (nowMs - s_diagLastUpdateUiMs >= kDiagUpdateUiMs) {
+                    s_diagLastUpdateUiMs = nowMs;
+                    uiController.updateUI();
+                }
+            }
+        }
+#else
         // Roep LVGL task handler regelmatig aan om IDLE task tijd te geven
         TickType_t currentTime = xTaskGetTickCount();
         if ((currentTime - lastLvglTime) >= lvglFrequency) {
@@ -10388,6 +10771,7 @@ void uiTask(void *parameter)
             // Fase 8.8.1: Gebruik module versie (parallel - oude functie blijft bestaan)
             uiController.updateUI();
         }
+#endif
         
         // Meet CPU usage: bereken tijd die deze task gebruikt
         unsigned long taskTime = millis() - taskStartTime;
@@ -10428,12 +10812,30 @@ void uiTask(void *parameter)
 #define WEB_TASK_STACK_LOG 0
 #endif
 
-// FreeRTOS Task: Web server op Core 0 (server.handleClient() continu, data update elke 5 seconden)
+// --- webTask: handleClient-scheduler (JC3248W535 WAN-stabiliteit) — lokaal, geen platform_config ---
+// Effectieve min. interval tussen handleClient(): idle ≥1000 ms, burst =625 ms (diagnose: <625 ms instabiel).
+#ifndef WEB_TASK_WAKE_MS
+#define WEB_TASK_WAKE_MS 200
+#endif
+#ifndef WEB_HANDLE_IDLE_MS
+#define WEB_HANDLE_IDLE_MS 1000
+#endif
+#ifndef WEB_HANDLE_BURST_MS
+#define WEB_HANDLE_BURST_MS 625
+#endif
+#ifndef WEB_ACTIVITY_BURST_HOLD_MS
+#define WEB_ACTIVITY_BURST_HOLD_MS 5000
+#endif
+// 1 = alleen [WEB_HC] IDLE↔BURST bij moduswissel (geen spam)
+#ifndef CRYPTO_ALERT_WEB_HANDLECLIENT_MODE_LOG
+#define CRYPTO_ALERT_WEB_HANDLECLIENT_MODE_LOG 0
+#endif
+
+// FreeRTOS Task: Web server op Core 0 — zie WEB_TASK_WAKE_MS / WEB_HANDLE_* hierboven
 void webTask(void *parameter)
 {
     TickType_t lastWakeTime = xTaskGetTickCount();
-    const TickType_t frequency = pdMS_TO_TICKS(100); // Server handle elke 100ms voor responsiviteit
-    
+
     Serial.println("[Web Task] Gestart op Core 0");
 #if WEB_TASK_STACK_LOG
     Serial.printf("[STACK][Web] HWM=%u bytes (task start)\n",
@@ -10445,7 +10847,8 @@ void webTask(void *parameter)
         Serial.println("[Web Task] Wachten op WiFi verbinding...");
         vTaskDelay(pdMS_TO_TICKS(1000)); // Wacht 1 seconde
     }
-    
+    lastWakeTime = xTaskGetTickCount();
+
     Serial.println("[Web Task] WiFi verbonden, start web server");
     // setupWebServer() draait al in setup() (wifiConnectionAndFetchPrice); deze HWM is vóór eerste handleClient()
 #if WEB_TASK_STACK_LOG
@@ -10461,10 +10864,65 @@ void webTask(void *parameter)
 
     for (;;)
     {
+        const bool wifiOk = (WiFi.status() == WL_CONNECTED);
+        bool inBurst = false;
+        const unsigned long nowLoop = millis();
+        if (wifiOk) {
+            const uint32_t lastAct = webServerModule.getLastWebActivityMs();
+            inBurst = (lastAct != 0u) &&
+                      ((nowLoop - (unsigned long)lastAct) < (unsigned long)WEB_ACTIVITY_BURST_HOLD_MS);
+        }
+
         // Handle web server requests alleen als WiFi verbonden is
         // Fase 9.1.2: Gebruik module versie
-        if (WiFi.status() == WL_CONNECTED) {
-            webServerModule.handleClient();
+        if (wifiOk) {
+#if BOOT_DIAG_WEBTASK_HANDLECLIENT_INTERVAL_MS > 0
+            static unsigned long s_lastWebHandleClientMs = 0;
+            static bool s_webHandleIntervalLogged = false;
+            const unsigned long hcIv = (unsigned long)BOOT_DIAG_WEBTASK_HANDLECLIENT_INTERVAL_MS;
+            if (!s_webHandleIntervalLogged) {
+                s_webHandleIntervalLogged = true;
+                Serial.printf("[BOOT_DIAG] webTask handleClient interval=%lums\n", hcIv);
+            }
+            {
+                const unsigned long nowHc = millis();
+                if (s_lastWebHandleClientMs == 0UL ||
+                    (nowHc - s_lastWebHandleClientMs) >= hcIv) {
+                    s_lastWebHandleClientMs = nowHc;
+                    webServerModule.handleClient();
+                }
+            }
+#elif BOOT_DIAG_WEBTASK_SKIP_HANDLECLIENT
+            static bool s_skipHandleClientLogged = false;
+            if (!s_skipHandleClientLogged) {
+                s_skipHandleClientLogged = true;
+                Serial.println(F("[BOOT_DIAG] webTask skipping handleClient"));
+            }
+#else
+            {
+                const unsigned long minIv = inBurst
+                    ? (unsigned long)WEB_HANDLE_BURST_MS
+                    : (unsigned long)WEB_HANDLE_IDLE_MS;
+                static unsigned long s_lastProdHandleClientMs = 0;
+                const unsigned long nowHc = millis();
+                if (s_lastProdHandleClientMs == 0UL ||
+                    (nowHc - s_lastProdHandleClientMs) >= minIv) {
+                    s_lastProdHandleClientMs = nowHc;
+                    webServerModule.handleClient();
+                }
+#if CRYPTO_ALERT_WEB_HANDLECLIENT_MODE_LOG
+                static bool s_webHcWasBurst = false;
+                if (inBurst != s_webHcWasBurst) {
+                    if (inBurst) {
+                        Serial.println(F("[WEB_HC] BURST"));
+                    } else {
+                        Serial.println(F("[WEB_HC] IDLE"));
+                    }
+                    s_webHcWasBurst = inBurst;
+                }
+#endif
+            }
+#endif
 #if WEB_TASK_STACK_LOG
             if (!s_loggedHwmAfterFirstHandle) {
                 s_loggedHwmAfterFirstHandle = true;
@@ -10478,6 +10936,7 @@ void webTask(void *parameter)
             while (WiFi.status() != WL_CONNECTED) {
                 vTaskDelay(pdMS_TO_TICKS(1000)); // Wacht 1 seconde
             }
+            lastWakeTime = xTaskGetTickCount();
             Serial.println("[Web Task] WiFi weer verbonden");
         }
 
@@ -10491,8 +10950,13 @@ void webTask(void *parameter)
             }
         }
 #endif
-        
-        vTaskDelayUntil(&lastWakeTime, frequency);
+
+#if BOOT_DIAG_WEBTASK_HANDLECLIENT_INTERVAL_MS > 0 || BOOT_DIAG_WEBTASK_SKIP_HANDLECLIENT
+        const TickType_t periodTicks = pdMS_TO_TICKS(100);
+#else
+        const TickType_t periodTicks = pdMS_TO_TICKS(WEB_TASK_WAKE_MS);
+#endif
+        vTaskDelayUntil(&lastWakeTime, periodTicks);
     }
 }
 

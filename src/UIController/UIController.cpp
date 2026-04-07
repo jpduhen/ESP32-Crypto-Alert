@@ -229,6 +229,8 @@ extern char price2HDiffLabelBuffer[24];
 extern char price30MinMinLabelBuffer[24];
 extern char price30MinDiffLabelBuffer[32];
 extern char bitvavoSymbol[16];
+extern char chartColorMode[8];
+extern char chartColorManual[16];
 extern float lastPrice1MinMaxValue;
 extern float lastPrice1MinMinValue;
 extern float lastPrice1MinDiffValue;
@@ -510,9 +512,50 @@ static lv_color_t getChartAssetColor()
     return lv_palette_lighten(LV_PALETTE_GREY, 2);
 }
 
+// Alleen voor grafieklijn/punten bij chartColorMode == manual
+static lv_color_t lvColorFromManualChartKey(const char* key)
+{
+    if (key == nullptr || key[0] == '\0') {
+        return lv_palette_main(LV_PALETTE_ORANGE);
+    }
+    if (strcmp(key, "orange") == 0) {
+        return lv_palette_main(LV_PALETTE_ORANGE);
+    }
+    if (strcmp(key, "purple") == 0) {
+        return lv_palette_main(LV_PALETTE_PURPLE);
+    }
+    if (strcmp(key, "yellow") == 0) {
+        return lv_palette_main(LV_PALETTE_YELLOW);
+    }
+    if (strcmp(key, "red") == 0) {
+        return lv_palette_main(LV_PALETTE_RED);
+    }
+    if (strcmp(key, "cyan") == 0) {
+        return lv_palette_main(LV_PALETTE_CYAN);
+    }
+    if (strcmp(key, "blue") == 0) {
+        return lv_palette_main(LV_PALETTE_BLUE);
+    }
+    if (strcmp(key, "green") == 0) {
+        return lv_palette_main(LV_PALETTE_GREEN);
+    }
+    if (strcmp(key, "white") == 0) {
+        return lv_color_white();
+    }
+    return lv_palette_main(LV_PALETTE_ORANGE);
+}
+
+static lv_color_t getEffectiveChartSeriesColor()
+{
+    if (chartColorMode[0] != '\0' && strcmp(chartColorMode, "manual") == 0) {
+        return lvColorFromManualChartKey(chartColorManual);
+    }
+    return getChartAssetColor();
+}
+
 static lv_color_t getChartSeriesLineColor()
 {
-    return getChartAssetColor();
+    return getEffectiveChartSeriesColor();
 }
 
 static const char* getQuoteHexColor()
@@ -2713,15 +2756,30 @@ void UIController::updatePriceCardColor(uint8_t index, float pct)
 // Helper functie om chart section bij te werken
 void UIController::updateChartSection(int32_t currentPrice, bool hasNewPriceData, float refPriceEur)
 {
-    // Vernieuw kleuren als markt (symbool) wijzigt: chart op BASE, header/hoofdprijs op quote-accent
+    // Chartserie: effectieve kleur bij symbool- of chart-instellingwijziging; quote-accent alleen bij symboolwijziging
     static char lastBitvavoSymbol[24] = {0};
-    if (strncmp(bitvavoSymbol, lastBitvavoSymbol, sizeof(lastBitvavoSymbol)) != 0) {
+    static char lastChartMode[8] = {0};
+    static char lastChartManual[16] = {0};
+    const bool symbolChanged = (strncmp(bitvavoSymbol, lastBitvavoSymbol, sizeof(lastBitvavoSymbol)) != 0);
+    const bool chartModeChanged = (strncmp(chartColorMode, lastChartMode, sizeof(lastChartMode)) != 0);
+    const bool chartManualChanged = (strncmp(chartColorManual, lastChartManual, sizeof(lastChartManual)) != 0);
+    if (symbolChanged || chartModeChanged || chartManualChanged) {
         lv_chart_set_series_color(::chart, ::dataSeries, getChartSeriesLineColor());
+        lv_obj_invalidate(::chart);
+    }
+    if (symbolChanged) {
         applyChartHeaderFooterColors(getQuoteAccentColor());
         applyBtcEurBoxColors(getQuoteAccentColor());
         setBtcTitleLabel();
-        lv_obj_invalidate(::chart);
+    }
+    if (symbolChanged) {
         safeStrncpy(lastBitvavoSymbol, bitvavoSymbol, sizeof(lastBitvavoSymbol));
+    }
+    if (chartModeChanged) {
+        safeStrncpy(lastChartMode, chartColorMode, sizeof(lastChartMode));
+    }
+    if (chartManualChanged) {
+        safeStrncpy(lastChartManual, chartColorManual, sizeof(lastChartManual));
     }
 
     // Fase 8.7.1: Gebruik globale pointers (synchroniseert met module pointers)

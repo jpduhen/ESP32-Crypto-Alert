@@ -129,7 +129,9 @@ struct CryptoMonitorSettings {
     char bitvavoSymbol[16];  // Bitvavo market (bijv. "BTC-EUR")
     uint8_t language;
     uint8_t displayRotation;  // Display rotatie: 0 = normaal, 2 = 180 graden gedraaid
-    
+    char chartColorMode[8];   // "auto" | "manual" — alleen grafieklijn/punten
+    char chartColorManual[16]; // orange|purple|yellow|red|cyan|blue|green|white
+
     // Alert thresholds
     AlertThresholds alertThresholds;
     
@@ -264,6 +266,8 @@ private:
     static const char* PREF_KEY_BITVAVO_SYMBOL;
     static const char* PREF_KEY_LANGUAGE;
     static const char* PREF_KEY_DISPLAY_ROTATION;
+    static const char* PREF_KEY_CHART_COLOR_MODE;
+    static const char* PREF_KEY_CHART_COLOR_MANUAL;
     static const char* PREF_KEY_TH1_UP;
     static const char* PREF_KEY_TH1_DOWN;
     static const char* PREF_KEY_TH30_UP;

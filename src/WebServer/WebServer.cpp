@@ -52,6 +52,8 @@ extern char ntfyTopic[];
 extern char bitvavoSymbol[];  // Bitvavo market (bijv. "BTC-EUR")
 extern uint8_t language;
 extern uint8_t displayRotation;
+extern char chartColorMode[8];
+extern char chartColorManual[16];
 extern char mqttHost[];
 extern char mqttUser[];
 extern char mqttPass[];
@@ -185,6 +187,17 @@ extern bool getNotificationLogEntry(uint8_t index,
                                     char *colorTagOut, size_t colorTagSize,
                                     uint32_t *timeMsOut,
                                     uint8_t *sentOut);
+
+// Productie webTask: laatste door handler gemarkeerde webactiviteit (millis).
+static uint32_t s_lastWebActivityMs = 0;
+
+void WebServerModule::notifyWebActivity() {
+    s_lastWebActivityMs = millis();
+}
+
+uint32_t WebServerModule::getLastWebActivityMs() {
+    return s_lastWebActivityMs;
+}
 
 // WEB-PERF-3: Externe variabelen voor /status endpoint
 extern float ret_2h;  // 2-hour return (globaal in ESP32-Crypto-Alert.ino)
@@ -335,33 +348,63 @@ void WebServerModule::setupWebServer() {
     server = &::server;
     
     Serial.println(F("[WebServer] Routes registreren..."));
-    server->on("/", [this]() { this->handleRoot(); });
+    server->on("/", [this]() {
+        notifyWebActivity();
+        this->handleRoot();
+    });
     Serial.println("[WebServer] Route '/' geregistreerd");
-    server->on("/save", HTTP_POST, [this]() { this->handleSave(); });
+    server->on("/save", HTTP_POST, [this]() {
+        notifyWebActivity();
+        this->handleSave();
+    });
     Serial.println(F("[WebServer] Route '/save' geregistreerd"));
-    server->on("/anchor/set", HTTP_POST, [this]() { this->handleAnchorSet(); });
+    server->on("/anchor/set", HTTP_POST, [this]() {
+        notifyWebActivity();
+        this->handleAnchorSet();
+    });
     Serial.println("[WebServer] Route '/anchor/set' geregistreerd");
-    server->on("/ntfy/reset", HTTP_POST, [this]() { this->handleNtfyReset(); });
+    server->on("/ntfy/reset", HTTP_POST, [this]() {
+        notifyWebActivity();
+        this->handleNtfyReset();
+    });
     Serial.println(F("[WebServer] Route '/ntfy/reset' geregistreerd"));
-    server->on("/wifi/reset", HTTP_POST, [this]() { this->handleWifiReset(); });
+    server->on("/wifi/reset", HTTP_POST, [this]() {
+        notifyWebActivity();
+        this->handleWifiReset();
+    });
     Serial.println(F("[WebServer] Route '/wifi/reset' geregistreerd"));
-    server->on("/status", HTTP_GET, [this]() { this->handleStatus(); });  // WEB-PERF-3: Status endpoint
+    server->on("/status", HTTP_GET, [this]() {
+        notifyWebActivity();
+        this->handleStatus();
+    });  // WEB-PERF-3: Status endpoint
     Serial.println(F("[WebServer] Route '/status' geregistreerd"));
     // Read-only plain-text settings export (voor copy/paste)
-    server->on("/settings.txt", HTTP_GET, [this]() { this->handleSettingsExport(); });
+    server->on("/settings.txt", HTTP_GET, [this]() {
+        notifyWebActivity();
+        this->handleSettingsExport();
+    });
     Serial.println(F("[WebServer] Route '/settings.txt' geregistreerd"));
     // Read-only notification log page
-    server->on("/notifications", HTTP_GET, [this]() { this->handleNotifications(); });
+    server->on("/notifications", HTTP_GET, [this]() {
+        notifyWebActivity();
+        this->handleNotifications();
+    });
     Serial.println(F("[WebServer] Route '/notifications' geregistreerd"));
-    server->on("/config", HTTP_GET, [this]() { this->handleConfigView(); });
+    server->on("/config", HTTP_GET, [this]() {
+        notifyWebActivity();
+        this->handleConfigView();
+    });
     Serial.println(F("[WebServer] Route '/config' geregistreerd (read-only)"));
 #if OTA_ENABLED
-    // Web-based OTA firmware update (chunked upload) - extracted to module
+    // Web-based OTA firmware update (chunked upload) — routes in OtaWebUpdater; geen notifyWebActivity in deze stap
     otaWebUpdater.begin(server);
     otaWebUpdater.registerRoutes(server);
     Serial.println(F("[WebServer] Routes /update, /update/start, /update/chunk, /update/end (chunked OTA)"));
 #endif
-    server->onNotFound([this]() { this->handleNotFound(); }); // 404 handler
+    server->onNotFound([this]() {
+        notifyWebActivity();
+        this->handleNotFound();
+    }); // 404 handler
     Serial.println(F("[WebServer] 404 handler geregistreerd"));
     server->begin();
     Serial.println("[WebServer] Server gestart");
@@ -556,6 +599,36 @@ void WebServerModule::renderSettingsHTML() {
                  (displayRotation == 2) ? "2" : "0", 
                  getText("0 = normaal, 2 = 180 graden gedraaid", "0 = normal, 2 = rotated 180 degrees"), 0, 2, 2);
     
+    sendSectionFooter();
+
+    // Display / UI — grafiekkleur (alleen lijn/punten; quote-accent blijft EUR-blauw / USDC-groen)
+    sendSectionHeader(getText("Display / UI / Weergave", "Display / UI / Appearance"), "display", false);
+    sendSectionDesc(getText("Weergave van de prijsgrafiek (lijn en punten). Quote-kleuren (EUR/USDC) en overige UI blijven ongewijzigd.",
+                            "Price chart line and points only. Quote accents (EUR/USDC) and other UI are unchanged."));
+    {
+        const char* modeVals[] = {"auto", "manual"};
+        const char* modeLabels[] = {
+            getText("Auto", "Auto"),
+            getText("Handmatig", "Manual")
+        };
+        sendStringSelectRow(getText("Grafiekkleur modus", "Chart color mode"), "chartColorMode",
+                            chartColorMode, modeVals, modeLabels, 2);
+        const char* colorVals[] = {
+            "orange", "purple", "yellow", "red", "cyan", "blue", "green", "white"
+        };
+        const char* colorLabels[] = {
+            getText("Oranje", "Orange"),
+            getText("Paars", "Purple"),
+            getText("Geel", "Yellow"),
+            getText("Rood", "Red"),
+            getText("Cyaan", "Cyan"),
+            getText("Blauw", "Blue"),
+            getText("Groen", "Green"),
+            getText("Wit", "White")
+        };
+        sendStringSelectRow(getText("Grafiekkleur", "Chart color"), "chartColorManual",
+                            chartColorManual, colorVals, colorLabels, 8);
+    }
     sendSectionFooter();
     
     // Anchor & Risicokader sectie
@@ -1566,6 +1639,35 @@ void WebServerModule::renderConfigReadOnlyHTML() {
         sendStatusRow(getText("Display Rotatie", "Display Rotation"), valueBuf);
         sendSectionFooter();
 
+        sendSectionHeader(getText("Display / UI / Weergave", "Display / UI / Appearance"), "display", true);
+        sendSectionDesc(getText("Weergave van de prijsgrafiek (lijn en punten).",
+                                "Price chart line and points."));
+        {
+            const bool manualMode = (strcmp(chartColorMode, "manual") == 0);
+            sendStatusRow(getText("Grafiekkleur modus", "Chart color mode"),
+                          manualMode ? getText("Handmatig", "Manual") : getText("Auto", "Auto"));
+            const char* manualLabel = chartColorManual;
+            if (strcmp(chartColorManual, "orange") == 0) {
+                manualLabel = getText("Oranje", "Orange");
+            } else if (strcmp(chartColorManual, "purple") == 0) {
+                manualLabel = getText("Paars", "Purple");
+            } else if (strcmp(chartColorManual, "yellow") == 0) {
+                manualLabel = getText("Geel", "Yellow");
+            } else if (strcmp(chartColorManual, "red") == 0) {
+                manualLabel = getText("Rood", "Red");
+            } else if (strcmp(chartColorManual, "cyan") == 0) {
+                manualLabel = getText("Cyaan", "Cyan");
+            } else if (strcmp(chartColorManual, "blue") == 0) {
+                manualLabel = getText("Blauw", "Blue");
+            } else if (strcmp(chartColorManual, "green") == 0) {
+                manualLabel = getText("Groen", "Green");
+            } else if (strcmp(chartColorManual, "white") == 0) {
+                manualLabel = getText("Wit", "White");
+            }
+            sendStatusRow(getText("Grafiekkleur (handmatige keuze)", "Chart color (manual choice)"), manualLabel);
+        }
+        sendSectionFooter();
+
         sendSectionHeader(getText("Anchor & Risicokader", "Anchor & Risk Framework"), "anchor", true);
         sendSectionDesc(getText("Anchor prijs instellingen en risicobeheer", "Anchor price settings and risk management"));
         sendStatusRow(getText("2h/2h Strategie", "2h/2h Strategy"), strategyOptionsRo[stratIdx]);
@@ -1879,7 +1981,7 @@ void WebServerModule::handleRoot() {
     if (server == nullptr) {
         return;
     }
-    
+
     // M1: Rate-limited heap telemetry in web server (alleen bij "/")
     logHeap("WEB_ROOT");
     
@@ -1910,6 +2012,27 @@ void WebServerModule::handleSave() {
         if (rotVal == 0 || rotVal == 2) {
             displayRotation = static_cast<uint8_t>(rotVal);
             requestDisplayRotation(displayRotation);
+        }
+    }
+
+    if (server->hasArg("chartColorMode")) {
+        String m = server->arg("chartColorMode");
+        if (m == "manual") {
+            safeStrncpy(chartColorMode, "manual", sizeof(chartColorMode));
+        } else {
+            safeStrncpy(chartColorMode, "auto", sizeof(chartColorMode));
+        }
+    }
+    if (server->hasArg("chartColorManual")) {
+        String c = server->arg("chartColorManual");
+        static const char* const allowed[] = {
+            "orange", "purple", "yellow", "red", "cyan", "blue", "green", "white"
+        };
+        for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++) {
+            if (c == allowed[i]) {
+                safeStrncpy(chartColorManual, allowed[i], sizeof(chartColorManual));
+                break;
+            }
         }
     }
     
@@ -2401,6 +2524,9 @@ void WebServerModule::handleSave() {
     }
     
     saveSettings();
+
+    // WEB-PERF-3: Invalideer cache zodat volgende GET / actuele velden toont (o.a. display/chart)
+    invalidatePageCache();
     
     // Herconnect MQTT als instellingen zijn gewijzigd
     requestMqttReconnect();
@@ -2630,7 +2756,11 @@ void WebServerModule::handleSettingsExport() {
     server->sendContent(line);
     snprintf(line, sizeof(line), "language: %u\n", static_cast<unsigned>(language));
     server->sendContent(line);
-    snprintf(line, sizeof(line), "displayRotation: %u\n\n", static_cast<unsigned>(displayRotation));
+    snprintf(line, sizeof(line), "displayRotation: %u\n", static_cast<unsigned>(displayRotation));
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "chartColorMode: %s\n", chartColorMode);
+    server->sendContent(line);
+    snprintf(line, sizeof(line), "chartColorManual: %s\n\n", chartColorManual);
     server->sendContent(line);
 
     server->sendContent("[anchor]\n");
@@ -3174,7 +3304,7 @@ void WebServerModule::handleUpdateEnd() { (void)0; }
 // WEB-PERF-3: Status endpoint - JSON met live waarden (geen heap-allocaties)
 void WebServerModule::handleStatus() {
     if (server == nullptr) return;
-    
+
     #if !DEBUG_BUTTON_ONLY
     unsigned long statusStart = millis();
     #endif
@@ -3818,6 +3948,25 @@ void WebServerModule::sendDropdownRow(const char* label, const char* name, int v
         char buf[128];
         snprintf(buf, sizeof(buf), "<option value=\"%d\"%s>%s</option>",
                  i, (i == value) ? " selected" : "", options[i]);
+        server->sendContent(buf);
+    }
+    server->sendContent("</select></td></tr>");
+}
+
+void WebServerModule::sendStringSelectRow(const char* label, const char* name, const char* currentValue,
+                                          const char* const optionValues[], const char* const optionLabels[], int optionCount) {
+    if (server == nullptr) return;
+    server->sendContent("<tr><td>");
+    server->sendContent(label);
+    server->sendContent(":</td><td><select name=\"");
+    server->sendContent(name);
+    server->sendContent("\">");
+    for (int i = 0; i < optionCount; i++) {
+        char buf[192];
+        snprintf(buf, sizeof(buf), "<option value=\"%s\"%s>%s</option>",
+                 optionValues[i],
+                 (currentValue != nullptr && strcmp(currentValue, optionValues[i]) == 0) ? " selected" : "",
+                 optionLabels[i]);
         server->sendContent(buf);
     }
     server->sendContent("</select></td></tr>");

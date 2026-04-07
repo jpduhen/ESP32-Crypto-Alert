@@ -49,7 +49,11 @@ public:
     
     // Handler voor webTask (blijft in .ino, maar kan module method aanroepen)
     void handleClient();
-    
+
+    // Productie webTask: markeer recente HTTP-activiteit (idle → burst polling in webTask).
+    static void notifyWebActivity();
+    static uint32_t getLastWebActivityMs();
+
 private:
     // Fase 9.1.3: HTML helper functies
     void sendHtmlHeader(const char* platformName, const char* ntfyTopic);
@@ -58,6 +62,8 @@ private:
                      const char* placeholder, float minVal = 0, float maxVal = 0, float step = 0);
     void sendCheckboxRow(const char* label, const char* name, bool checked);
     void sendDropdownRow(const char* label, const char* name, int value, const char* options[], int optionCount);
+    void sendStringSelectRow(const char* label, const char* name, const char* currentValue,
+                            const char* const optionValues[], const char* const optionLabels[], int optionCount);
     void sendStatusRow(const char* label, const char* value);
     void sendSectionHeader(const char* title, const char* sectionId, bool expanded = false);
     void sendSectionFooter();
