@@ -1,5 +1,7 @@
 # Functionele inventarisatie V1 (kort)
 
+**V2-traject:** het leidende werkdocument is [../architecture/V2_WORKDOCUMENT_MASTER.md](../architecture/V2_WORKDOCUMENT_MASTER.md).
+
 Gebaseerd op `README.md`, `ESP32-Crypto-Alert.ino`, `platform_config.h`, `docs/CODE_INDEX.md`, `docs/CODE_ANALYSIS.md` en module-mappen onder `src/`.  
 **Let op:** `CODE_INDEX.md` vermeldt nog op sommige plekken “Binance”; de actieve integratie is **Bitvavo** (`BITVAVO_API_BASE` in de `.ino`). Dat is een **documentatie-inconsistentie** in V1.
 

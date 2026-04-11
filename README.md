@@ -65,6 +65,8 @@ The complete English user guide is split into separate chapters for better reada
 
 A controlled rebuild (documentation layout, migration notes, `firmware-v2/` placeholder) is tracked on branch [**`v2/foundation`**](https://github.com/jpduhen/ESP32-Crypto-Alert/tree/v2/foundation). Production-ready firmware remains on **`main`** until V2 matures.
 
+**Formal V2 project status (decisions, priorities, backlog):** [docs/architecture/V2_WORKDOCUMENT_MASTER.md](docs/architecture/V2_WORKDOCUMENT_MASTER.md).
+
 ## Quick Start
 1. Choose a compatible board (e.g., Cheap Yellow Display).
 2. Follow [Chapter 4: Installation](docs/04-Installation.md).

@@ -1,5 +1,7 @@
 # Uitgangspunten V2-herbouw
 
+**Leidend overzicht traject:** [V2_WORKDOCUMENT_MASTER.md](V2_WORKDOCUMENT_MASTER.md) — status, besluiten en prioriteiten. Dit document beschrijft de uitgebreide uitgangspunten en randvoorwaarden.
+
 **Status:** concept — vastgelegd in de voorbereidingsfase van V2.  
 **Referentie V1:** huidige Arduino/ESP32-build in repo-root en `src/`.
 

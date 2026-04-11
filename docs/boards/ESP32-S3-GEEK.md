@@ -1,5 +1,7 @@
 # ESP32-S3 GEEK — referentieboard V2
 
+**V2-traject:** [../architecture/V2_WORKDOCUMENT_MASTER.md](../architecture/V2_WORKDOCUMENT_MASTER.md).
+
 **Rol:** eerste doelhardware voor de V2-herbouw (afspraak in voorbereidingsfase).  
 **V1-referentie in repo:** `PINS_ESP32S3_GEEK_ST7789_114.h`, selectie via `#define PLATFORM_ESP32S3_GEEK` in `platform_config.h` (standaard staat in upstream vaak een ander board actief).
 

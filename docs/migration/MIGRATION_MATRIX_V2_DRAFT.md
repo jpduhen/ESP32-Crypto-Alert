@@ -1,5 +1,7 @@
 # Migratiematrix V2 — concept (draft)
 
+**V2-traject:** status en besluiten staan in [../architecture/V2_WORKDOCUMENT_MASTER.md](../architecture/V2_WORKDOCUMENT_MASTER.md). Deze matrix is een levend hulpmiddel en volgt de prioriteiten uit dat document.
+
 **Doel:** eerste onderbouw voor besluitvorming. Geen vast contract.  
 **Legenda status:** *Behouden* = concept/logica waardevol; *Herschrijven* = opnieuw in V2 (andere HAL/build); *Schrappen* = verwacht geen rechtstreekse port; *Nader beoordelen* = afhankelijk van scope/risico.
 

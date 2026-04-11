@@ -2,6 +2,8 @@
 
 Deze map is de geplande plek voor de **nieuwe firmware** tijdens de gecontroleerde V2-herbouw. V1 blijft in de repo-root (`ESP32-Crypto-Alert.ino`, `src/`, `platform_config.h`) de functionele referentie.
 
+**Projectstatus V2:** [docs/architecture/V2_WORKDOCUMENT_MASTER.md](../docs/architecture/V2_WORKDOCUMENT_MASTER.md).
+
 ## Richting
 
 - **Voorkeur:** ESP-IDF als bouwsysteem voor productierijpheid, componenten en tooling.
@@ -28,4 +30,4 @@ De map `main/` is nu voorbereid met een placeholder (`.gitkeep`) zodat de struct
 ## Relatie met V1
 
 - Domeinlogica (alerts, metrics, warm start, enz.) wordt **conceptueel** hergebruikt of opnieuw gemodelleerd; **geen copy-paste-migratie** zonder review.
-- Zie ook: `docs/migration/` en `docs/architecture/`.
+- Zie ook: `docs/migration/` en `docs/architecture/` (status: zie link bovenaan dit bestand).
