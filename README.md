@@ -61,6 +61,10 @@ The complete English user guide is split into separate chapters for better reada
 - [NTFY / WS cleanup tracker](docs/ntfy_ws_cleanup_tracker.md) — productie delivery path, diagnostics flags, phased cleanup (Fase 1–4 closed as of 2026-03-27).
 - **Regime Engine (v1):** `src/RegimeEngine/` — regime snapshot for UI/settings; see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+### Firmware V2 (preparation)
+
+A controlled rebuild (documentation layout, migration notes, `firmware-v2/` placeholder) is tracked on branch [**`v2/foundation`**](https://github.com/jpduhen/ESP32-Crypto-Alert/tree/v2/foundation). Production-ready firmware remains on **`main`** until V2 matures.
+
 ## Quick Start
 1. Choose a compatible board (e.g., Cheap Yellow Display).
 2. Follow [Chapter 4: Installation](docs/04-Installation.md).
