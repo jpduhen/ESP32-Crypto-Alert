@@ -1,0 +1,25 @@
+# Standaard voor eerste referentieboard: ESP32-S3 (o.a. ESP32-S3 GEEK).
+# ESP-IDF baseline: v5.4.2 (zie ESP_IDF_VERSION en BUILD.md).
+# Build: idf.py set-target esp32s3 && idf.py build
+# (Target staat in sdkconfig na set-target — niet hard forceren in defaults.)
+
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_FREERTOS_HZ=1000
+
+# Main draait app_core::run() → market_data::tick() met HTTPS (esp_http_client + mbedTLS).
+# 3584 was te klein: stack overflow na STA_GOT_IP bij eerste Bitvavo REST/WS.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# T-103: HTTPS naar api.bitvavo.com / wss (TLS bundle)
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+
+# SoftAP onboarding: mobiele browsers sturen vaak >512 B aan HTTP-headers (431 zonder deze verhoging)
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048
+
+# S3-GEEK: fysiek 16 MB flash — align met partition table (geen 2 MB header-cap)
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+
+# V2: dual OTA, 3 MiB per app-slot — zie partitions_v2_16mb_ota.csv + docs/flash/PARTITIONS_V2.md
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_v2_16mb_ota.csv"

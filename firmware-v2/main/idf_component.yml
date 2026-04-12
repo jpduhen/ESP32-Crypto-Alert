@@ -1,0 +1,3 @@
+## Managed dependencies — LVGL op de bestaande esp_lcd-route (ADR-004).
+dependencies:
+  espressif/esp_lvgl_port: "^2.5.0"

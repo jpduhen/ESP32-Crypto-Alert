@@ -61,9 +61,11 @@ De volledige Nederlandstalige handleiding is onderverdeeld in aparte hoofdstukke
 
 ### Firmware V2 (voorbereiding)
 
-Gecontroleerde herbouw: documentatie en `firmware-v2/`-placeholder op branch [**`v2/foundation`**](https://github.com/jpduhen/ESP32-Crypto-Alert/tree/v2/foundation). Productie-firmware blijft op **`main`**.
+Gecontroleerde herbouw: o.a. ESP-IDF-skeleton onder `firmware-v2/` op branch [**`v2/foundation`**](https://github.com/jpduhen/ESP32-Crypto-Alert/tree/v2/foundation). Productie-firmware blijft op **`main`**.
 
-**Formele V2-projectstatus (besluiten, prioriteiten, backlog):** [docs/architecture/V2_WORKDOCUMENT_MASTER.md](docs/architecture/V2_WORKDOCUMENT_MASTER.md).
+**Primaire V2-status (besluiten, prioriteiten, migratie):** [firmware-v2/v_2_herbouw_werkdocument_esp_32_crypto_alert.md](firmware-v2/v_2_herbouw_werkdocument_esp_32_crypto_alert.md).  
+**Governance-overzicht:** [docs/architecture/V2_WORKDOCUMENT_MASTER.md](docs/architecture/V2_WORKDOCUMENT_MASTER.md).  
+**V2-firmware bouwen (ESP-IDF v5.4.2):** [firmware-v2/BUILD.md](firmware-v2/BUILD.md) · [firmware-v2/README.md](firmware-v2/README.md).
 
 ## 🚀 Quick Start
 1. Kies een compatibel board (bijv. Cheap Yellow Display).

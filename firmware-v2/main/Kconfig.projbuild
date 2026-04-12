@@ -1,0 +1,28 @@
+menu "ESP32 Crypto Alert V2"
+
+    config MD_USE_EXCHANGE_BITVAVO
+        bool "Market data: Bitvavo exchange (REST+WS)"
+        default y
+        help
+            Zet uit voor mock-only feed (CI/offline zonder netwerk).
+
+    config NET_WIFI_STA_SSID
+        string "WiFi STA SSID (leeg = geen WiFi)"
+        default ""
+        help
+            Vereist voor live Bitvavo. Leeg laat WiFi uit (alleen net stack init).
+
+    config NET_WIFI_STA_PASS
+        string "WiFi STA password"
+        default ""
+        help
+            WPA2-PSK; leeg als open netwerk (niet aanbevolen).
+            Alleen fallback als NVS leeg is (ontwikkelaars); normaal: onboarding portal.
+
+    config WIFI_ONBOARDING_FORCE
+        bool "WiFi: wis NVS-credentials en start altijd provisioning (SoftAP)"
+        default n
+        help
+            Test/factory: bij boot worden wifi_ssid/wifi_pass gewist en opent de portal opnieuw.
+
+endmenu

@@ -1,0 +1,19 @@
+idf_component_register(
+    SRCS
+        "exchange_bitvavo.cpp"
+        "bitvavo_rest.cpp"
+        "bitvavo_ws.cpp"
+    INCLUDE_DIRS "include"
+    REQUIRES
+        esp_http_client
+        esp-tls
+        mbedtls
+        esp_netif
+        esp_event
+        esp_timer
+        freertos
+        esp_websocket_client
+        net_runtime
+        diagnostics
+        market_types
+)

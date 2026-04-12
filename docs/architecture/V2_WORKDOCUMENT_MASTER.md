@@ -1,8 +1,9 @@
-# V2 — leidend werkdocument (projectstatus)
+# V2 — werkdocument (governance & repo-overzicht)
 
-**Status:** actief — formele bron van waarheid voor het V2-traject in deze repository.  
-**Laatste inhoudelijke update:** 2026-04-11 (V2-voorbereiding en consolidatie documentatie).  
-**Branch voorbereiding:** [`v2/foundation`](https://github.com/jpduhen/ESP32-Crypto-Alert/tree/v2/foundation) (naast `main`).
+**Status:** actief — vastlegging van **governance**, **rollen** en **repo-overzicht** voor het V2-traject.  
+**Operationele status** (besluiten, prioriteiten, migratiematrix-stuur, ticketstatus): primair in [**firmware-v2/v_2_herbouw_werkdocument_esp_32_crypto_alert.md**](../../firmware-v2/v_2_herbouw_werkdocument_esp_32_crypto_alert.md) — bij spanning prevaleert dat document tot expliciete herziening hier.  
+**Laatste inhoudelijke update:** 2026-04-11 (hiërarchie docs / skeletonfase).  
+**Branch:** [`v2/foundation`](https://github.com/jpduhen/ESP32-Crypto-Alert/tree/v2/foundation).
 
 ---
 
@@ -10,10 +11,10 @@
 
 | Onderwerp | Stand |
 |-----------|--------|
-| V2-voorbereiding | **Gestart** — documentaire en organisatorische basis ligt in de repo. |
-| Branch | **`v2/foundation`** bestaat (lokaal en op GitHub); bevat o.a. `firmware-v2/`-placeholder en migratie-/architectuurdocs. |
-| Referentieboard | **ESP32-S3 GEEK** is het eerste referentieboard voor V2. |
-| Inventarisatie | Een eerste **functionele inventarisatie V1** en een **migratiematrix (draft)** zijn aanwezig (zie §7). |
+| V2-voorbereiding | **Gestart** — documentaire basis + **eerste ESP-IDF-skeleton** onder `firmware-v2/` (buildbaar met lokale ESP-IDF-toolchain). |
+| Branch | **`v2/foundation`** — o.a. `firmware-v2/` met componenten (zie [V2_SKELETON_NOTES.md](V2_SKELETON_NOTES.md)). |
+| Referentieboard | **ESP32-S3 GEEK** — eerste concrete BSP (`bsp_s3_geek`). |
+| Inventarisatie | Functionele inventarisatie V1 + migratiematrix (draft); skeleton mapped op matrix (zie skeletonnotities). |
 | V1 | Blijft de **functionele referentie** voor gedrag en features tot V2 dat expliciet vervangt. |
 
 ---
@@ -39,11 +40,11 @@ Deze besluiten zijn leidend tenzij ze in een latere revisie van dit document wor
 
 Wat nu het meeste aandacht vraagt binnen het V2-traject:
 
-1. **V1 formeel bevriezen als referentie** — geen grote functionele wijzigingen aan V1 zonder expliciete beslissing; wijzigingen alleen ter ondersteuning van vastgelegde releases of noodgevallen.
-2. **Migratiematrix aanscherpen en prioriteren** — draft uitbreiden met volgorde, risico’s en afhankelijkheden per blok; afstemmen met dit werkdocument.
-3. **V2-mapstructuur concretiseren** richting een **eerste uitvoerbare skeleton** (bijv. ESP-IDF-achtige layout onder `firmware-v2/`, zonder volledige feature-port in deze fase).
-4. **Werkdocument-synchronisatie vastleggen** — dit bestand bij elke relevante mijlpaal bijwerken; PR’s die V2-richting raken verwijzen hiernaar waar passend.
-5. **Eerste uitvoerbare tickets opstellen** voor Cursor (repo-taken: docs, scaffolding, kleine refactors) — concreet en reviewbaar.
+1. **V1 formeel bevriezen als referentie** — geen grote functionele wijzigingen aan V1 zonder expliciete beslissing.
+2. **Field-test T-103** — WiFi + Bitvavo op GEEK; valideren REST/WS en snapshot-gedrag (zie ADR-002).
+3. **M-002 verdiepen** — backoff, queues, scheiding met latere MQTT/NTFY/WebUI.
+4. **Migratiematrix aanscherpen** — net-runtime model t.o.v. nieuwe componenten.
+5. **Werkdocument-synchronisatie** — primair `firmware-v2/`-werkdocument; dit bestand bij governance-mijlpalen.
 
 ---
 
@@ -52,10 +53,13 @@ Wat nu het meeste aandacht vraagt binnen het V2-traject:
 | Item | Status |
 |------|--------|
 | V2-branch aanmaken (`v2/foundation`) | **Klaar** |
-| Input voor migratiematrix verzamelen | **Bezig** (draft bestaat; verfijning loopt) |
-| V2-mapstructuur uitschrijven / richting eerste skeleton | **Bezig** (placeholder + README; uitwerking IDF-skeleton volgt) |
-| Werkdocument-synchronisatie inrichten | **Todo** (proces: dit masterdocument als ankert; cadans: bij milestone of na merge V2-gerelateerde PR’s) |
-| Eerste Cursor-tickets | **Todo** |
+| Input voor migratiematrix verzamelen | **Bezig** (draft + skeleton-mapping in [V2_SKELETON_NOTES.md](V2_SKELETON_NOTES.md)) |
+| ESP-IDF skeleton (`firmware-v2/`, S-001…S-007) | **Klaar** |
+| T-101 reproduceerbare build + CI-smoke (IDF **v5.4.2**) | **Klaar** (zie `firmware-v2/BUILD.md`, `.github/workflows/firmware-v2-smoke.yml`) |
+| Werkdocument-synchronisatie inrichten | **Bezig** |
+| Display bring-up GEEK — `esp_lcd` ST7789 + volledige schermvulling (T-102) | **Klaar** (code); **hardwarecheck** volledig groen zonder restanten |
+| LVGL op GEEK | **Todo** (optioneel) |
+| Exchange / netwerklaag Bitvavo (T-103) | **Klaar** (code + ADR-002); field-test gebruiker |
 
 ---
 
@@ -63,16 +67,17 @@ Wat nu het meeste aandacht vraagt binnen het V2-traject:
 
 | Rol | Verantwoordelijkheid |
 |-----|----------------------|
-| **Dit GitHub-werkdocument** (`V2_WORKDOCUMENT_MASTER.md`) | **Formele bron van waarheid** voor status, besluiten en prioriteiten van het V2-traject in deze repo. |
-| **ChatGPT** (of vergelijkbare assistent) | Levert **structuur**, **analyse** en **voorstellen voor besluiten**; geen automatische overschrijving van dit document zonder menselijke review. |
-| **Cursor** | Voert **repo-documentatie** en **codewijzigingen** uit volgens tickets en dit werkdocument; wijzigingen aan dit bestand via duidelijke commits/PR’s. |
-| **Gebruiker / maintainer** | Stuurt **prioriteiten**, **validatie** en definitieve **go/no-go** op inhoud en merges. |
+| **Werkdocument `firmware-v2/v_2_herbouw_…`** | **Primaire bron** voor actuele **status, besluiten, prioriteiten** en **migratierichting** (dagelijks gebruik). |
+| **Dit bestand** (`V2_WORKDOCUMENT_MASTER.md`) | **Governance** (rollen, backlog-overzicht, consistentie); geen duplicaat van de volledige matrix. |
+| **ChatGPT** (of vergelijkbare assistent) | **Structuur en analyse**; werkdocument in `firmware-v2/` bijwerken na mijlpalen. |
+| **Cursor** | **Code en technische docs** in de repo; commits/PR’s refereren aan het `firmware-v2`-werkdocument waar relevant. |
+| **Gebruiker / maintainer** | **Prioriteiten**, **validatie**, **go/no-go**. |
 
 ---
 
 ## 6. Consistentie en scope
 
-- Onderliggende documenten ([§7](#7-verwante-documenten)) vullen details; bij **tegenspraak** prevaleert **dit masterdocument** tot een bewuste herziening.
+- Onderliggende documenten ([§7](#7-verwante-documenten)) vullen details; bij **tegenspraak** over status/prioriteiten prevaleert het [**werkdocument in `firmware-v2/`**](../../firmware-v2/v_2_herbouw_werkdocument_esp_32_crypto_alert.md) tot een bewuste herziening.
 - **Geen impliciete scope-uitbreiding:** nieuwe boards of stacks horen hier of in een ADR met datum.
 
 ---
@@ -82,10 +87,12 @@ Wat nu het meeste aandacht vraagt binnen het V2-traject:
 | Document | Rol |
 |----------|-----|
 | [V2_OUTGANGSPUNTEN_NL.md](V2_OUTGANGSPUNTEN_NL.md) | Uitgangspunten herbouw, doelen, boards, open punten. |
+| [V2_SKELETON_NOTES.md](V2_SKELETON_NOTES.md) | Skeletonfase: tickets S-001…S-007, ontwerpkeuzes, open punten. |
+| [../../firmware-v2/v_2_herbouw_werkdocument_esp_32_crypto_alert.md](../../firmware-v2/v_2_herbouw_werkdocument_esp_32_crypto_alert.md) | Regie / strategisch werkdocument (Jan Pieter + AI + Cursor). |
 | [../migration/FUNCTIONAL_INVENTORY_V1_NL.md](../migration/FUNCTIONAL_INVENTORY_V1_NL.md) | Korte functionele inventarisatie V1. |
 | [../migration/MIGRATION_MATRIX_V2_DRAFT.md](../migration/MIGRATION_MATRIX_V2_DRAFT.md) | Migratiematrix (concept). |
 | [../boards/README.md](../boards/README.md) | Board-overzicht; [ESP32-S3-GEEK.md](../boards/ESP32-S3-GEEK.md) referentieboard. |
-| [../../firmware-v2/README.md](../../firmware-v2/README.md) | Placeholder en beoogde ESP-IDF-layout voor nieuwe firmware. |
+| [../../firmware-v2/README.md](../../firmware-v2/README.md) | ESP-IDF-project (V2 firmware builden). |
 
 ---
 
@@ -94,3 +101,4 @@ Wat nu het meeste aandacht vraagt binnen het V2-traject:
 | Datum | Notitie |
 |-------|---------|
 | 2026-04-11 | Eerste versie als leidend werkdocument; consolidatie V2-voorbereiding. |
+| 2026-04-11 | Skeletonfase: ESP-IDF `firmware-v2/`, notities in `V2_SKELETON_NOTES.md`. |

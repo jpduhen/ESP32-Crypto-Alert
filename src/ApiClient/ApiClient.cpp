@@ -1,8 +1,75 @@
 #include "ApiClient.h"
+#include "../../TransportDiagFetchPrice.h"
 #include "../Memory/HeapMon.h"
 #include "../Net/HttpFetch.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+
+#if TRANSPORT_DIAG_FETCHPRICE
+static uint32_t s_txDiagFpInv = 0;
+static int32_t s_txDiagFpLastErrInv = -1;
+#ifndef TRANSPORT_DIAG_FP_FIRST_N_VERBOSE
+#define TRANSPORT_DIAG_FP_FIRST_N_VERBOSE 8u
+#endif
+#ifndef TRANSPORT_DIAG_FP_AFTER_ERR_WINDOW
+#define TRANSPORT_DIAG_FP_AFTER_ERR_WINDOW 10
+#endif
+
+static bool txDiagFpVerbose(uint32_t inv)
+{
+    if (inv <= TRANSPORT_DIAG_FP_FIRST_N_VERBOSE) {
+        return true;
+    }
+    if (s_txDiagFpLastErrInv >= 0
+        && (int32_t)inv - s_txDiagFpLastErrInv <= (int32_t)TRANSPORT_DIAG_FP_AFTER_ERR_WINDOW) {
+        return true;
+    }
+    return false;
+}
+
+static void txDiagFpLogCtx(const char* tag)
+{
+    const unsigned long t = millis();
+    const IPAddress lip = WiFi.localIP();
+    Serial.printf(
+        F("[TXDIAG] %s t=%lu wifi=%d ip=%u.%u.%u.%u rssi=%ld heap=%u minheap=%u\n"),
+        tag,
+        (unsigned long)t,
+        (int)WiFi.status(),
+        (unsigned)lip[0], (unsigned)lip[1], (unsigned)lip[2], (unsigned)lip[3],
+        (long)WiFi.RSSI(),
+        (unsigned)ESP.getFreeHeap(),
+        (unsigned)ESP.getMinFreeHeap());
+}
+#endif // TRANSPORT_DIAG_FETCHPRICE
+
+#if TRANSPORT_DIAG_FETCHPRICE && TRANSPORT_DIAG_FETCHPRICE_STREAM
+// Alleen voor fetchBitvavoPrice: stream/client onder HTTPClient (zelfde txV-begrenzing als [TXDIAG]).
+static uintptr_t s_txStreamPostGetPtrLastOk = 0;
+
+static int txStreamConnVal(WiFiClient* p)
+{
+    if (!p) {
+        return -1;
+    }
+    return p->connected() ? 1 : 0;
+}
+
+static void txStreamLogPreEnd(HTTPClient& http)
+{
+    WiFiClient* sp = http.getStreamPtr();
+    Serial.printf(
+        F("[TXSTREAM] pre-end streamPtr=%p connected=%d http.conn=%d\n"),
+        (void*)sp,
+        txStreamConnVal(sp),
+        http.connected() ? 1 : 0);
+}
+
+static void txStreamLogPostEnd(void)
+{
+    Serial.println(F("[TXSTREAM] post-end"));
+}
+#endif
 
 // Constructor - initialiseer persistent clients
 ApiClient::ApiClient() {
@@ -529,6 +596,22 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
     
     // C2: Neem netwerk mutex voor alle HTTP operaties (met debug logging)
     netMutexLock("[API] HTTP fetchBitvavoPrice");
+#if TRANSPORT_DIAG_FETCHPRICE
+    s_txDiagFpInv++;
+    const uint32_t txInv = s_txDiagFpInv;
+    const bool txV = txDiagFpVerbose(txInv);
+    if (txV) {
+        Serial.println(F("[TXDIAG] enter fetchBitvavoPrice"));
+        txDiagFpLogCtx("ctx@enter");
+    } else {
+        Serial.printf(
+            F("[TXDIAG] compact n=%lu t=%lu w=%d heap=%u\n"),
+            (unsigned long)txInv,
+            (unsigned long)millis(),
+            (int)WiFi.status(),
+            (unsigned)ESP.getFreeHeap());
+    }
+#endif
     
     const uint8_t MAX_RETRIES = 0; // Geen retries voor normale price fetches (snellere failure)
     const uint32_t RETRY_DELAYS[] = {100, 200}; // Backoff delays in ms (verlaagd, niet gebruikt met MAX_RETRIES=0)
@@ -539,8 +622,20 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
         bool shouldRetry = false;
         int lastCode = 0;
         
+#if TRANSPORT_DIAG_FETCHPRICE
+        if (txV) {
+            Serial.println(F("[TXDIAG] before client/http setup"));
+        }
+#endif
         // Gebruik lokaal HTTPClient object (zoals fetchBitvavoCandles doet) - persistent client geeft HTTP 400
         HTTPClient http;
+#if TRANSPORT_DIAG_FETCHPRICE
+        if (txV) {
+            Serial.printf(
+                F("[TXDIAG] HTTPClient@%p stack local reuse=0\n"),
+                (void*)(uintptr_t)&http);
+        }
+#endif
         
         // S2: do-while(0) patroon voor consistente cleanup per attempt
         do {
@@ -563,7 +658,51 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
             #endif
             // [BOOT] Minimale timing rond eerste HTTPS (hang/assert-diagnose; geen TCPIP-lock)
             Serial.printf(F("[API][BOOT] before http.begin t=%lu ms\n"), (unsigned long)millis());
-            if (!http.begin(url)) {
+#if TRANSPORT_DIAG_FETCHPRICE
+            if (txV) {
+                WiFiClient* wbb = http.getStreamPtr();
+                Serial.printf(
+                    F("[TXDIAG] streamPtr_preBegin=%p connected_preBegin=%d\n"),
+                    (void*)wbb,
+                    wbb ? (wbb->connected() ? 1 : 0) : -1);
+                Serial.println(F("[TXDIAG] before http.begin"));
+                txDiagFpLogCtx("ctx@before_begin");
+            }
+#endif
+#if TRANSPORT_DIAG_FETCHPRICE && TRANSPORT_DIAG_FETCHPRICE_STREAM
+            if (txV) {
+                Serial.printf(F("[TXSTREAM] pre-begin http@%p\n"), (void*)(uintptr_t)&http);
+            }
+#endif
+            const bool beginOk = http.begin(url);
+#if TRANSPORT_DIAG_FETCHPRICE
+            if (txV) {
+                Serial.printf(F("[TXDIAG] after http.begin ok=%d\n"), beginOk ? 1 : 0);
+            }
+#endif
+#if TRANSPORT_DIAG_FETCHPRICE && TRANSPORT_DIAG_FETCHPRICE_STREAM
+            if (txV) {
+                WiFiClient* spb = http.getStreamPtr();
+                Serial.printf(F("[TXSTREAM] post-begin ok=%d streamPtr=%p"), beginOk ? 1 : 0, (void*)spb);
+                if (spb != nullptr) {
+                    Serial.printf(F(" connected=%d\n"), spb->connected() ? 1 : 0);
+                } else {
+                    Serial.print(F(" connected=n/a\n"));
+                }
+            }
+#endif
+            if (!beginOk) {
+#if TRANSPORT_DIAG_FETCHPRICE
+                if (!txV) {
+                    Serial.printf(
+                        F("[TXDIAG] fail begin n=%lu t=%lu w=%d heap=%u minheap=%u\n"),
+                        (unsigned long)txInv,
+                        (unsigned long)millis(),
+                        (int)WiFi.status(),
+                        (unsigned)ESP.getFreeHeap(),
+                        (unsigned)ESP.getMinFreeHeap());
+                }
+#endif
                 Serial.printf(F("[API][BOOT] http.begin failed t=%lu ms\n"), (unsigned long)millis());
                 #if !DEBUG_BUTTON_ONLY
                 if (attempt == MAX_RETRIES) {
@@ -574,8 +713,83 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
                 break;
             }
             Serial.printf(F("[API][BOOT] before GET t=%lu ms\n"), (unsigned long)millis());
+#if TRANSPORT_DIAG_FETCHPRICE
+            if (txV) {
+                WiFiClient* wpre = http.getStreamPtr();
+                Serial.printf(
+                    F("[TXDIAG] streamPtr=%p connected_preGET=%d\n"),
+                    (void*)wpre,
+                    wpre ? (wpre->connected() ? 1 : 0) : -1);
+                Serial.println(F("[TXDIAG] before GET"));
+            }
+#endif
+#if TRANSPORT_DIAG_FETCHPRICE && TRANSPORT_DIAG_FETCHPRICE_STREAM
+            if (txV) {
+                WiFiClient* wg = http.getStreamPtr();
+                Serial.printf(
+                    F("[TXSTREAM] pre-GET streamPtr=%p connected=%d http.conn=%d\n"),
+                    (void*)wg,
+                    txStreamConnVal(wg),
+                    http.connected() ? 1 : 0);
+            }
+#endif
             int code = http.GET();
+#if TRANSPORT_DIAG_FETCHPRICE
+            if (txV) {
+                WiFiClient* wpost = http.getStreamPtr();
+                Serial.printf(
+                    F("[TXDIAG] after GET code=%d\n"),
+                    code);
+                Serial.printf(
+                    F("[TXDIAG] streamPtr=%p connected_postGET=%d\n"),
+                    (void*)wpost,
+                    wpost ? (wpost->connected() ? 1 : 0) : -1);
+            }
+#endif
+#if TRANSPORT_DIAG_FETCHPRICE && TRANSPORT_DIAG_FETCHPRICE_STREAM
+            if (txV) {
+                WiFiClient* wa = http.getStreamPtr();
+                const uintptr_t curAddr = (uintptr_t)wa;
+                Serial.printf(
+                    F("[TXSTREAM] post-GET code=%d streamPtr=%p connected=%d http.conn=%d size=%d\n"),
+                    code,
+                    (void*)wa,
+                    txStreamConnVal(wa),
+                    http.connected() ? 1 : 0,
+                    http.getSize());
+                if (s_txStreamPostGetPtrLastOk != 0 && curAddr != 0) {
+                    if (curAddr != s_txStreamPostGetPtrLastOk) {
+                        Serial.printf(
+                            F("[TXSTREAM] streamPtr addr changed vs last ok-run prev=%p now=%p\n"),
+                            (void*)s_txStreamPostGetPtrLastOk,
+                            (void*)curAddr);
+                    } else {
+                        Serial.printf(
+                            F("[TXSTREAM] streamPtr addr same as last ok-run %p\n"),
+                            (void*)curAddr);
+                    }
+                }
+                if (code == 200 && wa != nullptr) {
+                    s_txStreamPostGetPtrLastOk = curAddr;
+                }
+            }
+            if (code < 0 && http.getStreamPtr() == nullptr) {
+                Serial.println(F("[TXSTREAM] fail path: no stream after GET"));
+            }
+#endif
             Serial.printf(F("[API][BOOT] after GET code=%d t=%lu ms\n"), code, (unsigned long)millis());
+#if TRANSPORT_DIAG_FETCHPRICE
+            if (!txV && code != 200) {
+                Serial.printf(
+                    F("[TXDIAG] fail GET n=%lu code=%d t=%lu w=%d heap=%u minheap=%u\n"),
+                    (unsigned long)txInv,
+                    code,
+                    (unsigned long)millis(),
+                    (int)WiFi.status(),
+                    (unsigned)ESP.getFreeHeap(),
+                    (unsigned)ESP.getMinFreeHeap());
+            }
+#endif
             unsigned long requestTime = millis() - requestStart;
             lastCode = code;
             
@@ -639,18 +853,63 @@ bool ApiClient::fetchBitvavoPrice(const char* symbol, float& out)
             ok = true;
         } while(0);
         
+#if TRANSPORT_DIAG_FETCHPRICE
+        if (!attemptOk) {
+            s_txDiagFpLastErrInv = (int32_t)txInv;
+        }
+#endif
         // N2: Cleanup alleen bij fouten (lokaal HTTPClient object, geen keep-alive nodig)
         // Voor fetchBitvavoPrice gebruiken we lokaal object, dus altijd cleanup
         if (attemptOk) {
             // Succes: cleanup voor lokaal object
+#if TRANSPORT_DIAG_FETCHPRICE && TRANSPORT_DIAG_FETCHPRICE_STREAM
+            if (txV) {
+                txStreamLogPreEnd(http);
+            }
+#endif
+#if TRANSPORT_DIAG_FETCHPRICE
+            if (txV) {
+                Serial.println(F("[TXDIAG] before http.end"));
+            }
+#endif
             http.end();
+#if TRANSPORT_DIAG_FETCHPRICE
+            if (txV) {
+                Serial.println(F("[TXDIAG] after http.end"));
+            }
+#endif
+#if TRANSPORT_DIAG_FETCHPRICE && TRANSPORT_DIAG_FETCHPRICE_STREAM
+            if (txV) {
+                txStreamLogPostEnd();
+            }
+#endif
             if (attempt > 0) {
                 Serial.printf(F("[API] Succes na retry (poging %d/%d)\n"), attempt + 1, MAX_RETRIES + 1);
             }
             break;
         } else {
             // Fout: cleanup
+#if TRANSPORT_DIAG_FETCHPRICE && TRANSPORT_DIAG_FETCHPRICE_STREAM
+            if (txV) {
+                txStreamLogPreEnd(http);
+            }
+#endif
+#if TRANSPORT_DIAG_FETCHPRICE
+            if (txV) {
+                Serial.println(F("[TXDIAG] before http.end"));
+            }
+#endif
             http.end();
+#if TRANSPORT_DIAG_FETCHPRICE
+            if (txV) {
+                Serial.println(F("[TXDIAG] after http.end"));
+            }
+#endif
+#if TRANSPORT_DIAG_FETCHPRICE && TRANSPORT_DIAG_FETCHPRICE_STREAM
+            if (txV) {
+                txStreamLogPostEnd();
+            }
+#endif
             WiFiClient* stream = http.getStreamPtr();
             if (stream != nullptr) {
                 stream->stop();

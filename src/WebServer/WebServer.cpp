@@ -16,6 +16,7 @@
 
 #include "../RegimeEngine/RegimeEngine.h"
 #include "../PriceFormat/QuotePriceFormat.h"
+#include "../Net/HttpFetch.h"  // netMutexLock / netMutexUnlock (zelfde gate als API/WS, .ino)
 
 static const char* regimeStatusJsonString(bool enabled, RegimeKind k) {
     if (!enabled) {
@@ -342,6 +343,14 @@ void WebServerModule::begin() {
     // Server pointer wordt ingesteld in setupWebServer()
 }
 
+// WEBTRACE: file-static vóór setupWebServer() — setupWebServer zet o.a. s_deferredServerBeginPending.
+#if (WEBTRACE_FIRST_SERVICE_DELAY_MS > 0) || (WEBTRACE_DELAY_SERVER_BEGIN_MS > 0)
+static unsigned long s_webTraceWifiSteadyMs = 0;
+#endif
+#if WEBTRACE_DELAY_SERVER_BEGIN_MS > 0
+static bool s_deferredServerBeginPending = false;
+#endif
+
 // Fase 9.1.2: setupWebServer() verplaatst naar WebServerModule
 void WebServerModule::setupWebServer() {
     // Gebruik globale server instance
@@ -411,19 +420,157 @@ void WebServerModule::setupWebServer() {
         this->handleNotFound();
     }); // 404 handler
     Serial.println(F("[WebServer] 404 handler geregistreerd"));
+#if BOOT_DIAG_DISABLE_WEBSERVER_BEGIN
+    Serial.println(F("[BOOT_DIAG] WebServer begin skipped (routes registered, no listen socket)"));
+#elif WEBTRACE_DELAY_SERVER_BEGIN_MS > 0
+    Serial.println(F("[WEBTRACE] server.begin deferred pending"));
+    s_deferredServerBeginPending = true;
+#else
     server->begin();
-    Serial.println("[WebServer] Server gestart");
+    Serial.println(F("[WebServer] Server gestart"));
+#endif
     // Geoptimaliseerd: gebruik char array i.p.v. String
     char ipBuffer[16];
     formatIPAddress(WiFi.localIP(), ipBuffer, sizeof(ipBuffer));
+#if WEBTRACE_DELAY_SERVER_BEGIN_MS > 0
+    Serial.printf("[WebServer] (listen deferred) IP http://%s\n", ipBuffer);
+#else
     Serial.printf("[WebServer] Gestart op http://%s\n", ipBuffer);
+#endif
+}
+
+// Fase 9.1.4: handleClient() voor webTask — roept Arduino WebServer::handleClient() aan (ESP32: NetworkServer::accept + parse + dispatch).
+
+void WebServerModule::markWebTraceWifiSteadyMs(unsigned long steadyMs) {
+#if (WEBTRACE_FIRST_SERVICE_DELAY_MS > 0) || (WEBTRACE_DELAY_SERVER_BEGIN_MS > 0)
+    if (s_webTraceWifiSteadyMs == 0UL) {
+        s_webTraceWifiSteadyMs = steadyMs;
+        Serial.printf(
+            "[WEBTRACE] anchor wifi_steady_ms=%lu first_service_delay_ms=%lu defer_server_begin_ms=%lu\n",
+            steadyMs,
+            (unsigned long)WEBTRACE_FIRST_SERVICE_DELAY_MS,
+            (unsigned long)WEBTRACE_DELAY_SERVER_BEGIN_MS);
+    }
+#else
+    (void)steadyMs;
+#endif
+}
+
+void WebServerModule::pollDeferredServerBegin(void) {
+#if WEBTRACE_DELAY_SERVER_BEGIN_MS <= 0
+    return;
+#else
+    if (server == nullptr) {
+        return;
+    }
+    if (!s_deferredServerBeginPending) {
+        return;
+    }
+    if (s_webTraceWifiSteadyMs == 0UL) {
+        return;
+    }
+    const unsigned long elapsed = millis() - s_webTraceWifiSteadyMs;
+    if (elapsed < (unsigned long)WEBTRACE_DELAY_SERVER_BEGIN_MS) {
+        return;
+    }
+    Serial.println(F("[WEBTRACE] server.begin now executing"));
+    server->begin();
+    Serial.println(F("[WEBTRACE] server.begin done"));
+    Serial.println(F("[WebServer] Server gestart"));
+    s_deferredServerBeginPending = false;
+    char ipBuffer[16];
+    formatIPAddress(WiFi.localIP(), ipBuffer, sizeof(ipBuffer));
+    Serial.printf("[WebServer] Gestart op http://%s\n", ipBuffer);
+#endif
+}
+
+static bool webTraceDeferAllowsRealHandleClient(void) {
+#if WEBTRACE_FIRST_SERVICE_DELAY_MS == 0
+    return true;
+#else
+    if (s_webTraceWifiSteadyMs == 0UL) {
+        return true;
+    }
+    const unsigned long elapsed = millis() - s_webTraceWifiSteadyMs;
+    if (elapsed < WEBTRACE_FIRST_SERVICE_DELAY_MS) {
+        static uint8_t sDeferLogCount = 0;
+        if (sDeferLogCount < 5) {
+            ++sDeferLogCount;
+            Serial.printf(
+                "[WEBTRACE] defer: skip server handleClient elapsed=%lu/%lu ms\n",
+                elapsed,
+                (unsigned long)WEBTRACE_FIRST_SERVICE_DELAY_MS);
+        }
+        return false;
+    }
+    static bool sDeferLiftLogged = false;
+    if (!sDeferLiftLogged) {
+        sDeferLiftLogged = true;
+        Serial.println(F("[WEBTRACE] first real handleClient now allowed"));
+    }
+    return true;
+#endif
 }
 
 // Fase 9.1.4: handleClient() voor webTask
 void WebServerModule::handleClient() {
-    if (server != nullptr) {
-        server->handleClient();
+    if (server == nullptr) {
+        return;
     }
+
+#if WEBTRACE_HANDLECLIENT_NOOP
+    {
+        static uint32_t s_noopIter = 0;
+        ++s_noopIter;
+        if (s_noopIter <= 10u) {
+            Serial.printf("[WEBTRACE] NOOP iter=%lu (listen socket active; server->handleClient not called)\n",
+                          (unsigned long)s_noopIter);
+        }
+    }
+    return;
+#endif
+
+    if (!webTraceDeferAllowsRealHandleClient()) {
+        return;
+    }
+
+#if WEBTRACE_HANDLECLIENT_FORENSICS
+    static uint32_t s_traceIter = 0;
+    ++s_traceIter;
+    const unsigned long t0us = micros();
+    const bool traceShort = (s_traceIter <= 10u);
+    if (traceShort) {
+        Serial.printf("[WEBTRACE] iter=%lu before handleClient t_us=%lu\n",
+                      (unsigned long)s_traceIter,
+                      (unsigned long)t0us);
+    }
+#endif
+#if WEBTRACE_SERIALIZE_HANDLECLIENT_WITH_NET_GATE
+    Serial.println(F("[WEBTRACE] netgate acquire before handleClient"));
+    netMutexLock("[WEBTRACE][WebServer] handleClient");
+#endif
+    server->handleClient();
+#if WEBTRACE_SERIALIZE_HANDLECLIENT_WITH_NET_GATE
+    netMutexUnlock("[WEBTRACE][WebServer] handleClient");
+    Serial.println(F("[WEBTRACE] netgate release after handleClient"));
+#endif
+#if WEBTRACE_HANDLECLIENT_FORENSICS
+    {
+        const unsigned long t1us = micros();
+        const unsigned long dtus = (t1us >= t0us) ? (t1us - t0us) : 0UL;
+        const float dtms = (float)dtus / 1000.0f;
+        if (traceShort) {
+            const String postUri = server->uri();
+            Serial.printf(
+                "[WEBTRACE] iter=%lu after handleClient dt_ms=%.3f post_connected=%d post_avail=%u uri=\"%s\"\n",
+                (unsigned long)s_traceIter,
+                dtms,
+                server->client().connected() ? 1 : 0,
+                (unsigned)server->client().available(),
+                postUri.c_str());
+        }
+    }
+#endif
 }
 
 // Fase 9.1.3: renderSettingsHTML() verplaatst vanuit .ino
@@ -606,6 +753,7 @@ void WebServerModule::renderSettingsHTML() {
     
     sendSectionFooter();
 
+#if !BOOT_DIAG_DISABLE_WEBUI_COLOR_FEATURE
     // Display / UI — grafiekkleur (alleen lijn/punten; quote-accent blijft EUR-blauw / USDC-groen)
     sendSectionHeader(getText("Display / UI / Weergave", "Display / UI / Appearance"), "display", false);
     sendSectionDesc(getText("Weergave van de prijsgrafiek (lijn en punten). Quote-kleuren (EUR/USDC) en overige UI blijven ongewijzigd.",
@@ -635,6 +783,7 @@ void WebServerModule::renderSettingsHTML() {
                             chartColorManual, colorVals, colorLabels, 8);
     }
     sendSectionFooter();
+#endif
     
     // Anchor & Risicokader sectie
     sendSectionHeader(getText("Anchor & Risicokader", "Anchor & Risk Framework"), "anchor", false);
@@ -1644,6 +1793,7 @@ void WebServerModule::renderConfigReadOnlyHTML() {
         sendStatusRow(getText("Display Rotatie", "Display Rotation"), valueBuf);
         sendSectionFooter();
 
+#if !BOOT_DIAG_DISABLE_WEBUI_COLOR_FEATURE
         sendSectionHeader(getText("Display / UI / Weergave", "Display / UI / Appearance"), "display", true);
         sendSectionDesc(getText("Weergave van de prijsgrafiek (lijn en punten).",
                                 "Price chart line and points."));
@@ -1672,6 +1822,7 @@ void WebServerModule::renderConfigReadOnlyHTML() {
             sendStatusRow(getText("Grafiekkleur (handmatige keuze)", "Chart color (manual choice)"), manualLabel);
         }
         sendSectionFooter();
+#endif
 
         sendSectionHeader(getText("Anchor & Risicokader", "Anchor & Risk Framework"), "anchor", true);
         sendSectionDesc(getText("Anchor prijs instellingen en risicobeheer", "Anchor price settings and risk management"));
@@ -2020,6 +2171,7 @@ void WebServerModule::handleSave() {
         }
     }
 
+#if !BOOT_DIAG_DISABLE_WEBUI_COLOR_FEATURE
     if (server->hasArg("chartColorMode")) {
         String m = server->arg("chartColorMode");
         if (m == "manual") {
@@ -2040,6 +2192,7 @@ void WebServerModule::handleSave() {
             }
         }
     }
+#endif
     
     // Fix: Gebruik String object eerst (zoals bij anchor) om dangling pointer te voorkomen
     // ESP32-S3 heeft problemen met direct .c_str() op tijdelijke String objecten
@@ -2763,10 +2916,12 @@ void WebServerModule::handleSettingsExport() {
     server->sendContent(line);
     snprintf(line, sizeof(line), "displayRotation: %u\n", static_cast<unsigned>(displayRotation));
     server->sendContent(line);
+#if !BOOT_DIAG_DISABLE_WEBUI_COLOR_FEATURE
     snprintf(line, sizeof(line), "chartColorMode: %s\n", chartColorMode);
     server->sendContent(line);
     snprintf(line, sizeof(line), "chartColorManual: %s\n\n", chartColorManual);
     server->sendContent(line);
+#endif
 
     server->sendContent("[anchor]\n");
     snprintf(line, sizeof(line), "anchorStrategy: %u\n", static_cast<unsigned>(anchorStrategy));
