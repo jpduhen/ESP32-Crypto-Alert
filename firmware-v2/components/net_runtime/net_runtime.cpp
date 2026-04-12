@@ -1,12 +1,14 @@
 /**
  * net_runtime — M-002: WiFi/netif + globale net_mutex; géén HTTP(S)/WS naar exchanges.
- * Reconnect STA: on_wifi_sta_event. TODO: optionele backoff; MQTT/NTFY later zelfde mutex of queue.
+ * STA-reconnect: alleen hier (geen tweede loop in app_core/exchange). Backoff via esp_timer
+ * na WIFI_EVENT_STA_DISCONNECTED; reset bij IP. WS-reconnect blijft in exchange (esp_websocket_client).
  */
 #include "net_runtime/net_runtime.hpp"
 #include "esp_check.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/semphr.h"
 #include <cstring>
@@ -17,6 +19,11 @@ namespace net_runtime {
 
 static const char TAG[] = "net_runtime";
 
+/** Exponentiële backoff voor STA-reconnect (ms), begrensd. Stap verhoogt per disconnect; reset bij IP. */
+static constexpr uint32_t kStaBackoffBaseMs = 500;
+static constexpr uint32_t kStaBackoffMaxMs = 30000;
+static constexpr unsigned kStaBackoffShiftMax = 5u; /* 2^5 * base = 16s < max */
+
 static SemaphoreHandle_t s_net_mutex;
 static bool s_has_ip;
 static bool s_early_done;
@@ -24,18 +31,57 @@ static bool s_wifi_inited;
 static bool s_sta_handlers_registered;
 static esp_netif_t *s_ap_netif;
 static esp_netif_t *s_sta_netif;
+static esp_timer_handle_t s_sta_backoff_timer;
+static uint8_t s_sta_backoff_step;
+
+static void sta_backoff_timer_cb(void *arg)
+{
+    (void)arg;
+    ESP_LOGI(TAG, "STA esp_wifi_connect() na backoff-interval");
+    esp_wifi_connect();
+}
+
+static void schedule_sta_reconnect_after_backoff()
+{
+    if (!s_sta_backoff_timer) {
+        ESP_LOGW(TAG, "STA disconnected — geen backoff-timer, direct reconnect");
+        esp_wifi_connect();
+        return;
+    }
+    esp_timer_stop(s_sta_backoff_timer);
+    const unsigned shift = (s_sta_backoff_step < kStaBackoffShiftMax) ? s_sta_backoff_step : kStaBackoffShiftMax;
+    uint32_t ms = kStaBackoffBaseMs * (1u << shift);
+    if (ms > kStaBackoffMaxMs) {
+        ms = kStaBackoffMaxMs;
+    }
+    const uint64_t us = static_cast<uint64_t>(ms) * 1000ULL;
+    if (esp_timer_start_once(s_sta_backoff_timer, us) != ESP_OK) {
+        ESP_LOGW(TAG, "backoff timer start failed — direct reconnect");
+        esp_wifi_connect();
+        return;
+    }
+    ESP_LOGW(TAG, "STA disconnected — reconnect over %lums (backoff-stap %u)", static_cast<unsigned long>(ms),
+             static_cast<unsigned>(s_sta_backoff_step));
+    if (s_sta_backoff_step < 255) {
+        ++s_sta_backoff_step;
+    }
+}
 
 static void on_wifi_sta_event(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     (void)arg;
     (void)event_base;
-    (void)event_data;
     if (event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
         s_has_ip = false;
-        ESP_LOGW(TAG, "STA disconnected, retry");
-        esp_wifi_connect();
+        if (event_data) {
+            const auto *dis = static_cast<wifi_event_sta_disconnected_t *>(event_data);
+            ESP_LOGW(TAG, "STA disconnected reason=%u", static_cast<unsigned>(dis->reason));
+        } else {
+            ESP_LOGW(TAG, "STA disconnected (geen reason payload)");
+        }
+        schedule_sta_reconnect_after_backoff();
     }
 }
 
@@ -46,7 +92,11 @@ static void on_ip_event(void *arg, esp_event_base_t event_base, int32_t event_id
     (void)event_data;
     if (event_id == IP_EVENT_STA_GOT_IP) {
         s_has_ip = true;
-        ESP_LOGI(TAG, "STA got IP");
+        s_sta_backoff_step = 0;
+        if (s_sta_backoff_timer) {
+            esp_timer_stop(s_sta_backoff_timer);
+        }
+        ESP_LOGI(TAG, "STA got IP — backoff reset");
     }
 }
 
@@ -74,6 +124,16 @@ esp_err_t early_init()
 
     ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "esp_netif_init");
     ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), TAG, "event_loop");
+
+    esp_timer_create_args_t targs{};
+    targs.callback = &sta_backoff_timer_cb;
+    targs.name = "net_sta_bo";
+    if (esp_timer_create(&targs, &s_sta_backoff_timer) != ESP_OK) {
+        s_sta_backoff_timer = nullptr;
+        ESP_LOGW(TAG, "esp_timer_create(backoff) failed — STA gebruikt direct reconnect");
+    }
+    s_sta_backoff_step = 0;
+
     s_early_done = true;
     return ESP_OK;
 }

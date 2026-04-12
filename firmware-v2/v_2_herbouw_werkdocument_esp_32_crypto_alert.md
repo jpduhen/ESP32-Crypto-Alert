@@ -1410,7 +1410,11 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Stap 8:** M-002 verder (backoff), en/of **UI-verfijning** (thema, tweede view) — klein houden; geen dashboard-scope zonder apart besluit.
+**Stap 8 — deels uitgevoerd (M-002a):** STA **backoff** in `net_runtime` + disconnect-reason logging; zie § **M-002a**. Nog open: queues, MQTT/NTFY/WebUI-scheiding, worker-task.
+
+\
+
+**Stap 8b:** UI-verfijning (thema, tweede view) — klein houden; geen dashboard-scope zonder apart besluit.
 
 \
 
@@ -1577,6 +1581,34 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 \
 
 **Bewust buiten scope:** dashboard, grafieken, alerts, WebUI, MQTT, NTFY, extra boards.
+
+\
+
+---
+
+\
+
+## M-002a — STA-backoff en netwerkstatus (na T-103d) (uitgevoerd)
+
+\
+
+**Wat is aangescherpt**
+
+\
+
+- **WiFi STA-reconnect** zit **uitsluitend** in **`net_runtime`**: bij `WIFI_EVENT_STA_DISCONNECTED` geen directe `esp_wifi_connect()` meer; **één** plek met **exponentiële backoff** (500 ms → … → max 30 s) via **`esp_timer`**, reset bij **`IP_EVENT_STA_GOT_IP`**. Hiermee is reconnect/backoff voor de datalink niet meer verspreid over andere lagen.
+
+\
+
+- **Zichtbaarheid:** disconnect-log bevat nu **WiFi-reasoncode** (alleen in `net_runtime`, geen lek naar UI). Bovenliggende lagen blijven **linkstatus** afleiden via bestaande façade: `net_runtime::has_ip()` en `market_data::snapshot()` (`ConnectionState` / `FeedErrorCode::NetworkDown` zonder Bitvavo-protocolteksten).
+
+\
+
+- **Onveranderd (bewust):** **WebSocket**-reconnect blijft eigendom van **`esp_websocket_client`** in **`exchange_bitvavo`** (`reconnect_timeout_ms`); **REST**-interval blijft in `exchange_bitvavo::tick`. Geen nieuwe services, geen UI-wijziging, geen worker-task.
+
+\
+
+**Backlog (ongewijzigd):** MQTT/NTFY/WebUI achter mutex/queue; HTTP-client hergebruik; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md).
 
 \
 

@@ -27,6 +27,10 @@ esp_err_t stop_softap();
  */
 esp_err_t start_sta(const char *sta_ssid, const char *sta_pass);
 
+/**
+ * STA heeft een geldig IP (gate voor TLS naar buiten). Enige plek voor «WiFi klaar?» in app-laag;
+ * feedstatus blijft via `market_data::snapshot()`.
+ */
 bool has_ip();
 
 bool net_mutex_take(TickType_t timeout_ticks = pdMS_TO_TICKS(15000));

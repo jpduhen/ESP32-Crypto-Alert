@@ -22,8 +22,8 @@ Voorkomen dat de V2-netwerklaag opnieuw een monoliet wordt (zoals beschreven in 
 
 | Mechanisme | Eigenaar | Opmerking |
 |------------|----------|-----------|
-| WiFi STA **disconnect → opnieuw verbinden** | **`net_runtime`** (`WIFI_EVENT_STA_DISCONNECTED` → `esp_wifi_connect()`). | Geen exponentiële backoff in deze stap; kan later uitgebreid worden (**TODO M-002**). |
-| **Bitvavo WebSocket** reconnect | **`esp_websocket_client`** (ingestelde `reconnect_timeout_ms`); telling in `MarketSnapshot::ws_reconnect_count`. | Exchange-laag registreert events; geen tweede parallel reconnect-loop in `app_core`. |
+| WiFi STA **disconnect → opnieuw verbinden** | **`net_runtime` alleen** (`WIFI_EVENT_STA_DISCONNECTED` → **`esp_timer` + backoff** → daarna `esp_wifi_connect()`). Backoff reset bij **`IP_EVENT_STA_GOT_IP`**. | Geen directe reconnect-storm; cap 30 s. Disconnect-log: WiFi-reasoncode (niet naar UI). |
+| **Bitvavo WebSocket** reconnect | **`esp_websocket_client`** in **`exchange_bitvavo`** (`reconnect_timeout_ms` in `bitvavo_ws.cpp`); telling in `MarketSnapshot::ws_reconnect_count`. | Los van STA-backoff; geen tweede reconnect-loop in `app_core`. |
 | **REST** herhaling | **`exchange_bitvavo::tick`** (interval + skip als WS live — zie T-103b). | Geen aparte REST-task. |
 | Toekomst **MQTT / NTFY / WebUI** | Nog **niet** geïmplementeerd. | Moeten achter dezelfde **`net_mutex`** of een expliciete queue-service (**TODO M-002**), zie onder. |
 
@@ -46,9 +46,15 @@ Voorkomen dat de V2-netwerklaag opnieuw een monoliet wordt (zoals beschreven in 
 ## Open M-002-risico’s (bewust)
 
 1. **Eén `net_mutex`** — serialiseert nu HTTP+WS; parallelle streams vragen later ontwerp (queue of gesplitste mutexen).
-2. **WiFi-reconnect** is simpel (direct `esp_wifi_connect`); geen jitter/backoff — kan AP last geven bij slechte link.
+2. **WiFi-reconnect (deels afgehandeld in M-002a, 2026-04):** STA-backoff zit nu in `net_runtime` (timer + cap). Nog te tunen: basis/max intervallen.
 3. **Main-task stack** — netwerk zwaar (TLS); langere termijn: eigen worker-task (**TODO**), niet in deze hardening.
 4. **MQTT / NTFY / WebUI** — alleen **haakjes** in code/docs; geen nieuwe services in deze stap.
+
+### Netwerkstatus richting bovenlagen (afbakening)
+
+- **Link (IP):** `net_runtime::has_ip()` — enige expliciete WiFi/IP-vraag voor «kan ik naar buiten?».
+- **Domeinfeed:** `market_data::snapshot()` — `ConnectionState`, `FeedErrorCode`, `last_error_detail` zijn **feed-/exchange-niveau** (geen WiFi-reasoncodes; bij geen IP: `NetworkDown` + korte tekst).
+- **UI:** geen `esp_wifi_*`, geen URLs; alleen snapshot-velden die al generiek zijn.
 
 ## Verwijzingen
 
