@@ -25,4 +25,49 @@ menu "ESP32 Crypto Alert V2"
         help
             Test/factory: bij boot worden wifi_ssid/wifi_pass gewist en opent de portal opnieuw.
 
+    choice DISPLAY_DIAG_PROFILE
+        prompt "Display: A/B diagnoseprofiel (wissel → fullclean + build)"
+        default DISPLAY_DIAG_PROFILE_SWAP_OFF
+        help
+            Standaard **ESP32-S3 GEEK**: profiel 1 (LVGL swap_bytes=0, RGB, 27 MHz) — field-test bevestigd.
+            Eén profiel per build; zet swap_bytes, rgb_order en SPI-klok.
+            Als de seriële log niet verandert: rm build sdkconfig sdkconfig.old && idf.py set-target esp32s3
+
+        config DISPLAY_DIAG_PROFILE_BASELINE
+            bool "0 — swap=1, RGB, 27 MHz (alternatief / diagnose)"
+
+        config DISPLAY_DIAG_PROFILE_SWAP_OFF
+            bool "1 — swap=0, RGB, 27 MHz (standaard GEEK, ST7789+LVGL 9)"
+
+        config DISPLAY_DIAG_PROFILE_BGR
+            bool "2 — swap=1, BGR, 27 MHz (esp_lcd rgb order)"
+
+        config DISPLAY_DIAG_PROFILE_SPI_20M
+            bool "3 — swap=1, RGB, 20 MHz SPI"
+    endchoice
+
+    config UI_LVGL_SWAP_BYTES
+        int
+        range 0 1
+        default 0 if DISPLAY_DIAG_PROFILE_SWAP_OFF
+        default 1
+        help
+            Afgeleid van Display diagnoseprofiel (hier niet handmatig zetten).
+
+    config DISPLAY_ST7789_BGR_ORDER
+        int
+        range 0 1
+        default 1 if DISPLAY_DIAG_PROFILE_BGR
+        default 0
+        help
+            Afgeleid van Display diagnoseprofiel.
+
+    config DISPLAY_SPI_PCLK_HZ
+        int
+        range 8000000 40000000
+        default 20000000 if DISPLAY_DIAG_PROFILE_SPI_20M
+        default 27000000
+        help
+            Afgeleid van Display diagnoseprofiel.
+
 endmenu

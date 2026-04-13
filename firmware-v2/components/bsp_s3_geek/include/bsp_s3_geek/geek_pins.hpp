@@ -20,7 +20,10 @@ inline constexpr int BACKLIGHT = 7;
 inline constexpr int WIDTH = 135;
 inline constexpr int HEIGHT = 240;
 
-/** SPI klok (Hz) — conservatief t.o.v. ST7789; gelijk aan V1 GFX_SPEED. */
+/**
+ * SPI klok (Hz) — referentie gelijk aan V1 `GFX_SPEED`; productdefault op GEEK: 27 MHz.
+ * LVGL 9 + esp_lvgl_port: vastgelegde default is **geen** `swap_bytes` (profiel `DISPLAY_DIAG_PROFILE_SWAP_OFF`).
+ */
 inline constexpr int SPI_PIXEL_CLOCK_HZ = 27 * 1000 * 1000;
 
 /**

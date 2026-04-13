@@ -19,6 +19,24 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "hal/lcd_types.h"
+#include "sdkconfig.h"
+
+#ifndef CONFIG_DISPLAY_SPI_PCLK_HZ
+#define CONFIG_DISPLAY_SPI_PCLK_HZ (27 * 1000 * 1000)
+#endif
+
+/* pclk/rgb volgen profiel — voorkomt dat oude CONFIG_DISPLAY_* in sdkconfig profiel 2/3 overschrijft. */
+#if defined(CONFIG_DISPLAY_DIAG_PROFILE_SPI_20M) && CONFIG_DISPLAY_DIAG_PROFILE_SPI_20M
+#define DISPLAY_PCLK_EFFECTIVE (20 * 1000 * 1000)
+#else
+#define DISPLAY_PCLK_EFFECTIVE CONFIG_DISPLAY_SPI_PCLK_HZ
+#endif
+
+#if defined(CONFIG_DISPLAY_DIAG_PROFILE_BGR) && CONFIG_DISPLAY_DIAG_PROFILE_BGR
+#define DISPLAY_USE_BGR 1
+#else
+#define DISPLAY_USE_BGR 0
+#endif
 
 #ifndef DISPLAY_PORT_RGBK_DIAG
 /** 1 = kort R→G→B→K na zwarte clear (hardwaretest); 0 = alleen clear + groen (snellere boot). */
@@ -127,8 +145,10 @@ static esp_err_t draw_corner_marks(esp_lcd_panel_handle_t panel)
 esp_err_t init()
 {
     const auto &d = bsp_s3_geek::board_descriptor();
-    ESP_LOGI(DIAG_TAG_DISP, "T-102: esp_lcd + ST7789 SPI (GEEK %s) %ux%u, geen swap_xy (zoals V1 rot=0)",
-             d.id, (unsigned)WIDTH, (unsigned)HEIGHT);
+    ESP_LOGI(DIAG_TAG_DISP,
+             "T-102: esp_lcd + ST7789 SPI (GEEK %s) %ux%u, pclk=%d Hz, rgb_order=%s, geen swap_xy (zoals V1 rot=0)",
+             d.id, (unsigned)WIDTH, (unsigned)HEIGHT, DISPLAY_PCLK_EFFECTIVE,
+             DISPLAY_USE_BGR ? "BGR" : "RGB");
 
     spi_bus_config_t buscfg = {};
     buscfg.sclk_io_num = SCLK;
@@ -145,7 +165,7 @@ esp_err_t init()
     io_config.cs_gpio_num = CS;
     io_config.dc_gpio_num = DC;
     io_config.spi_mode = 0;
-    io_config.pclk_hz = SPI_PIXEL_CLOCK_HZ;
+    io_config.pclk_hz = DISPLAY_PCLK_EFFECTIVE;
     io_config.trans_queue_depth = 10;
     io_config.lcd_cmd_bits = 8;
     io_config.lcd_param_bits = 8;
@@ -157,7 +177,8 @@ esp_err_t init()
 
     esp_lcd_panel_dev_config_t panel_config = {};
     panel_config.reset_gpio_num = RST;
-    panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
+    panel_config.rgb_ele_order =
+        DISPLAY_USE_BGR ? LCD_RGB_ELEMENT_ORDER_BGR : LCD_RGB_ELEMENT_ORDER_RGB;
     panel_config.bits_per_pixel = 16;
     panel_config.data_endian = LCD_RGB_DATA_ENDIAN_LITTLE;
 

@@ -6,7 +6,7 @@
 namespace ui {
 
 /**
- * LVGL + esp_lvgl_port op de bestaande esp_lcd-panel (ADR-004).
+ * LVGL + esp_lvgl_port op de bestaande esp_lcd-panel (ADR-004); Stap 8b: compacte live view.
  * Live data uitsluitend via `market_data::snapshot()` / `refresh_from_snapshot` — geen exchange in `ui`.
  */
 esp_err_t init();

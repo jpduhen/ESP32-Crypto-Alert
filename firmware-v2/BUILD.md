@@ -41,6 +41,8 @@ Machineleesbare pin: [`ESP_IDF_VERSION`](ESP_IDF_VERSION).
 
 De eerste build downloadt **managed components** (o.a. `esp_websocket_client`, **`esp_lvgl_port`** + LVGL via `main/idf_component.yml`) — **internet** nodig. Daarna staat `managed_components/` lokaal (zie `.gitignore`).
 
+**Display A/B (GEEK):** in `menuconfig` → *ESP32 Crypto Alert V2* kies **Display: A/B diagnoseprofiel** (0–3). Wissel je profiel, verwijder dan **`sdkconfig`** (en bij twijfel `build/`) zodat de nieuwe waarden echt in de build komen — zie [docs/display/GEEK_DISPLAY_DIAG.md](docs/display/GEEK_DISPLAY_DIAG.md).
+
 ## WiFi — onboarding (standaard)
 
 Credentials komen uit **NVS** (ingevoerd via browser op het **SoftAP `CryptoAlert`**), niet meer alleen uit menuconfig.

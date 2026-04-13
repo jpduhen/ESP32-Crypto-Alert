@@ -1414,7 +1414,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Stap 8b:** UI-verfijning (thema, tweede view) — klein houden; geen dashboard-scope zonder apart besluit.
+**Stap 8b — uitgevoerd:** minimale verfijning van de bestaande live view (hiërarchie, spacing, bronregel); zie § **Stap 8b**. **Volgende kleine UI-stap (optioneel):** tweede view / thema — buiten deze scope tot besluit.
 
 \
 
@@ -1609,6 +1609,62 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 \
 
 **Backlog (ongewijzigd):** MQTT/NTFY/WebUI achter mutex/queue; HTTP-client hergebruik; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md).
+
+\
+
+---
+
+\
+
+## Stap 8b — Minimale UI-verfijning live view (S3-GEEK) (uitgevoerd)
+
+\
+
+**Doel:** zelfde databron (`market_data::snapshot()`), rustigere product-UI — **geen** dashboard, tweede scherm of nieuwe velden.
+
+\
+
+**Uitgevoerd in `ui`**
+
+\
+
+- **Hiërarchie:** symbool bovenin (muted grijs, gecentreerd, vaste breedte i.v.m. smalle 135 px); **prijs** visueel centraal als groot getal; **EUR** op aparte regel eronder (`align_to`, lichtere opacity); **bron** onderaan als `Bron · WS` / `REST` / `—`.
+
+\
+
+- **Scherm:** iets zachter dan puur zwart (`#0B0D0C`), padding op het scherm; prijsregel iets omhoog ten opzichte van het midden zodat EUR + symbool/bottom rustiger balanceren.
+
+\
+
+- **Onveranderd:** `app_core`, `display_port`, `market_data`-API; geen netwerk-/exchange-logica in `ui`.
+
+\
+
+---
+
+\
+
+## Display-diagnose GEEK — LVGL `swap_bytes` / SPI-klok (klein, revertible)
+
+\
+
+**Doel:** wazige LVGL-tekst of kleurverschuiving **A/B** onderzoeken zonder pin-/architectuurwijziging; vergelijk met V1-pinmapping (die inhoudelijk gelijk blijft aan `geek_pins.hpp`).
+
+\
+
+- **Kconfig** (`idf.py menuconfig` → *ESP32 Crypto Alert V2*): **Display: A/B diagnoseprofiel** (0–3) zet afgeleid `swap_bytes`, `rgb_order` en SPI-klok. **Default voor S3-GEEK:** `CONFIG_DISPLAY_DIAG_PROFILE_SWAP_OFF` (swap_bytes=0, RGB, 27 MHz). Na profielwissel: **`sdkconfig` verwijderen** en opnieuw `set-target` + build (zie `GEEK_DISPLAY_DIAG.md`). In `sdkconfig.defaults` alleen `CONFIG_DISPLAY_DIAG_PROFILE_*`.
+
+\
+
+- **Documentatie / procedure:** [firmware-v2/docs/display/GEEK_DISPLAY_DIAG.md](../docs/display/GEEK_DISPLAY_DIAG.md).
+
+\
+
+- **Logs:** `display_port` logt **pclk**; `ui` logt **swap_bytes** bij LVGL-init.
+
+\
+
+**Conclusie na hardware:** invullen in dat document (hypothese A offset/gap, B LVGL byte order, C SPI-timing).
 
 \
 
