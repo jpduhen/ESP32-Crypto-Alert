@@ -1628,11 +1628,19 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-- **Hiërarchie:** symbool bovenin (muted grijs, gecentreerd, vaste breedte i.v.m. smalle 135 px); **prijs** visueel centraal als groot getal; **EUR** op aparte regel eronder (`align_to`, lichtere opacity); **bron** onderaan als `Bron · WS` / `REST` / `—`.
+- **Hiërarchie:** symbool bovenin (muted koel grijs, gecentreerd, vaste breedte i.v.m. smalle 135 px; lange labels met **dots** i.p.v. aflopen buiten het scherm); **prijs** dominant in het midden; **EUR** er direct onder in hetzelfde blok; **bron** onderaan als `Bron · WS` / `REST` / `—`.
 
 \
 
-- **Scherm:** iets zachter dan puur zwart (`#0B0D0C`), padding op het scherm; prijsregel iets omhoog ten opzichte van het midden zodat EUR + symbool/bottom rustiger balanceren.
+- **Layout / compositie:** prijs + EUR staan in één **flex-column** (transparante container, `pad_row` 5) i.p.v. losse `align_to` op het scherm — rustiger verticaal ritme en één optische eenheid; het blok licht **omhoog** gezet (`CENTER`, y≈−4) t.o.v. symbool en bron.
+
+\
+
+- **Typografie / kleur (zelfde default font):** prijs iets helderder (`#F4FAF8`), iets meer **letter-spacing** op het bedrag; EUR zachter mint (`#86EFAC`, opacity ~70%); bronregel donkerder grijs, lagere opacity, lichte letter-spacing; scherm nog `#0B0D0C`, iets ruimere padding (top/bottom).
+
+\
+
+- **Bewust níet in deze stap:** grotere LVGL-fonts (extra `CONFIG_LV_FONT_*`), tweede view/thema, grafieken, netwerkstatus in UI, extra snapshot-velden, animaties.
 
 \
 

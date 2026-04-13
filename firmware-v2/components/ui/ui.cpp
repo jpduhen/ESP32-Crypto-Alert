@@ -1,6 +1,7 @@
 /**
  * Stap 8b: compacte live view (135×240) — alleen `market_data::snapshot()`, geen exchange-details.
  * Hiërarchie: symbool (secundair) → prijs dominant → EUR-regel → bron (klein).
+ * Layout: prijs + EUR in één flex-column (centraal blok) voor rustigere alignment dan losse y-offsets.
  */
 #include "ui/ui.hpp"
 #include "display_port/display_port.hpp"
@@ -41,6 +42,8 @@ static lv_obj_t *screen_root()
 #endif
 
 static lv_obj_t *s_lbl_symbol = nullptr;
+/** Prijs + EUR gegroepeerd voor verticale ritme (flex column). */
+static lv_obj_t *s_price_col = nullptr;
 /** Regel 1: alleen het bedrag (dominant). */
 static lv_obj_t *s_lbl_price = nullptr;
 /** Regel 2: eenheid «EUR» (secundair, onder bedrag). */
@@ -66,8 +69,8 @@ static void apply_screen_chrome(lv_obj_t *scr)
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x0B0D0C), 0);
     lv_obj_set_style_pad_left(scr, 10, 0);
     lv_obj_set_style_pad_right(scr, 10, 0);
-    lv_obj_set_style_pad_top(scr, 14, 0);
-    lv_obj_set_style_pad_bottom(scr, 18, 0);
+    lv_obj_set_style_pad_top(scr, 16, 0);
+    lv_obj_set_style_pad_bottom(scr, 20, 0);
 }
 
 } // namespace
@@ -118,30 +121,48 @@ esp_err_t init()
 
     s_lbl_symbol = lv_label_create(scr);
     lv_label_set_text(s_lbl_symbol, "—");
-    lv_obj_set_style_text_color(s_lbl_symbol, lv_color_hex(0x9CA3AF), 0);
+#if LVGL_VERSION_MAJOR >= 9
+    lv_label_set_long_mode(s_lbl_symbol, LV_LABEL_LONG_MODE_DOTS);
+#else
+    lv_label_set_long_mode(s_lbl_symbol, LV_LABEL_LONG_DOT_DOT);
+#endif
+    lv_obj_set_style_text_color(s_lbl_symbol, lv_color_hex(0x8B939E), 0);
+    lv_obj_set_style_text_opa(s_lbl_symbol, LV_OPA_90, 0);
     lv_obj_set_style_text_align(s_lbl_symbol, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(s_lbl_symbol, static_cast<lv_coord_t>(display_port::panel_width() - 20));
-    lv_obj_align(s_lbl_symbol, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_align(s_lbl_symbol, LV_ALIGN_TOP_MID, 0, 2);
 
-    s_lbl_price = lv_label_create(scr);
+    s_price_col = lv_obj_create(scr);
+    lv_obj_remove_style_all(s_price_col);
+    lv_obj_clear_flag(s_price_col, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_opa(s_price_col, LV_OPA_TRANSP, 0);
+    lv_obj_set_width(s_price_col, static_cast<lv_coord_t>(display_port::panel_width() - 20));
+    lv_obj_set_height(s_price_col, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(s_price_col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(s_price_col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(s_price_col, 5, 0);
+    lv_obj_align(s_price_col, LV_ALIGN_CENTER, 0, -4);
+
+    s_lbl_price = lv_label_create(s_price_col);
     lv_label_set_text(s_lbl_price, "—");
-    lv_obj_set_style_text_color(s_lbl_price, lv_color_hex(0xECFDF5), 0);
+    lv_obj_set_style_text_color(s_lbl_price, lv_color_hex(0xF4FAF8), 0);
     lv_obj_set_style_text_align(s_lbl_price, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_letter_space(s_lbl_price, 1, 0);
-    lv_obj_align(s_lbl_price, LV_ALIGN_CENTER, 0, -26);
+    lv_obj_set_style_text_letter_space(s_lbl_price, 2, 0);
 
-    s_lbl_price_unit = lv_label_create(scr);
+    s_lbl_price_unit = lv_label_create(s_price_col);
     lv_label_set_text(s_lbl_price_unit, "EUR");
-    lv_obj_set_style_text_color(s_lbl_price_unit, lv_color_hex(0x6EE7B7), 0);
-    lv_obj_set_style_text_opa(s_lbl_price_unit, LV_OPA_80, 0);
+    lv_obj_set_style_text_color(s_lbl_price_unit, lv_color_hex(0x86EFAC), 0);
+    lv_obj_set_style_text_opa(s_lbl_price_unit, LV_OPA_70, 0);
     lv_obj_set_style_text_align(s_lbl_price_unit, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align_to(s_lbl_price_unit, s_lbl_price, LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
+    lv_obj_set_style_text_letter_space(s_lbl_price_unit, 1, 0);
 
     s_lbl_source = lv_label_create(scr);
     lv_label_set_text(s_lbl_source, "Bron · —");
-    lv_obj_set_style_text_color(s_lbl_source, lv_color_hex(0x6B7280), 0);
+    lv_obj_set_style_text_color(s_lbl_source, lv_color_hex(0x5C6370), 0);
+    lv_obj_set_style_text_opa(s_lbl_source, LV_OPA_70, 0);
     lv_obj_set_style_text_align(s_lbl_source, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_lbl_source, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_text_letter_space(s_lbl_source, 1, 0);
+    lv_obj_align(s_lbl_source, LV_ALIGN_BOTTOM_MID, 0, -10);
 
     lvgl_port_unlock();
 
@@ -151,7 +172,7 @@ esp_err_t init()
 
 void refresh_from_snapshot(const market_data::MarketSnapshot &snap)
 {
-    if (!s_lbl_symbol || !s_lbl_price || !s_lbl_price_unit || !s_lbl_source) {
+    if (!s_lbl_symbol || !s_price_col || !s_lbl_price || !s_lbl_price_unit || !s_lbl_source) {
         return;
     }
     if (!lvgl_port_lock(100)) {
