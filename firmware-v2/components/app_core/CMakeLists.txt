@@ -11,6 +11,7 @@ idf_component_register(
         market_data
         market_types
         net_runtime
+        ota_service
         service_outbound
         webui
         wifi_onboarding

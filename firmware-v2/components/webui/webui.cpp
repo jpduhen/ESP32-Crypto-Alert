@@ -2,6 +2,7 @@
  * M-013a: minimale WebUI — GET / en GET /api/status.json.
  * M-013b: POST /api/services.json — mqtt/ntfy naar config_store.
  * M-013c: hoofdpagina-formulier (inline JS) naar dezelfde POST-route.
+ * M-014a: POST /api/ota — ruwe firmware → ota_service.
  */
 #include "webui/webui.hpp"
 #include "config_store/config_store.hpp"
@@ -19,6 +20,7 @@
 
 #if CONFIG_WEBUI_ENABLE
 #include "lwip/def.h"
+#include "ota_service/ota_service.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -323,7 +325,7 @@ static esp_err_t handle_root_html(httpd_req_t *req)
     const char *mq_chk = svc.mqtt_enabled ? " checked" : "";
     const char *nt_chk = svc.ntfy_enabled ? " checked" : "";
 
-    constexpr size_t k_html_alloc = 12288;
+    constexpr size_t k_html_alloc = 16384;
     char *const html = static_cast<char *>(std::malloc(k_html_alloc));
     if (!html) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem");
@@ -372,6 +374,20 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         "m.style.color=x.ok?'#063':'#800';m.textContent=x.ok?x.text:('Fout '+x.status+': '+x.text);}})"
         ".catch(function(err){m.style.color='#800';m.textContent='Netwerkfout: '+err;});});})();"
         "</script>"
+        "<h2>OTA-firmware</h2>"
+        "<p style=\"color:#666;font-size:.9rem\">Geen login — alleen op een vertrouwd netwerk. Gebruik het "
+        "<code>build/*.bin</code> van <code>idf.py build</code>. Stroom stabiel houden.</p>"
+        "<p><input type=\"file\" id=\"ota-file\" accept=\".bin,.BIN\"/></p>"
+        "<p><button type=\"button\" id=\"ota-btn\">Firmware uploaden</button></p>"
+        "<p id=\"ota-msg\"></p>"
+        "<script>(function(){var b=document.getElementById('ota-btn');if(!b)return;"
+        "b.addEventListener('click',function(){var f=document.getElementById('ota-file');"
+        "var o=document.getElementById('ota-msg');if(!f||!f.files.length){o.textContent='Kies een .bin';"
+        "o.style.color='#800';return;}o.textContent='Upload…';o.style.color='#333';"
+        "fetch('/api/ota',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:f.files[0]})"
+        ".then(function(r){return r.text().then(function(t){return {ok:r.ok,s:r.status,t:t};});})"
+        ".then(function(x){o.style.color=x.ok?'#063':'#800';o.textContent=x.t;})"
+        ".catch(function(e){o.style.color='#800';o.textContent=''+e;});});})();</script>"
         "</body></html>",
         app ? app->version : "?",
         ipbuf[0] ? ipbuf : "—",
@@ -401,6 +417,11 @@ static esp_err_t handle_root_html(httpd_req_t *req)
     return send_err;
 }
 
+static esp_err_t handle_ota_post(httpd_req_t *req)
+{
+    return ota_service::handle_firmware_upload(req);
+}
+
 #endif // CONFIG_WEBUI_ENABLE
 
 esp_err_t init()
@@ -424,8 +445,10 @@ esp_err_t init()
         port = 8080;
     }
     cfg.server_port = port;
-    cfg.max_uri_handlers = 8;
+    cfg.max_uri_handlers = 12;
     cfg.lru_purge_enable = true;
+    /** M-014a: OTA-handler gebruikt ~1 KiB recv-buffer op httpd-taskstack (default 4096 is krap). */
+    cfg.stack_size = 8192;
 
     ESP_RETURN_ON_ERROR(httpd_start(&s_httpd, &cfg), TAG, "httpd_start");
 
@@ -451,7 +474,14 @@ esp_err_t init()
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uh), TAG, "reg html");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &us), TAG, "reg services post");
 
-    ESP_LOGI(TAG, "M-013a/b/c: webui op poort %u — status + POST services + form (M-013c)", static_cast<unsigned>(port));
+    httpd_uri_t uo{};
+    uo.uri = "/api/ota";
+    uo.method = HTTP_POST;
+    uo.handler = handle_ota_post;
+    uo.user_ctx = nullptr;
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uo), TAG, "reg ota post");
+
+    ESP_LOGI(TAG, "M-013a/b/c + M-014a: webui poort %u — status, services, OTA-upload", static_cast<unsigned>(port));
     return ESP_OK;
 #endif
 }

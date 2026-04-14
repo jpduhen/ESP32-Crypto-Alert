@@ -31,3 +31,4 @@ CONFIG_DISPLAY_DIAG_PROFILE_SWAP_OFF=y
 # M-011a: NTFY staat default uit; zet CONFIG_NTFY_CLIENT_ENABLE=y + NTFY_TOPIC via menuconfig voor echte push.
 # M-012a: MQTT-bridge default uit; zet CONFIG_MQTT_BRIDGE_ENABLE=y + MQTT_BROKER_URI voor echte publish.
 # M-013a: read-only WebUI default uit; zet CONFIG_WEBUI_ENABLE=y + WEBUI_PORT (bijv. 8080).
+# M-014a: OTA-upload via POST /api/ota (ruwe .bin); dual-slot zie partitions_v2_16mb_ota.csv.

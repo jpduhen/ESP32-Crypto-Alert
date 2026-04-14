@@ -1608,7 +1608,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Backlog (ongewijzigd t.o.v. M-002a):** mutex/queue voor schrijf-paden; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c**. **Runtime service-config (typed, read-only overlay):** § **M-003a**. **NTFY-sink:** § **M-011a**. **MQTT-bridge:** § **M-012a**. **WebUI (status + service-write + minimaal form):** § **M-013a** / § **M-013b** / § **M-013c**.
+**Backlog (ongewijzigd t.o.v. M-002a):** mutex/queue voor schrijf-paden; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c**. **Runtime service-config (typed, read-only overlay):** § **M-003a**. **NTFY-sink:** § **M-011a**. **MQTT-bridge:** § **M-012a**. **WebUI (status + service-write + form + OTA-basis):** § **M-013a**–**M-013c**, § **M-014a**.
 
 \
 
@@ -1884,7 +1884,39 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Bewust niet in M-013c:** auth; secrets; **webui-poort/toggle**; symbol/alerts; dashboard; WS/SPA; nieuwe API-routes.
+**Bewust niet in M-013c:** auth; secrets; **webui-poort/toggle**; symbol/alerts; dashboard; WS/SPA; service-API’s buiten `/api/services.json` (OTA: § **M-014a**).
+
+\
+
+---
+
+\
+
+## M-014a — Minimale OTA-basis via WebUI (upload → next slot) (uitgevoerd)
+
+\
+
+**Doel (migratiematrix **M-014**, technische basis):** met **bestaande dual-OTA-partitietabel** (`partitions_v2_16mb_ota.csv`, 3 MiB/slot) een **kleine, gecontroleerde** upload-flow: **HTTP POST** met **ruwe firmware-binary** → **`ota_service`** → **`esp_ota_*`** — **zonder** auth, **zonder** signing, **zonder** voortgangs-UX.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **Component `ota_service`:** `init()` logt **running** / **next** OTA-partitie; **`handle_firmware_upload(httpd_req_t *)`** accepteert alleen **`Content-Type: application/octet-stream`** + **`Content-Length`**, streamt naar de **niet-actieve** slot (**`esp_ota_begin` / `write` / `end`**), zet **boot-partitie** bij succes, stuurt **JSON**, **`esp_restart()`** na korte delay. **Mislukt** blijft het **lopende** image ongewijzigd.
+
+\
+
+- **WebUI:** **`POST /api/ota`** geregistreerd; op **`/`** een **minimale sectie** (bestand kiezen + knop) die **`fetch`** met **ruwe body** gebruikt — geen multipart-parser op het apparaat.
+
+\
+
+- **Grenzen:** max. imagegrootte **3 MiB** (partition size); minimum **1 KiB**; validatie via **IDF** (`esp_ota_end`). **Geen** MQTT-OTA, **geen** rollback-policy in firmware.
+
+\
+
+**Bewust niet in M-014a:** login; **cryptografische handtekening**; voortgangsbalk; automatische versiecheck; rollback/anti-brick-beleid; OTA via MQTT; tweede UI-view.
 
 \
 
