@@ -6,12 +6,15 @@
 namespace service_outbound {
 
 /**
- * Minimale dispatcher voor toekomstige outbound services (MQTT/NTFY/WebUI).
- * Huidige implementatie: stub — geen transports, geen queues (M-002c).
+ * Minimale outbound-plane: FreeRTOS-queue + poll-drain naar stub-sink (M-002c).
+ * Geen MQTT/NTFY/WebUI-transports; `emit` is niet-blokkerend (0-tick send).
  */
 esp_err_t init();
 
-/** Stuurt een event naar de geregistreerde sink(s); default is no-op + beperkte diag. */
+/** Zet een event in de interne queue; bij volle queue: drop + waarschuwing. */
 void emit(Event e);
+
+/** Leegt de queue en verwerkt elk event via de interne dispatcher (stub). Aanroepen vanuit `app_core`-lus — geen extra worker-task. */
+void poll();
 
 } // namespace service_outbound

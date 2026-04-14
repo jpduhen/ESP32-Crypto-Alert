@@ -6,7 +6,7 @@ namespace service_outbound {
 
 /**
  * Neutrale outbound-signalen (M-002c) — geen MQTT/NTFY/WebUI-protocoltypes.
- * Uitbreiden kan later; waarden blijven stabiel voor vaste ABI in firmware.
+ * Producer → interne FreeRTOS-queue → `poll`/`dispatch`; payloads later per event-type.
  */
 enum class Event : uint8_t {
     None = 0,

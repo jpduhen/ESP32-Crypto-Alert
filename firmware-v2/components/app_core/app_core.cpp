@@ -84,6 +84,7 @@ esp_err_t run()
     ESP_LOGI(TAG, "config: default_symbol=%s", cfg.default_symbol);
     ESP_LOGI(TAG, "runtime: idle (market_data tick)");
     service_outbound::emit(service_outbound::Event::ApplicationReady);
+    service_outbound::poll();
     for (;;) {
         market_data::tick();
 #if CONFIG_MD_USE_EXCHANGE_BITVAVO
@@ -91,6 +92,7 @@ esp_err_t run()
 #endif
         ui::refresh_from_snapshot(market_data::snapshot());
         diagnostics::tick_heartbeat();
+        service_outbound::poll();
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
 }

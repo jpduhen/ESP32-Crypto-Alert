@@ -1608,7 +1608,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Backlog (ongewijzigd t.o.v. M-002a):** MQTT/NTFY/WebUI achter mutex/queue; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound servicegrens (stub):** § **M-002c**.
+**Backlog (ongewijzigd t.o.v. M-002a):** MQTT/NTFY/WebUI achter mutex/queue; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound servicegrens (queue + stub dispatch):** § **M-002c**.
 
 \
 
@@ -1652,11 +1652,11 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-## M-002c — Minimale servicegrens outbound events (stub) (uitgevoerd)
+## M-002c — Minimale servicegrens outbound events + interne queue (stub) (uitgevoerd)
 
 \
 
-**Doel:** één neutrale **event-grens** voor toekomstige outbound acties (MQTT publish, NTFY, WebUI-push) **zonder** transports of queues te bouwen — alleen contract + stub dispatcher.
+**Doel:** één neutrale **producer→queue→consumer**-grens voor toekomstige outbound acties (MQTT publish, NTFY, WebUI-push) **zonder** echte transports — contract (`Event`) + **FreeRTOS-queue** (diepte 8) + **`poll()`**-drain naar stub-dispatcher.
 
 \
 
@@ -1664,19 +1664,19 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-- **Component `service_outbound`:** types `service_outbound::Event` (o.a. `ApplicationReady`) en API `init()` / `emit()` — geen protocolstrings omhoog vanuit exchange; **UI** en **display_port** blijven onwetend.
+- **Component `service_outbound`:** `Event` (o.a. `ApplicationReady`); **`emit()`** zet niet-blokkerend op de queue (vol = drop + waarschuwing); **`poll()`** leegt de queue en roept de interne **stub**-dispatch aan — tag **`svc_out`**, geen netwerk.
 
 \
 
-- **`app_core` orkestreert:** na `market_data::init` volgt `service_outbound::init`; vóór de hoofdlus één keer `emit(ApplicationReady)` — **stub** logt onder tag **`svc_out`** (geen netwerk, geen side effects).
+- **`app_core` orkestreert:** na `market_data::init` → `service_outbound::init`; vóór de hoofdlus `emit(ApplicationReady)` + **`poll()`** (directe verwerking); in de hoofdlus opnieuw **`poll()`** vóór elke slaap — geen aparte worker-task.
 
 \
 
-- **Ownership:** `market_data` blijft façade; `exchange_bitvavo` blijft transport; toekomstige echte services kunnen achter `emit` of een latere interne sink-hook aansluiten zonder architectuur opnieuw open te breken.
+- **Ownership:** `market_data` blijft façade; `exchange_bitvavo` blijft transport; **UI** / **display_port** geen outbound-service. Toekomstige echte services kunnen naast of in plaats van stub-dispatch aansluiten op dezelfde queue of een tweede trap.
 
 \
 
-**Bewust open:** echte MQTT-/NTFY-clients; WebUI; FreeRTOS-queues; worker-task; uitbreiding van `Event` met payloads zodra een transport kiest.
+**Bewust open:** echte MQTT-/NTFY-clients; WebUI; **payload-structs** per `Event`; aparte net-worker-task; scheiding van meerdere consumers als de load dat vraagt.
 
 \
 
