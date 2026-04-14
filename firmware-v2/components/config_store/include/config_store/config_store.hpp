@@ -7,8 +7,8 @@
 namespace config_store {
 
 /**
- * M-003a: schema v3 — runtime service-instellingen (NVS-overlay op Kconfig-defaults).
- * Schrijfpad WebUI/settings: bewust nog niet; alleen load + getters.
+ * M-003a / M-013b: schema v3 — runtime service-instellingen (NVS-overlay op Kconfig-defaults).
+ * M-013b: beperkte schrijfpad voor mqtt/ntfy via `persist_service_connectivity` (geen webui_*).
  */
 constexpr uint32_t kSchemaVersion = 3;
 
@@ -50,9 +50,16 @@ esp_err_t save(const RuntimeConfig &cfg);
 
 /**
  * Snapshot na `load_or_defaults` — zelfde inhoud als `out.services` van de laatste load.
- * Alleen lezen; geen schrijven vanuit services (M-003a).
+ * Bijgewerkt na `persist_service_connectivity` (M-013b).
  */
 const ServiceRuntimeConfig &service_runtime();
+
+/**
+ * M-013b: schrijf alleen mqtt_* en ntfy_* naar NVS (`svc_*` keys). Laat `webui_enabled` /
+ * `webui_port` ongemoeid. Valideert lengtes en vereist niet-lege `mqtt_broker_uri` als
+ * `mqtt_enabled` true. Wijzigt `g_service_cache` bij succes.
+ */
+esp_err_t persist_service_connectivity(const ServiceRuntimeConfig &mqtt_ntfy);
 
 /** True als er een niet-lege SSID in NVS zit (provisioned). */
 bool has_wifi_credentials(const RuntimeConfig &cfg);

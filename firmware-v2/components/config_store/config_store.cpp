@@ -192,6 +192,76 @@ const ServiceRuntimeConfig &service_runtime()
     return g_service_cache;
 }
 
+static bool svc_string_ok(const char *s)
+{
+    for (const char *p = s; *p; ++p) {
+        if (*p == '\r' || *p == '\n') {
+            return false;
+        }
+    }
+    return true;
+}
+
+esp_err_t persist_service_connectivity(const ServiceRuntimeConfig &mqtt_ntfy)
+{
+    if (!svc_string_ok(mqtt_ntfy.mqtt_broker_uri) || !svc_string_ok(mqtt_ntfy.ntfy_topic)) {
+        ESP_LOGW(DIAG_TAG_CFG, "M-013b: mqtt/ntfy string bevat ongeldige tekens");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (mqtt_ntfy.mqtt_enabled && mqtt_ntfy.mqtt_broker_uri[0] == '\0') {
+        ESP_LOGW(DIAG_TAG_CFG, "M-013b: mqtt_enabled zonder broker-URI");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strlen(mqtt_ntfy.mqtt_broker_uri) >= kMqttBrokerUriMax ||
+        strlen(mqtt_ntfy.ntfy_topic) >= kNtfyTopicMax) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    ServiceRuntimeConfig next = g_service_cache;
+    next.mqtt_enabled = mqtt_ntfy.mqtt_enabled;
+    strncpy(next.mqtt_broker_uri, mqtt_ntfy.mqtt_broker_uri, sizeof(next.mqtt_broker_uri) - 1);
+    next.mqtt_broker_uri[sizeof(next.mqtt_broker_uri) - 1] = '\0';
+    next.ntfy_enabled = mqtt_ntfy.ntfy_enabled;
+    strncpy(next.ntfy_topic, mqtt_ntfy.ntfy_topic, sizeof(next.ntfy_topic) - 1);
+    next.ntfy_topic[sizeof(next.ntfy_topic) - 1] = '\0';
+
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGW(DIAG_TAG_CFG, "M-013b: nvs_open: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    const uint8_t mq_en = next.mqtt_enabled ? 1u : 0u;
+    const uint8_t nt_en = next.ntfy_enabled ? 1u : 0u;
+    err = nvs_set_u32(h, KEY_SCHEMA, kSchemaVersion);
+    if (err == ESP_OK) {
+        err = nvs_set_u8(h, KEY_SVC_MQ_EN, mq_en);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_str(h, KEY_SVC_MQ_URI, next.mqtt_broker_uri);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u8(h, KEY_SVC_NT_EN, nt_en);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_str(h, KEY_SVC_NT_TP, next.ntfy_topic);
+    }
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+
+    if (err == ESP_OK) {
+        g_service_cache = next;
+        ESP_LOGI(DIAG_TAG_CFG, "M-013b: service connectivity opgeslagen (mqtt=%s ntfy=%s)",
+                 next.mqtt_enabled ? "on" : "off", next.ntfy_enabled ? "on" : "off");
+    } else {
+        ESP_LOGW(DIAG_TAG_CFG, "M-013b: persist: %s", esp_err_to_name(err));
+    }
+    return err;
+}
+
 esp_err_t save(const RuntimeConfig &cfg)
 {
     nvs_handle_t h;

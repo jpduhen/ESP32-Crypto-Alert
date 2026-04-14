@@ -1608,7 +1608,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Backlog (ongewijzigd t.o.v. M-002a):** mutex/queue voor schrijf-paden; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c**. **Runtime service-config (typed, read-only overlay):** § **M-003a**. **NTFY-sink:** § **M-011a**. **MQTT-bridge:** § **M-012a**. **Read-only WebUI:** § **M-013a**.
+**Backlog (ongewijzigd t.o.v. M-002a):** mutex/queue voor schrijf-paden; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c**. **Runtime service-config (typed, read-only overlay):** § **M-003a**. **NTFY-sink:** § **M-011a**. **MQTT-bridge:** § **M-012a**. **WebUI (status + beperkte service-write):** § **M-013a** / § **M-013b**.
 
 \
 
@@ -1704,7 +1704,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-- **`config_store::service_runtime()`** geeft een snapshot na `load_or_defaults` (zelfde inhoud als `RuntimeConfig::services`). **`save()`** schrijft nog **geen** service-velden (read-only uit applicatie-oogpunt; keys zijn bedoeld voor latere tooling/maintenance-API).
+- **`config_store::service_runtime()`** geeft een snapshot na `load_or_defaults` (zelfde inhoud als `RuntimeConfig::services`). **`save()`** schrijft nog **geen** service-velden; **M-013b** voegt een aparte API **`persist_service_connectivity`** toe voor een **kleine mqtt/ntfy-subset** (geen `webui_*`).
 
 \
 
@@ -1712,7 +1712,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Bewust open (niet M-003a):** schrijfpad vanuit WebUI of settings-API; `save()`-uitbreiding voor services; MQTT/NTFY **secrets** in NVS; volledige migratiematrix over alle domeinen; market/alert/symbool-keuze buiten dit subset.
+**Bewust open (niet M-003a zelf):** brede settings-API; `save()`-uitbreiding voor alle domeinen; MQTT/NTFY **secrets** in NVS; volledige migratiematrix; market/alert/symbool-keuze buiten dit subset. **Eerste beperkte write:** § **M-013b**.
 
 \
 
@@ -1796,7 +1796,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Doel:** migratiematrix **M-013** — eerste **HTTP**-observatiepunt: **geen** settings, **geen** OTA, **geen** dashboard — alleen veilige status.
+**Doel:** migratiematrix **M-013** — eerste **HTTP**-observatiepunt: **geen** OTA, **geen** dashboard — alleen veilige status; **geen** brede settingspagina.
 
 \
 
@@ -1812,11 +1812,47 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-- **Geen** POST-handlers, geen auth, geen koppeling aan `ntfy_client` / `mqtt_bridge`; geen protocol naar boven behalve façade-snapshot.
+- **Geen** auth; geen koppeling van HTTP aan `market_data`-transport buiten snapshot; eerste write-pad zit in **§ M-013b** (klein subset).
 
 \
 
-**Bewust open:** instellingen wijzigen; WebSocket push; SPA; integratie met outbound queue voor writes.
+**Bewust open (voor M-013a alleen):** WebSocket push; SPA; brede instellingen-UI. **Eerste write:** § **M-013b**.
+
+\
+
+---
+
+\
+
+## M-013b — Eerste gecontroleerde WebUI-write naar `config_store` (mqtt/ntfy) (uitgevoerd)
+
+\
+
+**Doel:** na **M-003a** + **M-013a** een **klein, veilig** schrijfpad: **HTTP POST JSON** → **`config_store`** (NVS), **zonder** secrets, **zonder** `webui_enabled` / `webui_port` (lock-out vermijden), **zonder** auth/OTA/brede settings.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **Endpoint:** **`POST /api/services.json`** — body max. ca. **1023** bytes, **JSON-object** met minstens één veld: **`mqtt_enabled`** (bool of 0/1), **`mqtt_broker_uri`** (string), **`ntfy_enabled`**, **`ntfy_topic`**. Ontbrekende velden laten de huidige runtime-waarde staan (**partiële update**).
+
+\
+
+- **Validatie (web + store):** ongeldige JSON, te lange strings, verboden regeleinden in strings, of **`mqtt_enabled: true` zonder niet-lege broker-URI** ⇒ **400** met `{"ok":false,"error":"…"}`. NVS-fout ⇒ **500**.
+
+\
+
+- **`config_store::persist_service_connectivity`:** schrijft alleen NVS-keys **`svc_mqtt_en`**, **`svc_mqtt_uri`**, **`svc_ntfy_en`**, **`svc_ntfy_tp`** en zet **`schema`** op v3; werkt **`g_service_cache`** bij. **`webui_*`** blijven ongewijzigd.
+
+\
+
+- **Runtime-gedrag:** **NTFY** leest `service_runtime()` bij elke push — **nieuw topic** geldt bij **volgende** notificatie. **MQTT-client** is al gestart in `mqtt_bridge::init`; **nieuwe broker-URI** is pas na **herstart** effectief (geen hot-reload in M-013b) — response bevat een korte **`note`**.
+
+\
+
+**Bewust niet in M-013b:** schrijven van **WebUI-poort/toggle**; **tokens/wachtwoorden**; **auth**; **symbol/alerts**; **MQTT hot-reconnect**; formulieren/dashboard.
 
 \
 

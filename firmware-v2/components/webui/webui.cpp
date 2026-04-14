@@ -1,10 +1,12 @@
 /**
- * M-013a: minimale read-only WebUI — alleen GET / en GET /api/status.json.
- * Leest `market_data::snapshot()` en STA-IP; geen exchange- of MQTT/NTFY-koppeling.
+ * M-013a: minimale WebUI — GET / en GET /api/status.json.
+ * M-013b: POST /api/services.json — kleine niet-geheime mqtt/ntfy-subset naar config_store.
  */
 #include "webui/webui.hpp"
 #include "config_store/config_store.hpp"
+#include "cJSON.h"
 #include "esp_app_desc.h"
+#include "esp_err.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -108,8 +110,177 @@ static esp_err_t handle_status_json(httpd_req_t *req)
     return httpd_resp_send(req, body, static_cast<size_t>(n));
 }
 
-static esp_err_t handle_root_html(httpd_req_t *req)
+static bool cjson_to_bool(const cJSON *j, bool *out)
 {
+    if (cJSON_IsBool(j)) {
+        *out = cJSON_IsTrue(j) != 0;
+        return true;
+    }
+    if (cJSON_IsNumber(j)) {
+        *out = (j->valuedouble != 0.0);
+        return true;
+    }
+    return false;
+}
+
+static esp_err_t send_json_text(httpd_req_t *req, const char *status_line, const char *json)
+{
+    httpd_resp_set_status(req, status_line);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    return httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t handle_services_post(httpd_req_t *req)
+{
+    char raw[1024]{};
+    const int need = req->content_len;
+    if (need <= 0 || need >= static_cast<int>(sizeof(raw))) {
+        ESP_LOGW(TAG, "M-013b: POST body ontbreekt of te groot (%d)", need);
+        return send_json_text(req, "400 Bad Request",
+                              "{\"ok\":false,\"error\":\"body ontbreekt of te groot (max 1023 bytes)\"}");
+    }
+    int got = 0;
+    while (got < need) {
+        const int r = httpd_req_recv(req, raw + got, (size_t)(need - got));
+        if (r < 0) {
+            ESP_LOGW(TAG, "M-013b: recv: %d", r);
+            return send_json_text(req, "400 Bad Request", "{\"ok\":false,\"error\":\"recv mislukt\"}");
+        }
+        if (r == 0) {
+            break;
+        }
+        got += r;
+    }
+    if (got != need) {
+        return send_json_text(req, "400 Bad Request", "{\"ok\":false,\"error\":\"body incompleet\"}");
+    }
+    raw[need] = '\0';
+
+    cJSON *root = cJSON_Parse(raw);
+    if (!root || !cJSON_IsObject(root)) {
+        if (root) {
+            cJSON_Delete(root);
+        }
+        ESP_LOGW(TAG, "M-013b: JSON parse mislukt");
+        return send_json_text(req, "400 Bad Request", "{\"ok\":false,\"error\":\"ongeldige JSON\"}");
+    }
+
+    config_store::ServiceRuntimeConfig merged = config_store::service_runtime();
+    bool any = false;
+
+    const cJSON *jm = cJSON_GetObjectItem(root, "mqtt_enabled");
+    if (jm != nullptr) {
+        bool v = false;
+        if (!cjson_to_bool(jm, &v)) {
+            cJSON_Delete(root);
+            return send_json_text(req, "400 Bad Request",
+                                  "{\"ok\":false,\"error\":\"mqtt_enabled: verwacht boolean of getal\"}");
+        }
+        merged.mqtt_enabled = v;
+        any = true;
+    }
+
+    const cJSON *juri = cJSON_GetObjectItem(root, "mqtt_broker_uri");
+    if (juri != nullptr) {
+        if (!cJSON_IsString(juri)) {
+            cJSON_Delete(root);
+            return send_json_text(req, "400 Bad Request",
+                                  "{\"ok\":false,\"error\":\"mqtt_broker_uri: verwacht string\"}");
+        }
+        const char *s = cJSON_GetStringValue(juri);
+        if (!s) {
+            cJSON_Delete(root);
+            return send_json_text(req, "400 Bad Request",
+                                  "{\"ok\":false,\"error\":\"mqtt_broker_uri: leeg\"}");
+        }
+        if (strlen(s) >= config_store::kMqttBrokerUriMax) {
+            cJSON_Delete(root);
+            return send_json_text(req, "400 Bad Request",
+                                  "{\"ok\":false,\"error\":\"mqtt_broker_uri: te lang\"}");
+        }
+        strncpy(merged.mqtt_broker_uri, s, sizeof(merged.mqtt_broker_uri) - 1);
+        merged.mqtt_broker_uri[sizeof(merged.mqtt_broker_uri) - 1] = '\0';
+        any = true;
+    }
+
+    const cJSON *jn = cJSON_GetObjectItem(root, "ntfy_enabled");
+    if (jn != nullptr) {
+        bool v = false;
+        if (!cjson_to_bool(jn, &v)) {
+            cJSON_Delete(root);
+            return send_json_text(req, "400 Bad Request",
+                                  "{\"ok\":false,\"error\":\"ntfy_enabled: verwacht boolean of getal\"}");
+        }
+        merged.ntfy_enabled = v;
+        any = true;
+    }
+
+    const cJSON *jtp = cJSON_GetObjectItem(root, "ntfy_topic");
+    if (jtp != nullptr) {
+        if (!cJSON_IsString(jtp)) {
+            cJSON_Delete(root);
+            return send_json_text(req, "400 Bad Request",
+                                  "{\"ok\":false,\"error\":\"ntfy_topic: verwacht string\"}");
+        }
+        const char *s = cJSON_GetStringValue(jtp);
+        if (!s) {
+            cJSON_Delete(root);
+            return send_json_text(req, "400 Bad Request",
+                                  "{\"ok\":false,\"error\":\"ntfy_topic: ongeldig\"}");
+        }
+        if (strlen(s) >= config_store::kNtfyTopicMax) {
+            cJSON_Delete(root);
+            return send_json_text(req, "400 Bad Request",
+                                  "{\"ok\":false,\"error\":\"ntfy_topic: te lang\"}");
+        }
+        strncpy(merged.ntfy_topic, s, sizeof(merged.ntfy_topic) - 1);
+        merged.ntfy_topic[sizeof(merged.ntfy_topic) - 1] = '\0';
+        any = true;
+    }
+
+    cJSON_Delete(root);
+
+    if (!any) {
+        ESP_LOGW(TAG, "M-013b: geen herkende velden");
+        return send_json_text(req, "400 Bad Request",
+                              "{\"ok\":false,\"error\":\"minstens één veld: mqtt_enabled, mqtt_broker_uri, "
+                              "ntfy_enabled, ntfy_topic\"}");
+    }
+
+    const esp_err_t pe = config_store::persist_service_connectivity(merged);
+    if (pe == ESP_ERR_INVALID_ARG) {
+        return send_json_text(req, "400 Bad Request",
+                              "{\"ok\":false,\"error\":\"validatie mislukt (bijv. mqtt_enabled zonder URI)\"}");
+    }
+    if (pe != ESP_OK) {
+        ESP_LOGW(TAG, "M-013b: persist: %s", esp_err_to_name(pe));
+        return send_json_text(req, "500 Internal Server Error",
+                              "{\"ok\":false,\"error\":\"opslaan mislukt\"}");
+    }
+
+    const config_store::ServiceRuntimeConfig &s = config_store::service_runtime();
+    cJSON *out = cJSON_CreateObject();
+    cJSON_AddBoolToObject(out, "ok", true);
+    cJSON_AddBoolToObject(out, "mqtt_enabled", s.mqtt_enabled);
+    cJSON_AddStringToObject(out, "mqtt_broker_uri", s.mqtt_broker_uri);
+    cJSON_AddBoolToObject(out, "ntfy_enabled", s.ntfy_enabled);
+    cJSON_AddStringToObject(out, "ntfy_topic", s.ntfy_topic);
+    cJSON_AddStringToObject(
+        out, "note",
+        "NTFY: volgende push gebruikt dit topic. MQTT: nieuwe broker-URI wordt pas na herstart actief "
+        "(geen hot-reload in M-013b).");
+    char *printed = cJSON_PrintUnformatted(out);
+    cJSON_Delete(out);
+    if (!printed) {
+        return send_json_text(req, "500 Internal Server Error", "{\"ok\":false,\"error\":\"geen geheugen\"}");
+    }
+    const esp_err_t se = send_json_text(req, "200 OK", printed);
+    cJSON_free(printed);
+    return se;
+}
+
+static esp_err_t handle_root_html(httpd_req_t *req)
     const market_data::MarketSnapshot snap = market_data::snapshot();
     char ipbuf[20]{};
     sta_ip_str(ipbuf, sizeof(ipbuf));
@@ -126,7 +297,8 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         "<p><strong>Versie</strong> %s · <strong>IP</strong> %s · <strong>WiFi IP bekend</strong> %s</p>"
         "<p><strong>Symbool</strong> %s · <strong>Prijs (EUR)</strong> %.4f · <strong>Geldig</strong> %s</p>"
         "<p><strong>Verbinding feed</strong> %s · <strong>Bron tick</strong> %s</p>"
-        "<p>JSON: <a href=\"/api/status.json\"><code>/api/status.json</code></a> (read-only)</p>"
+        "<p>JSON: <a href=\"/api/status.json\"><code>/api/status.json</code></a> · "
+        "<code>POST /api/services.json</code> (mqtt/ntfy, M-013b)</p>"
         "</body></html>",
         app ? app->version : "?",
         ipbuf[0] ? ipbuf : "—",
@@ -186,10 +358,17 @@ esp_err_t init()
     uh.handler = handle_root_html;
     uh.user_ctx = nullptr;
 
+    httpd_uri_t us{};
+    us.uri = "/api/services.json";
+    us.method = HTTP_POST;
+    us.handler = handle_services_post;
+    us.user_ctx = nullptr;
+
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uj), TAG, "reg json");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uh), TAG, "reg html");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &us), TAG, "reg services post");
 
-    ESP_LOGI(TAG, "M-013a: read-only webui op poort %u (M-003a runtime)", static_cast<unsigned>(port));
+    ESP_LOGI(TAG, "M-013a/b: webui op poort %u — GET status + POST services (M-013b)", static_cast<unsigned>(port));
     return ESP_OK;
 #endif
 }
