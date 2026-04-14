@@ -1608,7 +1608,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Backlog (ongewijzigd t.o.v. M-002a):** mutex/queue voor schrijf-paden; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c**. **Runtime service-config (typed, read-only overlay):** § **M-003a**. **NTFY-sink:** § **M-011a**. **MQTT-bridge:** § **M-012a**. **WebUI (status + beperkte service-write):** § **M-013a** / § **M-013b**.
+**Backlog (ongewijzigd t.o.v. M-002a):** mutex/queue voor schrijf-paden; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c**. **Runtime service-config (typed, read-only overlay):** § **M-003a**. **NTFY-sink:** § **M-011a**. **MQTT-bridge:** § **M-012a**. **WebUI (status + service-write + minimaal form):** § **M-013a** / § **M-013b** / § **M-013c**.
 
 \
 
@@ -1816,7 +1816,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Bewust open (voor M-013a alleen):** WebSocket push; SPA; brede instellingen-UI. **Eerste write:** § **M-013b**.
+**Bewust open (voor M-013a alleen):** WebSocket push; SPA; brede instellingen-UI. **Write + form:** § **M-013b** / § **M-013c**.
 
 \
 
@@ -1852,7 +1852,39 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Bewust niet in M-013b:** schrijven van **WebUI-poort/toggle**; **tokens/wachtwoorden**; **auth**; **symbol/alerts**; **MQTT hot-reconnect**; formulieren/dashboard.
+**Bewust niet in M-013b:** schrijven van **WebUI-poort/toggle**; **tokens/wachtwoorden**; **auth**; **symbol/alerts**; **MQTT hot-reconnect**; brede formulieren/dashboard — **minimaal HTML-form:** § **M-013c**.
+
+\
+
+---
+
+\
+
+## M-013c — Minimaal WebUI-form voor mqtt/ntfy (bovenop POST) (uitgevoerd)
+
+\
+
+**Doel:** de werkende **`POST /api/services.json`** (M-013b) **bruikbaar maken vanuit de browser** op **`GET /`**, zonder nieuwe backend, zonder SPA/auth/OTA.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **Hoofdpagina (`/`):** bestaande statusregels blijven; daaronder een **eenvoudig formulier** met **`mqtt_enabled`**, **`mqtt_broker_uri`**, **`ntfy_enabled`**, **`ntfy_topic`** — waarden uit **`config_store::service_runtime()`**, strings **HTML-geescaped** voor `value=""`.
+
+\
+
+- **Submit:** **minimale inline JavaScript** (`fetch` **POST** JSON naar **`/api/services.json`**, zelfde payload als M-013b); toont **succes** (inclusief server-**`note`**) of **fout** (status + JSON-`error` of ruwe body).
+
+\
+
+- **UX:** korte **hint** op de pagina: MQTT-broker pas na **herstart**; NTFY-topic bij volgende push. Geen tweede view, geen framework.
+
+\
+
+**Bewust niet in M-013c:** auth; secrets; **webui-poort/toggle**; symbol/alerts; dashboard; WS/SPA; nieuwe API-routes.
 
 \
 

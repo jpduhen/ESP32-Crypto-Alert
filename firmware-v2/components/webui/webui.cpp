@@ -1,6 +1,7 @@
 /**
  * M-013a: minimale WebUI — GET / en GET /api/status.json.
- * M-013b: POST /api/services.json — kleine niet-geheime mqtt/ntfy-subset naar config_store.
+ * M-013b: POST /api/services.json — mqtt/ntfy naar config_store.
+ * M-013c: hoofdpagina-formulier (inline JS) naar dezelfde POST-route.
  */
 #include "webui/webui.hpp"
 #include "config_store/config_store.hpp"
@@ -19,6 +20,7 @@
 #if CONFIG_WEBUI_ENABLE
 #include "lwip/def.h"
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #endif
 
@@ -279,26 +281,97 @@ static esp_err_t handle_services_post(httpd_req_t *req)
     return se;
 }
 
+/** HTML attribute escaping for value="…" (minimal subset). */
+static void html_attr_escape(const char *src, char *dst, size_t dst_sz)
+{
+    size_t j = 0;
+    for (size_t i = 0; src[i] != '\0' && j + 8 < dst_sz; ++i) {
+        switch (src[i]) {
+        case '&':
+            std::memcpy(dst + j, "&amp;", 5);
+            j += 5;
+            break;
+        case '"':
+            std::memcpy(dst + j, "&quot;", 6);
+            j += 6;
+            break;
+        case '<':
+            std::memcpy(dst + j, "&lt;", 4);
+            j += 4;
+            break;
+        default:
+            dst[j++] = src[i];
+            break;
+        }
+    }
+    dst[j] = '\0';
+}
+
 static esp_err_t handle_root_html(httpd_req_t *req)
 {
     const market_data::MarketSnapshot snap = market_data::snapshot();
     char ipbuf[20]{};
     sta_ip_str(ipbuf, sizeof(ipbuf));
     const esp_app_desc_t *app = esp_app_get_description();
+    const config_store::ServiceRuntimeConfig &svc = config_store::service_runtime();
 
-    char html[1400]{};
-    const int n = snprintf(
-        html, sizeof(html),
+    char esc_uri[config_store::kMqttBrokerUriMax * 6]{};
+    char esc_topic[config_store::kNtfyTopicMax * 6]{};
+    html_attr_escape(svc.mqtt_broker_uri, esc_uri, sizeof(esc_uri));
+    html_attr_escape(svc.ntfy_topic, esc_topic, sizeof(esc_topic));
+
+    const char *mq_chk = svc.mqtt_enabled ? " checked" : "";
+    const char *nt_chk = svc.ntfy_enabled ? " checked" : "";
+
+    constexpr size_t k_html_alloc = 12288;
+    char *const html = static_cast<char *>(std::malloc(k_html_alloc));
+    if (!html) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem");
+        return ESP_ERR_NO_MEM;
+    }
+
+    const int n = std::snprintf(
+        html, k_html_alloc,
         "<!DOCTYPE html><html lang=\"nl\"><head><meta charset=\"utf-8\"/>"
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"/>"
-        "<title>CryptoAlert V2</title><style>body{font-family:system-ui,sans-serif;"
-        "margin:1rem;line-height:1.4}code{background:#eee;padding:2px 6px}</style></head><body>"
+        "<title>CryptoAlert V2</title>"
+        "<style>body{font-family:system-ui,sans-serif;margin:1rem;line-height:1.4}"
+        "code{background:#eee;padding:2px 6px}fieldset{border:1px solid #ccc;border-radius:6px;padding:1rem;margin-top:1rem}"
+        "#svc-msg{min-height:1.5em;margin-top:.75em;font-size:.95rem}</style></head><body>"
         "<h1>CryptoAlert V2</h1>"
         "<p><strong>Versie</strong> %s · <strong>IP</strong> %s · <strong>WiFi IP bekend</strong> %s</p>"
         "<p><strong>Symbool</strong> %s · <strong>Prijs (EUR)</strong> %.4f · <strong>Geldig</strong> %s</p>"
         "<p><strong>Verbinding feed</strong> %s · <strong>Bron tick</strong> %s</p>"
-        "<p>JSON: <a href=\"/api/status.json\"><code>/api/status.json</code></a> · "
-        "<code>POST /api/services.json</code> (mqtt/ntfy, M-013b)</p>"
+        "<p><a href=\"/api/status.json\"><code>/api/status.json</code></a></p>"
+        "<h2>Services (mqtt / ntfy)</h2>"
+        "<p class=\"hint\">MQTT: na wijziging broker-URI eerst <strong>herstart</strong> — client start bij boot. "
+        "NTFY: topic geldt bij de volgende push.</p>"
+        "<form id=\"svc-form\">"
+        "<fieldset><legend>Instellingen</legend>"
+        "<p><label><input type=\"checkbox\" id=\"mqtt_enabled\"%s/> MQTT aan</label></p>"
+        "<p><label>Broker-URI<br/><input type=\"text\" id=\"mqtt_broker_uri\" value=\"%s\" "
+        "maxlength=\"%u\" size=\"56\" placeholder=\"mqtt://… of mqtts://…\"/></label></p>"
+        "<p><label><input type=\"checkbox\" id=\"ntfy_enabled\"%s/> NTFY aan</label></p>"
+        "<p><label>NTFY-topic<br/><input type=\"text\" id=\"ntfy_topic\" value=\"%s\" "
+        "maxlength=\"%u\" size=\"40\"/></label></p>"
+        "<p><button type=\"submit\">Opslaan</button></p>"
+        "</fieldset></form>"
+        "<p id=\"svc-msg\"></p>"
+        "<script>"
+        "(function(){var f=document.getElementById('svc-form');var m=document.getElementById('svc-msg');"
+        "f.addEventListener('submit',function(e){e.preventDefault();m.textContent='Bezig…';m.style.color='#333';"
+        "var body=JSON.stringify({mqtt_enabled:document.getElementById('mqtt_enabled').checked,"
+        "mqtt_broker_uri:document.getElementById('mqtt_broker_uri').value,"
+        "ntfy_enabled:document.getElementById('ntfy_enabled').checked,"
+        "ntfy_topic:document.getElementById('ntfy_topic').value});"
+        "fetch('/api/services.json',{method:'POST',headers:{'Content-Type':'application/json'},body:body})"
+        ".then(function(r){return r.text().then(function(t){return {ok:r.ok,status:r.status,text:t};});})"
+        ".then(function(x){try{var j=JSON.parse(x.text);if(x.ok){m.style.color='#063';"
+        "m.textContent='Opgeslagen. '+(j.note||'');}else{m.style.color='#800';"
+        "m.textContent='Fout '+x.status+': '+(j.error||x.text);}}catch(err){"
+        "m.style.color=x.ok?'#063':'#800';m.textContent=x.ok?x.text:('Fout '+x.status+': '+x.text);}})"
+        ".catch(function(err){m.style.color='#800';m.textContent='Netwerkfout: '+err;});});})();"
+        "</script>"
         "</body></html>",
         app ? app->version : "?",
         ipbuf[0] ? ipbuf : "—",
@@ -307,14 +380,25 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         snap.last_tick.price_eur,
         snap.valid ? "ja" : "nee",
         conn_str(snap.connection),
-        tick_str(snap.last_tick_source));
-    if (n <= 0 || static_cast<size_t>(n) >= sizeof(html)) {
+        tick_str(snap.last_tick_source),
+        mq_chk,
+        esc_uri,
+        static_cast<unsigned>(config_store::kMqttBrokerUriMax - 1),
+        nt_chk,
+        esc_topic,
+        static_cast<unsigned>(config_store::kNtfyTopicMax - 1));
+
+    if (n <= 0 || static_cast<size_t>(n) >= k_html_alloc) {
+        ESP_LOGW(TAG, "M-013c: HTML overflow of snprintf-fout (n=%d)", n);
+        std::free(html);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
         return ESP_FAIL;
     }
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_send(req, html, static_cast<size_t>(n));
+    const esp_err_t send_err = httpd_resp_send(req, html, static_cast<size_t>(n));
+    std::free(html);
+    return send_err;
 }
 
 #endif // CONFIG_WEBUI_ENABLE
@@ -367,7 +451,7 @@ esp_err_t init()
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uh), TAG, "reg html");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &us), TAG, "reg services post");
 
-    ESP_LOGI(TAG, "M-013a/b: webui op poort %u — GET status + POST services (M-013b)", static_cast<unsigned>(port));
+    ESP_LOGI(TAG, "M-013a/b/c: webui op poort %u — status + POST services + form (M-013c)", static_cast<unsigned>(port));
     return ESP_OK;
 #endif
 }
