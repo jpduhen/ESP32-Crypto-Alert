@@ -11,6 +11,7 @@ idf_component_register(
         market_data
         market_types
         net_runtime
+        service_outbound
         wifi_onboarding
         freertos
         esp_common

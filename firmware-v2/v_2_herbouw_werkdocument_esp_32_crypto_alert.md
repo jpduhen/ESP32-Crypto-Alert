@@ -1470,7 +1470,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-- Langere termijn: HTTP-client **hergebruik** / backoff volgens M-002; OTA-separate task voor netwerk i.p.v. main stack (zie eerdere stack-overflowfix).
+- Langere termijn: HTTP-client **hergebruik** voor REST Bitvavo: **M-002b** (uitgevoerd); verdere backoff/OTA-task i.p.v. main stack blijft open.
 
 \
 
@@ -1608,7 +1608,75 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Backlog (ongewijzigd):** MQTT/NTFY/WebUI achter mutex/queue; HTTP-client hergebruik; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md).
+**Backlog (ongewijzigd t.o.v. M-002a):** MQTT/NTFY/WebUI achter mutex/queue; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound servicegrens (stub):** § **M-002c**.
+
+\
+
+---
+
+\
+
+## M-002b — REST: HTTP-client hergebruik in `exchange_bitvavo` (uitgevoerd)
+
+\
+
+**Doel:** het REST-pad naar Bitvavo (`GET /v2/ticker/price`) minder TLS-overhead zonder nieuwe service-laag of wijziging aan `market_data` / UI.
+
+\
+
+**Wat is aangescherpt**
+
+\
+
+- **Ownership:** één lazy-geïnitialiseerde `esp_http_client` in **`bitvavo_rest.cpp`** (file-static). Alleen deze module beheert de handle; geen globale HTTP-helper buiten de exchange-laag.
+
+\
+
+- **Lifecycle:** eerste succesvolle `fetch_ticker_price` roept `esp_http_client_init` aan (basis-URL `https://api.bitvavo.com/`); elke call zet het volledige pad via **`esp_http_client_set_url`**, daarna open → headers → body → **`esp_http_client_close`**. De handle blijft bestaan voor de volgende call (minder volledige handshake dan «nieuwe sessie per request»).
+
+\
+
+- **Fouten:** bij `set_url`/open/read/niet-2xx/lege body wordt na **`close`** waar nodig **`esp_http_client_cleanup`** aangeroepen (`http_invalidate`); volgende REST-poging bouwt een schone client op. JSON-parsefout na geldige 200 blijft bewust **zonder** invalidate (zelfde transport, alleen inhoud).
+
+\
+
+- **Synchronisatie:** ongewijzigd — volledige REST-call blijft onder **`net_runtime::net_mutex`**; `exchange_bitvavo::tick` blijft de enige aanroeper in de huidige opzet.
+
+\
+
+**Bewust niet in deze stap:** MQTT/NTFY/WebUI; queue-framework; net-worker-task; hergebruik of wijziging aan **WebSocket**-client; wijziging aan `market_data`-API of snapshot-velden; backoff uitbreiden buiten bestaand STA/REST-gedrag.
+
+\
+
+---
+
+\
+
+## M-002c — Minimale servicegrens outbound events (stub) (uitgevoerd)
+
+\
+
+**Doel:** één neutrale **event-grens** voor toekomstige outbound acties (MQTT publish, NTFY, WebUI-push) **zonder** transports of queues te bouwen — alleen contract + stub dispatcher.
+
+\
+
+**Wat is aangescherpt**
+
+\
+
+- **Component `service_outbound`:** types `service_outbound::Event` (o.a. `ApplicationReady`) en API `init()` / `emit()` — geen protocolstrings omhoog vanuit exchange; **UI** en **display_port** blijven onwetend.
+
+\
+
+- **`app_core` orkestreert:** na `market_data::init` volgt `service_outbound::init`; vóór de hoofdlus één keer `emit(ApplicationReady)` — **stub** logt onder tag **`svc_out`** (geen netwerk, geen side effects).
+
+\
+
+- **Ownership:** `market_data` blijft façade; `exchange_bitvavo` blijft transport; toekomstige echte services kunnen achter `emit` of een latere interne sink-hook aansluiten zonder architectuur opnieuw open te breken.
+
+\
+
+**Bewust open:** echte MQTT-/NTFY-clients; WebUI; FreeRTOS-queues; worker-task; uitbreiding van `Event` met payloads zodra een transport kiest.
 
 \
 

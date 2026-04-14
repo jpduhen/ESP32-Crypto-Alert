@@ -1,5 +1,6 @@
 /**
  * app_core — lifecycle-orchestratie alleen (M-002): geen exchange-URLs; marktdata via market_data::.
+ * Outbound service-events: service_outbound:: (M-002c) — geen protocol in UI/display.
  */
 #include "app_core/app_core.hpp"
 #include "config_store/config_store.hpp"
@@ -9,6 +10,7 @@
 #include "market_data/market_data.hpp"
 #include "market_types/types.hpp"
 #include "net_runtime/net_runtime.hpp"
+#include "service_outbound/service_outbound.hpp"
 #include "wifi_onboarding/wifi_onboarding.hpp"
 #include "ui/ui.hpp"
 #include "esp_check.h"
@@ -67,6 +69,7 @@ static esp_err_t lifecycle_startup(config_store::RuntimeConfig &cfg)
         }
     }
     ESP_RETURN_ON_ERROR(market_data::init(cfg), TAG, "market_data::init");
+    ESP_RETURN_ON_ERROR(service_outbound::init(), TAG, "service_outbound::init");
     return ESP_OK;
 }
 
@@ -80,6 +83,7 @@ esp_err_t run()
 
     ESP_LOGI(TAG, "config: default_symbol=%s", cfg.default_symbol);
     ESP_LOGI(TAG, "runtime: idle (market_data tick)");
+    service_outbound::emit(service_outbound::Event::ApplicationReady);
     for (;;) {
         market_data::tick();
 #if CONFIG_MD_USE_EXCHANGE_BITVAVO
