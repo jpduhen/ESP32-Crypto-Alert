@@ -1,5 +1,6 @@
 /**
  * M-014a: minimale OTA-upload — alleen HTTP-entry via webui; geen signing/auth.
+ * M-014b: observability + post-boot bevestiging (mark valid indien rollback aan staat).
  */
 #include "ota_service/ota_service.hpp"
 #include "esp_http_server.h"
@@ -26,6 +27,9 @@ static constexpr size_t k_recv_chunk = 1024;
 
 static constexpr size_t k_min_image = 1024;
 
+/** Gezet tijdens `init()` — voor JSON/HTML. */
+static char s_boot_confirm[48] = "pending";
+
 static esp_err_t send_json(httpd_req_t *req, const char *status, const char *json)
 {
     httpd_resp_set_status(req, status);
@@ -34,18 +38,118 @@ static esp_err_t send_json(httpd_req_t *req, const char *status, const char *jso
     return httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
 }
 
+static const char *reset_reason_cstr(esp_reset_reason_t r)
+{
+    switch (r) {
+    case ESP_RST_POWERON:
+        return "poweron";
+    case ESP_RST_EXT:
+        return "ext";
+    case ESP_RST_SW:
+        return "software";
+    case ESP_RST_PANIC:
+        return "panic";
+    case ESP_RST_INT_WDT:
+        return "int_wdt";
+    case ESP_RST_TASK_WDT:
+        return "task_wdt";
+    case ESP_RST_WDT:
+        return "wdt";
+    case ESP_RST_DEEPSLEEP:
+        return "deepsleep";
+    case ESP_RST_BROWNOUT:
+        return "brownout";
+    default:
+        return "other";
+    }
+}
+
+static const char *ota_img_state_cstr(esp_ota_img_states_t st)
+{
+    switch (st) {
+    case ESP_OTA_IMG_NEW:
+        return "new";
+    case ESP_OTA_IMG_PENDING_VERIFY:
+        return "pending_verify";
+    case ESP_OTA_IMG_VALID:
+        return "valid";
+    case ESP_OTA_IMG_INVALID:
+        return "invalid";
+    case ESP_OTA_IMG_ABORTED:
+        return "aborted";
+    case ESP_OTA_IMG_UNDEFINED:
+    default:
+        return "undefined";
+    }
+}
+
 } // namespace
+
+void get_status_snapshot(OtaStatusSnapshot *out)
+{
+    if (!out) {
+        return;
+    }
+    std::memset(out, 0, sizeof(*out));
+
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    const esp_partition_t *next = esp_ota_get_next_update_partition(nullptr);
+
+    if (run) {
+        std::strncpy(out->running_label, run->label, sizeof(out->running_label) - 1);
+        out->running_address = run->address;
+        out->running_size_bytes = run->size;
+        esp_ota_img_states_t st{};
+        if (esp_ota_get_state_partition(run, &st) == ESP_OK) {
+            std::strncpy(out->img_state, ota_img_state_cstr(st), sizeof(out->img_state) - 1);
+        } else {
+            std::strncpy(out->img_state, "unknown", sizeof(out->img_state) - 1);
+        }
+    } else {
+        std::strncpy(out->img_state, "unknown", sizeof(out->img_state) - 1);
+    }
+
+    if (next) {
+        std::strncpy(out->next_update_label, next->label, sizeof(out->next_update_label) - 1);
+    }
+
+    std::strncpy(out->boot_confirm, s_boot_confirm, sizeof(out->boot_confirm) - 1);
+    std::strncpy(out->reset_reason, reset_reason_cstr(esp_reset_reason()), sizeof(out->reset_reason) - 1);
+}
 
 esp_err_t init()
 {
     const esp_partition_t *run = esp_ota_get_running_partition();
     const esp_partition_t *next = esp_ota_get_next_update_partition(nullptr);
+
+    esp_ota_img_states_t st_pre{};
+    const char *st_pre_s = "?";
+    if (run && esp_ota_get_state_partition(run, &st_pre) == ESP_OK) {
+        st_pre_s = ota_img_state_cstr(st_pre);
+    }
+
     ESP_LOGI(TAG,
-             "M-014a: running=%s @0x%x (%u KiB), next_update=%s",
+             "M-014b: running=%s @0x%08x (%u KiB) img_state=%s | next_update=%s | reset=%s",
              run ? run->label : "?",
              run ? (unsigned)run->address : 0u,
              run ? (unsigned)(run->size / 1024) : 0u,
-             next ? next->label : "?");
+             st_pre_s,
+             next ? next->label : "?",
+             reset_reason_cstr(esp_reset_reason()));
+
+    /** Post-boot: markeer image geldig als IDF rollback aan staat (anders ESP_ERR_NOT_SUPPORTED). */
+    const esp_err_t mr = esp_ota_mark_app_valid_cancel_rollback();
+    if (mr == ESP_OK) {
+        std::strncpy(s_boot_confirm, "marked_valid", sizeof(s_boot_confirm) - 1);
+        ESP_LOGI(TAG, "M-014b: esp_ota_mark_app_valid_cancel_rollback ok — rollback geannuleerd voor dit image");
+    } else if (mr == ESP_ERR_NOT_SUPPORTED) {
+        std::strncpy(s_boot_confirm, "rollback_disabled", sizeof(s_boot_confirm) - 1);
+        ESP_LOGI(TAG, "M-014b: rollback niet actief in build — geen aparte mark nodig (normaal)");
+    } else {
+        std::snprintf(s_boot_confirm, sizeof(s_boot_confirm), "error:%s", esp_err_to_name(mr));
+        ESP_LOGW(TAG, "M-014b: mark_app_valid: %s", esp_err_to_name(mr));
+    }
+
     return ESP_OK;
 }
 

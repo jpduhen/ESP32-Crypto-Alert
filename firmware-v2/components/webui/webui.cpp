@@ -3,6 +3,7 @@
  * M-013b: POST /api/services.json — mqtt/ntfy naar config_store.
  * M-013c: hoofdpagina-formulier (inline JS) naar dezelfde POST-route.
  * M-014a: POST /api/ota — ruwe firmware → ota_service.
+ * M-014b: OTA-status in /api/status.json + blok op /.
  */
 #include "webui/webui.hpp"
 #include "config_store/config_store.hpp"
@@ -89,12 +90,18 @@ static esp_err_t handle_status_json(httpd_req_t *req)
     sta_ip_str(ipbuf, sizeof(ipbuf));
     const esp_app_desc_t *app = esp_app_get_description();
 
-    char body[896]{};
+    ota_service::OtaStatusSnapshot ota{};
+    ota_service::get_status_snapshot(&ota);
+
+    char body[2048]{};
     const int n = snprintf(
         body, sizeof(body),
         "{\"app\":\"CryptoAlert V2\",\"version\":\"%s\",\"has_ip\":%s,\"ip\":\"%s\","
         "\"symbol\":\"%s\",\"price_eur\":%.4f,\"valid\":%s,\"connection\":\"%s\","
-        "\"tick_source\":\"%s\",\"last_tick_ms\":%lld}",
+        "\"tick_source\":\"%s\",\"last_tick_ms\":%lld,"
+        "\"ota\":{\"running_partition\":\"%s\",\"next_update_partition\":\"%s\","
+        "\"running_address\":%u,\"running_size_bytes\":%u,\"img_state\":\"%s\","
+        "\"boot_confirm\":\"%s\",\"reset_reason\":\"%s\"}}",
         app ? app->version : "?",
         net_runtime::has_ip() ? "true" : "false",
         ipbuf,
@@ -103,7 +110,14 @@ static esp_err_t handle_status_json(httpd_req_t *req)
         snap.valid ? "true" : "false",
         conn_str(snap.connection),
         tick_str(snap.last_tick_source),
-        (long long)snap.last_tick.ts_ms);
+        (long long)snap.last_tick.ts_ms,
+        ota.running_label[0] ? ota.running_label : "?",
+        ota.next_update_label[0] ? ota.next_update_label : "?",
+        (unsigned)ota.running_address,
+        (unsigned)ota.running_size_bytes,
+        ota.img_state[0] ? ota.img_state : "?",
+        ota.boot_confirm[0] ? ota.boot_confirm : "?",
+        ota.reset_reason[0] ? ota.reset_reason : "?");
     if (n <= 0 || static_cast<size_t>(n) >= sizeof(body)) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
         return ESP_FAIL;
@@ -284,6 +298,20 @@ static esp_err_t handle_services_post(httpd_req_t *req)
 }
 
 /** HTML attribute escaping for value="…" (minimal subset). */
+static const char *boot_confirm_nl(const char *bc)
+{
+    if (!bc || !bc[0]) {
+        return "—";
+    }
+    if (std::strcmp(bc, "marked_valid") == 0) {
+        return "Image bevestigd (rollback uitgeschakeld voor dit slot).";
+    }
+    if (std::strcmp(bc, "rollback_disabled") == 0) {
+        return "IDF rollback staat uit — geen aparte bevestigingsplicht.";
+    }
+    return bc;
+}
+
 static void html_attr_escape(const char *src, char *dst, size_t dst_sz)
 {
     size_t j = 0;
@@ -316,6 +344,8 @@ static esp_err_t handle_root_html(httpd_req_t *req)
     sta_ip_str(ipbuf, sizeof(ipbuf));
     const esp_app_desc_t *app = esp_app_get_description();
     const config_store::ServiceRuntimeConfig &svc = config_store::service_runtime();
+    ota_service::OtaStatusSnapshot ota{};
+    ota_service::get_status_snapshot(&ota);
 
     char esc_uri[config_store::kMqttBrokerUriMax * 6]{};
     char esc_topic[config_store::kNtfyTopicMax * 6]{};
@@ -344,7 +374,11 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         "<p><strong>Versie</strong> %s · <strong>IP</strong> %s · <strong>WiFi IP bekend</strong> %s</p>"
         "<p><strong>Symbool</strong> %s · <strong>Prijs (EUR)</strong> %.4f · <strong>Geldig</strong> %s</p>"
         "<p><strong>Verbinding feed</strong> %s · <strong>Bron tick</strong> %s</p>"
-        "<p><a href=\"/api/status.json\"><code>/api/status.json</code></a></p>"
+        "<p><a href=\"/api/status.json\"><code>/api/status.json</code></a> (incl. OTA-velden, M-014b)</p>"
+        "<h2>OTA / boot</h2>"
+        "<p><strong>Partitie</strong> %s @ 0x%08X · <strong>img-state</strong> %s<br/>"
+        "<strong>Volgende update-slot</strong> %s · <strong>Reset</strong> %s<br/>"
+        "<strong>Post-boot</strong> %s</p>"
         "<h2>Services (mqtt / ntfy)</h2>"
         "<p class=\"hint\">MQTT: na wijziging broker-URI eerst <strong>herstart</strong> — client start bij boot. "
         "NTFY: topic geldt bij de volgende push.</p>"
@@ -397,6 +431,12 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         snap.valid ? "ja" : "nee",
         conn_str(snap.connection),
         tick_str(snap.last_tick_source),
+        ota.running_label[0] ? ota.running_label : "?",
+        (unsigned)ota.running_address,
+        ota.img_state[0] ? ota.img_state : "?",
+        ota.next_update_label[0] ? ota.next_update_label : "?",
+        ota.reset_reason[0] ? ota.reset_reason : "?",
+        boot_confirm_nl(ota.boot_confirm),
         mq_chk,
         esc_uri,
         static_cast<unsigned>(config_store::kMqttBrokerUriMax - 1),
@@ -481,7 +521,7 @@ esp_err_t init()
     uo.user_ctx = nullptr;
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uo), TAG, "reg ota post");
 
-    ESP_LOGI(TAG, "M-013a/b/c + M-014a: webui poort %u — status, services, OTA-upload", static_cast<unsigned>(port));
+    ESP_LOGI(TAG, "M-013a/b/c + M-014a/b: webui poort %u — status+OTA-info, services, OTA-upload", static_cast<unsigned>(port));
     return ESP_OK;
 #endif
 }

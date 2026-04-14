@@ -1608,7 +1608,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Backlog (ongewijzigd t.o.v. M-002a):** mutex/queue voor schrijf-paden; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c**. **Runtime service-config (typed, read-only overlay):** § **M-003a**. **NTFY-sink:** § **M-011a**. **MQTT-bridge:** § **M-012a**. **WebUI (status + service-write + form + OTA-basis):** § **M-013a**–**M-013c**, § **M-014a**.
+**Backlog (ongewijzigd t.o.v. M-002a):** mutex/queue voor schrijf-paden; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c**. **Runtime service-config (typed, read-only overlay):** § **M-003a**. **NTFY-sink:** § **M-011a**. **MQTT-bridge:** § **M-012a**. **WebUI (status + service-write + form + OTA-basis + OTA-observability):** § **M-013a**–**M-013c**, § **M-014a**–**M-014b**.
 
 \
 
@@ -1916,7 +1916,39 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Bewust niet in M-014a:** login; **cryptografische handtekening**; voortgangsbalk; automatische versiecheck; rollback/anti-brick-beleid; OTA via MQTT; tweede UI-view.
+**Bewust niet in M-014a:** login; **cryptografische handtekening**; voortgangsbalk; automatische versiecheck; uitgewerkt rollback/anti-brick-beleid; OTA via MQTT; tweede UI-view — **observability/post-boot:** § **M-014b**.
+
+\
+
+---
+
+\
+
+## M-014b — OTA observability + post-boot bevestiging (M-014a vervolg) (uitgevoerd)
+
+\
+
+**Doel:** na werkende **M-014a**-upload de OTA-keten **transparanter** maken (slots, image-state, reset-reden) en een **netjes gecontroleerde** post-boot stap (`esp_ota_mark_app_valid_cancel_rollback` wanneer IDF dat ondersteunt) — **zonder** signing, **zonder** volledige rollback-architectuur, **zonder** extra UX-laag.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **`ota_service`:** uitgebreide **boot-log** (running/next partitie, `esp_ota_get_state_partition`, `esp_reset_reason`); daarna **`esp_ota_mark_app_valid_cancel_rollback()`** — bij succes **`marked_valid`** in snapshot; bij `ESP_ERR_NOT_SUPPORTED` (rollback uit in build) **`rollback_disabled`** met duidelijke log.
+
+\
+
+- **`get_status_snapshot`:** levert o.a. **`running_*`**, **`next_update_*`**, **`img_state`**, **`boot_confirm`**, **`reset_reason`** voor WebUI/JSON.
+
+\
+
+- **WebUI:** **`/api/status.json`** bevat een **`ota`-object** met bovenstaande velden; **`/`** toont een compact **OTA/boot-blok** + bestaande **versie**-regel. Geen tweede pagina.
+
+\
+
+**Bewust open (niet M-014b):** cryptografische verificatie; online versiecheck; MQTT-OTA; uitgewerkte rollback-policy; progress-UI; auth.
 
 \
 
