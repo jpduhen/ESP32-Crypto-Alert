@@ -123,4 +123,16 @@ menu "ESP32 Crypto Alert V2"
         default "cryptoalert/v2/status"
         depends on MQTT_BRIDGE_ENABLE
 
+    config WEBUI_ENABLE
+        bool "M-013a: read-only status-web (HTTP)"
+        default n
+        help
+            GET / en /api/status.json — geen POST, geen auth. Standaard poort 8080.
+
+    config WEBUI_PORT
+        int "WebUI TCP-poort"
+        range 1024 65535
+        default 8080
+        depends on WEBUI_ENABLE
+
 endmenu

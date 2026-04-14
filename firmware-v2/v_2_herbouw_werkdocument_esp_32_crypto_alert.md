@@ -1608,7 +1608,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Backlog (ongewijzigd t.o.v. M-002a):** WebUI achter mutex/queue; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c**. **NTFY-sink:** § **M-011a**. **MQTT-bridge:** § **M-012a**.
+**Backlog (ongewijzigd t.o.v. M-002a):** mutex/queue voor schrijf-paden; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c**. **Runtime service-config (typed, read-only overlay):** § **M-003a**. **NTFY-sink:** § **M-011a**. **MQTT-bridge:** § **M-012a**. **Read-only WebUI:** § **M-013a**.
 
 \
 
@@ -1676,7 +1676,43 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Bewust open (na M-011a / M-012a):** WebUI; rijkere **payload-structs** per `Event`; net-worker-task; extra event-mappings.
+**Bewust open (na M-011a / M-012a / M-013a):** rijkere **payload-structs** per `Event`; net-worker-task; extra event-mappings.
+
+\
+
+---
+
+\
+
+## M-003a — Eerste typed `config_store`-model voor runtime service-instellingen (uitgevoerd)
+
+\
+
+**Doel (migratiematrix M-003, P0):** een **klein, typed** runtime-configmodel zodat WebUI/MQTT/NTFY niet alleen via Kconfig hoeven; **leespad** met **schema v3**, **NVS-overlay** op **Kconfig-defaults**, **zonder** WebUI-schrijven, **zonder** OTA en **zonder** brede domeinmigratie.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **`ServiceRuntimeConfig`** in `config_store` (`webui_enabled`, `webui_port`, `mqtt_enabled`, `mqtt_broker_uri`, `ntfy_enabled`, `ntfy_topic`) — **geen** secrets (MQTT-wachtwoord, NTFY-token blijven Kconfig tot latere stap).
+
+\
+
+- **`kSchemaVersion = 3`**; bij load: eerst Kconfig-defaults voor services, daarna optionele NVS-sleutels (`svc_wui_en`, `svc_wui_pt`, `svc_mqtt_en`, `svc_mqtt_uri`, `svc_ntfy_en`, `svc_ntfy_tp`) — korte namen (≤15) in namespace `v2cfg`.
+
+\
+
+- **`config_store::service_runtime()`** geeft een snapshot na `load_or_defaults` (zelfde inhoud als `RuntimeConfig::services`). **`save()`** schrijft nog **geen** service-velden (read-only uit applicatie-oogpunt; keys zijn bedoeld voor latere tooling/maintenance-API).
+
+\
+
+- **Consumers:** `webui`, `mqtt_bridge`, `ntfy_client` lezen toggles/poort/URI/topic hier; **build-time** `CONFIG_*_ENABLE` blijft de harde compile-grens waar van toepassing.
+
+\
+
+**Bewust open (niet M-003a):** schrijfpad vanuit WebUI of settings-API; `save()`-uitbreiding voor services; MQTT/NTFY **secrets** in NVS; volledige migratiematrix over alle domeinen; market/alert/symbool-keuze buiten dit subset.
 
 \
 
@@ -1700,7 +1736,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-- **Kconfig (minimaal):** `CONFIG_NTFY_CLIENT_ENABLE` (default **uit**), `NTFY_SERVER`, `NTFY_TOPIC`, `NTFY_ACCESS_TOKEN`. Leeg topic ⇒ geen push (stil `ESP_OK`).
+- **Kconfig (minimaal):** `CONFIG_NTFY_CLIENT_ENABLE` (default **uit**), `NTFY_SERVER`, `NTFY_TOPIC`, `NTFY_ACCESS_TOKEN`. Leeg topic ⇒ geen push (stil `ESP_OK`). **Effectief topic** (na **§ M-003a**): `config_store::service_runtime().ntfy_topic` (NVS-overlay op Kconfig-default).
 
 \
 
@@ -1749,6 +1785,38 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 \
 
 **Bewust open:** HA discovery; retain/LWT-strategie; meerdere topics; alert-koppeling; TLS fine-tuning buiten URI.
+
+\
+
+---
+
+\
+
+## M-013a — Minimale read-only WebUI-basis (uitgevoerd)
+
+\
+
+**Doel:** migratiematrix **M-013** — eerste **HTTP**-observatiepunt: **geen** settings, **geen** OTA, **geen** dashboard — alleen veilige status.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **Component `webui`:** `esp_http_server` op **`WEBUI_PORT`** (default **8080**, Kconfig **uit**); **GET /** (HTML) en **GET /api/status.json** (JSON): app-**versie** (`esp_app_desc`), **STA-IP** (via `WIFI_STA_DEF`), **`market_data::snapshot()`** (symbool, prijs, geldig, verbinding, tick-bron, `ts_ms`).
+
+\
+
+- **`app_core`:** `webui::init()` na `service_outbound::init()`.
+
+\
+
+- **Geen** POST-handlers, geen auth, geen koppeling aan `ntfy_client` / `mqtt_bridge`; geen protocol naar boven behalve façade-snapshot.
+
+\
+
+**Bewust open:** instellingen wijzigen; WebSocket push; SPA; integratie met outbound queue voor writes.
 
 \
 

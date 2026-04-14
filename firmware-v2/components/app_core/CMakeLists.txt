@@ -12,6 +12,7 @@ idf_component_register(
         market_types
         net_runtime
         service_outbound
+        webui
         wifi_onboarding
         freertos
         esp_common

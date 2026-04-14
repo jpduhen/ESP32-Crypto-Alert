@@ -2,6 +2,7 @@
  * M-012a: eerste MQTT-route achter `service_outbound` — geen Home Assistant discovery.
  */
 #include "mqtt_bridge/mqtt_bridge.hpp"
+#include "config_store/config_store.hpp"
 #include "esp_crt_bundle.h"
 #include "esp_log.h"
 #include "mqtt_client.h"
@@ -78,18 +79,23 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 esp_err_t init()
 {
 #if !CONFIG_MQTT_BRIDGE_ENABLE
-    ESP_LOGD(TAG, "mqtt_bridge uit (Kconfig)");
+    ESP_LOGD(TAG, "mqtt_bridge uit (Kconfig build)");
     return ESP_OK;
 #else
-    if (strlen(CONFIG_MQTT_BROKER_URI) == 0) {
+    const config_store::ServiceRuntimeConfig &svc = config_store::service_runtime();
+    if (!svc.mqtt_enabled) {
+        ESP_LOGI(TAG, "mqtt uit (runtime M-003a)");
+        return ESP_OK;
+    }
+    if (strlen(svc.mqtt_broker_uri) == 0) {
         ESP_LOGI(TAG, "M-012a: broker-URI leeg — geen MQTT-client");
         return ESP_OK;
     }
 
     esp_mqtt_client_config_t mqtt_cfg{};
-    mqtt_cfg.broker.address.uri = CONFIG_MQTT_BROKER_URI;
+    mqtt_cfg.broker.address.uri = svc.mqtt_broker_uri;
     mqtt_cfg.session.keepalive = 60;
-    if (strncmp(CONFIG_MQTT_BROKER_URI, "mqtts://", 8) == 0) {
+    if (strncmp(svc.mqtt_broker_uri, "mqtts://", 8) == 0) {
         mqtt_cfg.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
     }
     if (strlen(CONFIG_MQTT_BRIDGE_USER) > 0) {
@@ -119,7 +125,10 @@ void request_application_ready_publish()
 #if !CONFIG_MQTT_BRIDGE_ENABLE
     return;
 #else
-    if (!s_client || strlen(CONFIG_MQTT_BROKER_URI) == 0) {
+    if (!config_store::service_runtime().mqtt_enabled) {
+        return;
+    }
+    if (!s_client || strlen(config_store::service_runtime().mqtt_broker_uri) == 0) {
         return;
     }
     if (!net_runtime::has_ip()) {

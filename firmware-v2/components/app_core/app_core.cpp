@@ -11,6 +11,7 @@
 #include "market_types/types.hpp"
 #include "net_runtime/net_runtime.hpp"
 #include "service_outbound/service_outbound.hpp"
+#include "webui/webui.hpp"
 #include "wifi_onboarding/wifi_onboarding.hpp"
 #include "ui/ui.hpp"
 #include "esp_check.h"
@@ -70,6 +71,7 @@ static esp_err_t lifecycle_startup(config_store::RuntimeConfig &cfg)
     }
     ESP_RETURN_ON_ERROR(market_data::init(cfg), TAG, "market_data::init");
     ESP_RETURN_ON_ERROR(service_outbound::init(), TAG, "service_outbound::init");
+    ESP_RETURN_ON_ERROR(webui::init(), TAG, "webui::init");
     return ESP_OK;
 }
 
