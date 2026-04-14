@@ -6,6 +6,7 @@
 #include "config_store/config_store.hpp"
 #include "cJSON.h"
 #include "esp_app_desc.h"
+#include "esp_check.h"
 #include "esp_err.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -22,8 +23,6 @@
 #endif
 
 namespace webui {
-
-namespace {
 
 static const char TAG[] = "web_ui";
 
@@ -281,6 +280,7 @@ static esp_err_t handle_services_post(httpd_req_t *req)
 }
 
 static esp_err_t handle_root_html(httpd_req_t *req)
+{
     const market_data::MarketSnapshot snap = market_data::snapshot();
     char ipbuf[20]{};
     sta_ip_str(ipbuf, sizeof(ipbuf));
@@ -319,8 +319,6 @@ static esp_err_t handle_root_html(httpd_req_t *req)
 
 #endif // CONFIG_WEBUI_ENABLE
 
-} // namespace
-
 esp_err_t init()
 {
 #if !CONFIG_WEBUI_ENABLE
@@ -336,8 +334,9 @@ esp_err_t init()
         return ESP_OK;
     }
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+    const int port_cfg = static_cast<int>(svc.webui_port);
     uint16_t port = svc.webui_port;
-    if (port < 1024 || port > 65535) {
+    if (port_cfg < 1024 || port_cfg > 65535) {
         port = 8080;
     }
     cfg.server_port = port;
