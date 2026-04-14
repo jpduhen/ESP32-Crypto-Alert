@@ -1608,7 +1608,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Backlog (ongewijzigd t.o.v. M-002a):** MQTT/NTFY/WebUI achter mutex/queue; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound servicegrens (queue + stub dispatch):** § **M-002c**.
+**Backlog (ongewijzigd t.o.v. M-002a):** WebUI achter mutex/queue; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c**. **NTFY-sink:** § **M-011a**. **MQTT-bridge:** § **M-012a**.
 
 \
 
@@ -1652,11 +1652,11 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-## M-002c — Minimale servicegrens outbound events + interne queue (stub) (uitgevoerd)
+## M-002c — Minimale servicegrens outbound events + interne queue (uitgevoerd)
 
 \
 
-**Doel:** één neutrale **producer→queue→consumer**-grens voor toekomstige outbound acties (MQTT publish, NTFY, WebUI-push) **zonder** echte transports — contract (`Event`) + **FreeRTOS-queue** (diepte 8) + **`poll()`**-drain naar stub-dispatcher.
+**Doel:** één neutrale **producer→queue→consumer**-grens: contract (`Event`) + **FreeRTOS-queue** (diepte 8) + **`poll()`**-drain. De eerste echte outbound-sink is **NTFY** (§ **M-011a**); daarvoor was de consumer nog stub-only.
 
 \
 
@@ -1664,19 +1664,91 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-- **Component `service_outbound`:** `Event` (o.a. `ApplicationReady`); **`emit()`** zet niet-blokkerend op de queue (vol = drop + waarschuwing); **`poll()`** leegt de queue en roept de interne **stub**-dispatch aan — tag **`svc_out`**, geen netwerk.
+- **Component `service_outbound`:** `Event` (o.a. `ApplicationReady`); **`emit()`** / **`poll()`** zoals beschreven; dispatch roept bij `ApplicationReady` de **`ntfy_client`**-sink aan (indien Kconfig aan).
 
 \
 
-- **`app_core` orkestreert:** na `market_data::init` → `service_outbound::init`; vóór de hoofdlus `emit(ApplicationReady)` + **`poll()`** (directe verwerking); in de hoofdlus opnieuw **`poll()`** vóór elke slaap — geen aparte worker-task.
+- **`app_core` orkestreert:** na `market_data::init` → `service_outbound::init`; vóór de hoofdlus `emit(ApplicationReady)` + **`poll()`**; in de hoofdlus **`poll()`** vóór elke slaap — geen worker-task.
 
 \
 
-- **Ownership:** `market_data` blijft façade; `exchange_bitvavo` blijft transport; **UI** / **display_port** geen outbound-service. Toekomstige echte services kunnen naast of in plaats van stub-dispatch aansluiten op dezelfde queue of een tweede trap.
+- **Ownership:** `market_data` blijft façade; `exchange_bitvavo` blijft transport; **UI** / **display_port** geen NTFY. Zie **M-011a** voor transport-detail.
 
 \
 
-**Bewust open:** echte MQTT-/NTFY-clients; WebUI; **payload-structs** per `Event`; aparte net-worker-task; scheiding van meerdere consumers als de load dat vraagt.
+**Bewust open (na M-011a / M-012a):** WebUI; rijkere **payload-structs** per `Event`; net-worker-task; extra event-mappings.
+
+\
+
+---
+
+\
+
+## M-011a — Eerste `ntfy_client`-sink achter `service_outbound` (uitgevoerd)
+
+\
+
+**Doel:** migratiematrix **M-011** — eerste **werkende** notificatiepad: HTTPS naar ntfy, **achter** de M-002c-queue, **zonder** MQTT/HA/WebUI.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **Component `ntfy_client`:** `init()` + `send_notification(title, body)` — één `esp_http_client_perform` (POST, `text/plain`, optionele `X-Title`, optionele **Bearer**), TLS via certificate bundle, onder **`net_runtime::net_mutex`**. Geen ntfy-protocol in `ui` / `market_data` / `exchange_bitvavo`.
+
+\
+
+- **Kconfig (minimaal):** `CONFIG_NTFY_CLIENT_ENABLE` (default **uit**), `NTFY_SERVER`, `NTFY_TOPIC`, `NTFY_ACCESS_TOKEN`. Leeg topic ⇒ geen push (stil `ESP_OK`).
+
+\
+
+- **Mapping:** alleen **`ApplicationReady`** → titel `CryptoAlert V2`, body `Application ready` (in `service_outbound` dispatch). Geen tweede event-type in deze stap.
+
+\
+
+- **Runtime:** zonder IP wordt niet geprobeerd te publishen (defensief); fouten → `ESP_LOGW` op `svc_out` / `ntfy`.
+
+\
+
+**Bewust open:** retry bij geen IP op eerste poll; meerdere events; persistente topic-opslag; alert-engine; uitgebreide MQTT (zie **M-012a**).
+
+\
+
+---
+
+\
+
+## M-012a — Eerste `mqtt_bridge` achter `service_outbound` (uitgevoerd)
+
+\
+
+**Doel:** migratiematrix **M-012** — eerste **MQTT**-publish (één topic, platte payload), **zonder** Home Assistant discovery of entity-model.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **Component `mqtt_bridge`:** `init()` start `esp_mqtt_client` (URI + optionele user/pass uit Kconfig); `request_application_ready_publish()` zet een **pending** publish (`online`, QoS 1) naar **`MQTT_TOPIC_BOOT`** zodra de client **verbonden** is (of direct als al verbonden).
+
+\
+
+- **Kconfig:** `CONFIG_MQTT_BRIDGE_ENABLE` (default **uit**), `MQTT_BROKER_URI`, `MQTT_BRIDGE_USER`, `MQTT_BRIDGE_PASSWORD`, `MQTT_TOPIC_BOOT`. Lege URI ⇒ geen client.
+
+\
+
+- **Mapping:** zelfde **`ApplicationReady`** als M-011a — geen MQTT in `ui` / `market_data` / `exchange_bitvavo`.
+
+\
+
+- **Logging:** tag **`mqtt_br`**; connect/disconnect en geslaagde publish op **INFO**/waarschuwing bij fout.
+
+\
+
+**Bewust open:** HA discovery; retain/LWT-strategie; meerdere topics; alert-koppeling; TLS fine-tuning buiten URI.
 
 \
 

@@ -70,4 +70,57 @@ menu "ESP32 Crypto Alert V2"
         help
             Afgeleid van Display diagnoseprofiel.
 
+    config NTFY_CLIENT_ENABLE
+        bool "M-011a: NTFY-notificaties (HTTPS, eerste sink)"
+        default n
+        help
+            Publiceert via ntfy achter `service_outbound`. Zonder topic: geen netwerk.
+
+    config NTFY_SERVER
+        string "NTFY server (basis-URL, geen slash aan einde)"
+        default "https://ntfy.sh"
+        depends on NTFY_CLIENT_ENABLE
+        help
+            Bijv. https://ntfy.sh of eigen host.
+
+    config NTFY_TOPIC
+        string "NTFY topic (leeg = geen push)"
+        default ""
+        depends on NTFY_CLIENT_ENABLE
+
+    config NTFY_ACCESS_TOKEN
+        string "NTFY Bearer-token (optioneel)"
+        default ""
+        depends on NTFY_CLIENT_ENABLE
+        help
+            Leeg voor open topic op ntfy.sh; anders Authorization: Bearer …
+
+    config MQTT_BRIDGE_ENABLE
+        bool "M-012a: MQTT-bridge (minimaal publish)"
+        default n
+        help
+            Eerste MQTT-pad achter service_outbound. Zonder broker-URI: geen client.
+
+    config MQTT_BROKER_URI
+        string "MQTT broker URI (leeg = uit)"
+        default ""
+        depends on MQTT_BRIDGE_ENABLE
+        help
+            Bijv. mqtt://192.168.1.10:1883 of mqtts://host:8883
+
+    config MQTT_BRIDGE_USER
+        string "MQTT gebruikersnaam (optioneel)"
+        default ""
+        depends on MQTT_BRIDGE_ENABLE
+
+    config MQTT_BRIDGE_PASSWORD
+        string "MQTT wachtwoord (optioneel)"
+        default ""
+        depends on MQTT_BRIDGE_ENABLE
+
+    config MQTT_TOPIC_BOOT
+        string "MQTT topic voor ApplicationReady (payload: online)"
+        default "cryptoalert/v2/status"
+        depends on MQTT_BRIDGE_ENABLE
+
 endmenu

@@ -1,12 +1,14 @@
 /**
- * M-002c: outbound event-plane — FreeRTOS-queue + poll-dispatcher, stub consumer.
- * Toekomstige transports (MQTT/NTFY/…) kunnen achter dezelfde dispatch-hook of
- * een tweede consumer-stage; `emit` blijft producer-zijde dun.
+ * M-002c / M-011a / M-012a: outbound queue + dispatch; sinks: ntfy + mqtt (Kconfig).
  */
 #include "service_outbound/service_outbound.hpp"
+#include "esp_check.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "mqtt_bridge/mqtt_bridge.hpp"
+#include "ntfy_client/ntfy_client.hpp"
+#include "sdkconfig.h"
 
 namespace service_outbound {
 
@@ -21,7 +23,7 @@ static bool s_ready{false};
 static QueueHandle_t s_q{nullptr};
 static bool s_app_ready_seen{false};
 
-static void dispatch_stub(Event e)
+static void dispatch_event(Event e)
 {
     switch (e) {
     case Event::None:
@@ -29,7 +31,21 @@ static void dispatch_stub(Event e)
     case Event::ApplicationReady:
         if (!s_app_ready_seen) {
             s_app_ready_seen = true;
-            ESP_LOGI(TAG, "dispatch ApplicationReady (stub sink — side-effect free)");
+            ESP_LOGI(TAG, "dispatch ApplicationReady → outbound sinks");
+#if CONFIG_NTFY_CLIENT_ENABLE
+            const esp_err_t n =
+                ntfy_client::send_notification("CryptoAlert V2", "Application ready");
+            if (n != ESP_OK) {
+                ESP_LOGW(TAG, "NTFY publish: %s", esp_err_to_name(n));
+            }
+#else
+            ESP_LOGD(TAG, "NTFY uit (Kconfig)");
+#endif
+#if CONFIG_MQTT_BRIDGE_ENABLE
+            mqtt_bridge::request_application_ready_publish();
+#else
+            ESP_LOGD(TAG, "MQTT bridge uit (Kconfig)");
+#endif
         }
         break;
     default:
@@ -44,12 +60,14 @@ esp_err_t init()
     if (s_ready) {
         return ESP_OK;
     }
+    ESP_RETURN_ON_ERROR(ntfy_client::init(), TAG, "ntfy_client::init");
+    ESP_RETURN_ON_ERROR(mqtt_bridge::init(), TAG, "mqtt_bridge::init");
     s_q = xQueueCreate(k_queue_depth, sizeof(Event));
     if (!s_q) {
         return ESP_ERR_NO_MEM;
     }
     s_ready = true;
-    ESP_LOGI(TAG, "M-002c: outbound queue ready (depth=%u, stub consumer)", static_cast<unsigned>(k_queue_depth));
+    ESP_LOGI(TAG, "M-002c: outbound queue ready (depth=%u)", static_cast<unsigned>(k_queue_depth));
     return ESP_OK;
 }
 
@@ -70,7 +88,7 @@ void poll()
     }
     Event e{};
     while (xQueueReceive(s_q, &e, 0) == pdTRUE) {
-        dispatch_stub(e);
+        dispatch_event(e);
     }
 }
 

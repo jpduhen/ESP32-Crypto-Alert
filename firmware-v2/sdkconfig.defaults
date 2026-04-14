@@ -26,3 +26,6 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_v2_16mb_ota.csv"
 
 # S3-GEEK ST7789 + LVGL: vastgelegd productprofiel — swap_bytes=0, RGB, 27 MHz (zie GEEK_DISPLAY_DIAG.md)
 CONFIG_DISPLAY_DIAG_PROFILE_SWAP_OFF=y
+
+# M-011a: NTFY staat default uit; zet CONFIG_NTFY_CLIENT_ENABLE=y + NTFY_TOPIC via menuconfig voor echte push.
+# M-012a: MQTT-bridge default uit; zet CONFIG_MQTT_BRIDGE_ENABLE=y + MQTT_BROKER_URI voor echte publish.
