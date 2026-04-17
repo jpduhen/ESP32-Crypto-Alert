@@ -12,6 +12,7 @@ namespace config_store {
  * M-003c: typed **alert-policy timing** (cooldown/suppress, non-secret).
  * M-003d: typed **confluence-policy** subset (bools, non-secret) — schema **v6**.
  * M-013i: eerste WebUI-write voor policy-timing (`POST /api/alert-policy-timing.json`).
+ * M-013k: eerste WebUI-write voor confluence-policy (`POST /api/alert-confluence-policy.json`, M-003d-subset).
  * M-013b: beperkte schrijfpad voor mqtt/ntfy via `persist_service_connectivity` (geen webui_*).
  */
 constexpr uint32_t kSchemaVersion = 6;
@@ -80,7 +81,7 @@ struct AlertPolicyTimingConfig {
 
 /**
  * M-003d: kleine confluence-policy (non-secret). Defaults = historisch M-010d/e-gedrag; NVS `altcf_*`.
- * Geen WebUI-write in M-003d.
+ * WebUI-write: **`persist_alert_confluence_policy`** (M-013k).
  */
 struct AlertConfluencePolicyConfig {
     /** Meester-schakelaar voor het confluence-pad (losse 1m/5m blijven eigen pad). */
@@ -154,6 +155,12 @@ esp_err_t persist_alert_runtime(const AlertRuntimeConfig &alert);
  * Valideert bereiken; bij succes: `g_policy_cache` bijgewerkt (`alert_engine` leest via `alert_policy_timing()`).
  */
 esp_err_t persist_alert_policy_timing(const AlertPolicyTimingConfig &policy);
+
+/**
+ * M-003d / M-013k: schrijf confluence-policy naar NVS (`altcf_*` keys), zet schema v6.
+ * Bij succes: `g_conf_policy_cache` bijgewerkt (`alert_engine` leest via `alert_confluence_policy()`).
+ */
+esp_err_t persist_alert_confluence_policy(const AlertConfluencePolicyConfig &policy);
 
 /** True als er een niet-lege SSID in NVS zit (provisioned). */
 bool has_wifi_credentials(const RuntimeConfig &cfg);

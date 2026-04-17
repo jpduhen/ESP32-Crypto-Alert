@@ -9,7 +9,8 @@
  * M-013e: read-only regime/vol/effectieve drempels in status.json + compact HTML-blok.
  * M-003b: `alert_runtime_config` in status.json (typed tuning, read-only).
  * M-003c: `alert_policy_timing` in status.json (cooldown/suppress, read-only).
- * M-003d: `alert_confluence_policy` in status.json (read-only; geen WebUI-write in deze stap).
+ * M-003d: `alert_confluence_policy` in status.json (read-only overlay).
+ * M-013k: POST /api/alert-confluence-policy.json → `persist_alert_confluence_policy` (zelfde subset als M-003d).
  * M-013f: POST /api/alert-runtime.json → `persist_alert_runtime` (zelfde subset als M-003b).
  * M-013i: POST /api/alert-policy-timing.json → `persist_alert_policy_timing` (zelfde subset als M-003c).
  * M-013g: minimaal formulier op / voor diezelfde vier velden (POST naar alert-runtime.json).
@@ -549,6 +550,123 @@ static esp_err_t handle_alert_policy_timing_post(httpd_req_t *req)
     return se;
 }
 
+static esp_err_t handle_alert_confluence_policy_post(httpd_req_t *req)
+{
+    char raw[512]{};
+    const int need = req->content_len;
+    if (need <= 0 || need >= static_cast<int>(sizeof(raw))) {
+        ESP_LOGW(TAG, "M-013k: POST body ontbreekt of te groot (%d)", need);
+        return send_json_text(req, "400 Bad Request",
+                              "{\"ok\":false,\"error\":\"body ontbreekt of te groot (max 511 bytes)\"}");
+    }
+    int got = 0;
+    while (got < need) {
+        const int r = httpd_req_recv(req, raw + got, (size_t)(need - got));
+        if (r < 0) {
+            ESP_LOGW(TAG, "M-013k: recv: %d", r);
+            return send_json_text(req, "400 Bad Request", "{\"ok\":false,\"error\":\"recv mislukt\"}");
+        }
+        if (r == 0) {
+            break;
+        }
+        got += r;
+    }
+    if (got != need) {
+        return send_json_text(req, "400 Bad Request", "{\"ok\":false,\"error\":\"body incompleet\"}");
+    }
+    raw[need] = '\0';
+
+    cJSON *root = cJSON_Parse(raw);
+    if (!root || !cJSON_IsObject(root)) {
+        if (root) {
+            cJSON_Delete(root);
+        }
+        ESP_LOGW(TAG, "M-013k: JSON parse/object");
+        return send_json_text(req, "400 Bad Request", "{\"ok\":false,\"error\":\"JSON moet een object zijn\"}");
+    }
+
+    int nchild = 0;
+    for (cJSON *c = root->child; c != nullptr; c = c->next) {
+        ++nchild;
+    }
+    if (nchild != 4) {
+        cJSON_Delete(root);
+        return send_json_text(req, "400 Bad Request",
+                              "{\"ok\":false,\"error\":\"exact vier velden vereist (M-003d subset)\"}");
+    }
+
+    config_store::AlertConfluencePolicyConfig next{};
+    for (cJSON *c = root->child; c != nullptr; c = c->next) {
+        if (c->string == nullptr) {
+            cJSON_Delete(root);
+            return send_json_text(req, "400 Bad Request", "{\"ok\":false,\"error\":\"ongeldige sleutel\"}");
+        }
+        bool v = false;
+        if (!cjson_to_bool(c, &v)) {
+            cJSON_Delete(root);
+            return send_json_text(
+                req, "400 Bad Request",
+                "{\"ok\":false,\"error\":\"alle waarden moeten boolean zijn of getal (0=onwaar, anders waar)\"}");
+        }
+        if (std::strcmp(c->string, "confluence_enabled") == 0) {
+            next.confluence_enabled = v;
+        } else if (std::strcmp(c->string, "confluence_require_same_direction") == 0) {
+            next.confluence_require_same_direction = v;
+        } else if (std::strcmp(c->string, "confluence_require_both_thresholds") == 0) {
+            next.confluence_require_both_thresholds = v;
+        } else if (std::strcmp(c->string, "confluence_emit_loose_alerts_when_conf_fails") == 0) {
+            next.confluence_emit_loose_alerts_when_conf_fails = v;
+        } else {
+            cJSON_Delete(root);
+            return send_json_text(req, "400 Bad Request",
+                                  "{\"ok\":false,\"error\":\"onbekende sleutel (alleen M-003d-velden)\"}");
+        }
+    }
+    cJSON_Delete(root);
+
+    const esp_err_t pe = config_store::persist_alert_confluence_policy(next);
+    if (pe != ESP_OK) {
+        ESP_LOGW(TAG, "M-013k: persist_alert_confluence_policy: %s", esp_err_to_name(pe));
+        return send_json_text(req, "500 Internal Server Error",
+                              "{\"ok\":false,\"error\":\"opslaan mislukt\"}");
+    }
+
+    const config_store::AlertConfluencePolicyConfig &acfp = config_store::alert_confluence_policy();
+    cJSON *out = cJSON_CreateObject();
+    if (!out) {
+        return send_json_text(req, "500 Internal Server Error", "{\"ok\":false,\"error\":\"geen geheugen\"}");
+    }
+    cJSON_AddBoolToObject(out, "ok", true);
+    cJSON *cfg = cJSON_CreateObject();
+    if (cfg) {
+        cJSON_AddNumberToObject(cfg, "schema_version", static_cast<double>(config_store::kSchemaVersion));
+        cJSON_AddBoolToObject(cfg, "confluence_enabled", acfp.confluence_enabled ? 1 : 0);
+        cJSON_AddBoolToObject(cfg, "confluence_require_same_direction", acfp.confluence_require_same_direction ? 1 : 0);
+        cJSON_AddBoolToObject(cfg, "confluence_require_both_thresholds", acfp.confluence_require_both_thresholds ? 1 : 0);
+        cJSON_AddBoolToObject(cfg,
+                              "confluence_emit_loose_alerts_when_conf_fails",
+                              acfp.confluence_emit_loose_alerts_when_conf_fails ? 1 : 0);
+        cJSON_AddItemToObject(out, "alert_confluence_policy", cfg);
+    }
+    cJSON_AddStringToObject(
+        out, "note",
+        "Opgeslagen in NVS — alert_engine gebruikt dit vanaf de volgende tick (geen herstart).");
+    char *printed = cJSON_PrintUnformatted(out);
+    cJSON_Delete(out);
+    if (!printed) {
+        return send_json_text(req, "500 Internal Server Error", "{\"ok\":false,\"error\":\"geen geheugen\"}");
+    }
+    ESP_LOGI(TAG,
+             "M-013k: confluence policy opgeslagen via POST (en=%d same_dir=%d both_thr=%d emit_loose=%d)",
+             acfp.confluence_enabled ? 1 : 0,
+             acfp.confluence_require_same_direction ? 1 : 0,
+             acfp.confluence_require_both_thresholds ? 1 : 0,
+             acfp.confluence_emit_loose_alerts_when_conf_fails ? 1 : 0);
+    const esp_err_t se = send_json_text(req, "200 OK", printed);
+    cJSON_free(printed);
+    return se;
+}
+
 static esp_err_t handle_services_post(httpd_req_t *req)
 {
     char raw[1024]{};
@@ -1031,8 +1149,9 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         "(incl. OTA, alerts_1m/5m/conf, <code>regime_observability</code>, "
         "<code>alert_decision_observability</code> M-013h, "
         "<code>alert_runtime_config</code> M-003b, <code>alert_policy_timing</code> M-003c, "
-        "<code>alert_confluence_policy</code> M-003d (read-only); "
-        "POST <code>/api/alert-runtime.json</code> M-013f/g, <code>/api/alert-policy-timing.json</code> M-013i/j; "
+        "<code>alert_confluence_policy</code> M-003d; "
+        "POST <code>/api/alert-runtime.json</code> M-013f/g, <code>/api/alert-policy-timing.json</code> M-013i/j, "
+        "<code>/api/alert-confluence-policy.json</code> M-013k; "
         "M-014b)</p>"
         "<h2>OTA / boot</h2>"
         "<p><strong>Partitie</strong> %s @ 0x%08X · <strong>img-state</strong> %s<br/>"
@@ -1136,7 +1255,7 @@ esp_err_t init()
         port = 8080;
     }
     cfg.server_port = port;
-    cfg.max_uri_handlers = 13;
+    cfg.max_uri_handlers = 14;
     cfg.lru_purge_enable = true;
     /** M-014a: OTA-handler gebruikt ~1 KiB recv-buffer op httpd-taskstack (default 4096 is krap). */
     cfg.stack_size = 8192;
@@ -1173,11 +1292,18 @@ esp_err_t init()
     uap.handler = handle_alert_policy_timing_post;
     uap.user_ctx = nullptr;
 
+    httpd_uri_t uacf{};
+    uacf.uri = "/api/alert-confluence-policy.json";
+    uacf.method = HTTP_POST;
+    uacf.handler = handle_alert_confluence_policy_post;
+    uacf.user_ctx = nullptr;
+
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uj), TAG, "reg json");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uh), TAG, "reg html");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &us), TAG, "reg services post");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &ua), TAG, "reg alert-runtime post");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uap), TAG, "reg alert-policy-timing post");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uacf), TAG, "reg alert-confluence-policy post");
 
     httpd_uri_t uo{};
     uo.uri = "/api/ota";
@@ -1187,8 +1313,8 @@ esp_err_t init()
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uo), TAG, "reg ota post");
 
     ESP_LOGI(TAG,
-             "M-013a–j + M-014a/b: webui poort %u — status+alerts+OTA, services, alert-runtime + "
-             "alert-policy forms+POST, OTA-upload",
+             "M-013a–k + M-014a/b: webui poort %u — status+alerts+OTA, services, alert-runtime + "
+             "alert-policy + confluence-policy POST, OTA-upload",
              static_cast<unsigned>(port));
     return ESP_OK;
 #endif

@@ -1608,7 +1608,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Backlog (ongewijzigd t.o.v. M-002a):** mutex/queue voor schrijf-paden; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c**. **Runtime service-config (typed, read-only overlay):** § **M-003a**. **Alert/regime tuning (typed, klein, non-secret):** § **M-003b**. **Alert-policy timing (cooldown/suppress, typed, non-secret):** § **M-003c**. **Confluence-policy subset (typed, read-only in status):** § **M-003d**. **NTFY-sink:** § **M-011a**; **domein 1m-alert → NTFY:** § **M-011b**. **MQTT-bridge (boot):** § **M-012a**; **1m-domeinalert → MQTT:** § **M-012b**. **WebUI (status + service-write + form + read-only alert-observability + regime/drempel-observability + alert-runtime JSON-write + minimaal alert-runtime-form + read-only alert-beslissing/cooldown/suppress-snapshot + alert-policy-timing JSON-write + minimaal alert-policy-timing-form + OTA-basis + OTA-observability):** § **M-013a**–**M-013j**, § **M-014a**–**M-014b**. **Eerste domeinmetric + alert-slice:** § **M-010a**. **Per-seconde canonicalisatie op WS-input:** § **M-010b**. **Tweede timeframe (5m) parallel aan 1m:** § **M-010c**. **Eerste 1m+5m-confluence (eenvoudige regel):** § **M-010d**. **Prioriteit/suppressie losse TF t.o.v. confluence:** § **M-010e**. **Mini-regime (vol → calm/normal/hot) zonder volledige engine:** § **M-010f**.
+**Backlog (ongewijzigd t.o.v. M-002a):** mutex/queue voor schrijf-paden; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c**. **Runtime service-config (typed, read-only overlay):** § **M-003a**. **Alert/regime tuning (typed, klein, non-secret):** § **M-003b**. **Alert-policy timing (cooldown/suppress, typed, non-secret):** § **M-003c**. **Confluence-policy subset (typed, status + JSON-write):** § **M-003d**, § **M-013k**. **NTFY-sink:** § **M-011a**; **domein 1m-alert → NTFY:** § **M-011b**. **MQTT-bridge (boot):** § **M-012a**; **1m-domeinalert → MQTT:** § **M-012b**. **WebUI (status + service-write + form + read-only alert-observability + regime/drempel-observability + alert-runtime JSON-write + minimaal alert-runtime-form + read-only alert-beslissing/cooldown/suppress-snapshot + alert-policy-timing JSON-write + minimaal alert-policy-timing-form + confluence-policy JSON-write + OTA-basis + OTA-observability):** § **M-013a**–**M-013k**, § **M-014a**–**M-014b**. **Eerste domeinmetric + alert-slice:** § **M-010a**. **Per-seconde canonicalisatie op WS-input:** § **M-010b**. **Tweede timeframe (5m) parallel aan 1m:** § **M-010c**. **Eerste 1m+5m-confluence (eenvoudige regel):** § **M-010d**. **Prioriteit/suppressie losse TF t.o.v. confluence:** § **M-010e**. **Mini-regime (vol → calm/normal/hot) zonder volledige engine:** § **M-010f**.
 
 \
 
@@ -1804,7 +1804,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Doel:** confluence in **M-010d/e** was **hardcoded**; deze stap legt een **kleine typed** NVS-overlay (vier booleans) zodat **`alert_engine`** één **snapshot** uit **`config_store`** leest — **zonder** brede confluence-matrix, **zonder** WebUI-write en **zonder** V1-migratie.
+**Doel:** confluence in **M-010d/e** was **hardcoded**; deze stap legt een **kleine typed** NVS-overlay (vier booleans) zodat **`alert_engine`** één **snapshot** uit **`config_store`** leest — **zonder** brede confluence-matrix en **zonder** V1-migratie. **Eerste WebUI-write** voor deze subset: § **M-013k**.
 
 \
 
@@ -1820,7 +1820,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-- **`config_store::alert_confluence_policy()`** na `load_or_defaults`; **geen** `persist_*` in deze stap (handmatige NVS of latere route mogelijk).
+- **`config_store::alert_confluence_policy()`** na `load_or_defaults`; **`persist_alert_confluence_policy`** schrijft naar NVS en werkt de runtime-cache bij (§ **M-013k**).
 
 \
 
@@ -1828,11 +1828,11 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-- **`webui`:** **`GET /api/status.json`** read-only **`alert_confluence_policy`** (+ `schema_version`). **Geen** POST/HTML-form in M-003d.
+- **`webui`:** **`GET /api/status.json`** — **`alert_confluence_policy`** (+ `schema_version`); **write:** § **M-013k** (**geen** HTML-form in M-003d/M-013k).
 
 \
 
-**Bewust niet in M-003d:** WebUI-write; auth; secrets; brede confluence-scorematrix; extra drempels buiten **M-003b**; extra cooldown/suppressie buiten **M-003c**; per-symbol tuning; `persist_alert_confluence` (kan later als kleine route volgen).
+**Bewust niet in M-003d:** auth; secrets; brede confluence-scorematrix; extra drempels buiten **M-003b**; extra cooldown/suppressie buiten **M-003c**; per-symbol tuning; HTML-form op **`/`** (bewust niet in M-003d/M-013k).
 
 \
 
@@ -2258,6 +2258,42 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 \
 
 **Bewust niet in M-013j:** auth; extra velden; threshold/regime; confluence-matrix; per-symbol; dashboard; tweede view; framework/SPA; V1-migratie.
+
+\
+
+---
+
+\
+
+## M-013k — Eerste gecontroleerde WebUI-write: confluence-policy (M-003d) (uitgevoerd)
+
+\
+
+**Doel:** na **M-003d** is **`alert_confluence_policy`** zichtbaar in **`GET /api/status.json`**, maar nog niet wijzigbaar via HTTP. **M-013k** voegt **één POST** toe — **exact** de vier booleans uit **M-003d** — **zonder** HTML-form in deze stap, **zonder** auth en **zonder** scope-uitbreiding.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **`POST /api/alert-confluence-policy.json`:** JSON-body = **exact vier sleutels** (`confluence_enabled`, `confluence_require_same_direction`, `confluence_require_both_thresholds`, `confluence_emit_loose_alerts_when_conf_fails`); waarden = JSON-boolean of getal (0 = onwaar, anders waar), zelfde patroon als **`cjson_to_bool`** elders in `webui`.
+
+\
+
+- **`config_store::persist_alert_confluence_policy`:** schrijft **`altcf_*`**, zet **schema v6**, werkt **`g_conf_policy_cache`** bij — **`alert_engine`** leest de volgende **`tick()`** zonder herstart.
+
+\
+
+- **Fouten:** compact **`400`** JSON bij parse-/sleutel-/typefouten; **`500`** bij NVS-falen.
+
+\
+
+- **`webui`:** hintregel op **`/`** vermeldt de nieuwe POST-route (geen formulier).
+
+\
+
+**Bewust niet in M-013k:** HTML-form op **`/`**; auth; secrets; brede confluence-matrix; extra drempels (**M-003b**) of timing (**M-003c**); per-symbol; tweede view; V1-migratie.
 
 \
 

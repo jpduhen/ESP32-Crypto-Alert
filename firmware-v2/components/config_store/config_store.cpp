@@ -545,6 +545,46 @@ esp_err_t persist_alert_policy_timing(const AlertPolicyTimingConfig &policy)
     return err;
 }
 
+esp_err_t persist_alert_confluence_policy(const AlertConfluencePolicyConfig &policy)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGW(DIAG_TAG_CFG, "M-013k: nvs_open: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = nvs_set_u32(h, KEY_SCHEMA, kSchemaVersion);
+    if (err == ESP_OK) {
+        err = nvs_set_u8(h, KEY_ALT_CF_EN, policy.confluence_enabled ? 1u : 0u);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u8(h, KEY_ALT_CF_SD, policy.confluence_require_same_direction ? 1u : 0u);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u8(h, KEY_ALT_CF_BT, policy.confluence_require_both_thresholds ? 1u : 0u);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u8(h, KEY_ALT_CF_LO, policy.confluence_emit_loose_alerts_when_conf_fails ? 1u : 0u);
+    }
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+
+    if (err == ESP_OK) {
+        g_conf_policy_cache = policy;
+        ESP_LOGI(DIAG_TAG_CFG,
+                 "M-013k: confluence policy opgeslagen (en=%s same_dir=%s both_thr=%s emit_loose=%s)",
+                 policy.confluence_enabled ? "on" : "off",
+                 policy.confluence_require_same_direction ? "on" : "off",
+                 policy.confluence_require_both_thresholds ? "on" : "off",
+                 policy.confluence_emit_loose_alerts_when_conf_fails ? "on" : "off");
+    } else {
+        ESP_LOGW(DIAG_TAG_CFG, "M-013k: persist confluence policy: %s", esp_err_to_name(err));
+    }
+    return err;
+}
+
 esp_err_t save(const RuntimeConfig &cfg)
 {
     nvs_handle_t h;
