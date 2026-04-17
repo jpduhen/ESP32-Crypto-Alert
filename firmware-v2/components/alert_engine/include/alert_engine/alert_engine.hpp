@@ -14,8 +14,29 @@ namespace alert_engine {
  * M-010e: confluence eerst; daarna losse 1m/5m — tijdelijk onderdrukken zelfde richting na confluence.
  * M-010f: mini-regime (calm/normal/hot) uit vol-proxy — alleen schaal van effectieve 1m/5m-drempels (+ confluence).
  * M-013e: read-only snapshot voor WebUI — geen extra beslislogica.
+ * M-013h: read-only laatste beslissing per pad (1m / 5m / confluence) + suppress/cooldown-restant — alleen snapshot.
  * M-003b: basis-drempels en calm/hot-‰ uit `config_store::alert_runtime()` (NVS-overlay op Kconfig).
+ * M-003d: confluence-policy booleans uit `config_store::alert_confluence_policy()` (defaults = M-010d/e).
  */
+
+/** Eén alert-pad: laatste evaluatie in `tick()` (M-013h). Status/reason in het Engels, stabiel voor JSON. */
+struct AlertPathDecisionSnapshot {
+    /** o.a. `not_ready`, `below_threshold`, `cooldown`, `suppressed`, `fired`, `invalid` */
+    char status[24]{};
+    /** korte code, bv. `metrics_not_ready`, `direction_mismatch`, `confluence_priority_window` */
+    char reason[64]{};
+    /** Tijd tot volgende mogelijke trigger bij cooldown, of volledige cd na `fired`; `-1` = n.v.t. */
+    int64_t remaining_cooldown_ms{-1};
+    /** M-010e venster; `-1` = n.v.t. */
+    int64_t remaining_suppress_ms{-1};
+};
+
+/** Laatste beslissingen — bijgewerkt aan het **einde** van elke `tick()`. */
+struct AlertDecisionObservabilitySnapshot {
+    AlertPathDecisionSnapshot tf_1m{};
+    AlertPathDecisionSnapshot tf_5m{};
+    AlertPathDecisionSnapshot confluence_1m5m{};
+};
 
 /** Laatst bekende regime/vol/drempels (bijgewerkt aan het begin van elke `tick()`). Veldnamen stabiel voor JSON. */
 struct RegimeObservabilitySnapshot {
@@ -41,5 +62,8 @@ void tick();
 
 /** Read-only: laatste `RegimeObservabilitySnapshot` (voor M-013e). */
 void get_regime_observability_snapshot(RegimeObservabilitySnapshot *out);
+
+/** Read-only: laatste pad-beslissingen (M-013h). */
+void get_alert_decision_observability_snapshot(AlertDecisionObservabilitySnapshot *out);
 
 } // namespace alert_engine

@@ -29,8 +29,22 @@ static const char KEY_ALT_5M_BPS[] = "alt_5m_bps";
 static const char KEY_ALT_SC_CL[] = "alt_sc_calm";
 static const char KEY_ALT_SC_HT[] = "alt_sc_hot";
 
+/** M-003c — NVS keys ≤15 chars. */
+static const char KEY_ALTP_CD_1M[] = "altp_cd_1m";
+static const char KEY_ALTP_CD_5M[] = "altp_cd_5m";
+static const char KEY_ALTP_CD_CF[] = "altp_cd_cf";
+static const char KEY_ALTP_SUP_LO[] = "altp_sup_lo";
+
+/** M-003d — bools als u8 0/1. */
+static const char KEY_ALT_CF_EN[] = "altcf_en";
+static const char KEY_ALT_CF_SD[] = "altcf_sd";
+static const char KEY_ALT_CF_BT[] = "altcf_bt";
+static const char KEY_ALT_CF_LO[] = "altcf_lo";
+
 static ServiceRuntimeConfig g_service_cache{};
 static AlertRuntimeConfig g_alert_cache{};
+static AlertPolicyTimingConfig g_policy_cache{};
+static AlertConfluencePolicyConfig g_conf_policy_cache{};
 
 static void service_apply_kconfig_defaults(ServiceRuntimeConfig &s)
 {
@@ -101,6 +115,80 @@ static void alert_apply_kconfig_defaults(AlertRuntimeConfig &a)
 #else
     a.regime_hot_scale_permille = 1180;
 #endif
+}
+
+static void alert_policy_apply_kconfig_defaults(AlertPolicyTimingConfig &p)
+{
+#ifdef CONFIG_ALERT_ENGINE_1M_COOLDOWN_S
+    p.cooldown_1m_s = static_cast<uint16_t>(CONFIG_ALERT_ENGINE_1M_COOLDOWN_S);
+#else
+    p.cooldown_1m_s = 120;
+#endif
+#ifdef CONFIG_ALERT_ENGINE_5M_COOLDOWN_S
+    p.cooldown_5m_s = static_cast<uint16_t>(CONFIG_ALERT_ENGINE_5M_COOLDOWN_S);
+#else
+    p.cooldown_5m_s = 300;
+#endif
+#ifdef CONFIG_ALERT_ENGINE_CONF_1M5M_COOLDOWN_S
+    p.cooldown_conf_1m5m_s = static_cast<uint16_t>(CONFIG_ALERT_ENGINE_CONF_1M5M_COOLDOWN_S);
+#else
+    p.cooldown_conf_1m5m_s = 600;
+#endif
+#ifdef CONFIG_ALERT_ENGINE_CONF_SUPPRESS_LOOSE_S
+    p.suppress_loose_after_conf_s = static_cast<uint16_t>(CONFIG_ALERT_ENGINE_CONF_SUPPRESS_LOOSE_S);
+#else
+    p.suppress_loose_after_conf_s = 8;
+#endif
+}
+
+static void alert_confluence_apply_defaults(AlertConfluencePolicyConfig &c)
+{
+    c.confluence_enabled = true;
+    c.confluence_require_same_direction = true;
+    c.confluence_require_both_thresholds = true;
+    c.confluence_emit_loose_alerts_when_conf_fails = true;
+}
+
+static void load_confluence_overlay(nvs_handle_t h, AlertConfluencePolicyConfig &c)
+{
+    uint8_t u8v = 0;
+    esp_err_t e = nvs_get_u8(h, KEY_ALT_CF_EN, &u8v);
+    if (e == ESP_OK) {
+        c.confluence_enabled = (u8v != 0);
+    }
+    e = nvs_get_u8(h, KEY_ALT_CF_SD, &u8v);
+    if (e == ESP_OK) {
+        c.confluence_require_same_direction = (u8v != 0);
+    }
+    e = nvs_get_u8(h, KEY_ALT_CF_BT, &u8v);
+    if (e == ESP_OK) {
+        c.confluence_require_both_thresholds = (u8v != 0);
+    }
+    e = nvs_get_u8(h, KEY_ALT_CF_LO, &u8v);
+    if (e == ESP_OK) {
+        c.confluence_emit_loose_alerts_when_conf_fails = (u8v != 0);
+    }
+}
+
+static void load_policy_overlay(nvs_handle_t h, AlertPolicyTimingConfig &p)
+{
+    uint16_t u16 = 0;
+    esp_err_t e = nvs_get_u16(h, KEY_ALTP_CD_1M, &u16);
+    if (e == ESP_OK && u16 >= kAlertPolicyCooldown1mSMin && u16 <= kAlertPolicyCooldown1mSMax) {
+        p.cooldown_1m_s = u16;
+    }
+    e = nvs_get_u16(h, KEY_ALTP_CD_5M, &u16);
+    if (e == ESP_OK && u16 >= kAlertPolicyCooldown5mSMin && u16 <= kAlertPolicyCooldown5mSMax) {
+        p.cooldown_5m_s = u16;
+    }
+    e = nvs_get_u16(h, KEY_ALTP_CD_CF, &u16);
+    if (e == ESP_OK && u16 >= kAlertPolicyCooldownConfSMin && u16 <= kAlertPolicyCooldownConfSMax) {
+        p.cooldown_conf_1m5m_s = u16;
+    }
+    e = nvs_get_u16(h, KEY_ALTP_SUP_LO, &u16);
+    if (e == ESP_OK && u16 >= kAlertPolicySuppressLooseSMin && u16 <= kAlertPolicySuppressLooseSMax) {
+        p.suppress_loose_after_conf_s = u16;
+    }
 }
 
 static void load_alert_overlay(nvs_handle_t h, AlertRuntimeConfig &a)
@@ -187,6 +275,8 @@ esp_err_t load_or_defaults(RuntimeConfig &out)
     out.wifi_sta_pass[0] = '\0';
     service_apply_kconfig_defaults(out.services);
     alert_apply_kconfig_defaults(out.alert_tuning);
+    alert_policy_apply_kconfig_defaults(out.alert_policy);
+    alert_confluence_apply_defaults(out.alert_confluence);
 
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NS, NVS_READONLY, &h);
@@ -194,12 +284,16 @@ esp_err_t load_or_defaults(RuntimeConfig &out)
         ESP_LOGI(DIAG_TAG_CFG, "no NVS namespace yet — defaults");
         g_service_cache = out.services;
         g_alert_cache = out.alert_tuning;
+        g_policy_cache = out.alert_policy;
+        g_conf_policy_cache = out.alert_confluence;
         return ESP_OK;
     }
     if (err != ESP_OK) {
         ESP_LOGW(DIAG_TAG_CFG, "nvs_open: %s — defaults", esp_err_to_name(err));
         g_service_cache = out.services;
         g_alert_cache = out.alert_tuning;
+        g_policy_cache = out.alert_policy;
+        g_conf_policy_cache = out.alert_confluence;
         return ESP_OK;
     }
 
@@ -230,11 +324,15 @@ esp_err_t load_or_defaults(RuntimeConfig &out)
 
     load_service_overlay(h, out.services);
     load_alert_overlay(h, out.alert_tuning);
+    load_policy_overlay(h, out.alert_policy);
+    load_confluence_overlay(h, out.alert_confluence);
 
     nvs_close(h);
     apply_defaults(out);
     g_service_cache = out.services;
     g_alert_cache = out.alert_tuning;
+    g_policy_cache = out.alert_policy;
+    g_conf_policy_cache = out.alert_confluence;
 
     ESP_LOGI(DIAG_TAG_CFG, "loaded schema=%u symbol=%s wifi=%s", (unsigned)out.schema_version, out.default_symbol,
              has_wifi_credentials(out) ? "yes" : "no");
@@ -247,6 +345,17 @@ esp_err_t load_or_defaults(RuntimeConfig &out)
              (unsigned)out.alert_tuning.threshold_1m_bps, (unsigned)out.alert_tuning.threshold_5m_bps,
              (unsigned)out.alert_tuning.regime_calm_scale_permille,
              (unsigned)out.alert_tuning.regime_hot_scale_permille);
+    ESP_LOGI(DIAG_TAG_CFG,
+             "M-003c policy timing: 1m_cd=%us 5m_cd=%us conf_cd=%us sup_loose=%us (Kconfig+NVS altp_*)",
+             (unsigned)out.alert_policy.cooldown_1m_s, (unsigned)out.alert_policy.cooldown_5m_s,
+             (unsigned)out.alert_policy.cooldown_conf_1m5m_s,
+             (unsigned)out.alert_policy.suppress_loose_after_conf_s);
+    ESP_LOGI(DIAG_TAG_CFG,
+             "M-003d confluence policy: en=%s same_dir=%s both_thr=%s emit_loose=%s (defaults+NVS altcf_*)",
+             out.alert_confluence.confluence_enabled ? "on" : "off",
+             out.alert_confluence.confluence_require_same_direction ? "on" : "off",
+             out.alert_confluence.confluence_require_both_thresholds ? "on" : "off",
+             out.alert_confluence.confluence_emit_loose_alerts_when_conf_fails ? "on" : "off");
     return ESP_OK;
 }
 
@@ -258,6 +367,16 @@ const ServiceRuntimeConfig &service_runtime()
 const AlertRuntimeConfig &alert_runtime()
 {
     return g_alert_cache;
+}
+
+const AlertPolicyTimingConfig &alert_policy_timing()
+{
+    return g_policy_cache;
+}
+
+const AlertConfluencePolicyConfig &alert_confluence_policy()
+{
+    return g_conf_policy_cache;
 }
 
 static bool svc_string_ok(const char *s)
@@ -374,6 +493,54 @@ esp_err_t persist_alert_runtime(const AlertRuntimeConfig &alert)
                  (unsigned)alert.regime_calm_scale_permille, (unsigned)alert.regime_hot_scale_permille);
     } else {
         ESP_LOGW(DIAG_TAG_CFG, "M-003b: persist alert: %s", esp_err_to_name(err));
+    }
+    return err;
+}
+
+esp_err_t persist_alert_policy_timing(const AlertPolicyTimingConfig &policy)
+{
+    if (policy.cooldown_1m_s < kAlertPolicyCooldown1mSMin || policy.cooldown_1m_s > kAlertPolicyCooldown1mSMax ||
+        policy.cooldown_5m_s < kAlertPolicyCooldown5mSMin || policy.cooldown_5m_s > kAlertPolicyCooldown5mSMax ||
+        policy.cooldown_conf_1m5m_s < kAlertPolicyCooldownConfSMin ||
+        policy.cooldown_conf_1m5m_s > kAlertPolicyCooldownConfSMax ||
+        policy.suppress_loose_after_conf_s < kAlertPolicySuppressLooseSMin ||
+        policy.suppress_loose_after_conf_s > kAlertPolicySuppressLooseSMax) {
+        ESP_LOGW(DIAG_TAG_CFG, "M-003c/M-013i: persist_alert_policy_timing: buiten toegestaan bereik");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGW(DIAG_TAG_CFG, "M-013i: nvs_open: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = nvs_set_u32(h, KEY_SCHEMA, kSchemaVersion);
+    if (err == ESP_OK) {
+        err = nvs_set_u16(h, KEY_ALTP_CD_1M, policy.cooldown_1m_s);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u16(h, KEY_ALTP_CD_5M, policy.cooldown_5m_s);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u16(h, KEY_ALTP_CD_CF, policy.cooldown_conf_1m5m_s);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u16(h, KEY_ALTP_SUP_LO, policy.suppress_loose_after_conf_s);
+    }
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+
+    if (err == ESP_OK) {
+        g_policy_cache = policy;
+        ESP_LOGI(DIAG_TAG_CFG,
+                 "M-013i: alert policy timing opgeslagen (1m_cd=%us 5m_cd=%us conf_cd=%us sup_loose=%us)",
+                 (unsigned)policy.cooldown_1m_s, (unsigned)policy.cooldown_5m_s,
+                 (unsigned)policy.cooldown_conf_1m5m_s, (unsigned)policy.suppress_loose_after_conf_s);
+    } else {
+        ESP_LOGW(DIAG_TAG_CFG, "M-013i: persist policy timing: %s", esp_err_to_name(err));
     }
     return err;
 }

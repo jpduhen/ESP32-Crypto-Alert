@@ -8,7 +8,13 @@
  * M-010c: 5m-alerts in JSON/HTML; M-010d: confluence 1m+5m in JSON/HTML.
  * M-013e: read-only regime/vol/effectieve drempels in status.json + compact HTML-blok.
  * M-003b: `alert_runtime_config` in status.json (typed tuning, read-only).
+ * M-003c: `alert_policy_timing` in status.json (cooldown/suppress, read-only).
+ * M-003d: `alert_confluence_policy` in status.json (read-only; geen WebUI-write in deze stap).
  * M-013f: POST /api/alert-runtime.json → `persist_alert_runtime` (zelfde subset als M-003b).
+ * M-013i: POST /api/alert-policy-timing.json → `persist_alert_policy_timing` (zelfde subset als M-003c).
+ * M-013g: minimaal formulier op / voor diezelfde vier velden (POST naar alert-runtime.json).
+ * M-013j: minimaal formulier op / voor alert-policy timing (POST naar alert-policy-timing.json).
+ * M-013h: read-only alert-beslissing per pad (1m/5m/confluence) in status.json + compact op /.
  */
 #include "webui/webui.hpp"
 #include "alert_engine/alert_engine.hpp"
@@ -69,6 +75,36 @@ static const char *tick_str(market_types::TickSource t)
     default:
         return "none";
     }
+}
+
+/** M-013h: stabiele JSON-velden; `-1` = n.v.t. */
+static void fmt_rem_ms(char *buf, size_t len, int64_t ms)
+{
+    if (!buf || len == 0) {
+        return;
+    }
+    if (ms < 0) {
+        std::snprintf(buf, len, "—");
+    } else {
+        std::snprintf(buf, len, "%lld ms", static_cast<long long>(ms));
+    }
+}
+
+static void add_alert_decision_path_json(cJSON *parent,
+                                         const char *key,
+                                         const alert_engine::AlertPathDecisionSnapshot &p)
+{
+    cJSON *o = cJSON_CreateObject();
+    if (!o || !parent || !key) {
+        return;
+    }
+    cJSON_AddStringToObject(o, "status", p.status[0] ? p.status : "?");
+    if (p.reason[0] != '\0') {
+        cJSON_AddStringToObject(o, "reason", p.reason);
+    }
+    cJSON_AddNumberToObject(o, "remaining_cooldown_ms", static_cast<double>(p.remaining_cooldown_ms));
+    cJSON_AddNumberToObject(o, "remaining_suppress_ms", static_cast<double>(p.remaining_suppress_ms));
+    cJSON_AddItemToObject(parent, key, o);
 }
 
 static void sta_ip_str(char *out, size_t out_len)
@@ -167,6 +203,18 @@ static esp_err_t handle_status_json(httpd_req_t *req)
     }
 
     {
+        alert_engine::AlertDecisionObservabilitySnapshot ado{};
+        alert_engine::get_alert_decision_observability_snapshot(&ado);
+        cJSON *ado_j = cJSON_CreateObject();
+        if (ado_j) {
+            add_alert_decision_path_json(ado_j, "1m", ado.tf_1m);
+            add_alert_decision_path_json(ado_j, "5m", ado.tf_5m);
+            add_alert_decision_path_json(ado_j, "confluence_1m5m", ado.confluence_1m5m);
+            cJSON_AddItemToObject(root, "alert_decision_observability", ado_j);
+        }
+    }
+
+    {
         const config_store::AlertRuntimeConfig &ar = config_store::alert_runtime();
         cJSON *arc_j = cJSON_CreateObject();
         if (arc_j) {
@@ -176,6 +224,39 @@ static esp_err_t handle_status_json(httpd_req_t *req)
             cJSON_AddNumberToObject(arc_j, "regime_calm_scale_permille", static_cast<double>(ar.regime_calm_scale_permille));
             cJSON_AddNumberToObject(arc_j, "regime_hot_scale_permille", static_cast<double>(ar.regime_hot_scale_permille));
             cJSON_AddItemToObject(root, "alert_runtime_config", arc_j);
+        }
+    }
+
+    {
+        const config_store::AlertPolicyTimingConfig &apt = config_store::alert_policy_timing();
+        cJSON *apt_j = cJSON_CreateObject();
+        if (apt_j) {
+            cJSON_AddNumberToObject(apt_j, "schema_version", static_cast<double>(config_store::kSchemaVersion));
+            cJSON_AddNumberToObject(apt_j, "cooldown_1m_s", static_cast<double>(apt.cooldown_1m_s));
+            cJSON_AddNumberToObject(apt_j, "cooldown_5m_s", static_cast<double>(apt.cooldown_5m_s));
+            cJSON_AddNumberToObject(apt_j, "cooldown_conf_1m5m_s", static_cast<double>(apt.cooldown_conf_1m5m_s));
+            cJSON_AddNumberToObject(apt_j, "suppress_loose_after_conf_s",
+                                     static_cast<double>(apt.suppress_loose_after_conf_s));
+            cJSON_AddItemToObject(root, "alert_policy_timing", apt_j);
+        }
+    }
+
+    {
+        const config_store::AlertConfluencePolicyConfig &acfp = config_store::alert_confluence_policy();
+        cJSON *acf_j = cJSON_CreateObject();
+        if (acf_j) {
+            cJSON_AddNumberToObject(acf_j, "schema_version", static_cast<double>(config_store::kSchemaVersion));
+            cJSON_AddBoolToObject(acf_j, "confluence_enabled", acfp.confluence_enabled ? 1 : 0);
+            cJSON_AddBoolToObject(acf_j,
+                                  "confluence_require_same_direction",
+                                  acfp.confluence_require_same_direction ? 1 : 0);
+            cJSON_AddBoolToObject(acf_j,
+                                  "confluence_require_both_thresholds",
+                                  acfp.confluence_require_both_thresholds ? 1 : 0);
+            cJSON_AddBoolToObject(acf_j,
+                                  "confluence_emit_loose_alerts_when_conf_fails",
+                                  acfp.confluence_emit_loose_alerts_when_conf_fails ? 1 : 0);
+            cJSON_AddItemToObject(root, "alert_confluence_policy", acf_j);
         }
     }
 
@@ -344,6 +425,125 @@ static esp_err_t handle_alert_runtime_post(httpd_req_t *req)
              "M-013f: alert runtime opgeslagen via POST (1m=%u 5m=%u bps calm=%u‰ hot=%u‰)",
              (unsigned)ar.threshold_1m_bps, (unsigned)ar.threshold_5m_bps,
              (unsigned)ar.regime_calm_scale_permille, (unsigned)ar.regime_hot_scale_permille);
+    const esp_err_t se = send_json_text(req, "200 OK", printed);
+    cJSON_free(printed);
+    return se;
+}
+
+static esp_err_t handle_alert_policy_timing_post(httpd_req_t *req)
+{
+    char raw[512]{};
+    const int need = req->content_len;
+    if (need <= 0 || need >= static_cast<int>(sizeof(raw))) {
+        ESP_LOGW(TAG, "M-013i: POST body ontbreekt of te groot (%d)", need);
+        return send_json_text(req, "400 Bad Request",
+                              "{\"ok\":false,\"error\":\"body ontbreekt of te groot (max 511 bytes)\"}");
+    }
+    int got = 0;
+    while (got < need) {
+        const int r = httpd_req_recv(req, raw + got, (size_t)(need - got));
+        if (r < 0) {
+            ESP_LOGW(TAG, "M-013i: recv: %d", r);
+            return send_json_text(req, "400 Bad Request", "{\"ok\":false,\"error\":\"recv mislukt\"}");
+        }
+        if (r == 0) {
+            break;
+        }
+        got += r;
+    }
+    if (got != need) {
+        return send_json_text(req, "400 Bad Request", "{\"ok\":false,\"error\":\"body incompleet\"}");
+    }
+    raw[need] = '\0';
+
+    cJSON *root = cJSON_Parse(raw);
+    if (!root || !cJSON_IsObject(root)) {
+        if (root) {
+            cJSON_Delete(root);
+        }
+        ESP_LOGW(TAG, "M-013i: JSON parse/object");
+        return send_json_text(req, "400 Bad Request", "{\"ok\":false,\"error\":\"JSON moet een object zijn\"}");
+    }
+
+    int nchild = 0;
+    for (cJSON *c = root->child; c != nullptr; c = c->next) {
+        ++nchild;
+    }
+    if (nchild != 4) {
+        cJSON_Delete(root);
+        return send_json_text(req, "400 Bad Request",
+                              "{\"ok\":false,\"error\":\"exact vier velden vereist (M-003c subset)\"}");
+    }
+
+    config_store::AlertPolicyTimingConfig next{};
+    for (cJSON *c = root->child; c != nullptr; c = c->next) {
+        if (c->string == nullptr) {
+            cJSON_Delete(root);
+            return send_json_text(req, "400 Bad Request", "{\"ok\":false,\"error\":\"ongeldige sleutel\"}");
+        }
+        uint16_t v = 0;
+        if (!json_u16_whole(c, &v)) {
+            cJSON_Delete(root);
+            return send_json_text(
+                req, "400 Bad Request",
+                "{\"ok\":false,\"error\":\"alle waarden moeten niet-negatieve gehele getallen zijn\"}");
+        }
+        if (std::strcmp(c->string, "cooldown_1m_s") == 0) {
+            next.cooldown_1m_s = v;
+        } else if (std::strcmp(c->string, "cooldown_5m_s") == 0) {
+            next.cooldown_5m_s = v;
+        } else if (std::strcmp(c->string, "cooldown_conf_1m5m_s") == 0) {
+            next.cooldown_conf_1m5m_s = v;
+        } else if (std::strcmp(c->string, "suppress_loose_after_conf_s") == 0) {
+            next.suppress_loose_after_conf_s = v;
+        } else {
+            cJSON_Delete(root);
+            return send_json_text(req, "400 Bad Request",
+                                  "{\"ok\":false,\"error\":\"onbekende sleutel (alleen M-003c-velden)\"}");
+        }
+    }
+    cJSON_Delete(root);
+
+    const esp_err_t pe = config_store::persist_alert_policy_timing(next);
+    if (pe == ESP_ERR_INVALID_ARG) {
+        return send_json_text(
+            req, "400 Bad Request",
+            "{\"ok\":false,\"error\":\"waarde buiten toegestaan bereik (zie config_store / Kconfig-ranges)\"}");
+    }
+    if (pe != ESP_OK) {
+        ESP_LOGW(TAG, "M-013i: persist_alert_policy_timing: %s", esp_err_to_name(pe));
+        return send_json_text(req, "500 Internal Server Error",
+                              "{\"ok\":false,\"error\":\"opslaan mislukt\"}");
+    }
+
+    const config_store::AlertPolicyTimingConfig &apt = config_store::alert_policy_timing();
+    cJSON *out = cJSON_CreateObject();
+    if (!out) {
+        return send_json_text(req, "500 Internal Server Error", "{\"ok\":false,\"error\":\"geen geheugen\"}");
+    }
+    cJSON_AddBoolToObject(out, "ok", true);
+    cJSON *cfg = cJSON_CreateObject();
+    if (cfg) {
+        cJSON_AddNumberToObject(cfg, "schema_version", static_cast<double>(config_store::kSchemaVersion));
+        cJSON_AddNumberToObject(cfg, "cooldown_1m_s", static_cast<double>(apt.cooldown_1m_s));
+        cJSON_AddNumberToObject(cfg, "cooldown_5m_s", static_cast<double>(apt.cooldown_5m_s));
+        cJSON_AddNumberToObject(cfg, "cooldown_conf_1m5m_s", static_cast<double>(apt.cooldown_conf_1m5m_s));
+        cJSON_AddNumberToObject(cfg, "suppress_loose_after_conf_s",
+                                 static_cast<double>(apt.suppress_loose_after_conf_s));
+        cJSON_AddItemToObject(out, "alert_policy_timing", cfg);
+    }
+    cJSON_AddStringToObject(
+        out, "note",
+        "Opgeslagen in NVS — alert_engine gebruikt dit vanaf de volgende tick (geen herstart).");
+    char *printed = cJSON_PrintUnformatted(out);
+    cJSON_Delete(out);
+    if (!printed) {
+        return send_json_text(req, "500 Internal Server Error", "{\"ok\":false,\"error\":\"geen geheugen\"}");
+    }
+    ESP_LOGI(TAG,
+             "M-013i: alert policy timing opgeslagen via POST (1m_cd=%us 5m_cd=%us conf_cd=%us sup_loose=%us)",
+             (unsigned)apt.cooldown_1m_s, (unsigned)apt.cooldown_5m_s,
+             (unsigned)apt.cooldown_conf_1m5m_s, (unsigned)apt.suppress_loose_after_conf_s);
     const esp_err_t se = send_json_text(req, "200 OK", printed);
     cJSON_free(printed);
     return se;
@@ -570,7 +770,8 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         "<title>CryptoAlert V2</title>"
         "<style>body{font-family:system-ui,sans-serif;margin:1rem;line-height:1.4}"
         "code{background:#eee;padding:2px 6px}fieldset{border:1px solid #ccc;border-radius:6px;padding:1rem;margin-top:1rem}"
-        "#svc-msg{min-height:1.5em;margin-top:.75em;font-size:.95rem}</style></head><body>"
+        "#svc-msg,#alert-runtime-msg,#alert-policy-msg{min-height:1.5em;margin-top:.75em;font-size:.95rem}"
+        "</style></head><body>"
         "<h1>CryptoAlert V2</h1>"
         "<p><strong>Versie</strong> %s · <strong>IP</strong> %s · <strong>WiFi IP bekend</strong> %s</p>"
         "<p><strong>Symbool</strong> %s · <strong>Prijs (EUR)</strong> %.4f · <strong>Geldig</strong> %s</p>"
@@ -645,11 +846,194 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         }
         w += static_cast<size_t>(nreg);
     }
+    {
+        alert_engine::AlertDecisionObservabilitySnapshot ado{};
+        alert_engine::get_alert_decision_observability_snapshot(&ado);
+        char sfx1[88]{};
+        char sfx5[88]{};
+        char sfxc[88]{};
+        if (ado.tf_1m.reason[0] != '\0') {
+            std::snprintf(sfx1, sizeof(sfx1), " · <code>%s</code>", ado.tf_1m.reason);
+        }
+        if (ado.tf_5m.reason[0] != '\0') {
+            std::snprintf(sfx5, sizeof(sfx5), " · <code>%s</code>", ado.tf_5m.reason);
+        }
+        if (ado.confluence_1m5m.reason[0] != '\0') {
+            std::snprintf(sfxc, sizeof(sfxc), " · <code>%s</code>", ado.confluence_1m5m.reason);
+        }
+        char cd1[28]{};
+        char sup1[28]{};
+        char cd5[28]{};
+        char sup5[28]{};
+        char cdc[28]{};
+        char supc[28]{};
+        fmt_rem_ms(cd1, sizeof(cd1), ado.tf_1m.remaining_cooldown_ms);
+        fmt_rem_ms(sup1, sizeof(sup1), ado.tf_1m.remaining_suppress_ms);
+        fmt_rem_ms(cd5, sizeof(cd5), ado.tf_5m.remaining_cooldown_ms);
+        fmt_rem_ms(sup5, sizeof(sup5), ado.tf_5m.remaining_suppress_ms);
+        fmt_rem_ms(cdc, sizeof(cdc), ado.confluence_1m5m.remaining_cooldown_ms);
+        fmt_rem_ms(supc, sizeof(supc), ado.confluence_1m5m.remaining_suppress_ms);
+        const int nd = std::snprintf(
+            html + w,
+            k_html_alloc - w,
+            "<h2>Alert-beslissing (M-013h, read-only)</h2>"
+            "<p class=\"hint\">Snapshot per tick uit <code>alert_engine</code> — geen aparte WebUI-logica.</p>"
+            "<p><strong>1m</strong> <code>%s</code>%s<br/>"
+            "<small>Cooldown rest · %s · suppress rest · %s</small></p>"
+            "<p><strong>5m</strong> <code>%s</code>%s<br/>"
+            "<small>Cooldown rest · %s · suppress rest · %s</small></p>"
+            "<p><strong>Confluence 1m+5m</strong> <code>%s</code>%s<br/>"
+            "<small>Cooldown rest · %s · suppress rest · %s</small></p>",
+            ado.tf_1m.status[0] ? ado.tf_1m.status : "?",
+            sfx1,
+            cd1,
+            sup1,
+            ado.tf_5m.status[0] ? ado.tf_5m.status : "?",
+            sfx5,
+            cd5,
+            sup5,
+            ado.confluence_1m5m.status[0] ? ado.confluence_1m5m.status : "?",
+            sfxc,
+            cdc,
+            supc);
+        if (nd <= 0 || w + static_cast<size_t>(nd) >= k_html_alloc) {
+            ESP_LOGW(TAG, "M-013h: HTML alert-beslissing overflow (nd=%d)", nd);
+            std::free(html);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
+            return ESP_FAIL;
+        }
+        w += static_cast<size_t>(nd);
+    }
+    {
+        const config_store::AlertRuntimeConfig &ar = config_store::alert_runtime();
+        const int nar = std::snprintf(
+            html + w,
+            k_html_alloc - w,
+            "<h2>Alert-runtime (M-013g)</h2>"
+            "<p class=\"hint\">Zelfde subset als M-003b/M-013f. <strong>Opslaan</strong> schrijft naar NVS; "
+            "<strong>alert_engine</strong> gebruikt de waarden vanaf de <strong>volgende tick</strong> "
+            "(geen firmware-herstart).</p>"
+            "<form id=\"alert-runtime-form\">"
+            "<fieldset><legend>Drempels (bps) en regime-schaal (‰)</legend>"
+            "<p><label>threshold_1m_bps<br/><input type=\"number\" id=\"ar_1m\" required min=\"%u\" max=\"%u\" "
+            "step=\"1\" value=\"%u\"/></label></p>"
+            "<p><label>threshold_5m_bps<br/><input type=\"number\" id=\"ar_5m\" required min=\"%u\" max=\"%u\" "
+            "step=\"1\" value=\"%u\"/></label></p>"
+            "<p><label>regime_calm_scale_permille<br/><input type=\"number\" id=\"ar_calm\" required "
+            "min=\"%u\" max=\"%u\" step=\"1\" value=\"%u\"/></label></p>"
+            "<p><label>regime_hot_scale_permille<br/><input type=\"number\" id=\"ar_hot\" required "
+            "min=\"%u\" max=\"%u\" step=\"1\" value=\"%u\"/></label></p>"
+            "<p><button type=\"submit\">Alert-runtime opslaan</button></p>"
+            "</fieldset></form>"
+            "<p id=\"alert-runtime-msg\"></p>"
+            "<script>"
+            "(function(){var f=document.getElementById('alert-runtime-form');"
+            "var m=document.getElementById('alert-runtime-msg');if(!f||!m)return;"
+            "f.addEventListener('submit',function(e){e.preventDefault();m.textContent='Bezig…';m.style.color='#333';"
+            "var body=JSON.stringify({"
+            "threshold_1m_bps:parseInt(document.getElementById('ar_1m').value,10),"
+            "threshold_5m_bps:parseInt(document.getElementById('ar_5m').value,10),"
+            "regime_calm_scale_permille:parseInt(document.getElementById('ar_calm').value,10),"
+            "regime_hot_scale_permille:parseInt(document.getElementById('ar_hot').value,10)"
+            "});"
+            "fetch('/api/alert-runtime.json',{method:'POST',headers:{'Content-Type':'application/json'},body:body})"
+            ".then(function(r){return r.text().then(function(t){return {ok:r.ok,status:r.status,text:t};});})"
+            ".then(function(x){try{var j=JSON.parse(x.text);if(x.ok){m.style.color='#063';"
+            "m.textContent='Opgeslagen. '+(j.note||'');}else{m.style.color='#800';"
+            "m.textContent='Fout '+x.status+': '+(j.error||x.text);}}catch(err){"
+            "m.style.color=x.ok?'#063':'#800';m.textContent=x.ok?x.text:('Fout '+x.status+': '+x.text);}})"
+            ".catch(function(err){m.style.color='#800';m.textContent='Netwerkfout: '+err;});});})();"
+            "</script>",
+            static_cast<unsigned>(config_store::kAlertThreshold1mBpsMin),
+            static_cast<unsigned>(config_store::kAlertThreshold1mBpsMax),
+            static_cast<unsigned>(ar.threshold_1m_bps),
+            static_cast<unsigned>(config_store::kAlertThreshold5mBpsMin),
+            static_cast<unsigned>(config_store::kAlertThreshold5mBpsMax),
+            static_cast<unsigned>(ar.threshold_5m_bps),
+            static_cast<unsigned>(config_store::kAlertRegimeCalmScalePermilleMin),
+            static_cast<unsigned>(config_store::kAlertRegimeCalmScalePermilleMax),
+            static_cast<unsigned>(ar.regime_calm_scale_permille),
+            static_cast<unsigned>(config_store::kAlertRegimeHotScalePermilleMin),
+            static_cast<unsigned>(config_store::kAlertRegimeHotScalePermilleMax),
+            static_cast<unsigned>(ar.regime_hot_scale_permille));
+        if (nar <= 0 || w + static_cast<size_t>(nar) >= k_html_alloc) {
+            ESP_LOGW(TAG, "M-013g: HTML alert-runtime-form overflow (nar=%d)", nar);
+            std::free(html);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
+            return ESP_FAIL;
+        }
+        w += static_cast<size_t>(nar);
+    }
+    {
+        const config_store::AlertPolicyTimingConfig &apt = config_store::alert_policy_timing();
+        const int nap = std::snprintf(
+            html + w,
+            k_html_alloc - w,
+            "<h2>Alert-policy timing (M-013j)</h2>"
+            "<p class=\"hint\">Zelfde subset als M-003c/M-013i (seconden). <strong>Opslaan</strong> schrijft naar NVS; "
+            "<strong>alert_engine</strong> gebruikt de waarden vanaf de <strong>volgende tick</strong> "
+            "(geen firmware-herstart).</p>"
+            "<form id=\"alert-policy-form\">"
+            "<fieldset><legend>Cooldowns en suppressie-venster (s)</legend>"
+            "<p><label>cooldown_1m_s<br/><input type=\"number\" id=\"ap_cd1\" required min=\"%u\" max=\"%u\" "
+            "step=\"1\" value=\"%u\"/></label></p>"
+            "<p><label>cooldown_5m_s<br/><input type=\"number\" id=\"ap_cd5\" required min=\"%u\" max=\"%u\" "
+            "step=\"1\" value=\"%u\"/></label></p>"
+            "<p><label>cooldown_conf_1m5m_s<br/><input type=\"number\" id=\"ap_cf\" required min=\"%u\" max=\"%u\" "
+            "step=\"1\" value=\"%u\"/></label></p>"
+            "<p><label>suppress_loose_after_conf_s<br/><input type=\"number\" id=\"ap_sup\" required "
+            "min=\"%u\" max=\"%u\" step=\"1\" value=\"%u\"/></label></p>"
+            "<p><button type=\"submit\">Policy-timing opslaan</button></p>"
+            "</fieldset></form>"
+            "<p id=\"alert-policy-msg\"></p>"
+            "<script>"
+            "(function(){var f=document.getElementById('alert-policy-form');"
+            "var m=document.getElementById('alert-policy-msg');if(!f||!m)return;"
+            "f.addEventListener('submit',function(e){e.preventDefault();m.textContent='Bezig…';m.style.color='#333';"
+            "var body=JSON.stringify({"
+            "cooldown_1m_s:parseInt(document.getElementById('ap_cd1').value,10),"
+            "cooldown_5m_s:parseInt(document.getElementById('ap_cd5').value,10),"
+            "cooldown_conf_1m5m_s:parseInt(document.getElementById('ap_cf').value,10),"
+            "suppress_loose_after_conf_s:parseInt(document.getElementById('ap_sup').value,10)"
+            "});"
+            "fetch('/api/alert-policy-timing.json',{method:'POST',headers:{'Content-Type':'application/json'},"
+            "body:body})"
+            ".then(function(r){return r.text().then(function(t){return {ok:r.ok,status:r.status,text:t};});})"
+            ".then(function(x){try{var j=JSON.parse(x.text);if(x.ok){m.style.color='#063';"
+            "m.textContent='Opgeslagen. '+(j.note||'');}else{m.style.color='#800';"
+            "m.textContent='Fout '+x.status+': '+(j.error||x.text);}}catch(err){"
+            "m.style.color=x.ok?'#063':'#800';m.textContent=x.ok?x.text:('Fout '+x.status+': '+x.text);}})"
+            ".catch(function(err){m.style.color='#800';m.textContent='Netwerkfout: '+err;});});})();"
+            "</script>",
+            static_cast<unsigned>(config_store::kAlertPolicyCooldown1mSMin),
+            static_cast<unsigned>(config_store::kAlertPolicyCooldown1mSMax),
+            static_cast<unsigned>(apt.cooldown_1m_s),
+            static_cast<unsigned>(config_store::kAlertPolicyCooldown5mSMin),
+            static_cast<unsigned>(config_store::kAlertPolicyCooldown5mSMax),
+            static_cast<unsigned>(apt.cooldown_5m_s),
+            static_cast<unsigned>(config_store::kAlertPolicyCooldownConfSMin),
+            static_cast<unsigned>(config_store::kAlertPolicyCooldownConfSMax),
+            static_cast<unsigned>(apt.cooldown_conf_1m5m_s),
+            static_cast<unsigned>(config_store::kAlertPolicySuppressLooseSMin),
+            static_cast<unsigned>(config_store::kAlertPolicySuppressLooseSMax),
+            static_cast<unsigned>(apt.suppress_loose_after_conf_s));
+        if (nap <= 0 || w + static_cast<size_t>(nap) >= k_html_alloc) {
+            ESP_LOGW(TAG, "M-013j: HTML alert-policy-form overflow (nap=%d)", nap);
+            std::free(html);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
+            return ESP_FAIL;
+        }
+        w += static_cast<size_t>(nap);
+    }
     n = std::snprintf(
         html + w, k_html_alloc - w,
         "<p><a href=\"/api/status.json\"><code>/api/status.json</code></a> "
         "(incl. OTA, alerts_1m/5m/conf, <code>regime_observability</code>, "
-        "<code>alert_runtime_config</code>; POST <code>/api/alert-runtime.json</code> M-013f; M-014b)</p>"
+        "<code>alert_decision_observability</code> M-013h, "
+        "<code>alert_runtime_config</code> M-003b, <code>alert_policy_timing</code> M-003c, "
+        "<code>alert_confluence_policy</code> M-003d (read-only); "
+        "POST <code>/api/alert-runtime.json</code> M-013f/g, <code>/api/alert-policy-timing.json</code> M-013i/j; "
+        "M-014b)</p>"
         "<h2>OTA / boot</h2>"
         "<p><strong>Partitie</strong> %s @ 0x%08X · <strong>img-state</strong> %s<br/>"
         "<strong>Volgende update-slot</strong> %s · <strong>Reset</strong> %s<br/>"
@@ -752,7 +1136,7 @@ esp_err_t init()
         port = 8080;
     }
     cfg.server_port = port;
-    cfg.max_uri_handlers = 12;
+    cfg.max_uri_handlers = 13;
     cfg.lru_purge_enable = true;
     /** M-014a: OTA-handler gebruikt ~1 KiB recv-buffer op httpd-taskstack (default 4096 is krap). */
     cfg.stack_size = 8192;
@@ -783,10 +1167,17 @@ esp_err_t init()
     ua.handler = handle_alert_runtime_post;
     ua.user_ctx = nullptr;
 
+    httpd_uri_t uap{};
+    uap.uri = "/api/alert-policy-timing.json";
+    uap.method = HTTP_POST;
+    uap.handler = handle_alert_policy_timing_post;
+    uap.user_ctx = nullptr;
+
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uj), TAG, "reg json");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uh), TAG, "reg html");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &us), TAG, "reg services post");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &ua), TAG, "reg alert-runtime post");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uap), TAG, "reg alert-policy-timing post");
 
     httpd_uri_t uo{};
     uo.uri = "/api/ota";
@@ -796,8 +1187,8 @@ esp_err_t init()
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uo), TAG, "reg ota post");
 
     ESP_LOGI(TAG,
-             "M-013a/b/c/d/f + M-014a/b: webui poort %u — status+alerts+OTA-info, services, alert-runtime POST, "
-             "OTA-upload",
+             "M-013a–j + M-014a/b: webui poort %u — status+alerts+OTA, services, alert-runtime + "
+             "alert-policy forms+POST, OTA-upload",
              static_cast<unsigned>(port));
     return ESP_OK;
 #endif
