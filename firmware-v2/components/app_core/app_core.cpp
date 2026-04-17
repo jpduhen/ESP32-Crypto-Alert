@@ -7,6 +7,8 @@
 #include "diagnostics/diagnostics.hpp"
 #include "display_port/display_port.hpp"
 #include "bsp_s3_geek/bsp_s3_geek.hpp"
+#include "alert_engine/alert_engine.hpp"
+#include "domain_metrics/domain_metrics.hpp"
 #include "market_data/market_data.hpp"
 #include "market_types/types.hpp"
 #include "net_runtime/net_runtime.hpp"
@@ -71,6 +73,8 @@ static esp_err_t lifecycle_startup(config_store::RuntimeConfig &cfg)
         }
     }
     ESP_RETURN_ON_ERROR(market_data::init(cfg), TAG, "market_data::init");
+    ESP_RETURN_ON_ERROR(domain_metrics::init(), TAG, "domain_metrics::init");
+    ESP_RETURN_ON_ERROR(alert_engine::init(), TAG, "alert_engine::init");
     ESP_RETURN_ON_ERROR(service_outbound::init(), TAG, "service_outbound::init");
     ESP_RETURN_ON_ERROR(ota_service::init(), TAG, "ota_service::init");
     ESP_RETURN_ON_ERROR(webui::init(), TAG, "webui::init");
@@ -94,7 +98,12 @@ esp_err_t run()
 #if CONFIG_MD_USE_EXCHANGE_BITVAVO
         t103_field_log_ws_via_market_data();
 #endif
-        ui::refresh_from_snapshot(market_data::snapshot());
+        {
+            const market_data::MarketSnapshot snap = market_data::snapshot();
+            domain_metrics::feed(snap);
+            alert_engine::tick();
+            ui::refresh_from_snapshot(snap);
+        }
         diagnostics::tick_heartbeat();
         service_outbound::poll();
         vTaskDelay(pdMS_TO_TICKS(5000));

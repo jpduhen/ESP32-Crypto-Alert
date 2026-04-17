@@ -146,7 +146,7 @@ esp_err_t init()
         std::strncpy(s_boot_confirm, "rollback_disabled", sizeof(s_boot_confirm) - 1);
         ESP_LOGI(TAG, "M-014b: rollback niet actief in build — geen aparte mark nodig (normaal)");
     } else {
-        std::snprintf(s_boot_confirm, sizeof(s_boot_confirm), "error:%s", esp_err_to_name(mr));
+        snprintf(s_boot_confirm, sizeof(s_boot_confirm), "error:%s", esp_err_to_name(mr));
         ESP_LOGW(TAG, "M-014b: mark_app_valid: %s", esp_err_to_name(mr));
     }
 

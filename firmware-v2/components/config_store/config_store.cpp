@@ -23,7 +23,14 @@ static const char KEY_SVC_MQ_URI[] = "svc_mqtt_uri";
 static const char KEY_SVC_NT_EN[] = "svc_ntfy_en";
 static const char KEY_SVC_NT_TP[] = "svc_ntfy_tp";
 
+/** M-003b — NVS keys ≤15 chars, namespace `v2cfg`. */
+static const char KEY_ALT_1M_BPS[] = "alt_1m_bps";
+static const char KEY_ALT_5M_BPS[] = "alt_5m_bps";
+static const char KEY_ALT_SC_CL[] = "alt_sc_calm";
+static const char KEY_ALT_SC_HT[] = "alt_sc_hot";
+
 static ServiceRuntimeConfig g_service_cache{};
+static AlertRuntimeConfig g_alert_cache{};
 
 static void service_apply_kconfig_defaults(ServiceRuntimeConfig &s)
 {
@@ -70,6 +77,51 @@ static void service_apply_kconfig_defaults(ServiceRuntimeConfig &s)
     s.ntfy_topic[0] = '\0';
 #endif
     s.ntfy_topic[sizeof(s.ntfy_topic) - 1] = '\0';
+}
+
+static void alert_apply_kconfig_defaults(AlertRuntimeConfig &a)
+{
+#ifdef CONFIG_ALERT_ENGINE_1M_THRESHOLD_BPS
+    a.threshold_1m_bps = static_cast<uint16_t>(CONFIG_ALERT_ENGINE_1M_THRESHOLD_BPS);
+#else
+    a.threshold_1m_bps = 16;
+#endif
+#ifdef CONFIG_ALERT_ENGINE_5M_THRESHOLD_BPS
+    a.threshold_5m_bps = static_cast<uint16_t>(CONFIG_ALERT_ENGINE_5M_THRESHOLD_BPS);
+#else
+    a.threshold_5m_bps = 32;
+#endif
+#ifdef CONFIG_ALERT_REGIME_THR_SCALE_CALM_PERMILLE
+    a.regime_calm_scale_permille = static_cast<uint16_t>(CONFIG_ALERT_REGIME_THR_SCALE_CALM_PERMILLE);
+#else
+    a.regime_calm_scale_permille = 900;
+#endif
+#ifdef CONFIG_ALERT_REGIME_THR_SCALE_HOT_PERMILLE
+    a.regime_hot_scale_permille = static_cast<uint16_t>(CONFIG_ALERT_REGIME_THR_SCALE_HOT_PERMILLE);
+#else
+    a.regime_hot_scale_permille = 1180;
+#endif
+}
+
+static void load_alert_overlay(nvs_handle_t h, AlertRuntimeConfig &a)
+{
+    uint16_t u16 = 0;
+    esp_err_t e = nvs_get_u16(h, KEY_ALT_1M_BPS, &u16);
+    if (e == ESP_OK && u16 >= kAlertThreshold1mBpsMin && u16 <= kAlertThreshold1mBpsMax) {
+        a.threshold_1m_bps = u16;
+    }
+    e = nvs_get_u16(h, KEY_ALT_5M_BPS, &u16);
+    if (e == ESP_OK && u16 >= kAlertThreshold5mBpsMin && u16 <= kAlertThreshold5mBpsMax) {
+        a.threshold_5m_bps = u16;
+    }
+    e = nvs_get_u16(h, KEY_ALT_SC_CL, &u16);
+    if (e == ESP_OK && u16 >= kAlertRegimeCalmScalePermilleMin && u16 <= kAlertRegimeCalmScalePermilleMax) {
+        a.regime_calm_scale_permille = u16;
+    }
+    e = nvs_get_u16(h, KEY_ALT_SC_HT, &u16);
+    if (e == ESP_OK && u16 >= kAlertRegimeHotScalePermilleMin && u16 <= kAlertRegimeHotScalePermilleMax) {
+        a.regime_hot_scale_permille = u16;
+    }
 }
 
 static void load_service_overlay(nvs_handle_t h, ServiceRuntimeConfig &s)
@@ -134,24 +186,28 @@ esp_err_t load_or_defaults(RuntimeConfig &out)
     out.wifi_sta_ssid[0] = '\0';
     out.wifi_sta_pass[0] = '\0';
     service_apply_kconfig_defaults(out.services);
+    alert_apply_kconfig_defaults(out.alert_tuning);
 
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NS, NVS_READONLY, &h);
     if (err == ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGI(DIAG_TAG_CFG, "no NVS namespace yet — defaults");
         g_service_cache = out.services;
+        g_alert_cache = out.alert_tuning;
         return ESP_OK;
     }
     if (err != ESP_OK) {
         ESP_LOGW(DIAG_TAG_CFG, "nvs_open: %s — defaults", esp_err_to_name(err));
         g_service_cache = out.services;
+        g_alert_cache = out.alert_tuning;
         return ESP_OK;
     }
 
     uint32_t ver = 0;
     err = nvs_get_u32(h, KEY_SCHEMA, &ver);
     if (err == ESP_OK && ver != kSchemaVersion) {
-        ESP_LOGW(DIAG_TAG_CFG, "schema %lu != %u — gedeeltelijke load (M-003a: services vullen vanaf Kconfig+NVS)",
+        ESP_LOGW(DIAG_TAG_CFG,
+                 "schema %lu != %u — gedeeltelijke load (services + M-003b alert-overlay vanaf Kconfig+NVS)",
                  (unsigned long)ver, (unsigned)kSchemaVersion);
     }
 
@@ -173,10 +229,12 @@ esp_err_t load_or_defaults(RuntimeConfig &out)
     }
 
     load_service_overlay(h, out.services);
+    load_alert_overlay(h, out.alert_tuning);
 
     nvs_close(h);
     apply_defaults(out);
     g_service_cache = out.services;
+    g_alert_cache = out.alert_tuning;
 
     ESP_LOGI(DIAG_TAG_CFG, "loaded schema=%u symbol=%s wifi=%s", (unsigned)out.schema_version, out.default_symbol,
              has_wifi_credentials(out) ? "yes" : "no");
@@ -184,12 +242,22 @@ esp_err_t load_or_defaults(RuntimeConfig &out)
              "M-003a services: webui=%s:%u mqtt=%s ntfy=%s (runtime; NVS override indien gezet)",
              out.services.webui_enabled ? "on" : "off", (unsigned)out.services.webui_port,
              out.services.mqtt_enabled ? "on" : "off", out.services.ntfy_enabled ? "on" : "off");
+    ESP_LOGI(DIAG_TAG_CFG,
+             "M-003b alert: 1m=%u 5m=%u bps calm=%u‰ hot=%u‰ (Kconfig+NVS alt_*)",
+             (unsigned)out.alert_tuning.threshold_1m_bps, (unsigned)out.alert_tuning.threshold_5m_bps,
+             (unsigned)out.alert_tuning.regime_calm_scale_permille,
+             (unsigned)out.alert_tuning.regime_hot_scale_permille);
     return ESP_OK;
 }
 
 const ServiceRuntimeConfig &service_runtime()
 {
     return g_service_cache;
+}
+
+const AlertRuntimeConfig &alert_runtime()
+{
+    return g_alert_cache;
 }
 
 static bool svc_string_ok(const char *s)
@@ -258,6 +326,54 @@ esp_err_t persist_service_connectivity(const ServiceRuntimeConfig &mqtt_ntfy)
                  next.mqtt_enabled ? "on" : "off", next.ntfy_enabled ? "on" : "off");
     } else {
         ESP_LOGW(DIAG_TAG_CFG, "M-013b: persist: %s", esp_err_to_name(err));
+    }
+    return err;
+}
+
+esp_err_t persist_alert_runtime(const AlertRuntimeConfig &alert)
+{
+    if (alert.threshold_1m_bps < kAlertThreshold1mBpsMin || alert.threshold_1m_bps > kAlertThreshold1mBpsMax ||
+        alert.threshold_5m_bps < kAlertThreshold5mBpsMin || alert.threshold_5m_bps > kAlertThreshold5mBpsMax ||
+        alert.regime_calm_scale_permille < kAlertRegimeCalmScalePermilleMin ||
+        alert.regime_calm_scale_permille > kAlertRegimeCalmScalePermilleMax ||
+        alert.regime_hot_scale_permille < kAlertRegimeHotScalePermilleMin ||
+        alert.regime_hot_scale_permille > kAlertRegimeHotScalePermilleMax) {
+        ESP_LOGW(DIAG_TAG_CFG, "M-003b: persist_alert_runtime: buiten toegestaan bereik");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGW(DIAG_TAG_CFG, "M-003b: nvs_open: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = nvs_set_u32(h, KEY_SCHEMA, kSchemaVersion);
+    if (err == ESP_OK) {
+        err = nvs_set_u16(h, KEY_ALT_1M_BPS, alert.threshold_1m_bps);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u16(h, KEY_ALT_5M_BPS, alert.threshold_5m_bps);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u16(h, KEY_ALT_SC_CL, alert.regime_calm_scale_permille);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u16(h, KEY_ALT_SC_HT, alert.regime_hot_scale_permille);
+    }
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+
+    if (err == ESP_OK) {
+        g_alert_cache = alert;
+        ESP_LOGI(DIAG_TAG_CFG,
+                 "M-003b: alert runtime opgeslagen (1m=%u 5m=%u bps calm=%u‰ hot=%u‰)",
+                 (unsigned)alert.threshold_1m_bps, (unsigned)alert.threshold_5m_bps,
+                 (unsigned)alert.regime_calm_scale_permille, (unsigned)alert.regime_hot_scale_permille);
+    } else {
+        ESP_LOGW(DIAG_TAG_CFG, "M-003b: persist alert: %s", esp_err_to_name(err));
     }
     return err;
 }

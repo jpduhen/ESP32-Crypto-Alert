@@ -1608,7 +1608,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Backlog (ongewijzigd t.o.v. M-002a):** mutex/queue voor schrijf-paden; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c**. **Runtime service-config (typed, read-only overlay):** § **M-003a**. **NTFY-sink:** § **M-011a**. **MQTT-bridge:** § **M-012a**. **WebUI (status + service-write + form + OTA-basis + OTA-observability):** § **M-013a**–**M-013c**, § **M-014a**–**M-014b**.
+**Backlog (ongewijzigd t.o.v. M-002a):** mutex/queue voor schrijf-paden; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c**. **Runtime service-config (typed, read-only overlay):** § **M-003a**. **Alert/regime tuning (typed, klein, non-secret):** § **M-003b**. **NTFY-sink:** § **M-011a**; **domein 1m-alert → NTFY:** § **M-011b**. **MQTT-bridge (boot):** § **M-012a**; **1m-domeinalert → MQTT:** § **M-012b**. **WebUI (status + service-write + form + read-only alert-observability + regime/drempel-observability + eerste alert-runtime JSON-write + OTA-basis + OTA-observability):** § **M-013a**–**M-013f**, § **M-014a**–**M-014b**. **Eerste domeinmetric + alert-slice:** § **M-010a**. **Per-seconde canonicalisatie op WS-input:** § **M-010b**. **Tweede timeframe (5m) parallel aan 1m:** § **M-010c**. **Eerste 1m+5m-confluence (eenvoudige regel):** § **M-010d**. **Prioriteit/suppressie losse TF t.o.v. confluence:** § **M-010e**. **Mini-regime (vol → calm/normal/hot) zonder volledige engine:** § **M-010f**.
 
 \
 
@@ -1720,6 +1720,46 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
+## M-003b — Typed runtime-config voor alert/regime-tuning (klein, non-secret) (uitgevoerd)
+
+\
+
+**Doel:** na **M-010f** + **M-013e** is het volgende **funderings**-stuk een **kleine typed** NVS-overlay voor **beperkte** tuning — **zonder** secrets en **zonder** brede alert-migratie uit V1. **Eerste WebUI-write** voor deze subset: § **M-013f**.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **`kSchemaVersion = 4`** (was v3: v4 voegt alleen optionele `alt_*`-sleutels toe; bestaande loads blijven gedeeltelijk bruikbaar).
+
+\
+
+- **`AlertRuntimeConfig`:** `threshold_1m_bps`, `threshold_5m_bps`, `regime_calm_scale_permille`, `regime_hot_scale_permille` — defaults uit **Kconfig**, optionele NVS-keys: **`alt_1m_bps`**, **`alt_5m_bps`**, **`alt_sc_calm`**, **`alt_sc_hot`** (namespace `v2cfg`).
+
+\
+
+- **`config_store::alert_runtime()`** snapshot na `load_or_defaults`; **`persist_alert_runtime`** schrijft gevalideerde waarden en werkt **`g_alert_cache`** bij.
+
+\
+
+- **`alert_engine`** gebruikt deze snapshot voor **basis**-drempels en **calm/hot**-‰-schaal; clamp/normal/hot-grenzen blijven uit bestaande Kconfig.
+
+\
+
+- **`webui`:** **`GET /api/status.json`** bevat read-only **`alert_runtime_config`** (vier velden + `schema_version`); **write:** § **M-013f**.
+
+\
+
+**Bewust niet in M-003b:** auth; cooldown-/suppressie-tuning; confluence-policy-matrix; per-symbol tuning; V1-import; brede `save()`-uitbreiding.
+
+\
+
+---
+
+\
+
 ## M-011a — Eerste `ntfy_client`-sink achter `service_outbound` (uitgevoerd)
 
 \
@@ -1748,7 +1788,39 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Bewust open:** retry bij geen IP op eerste poll; meerdere events; persistente topic-opslag; alert-engine; uitgebreide MQTT (zie **M-012a**).
+**Bewust open (vóór M-011b):** retry bij geen IP op eerste poll; meerdere events; persistente topic-opslag; alert-engine; uitgebreide MQTT (zie **M-012a**). **Domein 1m → NTFY:** § **M-011b**.
+
+\
+
+---
+
+\
+
+## M-011b — Eerste echte 1m-domeinalert naar `ntfy_client` (uitgevoerd)
+
+\
+
+**Doel (M-011 vervolg):** na **M-010a**/**M-010b** en het lege **`DomainAlert1mMove`**-event de **eerste echte productnotificatie** in V2: compacte **titel + body** via bestaande **`ntfy_client::send_notification`**, **zonder** MQTT in deze stap.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **`service_outbound`:** queue-elementen zijn **`OutboundEnvelope`** (`kind` + **`DomainAlert1mMovePayload`**: symbool, richting, prijs, `pct`, `ts_ms`). Alleen **`emit_domain_alert_1m`** mag **`DomainAlert1mMove`** plaatsen; platte **`emit(Event)`** weigert dit kind zonder payload.
+
+\
+
+- **Dispatch:** bij **`DomainAlert1mMove`** — titel `CryptoAlert V2 · 1m UP|DOWN · <symbool>`, body met prijs, 1m-%, en **`ts_ms`**; **`ESP_LOGI`** op **`svc_out`** voor queue + resultaat van **`ntfy_client`**.
+
+\
+
+- **`alert_engine`:** vult payload uit **`domain_metrics::Metric1mMovePct`** en **`market_data::snapshot().market_label`**; geen NTFY-strings in **`ntfy_client`** zelf buiten transport.
+
+\
+
+**Bewust niet in M-011b:** MQTT-mapping; HA discovery; brede payload-architectuur; alert-UI; multi-timeframe; V1-pariteit.
 
 \
 
@@ -1784,7 +1856,39 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Bewust open:** HA discovery; retain/LWT-strategie; meerdere topics; alert-koppeling; TLS fine-tuning buiten URI.
+**Bewust open:** HA discovery; retain/LWT-strategie; brede topic-taxonomie; TLS fine-tuning buiten URI. **Eerste domein-alert op MQTT:** § **M-012b**.
+
+\
+
+---
+
+\
+
+## M-012b — Eerste echte 1m-domeinalert naar MQTT (uitgevoerd)
+
+\
+
+**Doel:** hetzelfde **`DomainAlert1mMove`**-domeinsignaal als M-011b ook **via MQTT** beschikbaar maken — **één topic**, **compacte JSON**, **zonder** Home Assistant discovery of brede topic-architectuur.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **`mqtt_bridge::publish_domain_alert_1m(...)`:** compacte JSON (`symbol`, `dir` UP/DOWN, `price_eur`, `pct_1m`, `ts_ms`) naar **`MQTT_TOPIC_DOMAIN_ALERT_1M`** (default `cryptoalert/v2/alert/1m`), QoS 1, geen retain — alleen als MQTT build+runtime aan en client **verbonden**; anders duidelijke log, geen queue/backlog in M-012b.
+
+\
+
+- **`service_outbound`:** bij **`DomainAlert1mMove`** na NTFY-dispatch de MQTT-publish aanroepen; logs: event ontvangen, publish-aanroep, succes/fout in **`mqtt_br`**.
+
+\
+
+- **Ownership:** `domain_metrics` / `alert_engine` ongewijzigd; **geen** MQTT-logica in `ui`, `market_data`, `exchange_bitvavo`. **`ApplicationReady`** / boot-topic (**M-012a**) ongewijzigd.
+
+\
+
+**Bewust niet in M-012b:** HA discovery; retain/LWT-herontwerp; topic-taxonomie voor andere timeframes; offline-buffering; hot-reconnect voor gemiste alerts; payload-schema versioning.
 
 \
 
@@ -1804,7 +1908,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-- **Component `webui`:** `esp_http_server` op **`WEBUI_PORT`** (default **8080**, Kconfig **uit**); **GET /** (HTML) en **GET /api/status.json** (JSON): app-**versie** (`esp_app_desc`), **STA-IP** (via `WIFI_STA_DEF`), **`market_data::snapshot()`** (symbool, prijs, geldig, verbinding, tick-bron, `ts_ms`).
+- **Component `webui`:** `esp_http_server` op **`WEBUI_PORT`** (default **8080**, Kconfig **uit**); **GET /** (HTML) en **GET /api/status.json** (JSON): app-**versie** (`esp_app_desc`), **STA-IP** (via `WIFI_STA_DEF`), **`market_data::snapshot()`** (symbool, prijs, geldig, verbinding, tick-bron, `ts_ms`). **Read-only recente 1m-alerts** in JSON + HTML: § **M-013d**.
 
 \
 
@@ -1892,6 +1996,94 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
+## M-013d — Minimale alert-observability in WebUI (read-only) (uitgevoerd)
+
+\
+
+**Doel:** na **M-010**–**M-012** de **end-to-end 1m-domeinalert** lokaal **zichtbaar** maken voor tuning/validatie — **read-only**, **in RAM**, **zonder** dashboard, NVS-historiek of alert-instellingen-UI.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **Component `alert_observability`:** ringbuffer (**max. 8**) met velden **symbool, richting (UP/DOWN), prijs EUR, 1m %, ts_ms**; schrijven uitsluitend vanuit **`service_outbound`** bij dispatch van **`DomainAlert1mMove`** (zelfde moment als NTFY/MQTT-transport); **mutex** voor veilige HTTP-lees.
+
+\
+
+- **`webui`:** **`GET /api/status.json`** bevat **`alerts_1m`**: `{ "count", "items": [ … ] }` (nieuwste eerst); **`GET /`** toont een compacte **HTML-sectie** met dezelfde feiten. Geen nieuw productdomein; geen koppeling aan **`market_data`**-transport of **`mqtt_bridge`**.
+
+\
+
+- **Ownership:** **`alert_engine`** blijft beslissen; **`service_outbound`** transporteert én triggert observability-record; **`ui`** / **`exchange_bitvavo`** ongewijzigd.
+
+\
+
+**Bewust niet in M-013d:** tweede timeframe; filter/sort UI; acknowledge/silence; auth; SPA/WebSocket-push; persistente historiek in flash/NVS; analytics/statistieken.
+
+\
+
+---
+
+\
+
+## M-013e — Read-only WebUI-observability: regime, volatiliteit, effectieve drempels (uitgevoerd)
+
+\
+
+**Doel:** na **M-010f** zijn **drempels adaptief** — dat verbetert gedrag maar vermindert **transparantie**. **M-013e** maakt de **huidige** alert-intelligentie **lokaal zichtbaar** (read-only), **zonder** settings-write of tuning-UI — **geen** nieuwe domeinlogica.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **`alert_engine`:** struct **`RegimeObservabilitySnapshot`** + **`get_regime_observability_snapshot`** — bijgewerkt aan het begin van elke **`tick()`** (zelfde waarden als de beslissingen in die slag): **regime** (`calm` / `normal` / `hot`), **vol-metric** (`vol_mean_abs_step_bps`, `vol_pairs_used`, `vol_metric_ready`, `vol_unavailable_fallback`), **basis-** en **effectieve** drempels 1m/5m; **confluence** expliciet als **`confluence_effective_gate_pct`** (zelfde getallen als effectieve 1m/5m — beide benen nodig).
+
+\
+
+- **`webui`:** **`GET /api/status.json`** — object **`regime_observability`** (stabiele veldnamen); **`GET /`** — compact **HTML-blok** (M-013e). **`domain_metrics`** levert alleen de vol-berekening; **`market_data` / `exchange_bitvavo`** ongewijzigd.
+
+\
+
+**Bewust niet in M-013e:** write/tuning voor regime of alerts (**eerste write:** § **M-013f**); auth; dashboard/grafieken; SPA/WebSocket-push; uitgebreide historiek-analytics; regime-engine-uitbreiding; extra timeframe; HA-discovery-uitbreiding.
+
+\
+
+---
+
+\
+
+## M-013f — Eerste gecontroleerde WebUI-write: alert/regime runtime-subset (M-003b) (uitgevoerd)
+
+\
+
+**Doel:** na **M-003b** + **M-013e** een **klein, veilig** schrijfpad voor **exact dezelfde vier velden** als M-003b — **HTTP POST JSON** → **`persist_alert_runtime`** — **zonder** HTML-form in deze stap, **zonder** auth en **zonder** scope-uitbreiding.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **`webui`:** **`POST /api/alert-runtime.json`** — body moet **exact vier** sleutels bevatten: `threshold_1m_bps`, `threshold_5m_bps`, `regime_calm_scale_permille`, `regime_hot_scale_permille` (alleen **niet-negatieve gehele getallen**); bereik gehandhaafd door **`config_store::persist_alert_runtime`**. Bij fout: **400** met compact `{"ok":false,"error":"…"}`; bij succes: **200** met `ok`, `alert_runtime_config` (echo), `note`. **`g_alert_cache`** bijgewerkt — **`alert_engine`** gebruikt nieuwe waarden **zonder herstart** (volgende `tick()`).
+
+\
+
+- **Observability:** ongewijzigd — **`GET /api/status.json`** `alert_runtime_config` toont na write de nieuwe waarden.
+
+\
+
+**Bewust niet in M-013f:** HTML-form; auth; secrets; cooldown/suppressie/confluence-policy-write; per-symbol tuning; dashboard; tweede view; V1-migratie.
+
+\
+
+---
+
+\
+
 ## M-014a — Minimale OTA-basis via WebUI (upload → next slot) (uitgevoerd)
 
 \
@@ -1949,6 +2141,194 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 \
 
 **Bewust open (niet M-014b):** cryptografische verificatie; online versiecheck; MQTT-OTA; uitgewerkte rollback-policy; progress-UI; auth.
+
+\
+
+---
+
+\
+
+## M-010a — Minimale `domain_metrics` + `alert_engine` vertical slice (1m-move) (uitgevoerd)
+
+\
+
+**Doel (migratiematrix **M-010**, eerste productkern):** na stabiele service-/beheerbasis (**M-003a**, **M-013**–**M-014**) de **kern van Crypto Alert** weer zichtbaar maken: **rolling prijsbuffer** + **1m %-move** + **drempel + cooldown** + **traceerbare logs** + **minimaal outbound-event** — **zonder** V1-pariteit, regimes, anchors of brede NTFY/MQTT-mapping.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **`domain_metrics`:** vaste **ringbuffer** (tijd + EUR-prijs) gevoed vanuit **`market_data::snapshot`**; **`compute_1m_move_pct()`** berekent een **signed %** t.o.v. de **nieuwste sample ≤ now−60s** (geen interpolatie). **`feed`** negeert ongeldige ticks; tijdstempel valt terug op **`esp_timer`** als de tick geen `ts_ms` heeft.
+
+\
+
+- **`alert_engine`:** Kconfig-**drempel** (`ALERT_ENGINE_1M_THRESHOLD_BPS`, default 16 = **0,16%**) en **cooldown** (`ALERT_ENGINE_1M_COOLDOWN_S`); bij overschrijding van **|1m%|**: **`ESP_LOGI`** met richting **UP/DOWN**, daarna **`service_outbound::emit_domain_alert_1m(...)`** (symbool uit `market_data::snapshot`, metric uit `domain_metrics`) — **NTFY-koppeling:** § **M-011b**.
+
+\
+
+- **`service_outbound`:** event **`DomainAlert1mMove`** met **`DomainAlert1mMovePayload`** — **M-011b:** dispatch naar **`ntfy_client`** (geen MQTT in deze mapping).
+
+\
+
+- **`app_core`:** na **`market_data::tick`** → **`domain_metrics::feed`** → **`alert_engine::tick`** → UI; **`poll()`** blijft outbound leegmaken.
+
+\
+
+**Bewust niet in M-010a (NTFY-mapping volgt):** V1-alertpariteit; **confluence/regime/anchor**-logica; multi-timeframe; grafieken/dashboard; tweede UI-view; **MQTT** bij domeinalerts; symbol-/alert-settings-UI — **eerste NTFY domeinalert:** § **M-011b**.
+
+\
+
+---
+
+\
+
+## M-010b — Per-seconde canonicalisatie voor `domain_metrics` (WS-input normaliseren) (uitgevoerd)
+
+\
+
+**Doel (M-010 vervolg):** hoge-frequentie tick-instroom niet direct als ruwe punten in de metricbuffer gebruiken, maar eerst terugbrengen naar **één representatieve secondewaarde** zodat de 1m-move robuuster/leesbaarder wordt zonder extra besliscomplexiteit.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **`domain_metrics` canonicalisatie:** `feed(snapshot)` bouwt nu een **per-seconde bucket** (`sec_epoch`, `tick_count`, `sum_price`, `open`, `close`). Bij seconde-overgang wordt de vorige seconde gefinaliseerd naar een **canonical prijs** via eenvoudige **TWAP-achtige mean** (`sum / count`) en pas dan in de rolling ringbuffer gezet.
+
+\
+
+- **Tracebaarheid:** logregels tonen expliciet:
+  - **aantal ticks in die seconde** (`ticks=...`)
+  - gekozen **canonical waarde** (`canonical=...`)
+  - **open/close** binnen die seconde
+  - opbouw van de **1m-metric** (`now/ref/pct`) op basis van deze canonical samples.
+
+\
+
+- **`alert_engine` ongewijzigd in concept:** zelfde 1m%-move + drempel + cooldown; alleen invoerkwaliteit van `domain_metrics` is verbeterd.
+
+\
+
+**Bewust niet in M-010b:** geavanceerde statistische filters; multi-timeframe; regime/confluence/anchor-logica; extra outbound payloads; settings-UI voor tuning; dashboard/grafieken.
+
+\
+
+---
+
+\
+
+## M-010c — Tweede domeinmetric: 5m-move vertical slice (parallel aan 1m) (uitgevoerd)
+
+\
+
+**Doel:** functionele **breedte**: een **tweede eenvoudig timeframe** (5m) naast de bestaande **1m-keten**, op dezelfde **gecanonicaliseerde secondes** — **zonder** confluence, regime-engine of gedeelde beslislaag.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **`domain_metrics`:** ringbuffer-capaciteit en prune-horizon voldoende voor **≥5 min** historie; **`compute_5m_move_pct()`** — signed % t.o.v. **nieuwste sample ≤ now−300s** (zelfde patroon als 1m). **1m blijft ongewijzigd in gedrag.**
+
+\
+
+- **`alert_engine`:** eigen Kconfig-**drempel** (`ALERT_ENGINE_5M_THRESHOLD_BPS`, default **32** = **0,32%**) en **cooldown** (`ALERT_ENGINE_5M_COOLDOWN_S`, default **300** s); eigen **`s_last_fire_5m`**; bij trigger **`emit_domain_alert_5m`** met duidelijke **UP/DOWN**-logs.
+
+\
+
+- **`service_outbound`:** nieuw event **`DomainAlert5mMove`** + **`DomainAlert5mMovePayload`** (`pct_5m`); dispatch parallel: **NTFY**, **MQTT** (`MQTT_TOPIC_DOMAIN_ALERT_5M`), **WebUI-observability** (`alerts_5m` + HTML-sectie).
+
+\
+
+**Bewust niet in M-010c:** kruising **1m∩5m** (volgt **§ M-010d**); scores; anchors/TP/loss; alert-settings-UI; HA-discovery-uitbreiding; extra views/dashboards.
+
+\
+
+---
+
+\
+
+## M-010d — Eerste eenvoudige confluence-regel (1m + 5m) (uitgevoerd)
+
+\
+
+**Doel:** na **M-010c** een **minimale samenhang** tussen timeframes: alleen wanneer **1m** en **5m** **beide geldig** zijn, **dezelfde richting** hebben, en **beide** hun **eigen drempel** halen — **zonder** losse 1m/5m-alerts te vervangen of complexe suppressie.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **`alert_engine`:** eigen **`ALERT_ENGINE_CONF_1M5M_COOLDOWN_S`** (default **600** s); bij vuur **`emit_domain_confluence_1m5m`** met **pct_1m**, **pct_5m**, prijs, **ts_ms**; logs bij **tegenstrijdige richting** (INFO) en bij **vuur** (INFO); geen spam bij normaal «onder drempel».
+
+\
+
+- **`service_outbound`:** event **`DomainAlertConfluence1m5m`** + payload; **NTFY**, **MQTT** (`MQTT_TOPIC_DOMAIN_ALERT_CONF_1M5M`), **WebUI** (`alerts_conf_1m5m` + HTML-blok).
+
+\
+
+**Bewust niet in M-010d:** regime-engine; scoremodel; multi-factor confluence; prioriteitsmatrix; suppressie van 1m/5m (**eerste stap:** § **M-010e**); V1-pariteit; settings-UI.
+
+\
+
+---
+
+\
+
+## M-010e — Eenvoudige prioriteit en suppressie (confluence vs. losse 1m/5m) (uitgevoerd)
+
+\
+
+**Doel:** na **M-010d** **dubbelmeldingen beperken** — confluence heeft **voorrang**; losse 1m- en 5m-alerts blijven bestaan maar worden **kort** onderdrukt wanneer ze dezelfde richting zouden herhalen als een net gevoerde confluence — **zonder** brede policylaag of multi-factor matrix.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **`alert_engine`:** evaluatieorde **confluence vóór** losse 1m/5m; bij confluence-fire **`ALERT_ENGINE_CONF_SUPPRESS_LOOSE_S`** (default **8** s): geen losse **DomainAlert1mMove** / **DomainAlert5mMove** met **dezelfde richting** als die confluence (tegenovergestelde richting binnen het venster blijft mogelijk). Logs: **FIRE** (confluence), **suppressed** met reden (`reason=same_dir_as_conf`, `rem_ms`), en init met suppress-duur; max. **één suppress-log per TF per venster** (geen log-spam iedere tick).
+
+\
+
+- **Outbound ongewijzigd in vorm:** **NTFY** / **MQTT** / **WebUI** blijven dezelfde paden; alleen **minder** dubbele losse events na confluence.
+
+\
+
+**Bewust niet in M-010e:** regime-engine; scoremodel; multi-factor prioriteitsmatrix; lange dedup-horizon; settings-UI; V1-pariteit; extra UI-views; suppressie op basis van symbolen of orderboek.
+
+\
+
+---
+
+\
+
+## M-010f — Mini-regime (calm / normal / hot) uit volatiliteit, zonder volledige regime-engine (uitgevoerd)
+
+\
+
+**Doel:** na **M-010a–e** een **uitlegbare** eerste stap naar «marktregime» — alleen op basis van een **korte-horizon vol-proxy** op de bestaande canonieke prijsring — **zonder** V1-achtige regime-engine, scoremodel of extra timeframes.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **`domain_metrics`:** **`compute_vol_mean_abs_step_bps()`** — gemiddelde **|Δprijs/prijs|×10⁴** (bps) over opeenvolgende **~1s**-canonieke samples binnen venster (**`ALERT_REGIME_VOL_*`**).
+
+\
+
+- **`alert_engine`:** drie regimes — **calm** (lage gem. stap), **normal** (tussengrenzen), **hot** (hoge gem. stap); **één toepassing:** **effectieve 1m- en 5m-drempels** (en daarmee confluence-drempels) worden met **‰-schaal** vermenigvuldigd (calm iets **lager** / hot iets **hoger**); **cooldowns** en **M-010e-suppressie** ongewijzigd. Logs: **vol** + **regime** + **schaal** + **eff_thr** bij eerste vol-klaar en bij **regimewissel**; eenmalige melding bij vol-warmup.
+
+\
+
+**Bewust niet in M-010f:** volledige regime-engine; scoremodel; V1-pariteit; anchors/TP/loss; extra TF; alert-settings-UI / WebUI-tuning; dashboard/grafieken; HA-discovery; cooldown/suppressie meeschalen (bewust alleen drempels).
 
 \
 

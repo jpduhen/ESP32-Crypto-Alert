@@ -8,6 +8,8 @@ idf_component_register(
         bsp_s3_geek
         display_port
         ui
+        alert_engine
+        domain_metrics
         market_data
         market_types
         net_runtime

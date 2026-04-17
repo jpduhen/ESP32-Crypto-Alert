@@ -4,8 +4,15 @@
  * M-013c: hoofdpagina-formulier (inline JS) naar dezelfde POST-route.
  * M-014a: POST /api/ota — ruwe firmware → ota_service.
  * M-014b: OTA-status in /api/status.json + blok op /.
+ * M-013d: read-only recente 1m-alerts in status-JSON + HTML-sectie op /.
+ * M-010c: 5m-alerts in JSON/HTML; M-010d: confluence 1m+5m in JSON/HTML.
+ * M-013e: read-only regime/vol/effectieve drempels in status.json + compact HTML-blok.
+ * M-003b: `alert_runtime_config` in status.json (typed tuning, read-only).
+ * M-013f: POST /api/alert-runtime.json → `persist_alert_runtime` (zelfde subset als M-003b).
  */
 #include "webui/webui.hpp"
+#include "alert_engine/alert_engine.hpp"
+#include "alert_observability/alert_observability.hpp"
 #include "config_store/config_store.hpp"
 #include "cJSON.h"
 #include "esp_app_desc.h"
@@ -22,6 +29,7 @@
 #if CONFIG_WEBUI_ENABLE
 #include "lwip/def.h"
 #include "ota_service/ota_service.hpp"
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -93,38 +101,95 @@ static esp_err_t handle_status_json(httpd_req_t *req)
     ota_service::OtaStatusSnapshot ota{};
     ota_service::get_status_snapshot(&ota);
 
-    char body[2048]{};
-    const int n = snprintf(
-        body, sizeof(body),
-        "{\"app\":\"CryptoAlert V2\",\"version\":\"%s\",\"has_ip\":%s,\"ip\":\"%s\","
-        "\"symbol\":\"%s\",\"price_eur\":%.4f,\"valid\":%s,\"connection\":\"%s\","
-        "\"tick_source\":\"%s\",\"last_tick_ms\":%lld,"
-        "\"ota\":{\"running_partition\":\"%s\",\"next_update_partition\":\"%s\","
-        "\"running_address\":%u,\"running_size_bytes\":%u,\"img_state\":\"%s\","
-        "\"boot_confirm\":\"%s\",\"reset_reason\":\"%s\"}}",
-        app ? app->version : "?",
-        net_runtime::has_ip() ? "true" : "false",
-        ipbuf,
-        snap.market_label[0] ? snap.market_label : "—",
-        snap.last_tick.price_eur,
-        snap.valid ? "true" : "false",
-        conn_str(snap.connection),
-        tick_str(snap.last_tick_source),
-        (long long)snap.last_tick.ts_ms,
-        ota.running_label[0] ? ota.running_label : "?",
-        ota.next_update_label[0] ? ota.next_update_label : "?",
-        (unsigned)ota.running_address,
-        (unsigned)ota.running_size_bytes,
-        ota.img_state[0] ? ota.img_state : "?",
-        ota.boot_confirm[0] ? ota.boot_confirm : "?",
-        ota.reset_reason[0] ? ota.reset_reason : "?");
-    if (n <= 0 || static_cast<size_t>(n) >= sizeof(body)) {
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem");
+        return ESP_ERR_NO_MEM;
+    }
+    cJSON_AddStringToObject(root, "app", "CryptoAlert V2");
+    cJSON_AddStringToObject(root, "version", (app && app->version[0]) ? app->version : "?");
+    cJSON_AddBoolToObject(root, "has_ip", net_runtime::has_ip() ? 1 : 0);
+    cJSON_AddStringToObject(root, "ip", ipbuf);
+    cJSON_AddStringToObject(root, "symbol", snap.market_label[0] ? snap.market_label : "—");
+    cJSON_AddNumberToObject(root, "price_eur", snap.last_tick.price_eur);
+    cJSON_AddBoolToObject(root, "valid", snap.valid ? 1 : 0);
+    cJSON_AddStringToObject(root, "connection", conn_str(snap.connection));
+    cJSON_AddStringToObject(root, "tick_source", tick_str(snap.last_tick_source));
+    cJSON_AddNumberToObject(root, "last_tick_ms", static_cast<double>(snap.last_tick.ts_ms));
+
+    cJSON *ota_j = cJSON_CreateObject();
+    if (ota_j) {
+        cJSON_AddStringToObject(ota_j,
+                                "running_partition",
+                                ota.running_label[0] ? ota.running_label : "?");
+        cJSON_AddStringToObject(ota_j,
+                                "next_update_partition",
+                                ota.next_update_label[0] ? ota.next_update_label : "?");
+        cJSON_AddNumberToObject(ota_j, "running_address", static_cast<double>(ota.running_address));
+        cJSON_AddNumberToObject(ota_j, "running_size_bytes", static_cast<double>(ota.running_size_bytes));
+        cJSON_AddStringToObject(ota_j, "img_state", ota.img_state[0] ? ota.img_state : "?");
+        cJSON_AddStringToObject(ota_j, "boot_confirm", ota.boot_confirm[0] ? ota.boot_confirm : "?");
+        cJSON_AddStringToObject(ota_j, "reset_reason", ota.reset_reason[0] ? ota.reset_reason : "?");
+        cJSON_AddItemToObject(root, "ota", ota_j);
+    }
+
+    alert_observability::add_alerts_to_cjson(root);
+
+    alert_engine::RegimeObservabilitySnapshot rob{};
+    alert_engine::get_regime_observability_snapshot(&rob);
+    cJSON *reg_j = cJSON_CreateObject();
+    if (reg_j) {
+        cJSON_AddStringToObject(reg_j, "regime", rob.regime[0] ? rob.regime : "normal");
+        cJSON_AddBoolToObject(reg_j, "vol_metric_ready", rob.vol_metric_ready ? 1 : 0);
+        cJSON_AddNumberToObject(reg_j, "vol_mean_abs_step_bps", rob.vol_mean_abs_step_bps);
+        cJSON_AddNumberToObject(reg_j, "vol_pairs_used", static_cast<double>(rob.vol_pairs_used));
+        cJSON_AddBoolToObject(reg_j, "vol_unavailable_fallback", rob.vol_unavailable_fallback ? 1 : 0);
+        cJSON_AddNumberToObject(reg_j, "threshold_scale_permille", static_cast<double>(rob.threshold_scale_permille));
+        cJSON *base_thr = cJSON_CreateObject();
+        if (base_thr) {
+            cJSON_AddNumberToObject(base_thr, "move_pct_1m", rob.base_threshold_move_pct_1m);
+            cJSON_AddNumberToObject(base_thr, "move_pct_5m", rob.base_threshold_move_pct_5m);
+            cJSON_AddItemToObject(reg_j, "base_threshold_move_pct", base_thr);
+        }
+        cJSON *eff_thr = cJSON_CreateObject();
+        if (eff_thr) {
+            cJSON_AddNumberToObject(eff_thr, "move_pct_1m", rob.effective_threshold_move_pct_1m);
+            cJSON_AddNumberToObject(eff_thr, "move_pct_5m", rob.effective_threshold_move_pct_5m);
+            cJSON_AddItemToObject(reg_j, "effective_threshold_move_pct", eff_thr);
+        }
+        cJSON *conf_g = cJSON_CreateObject();
+        if (conf_g) {
+            cJSON_AddNumberToObject(conf_g, "requires_abs_move_pct_1m", rob.effective_threshold_move_pct_1m);
+            cJSON_AddNumberToObject(conf_g, "requires_abs_move_pct_5m", rob.effective_threshold_move_pct_5m);
+            cJSON_AddItemToObject(reg_j, "confluence_effective_gate_pct", conf_g);
+        }
+        cJSON_AddItemToObject(root, "regime_observability", reg_j);
+    }
+
+    {
+        const config_store::AlertRuntimeConfig &ar = config_store::alert_runtime();
+        cJSON *arc_j = cJSON_CreateObject();
+        if (arc_j) {
+            cJSON_AddNumberToObject(arc_j, "schema_version", static_cast<double>(config_store::kSchemaVersion));
+            cJSON_AddNumberToObject(arc_j, "threshold_1m_bps", static_cast<double>(ar.threshold_1m_bps));
+            cJSON_AddNumberToObject(arc_j, "threshold_5m_bps", static_cast<double>(ar.threshold_5m_bps));
+            cJSON_AddNumberToObject(arc_j, "regime_calm_scale_permille", static_cast<double>(ar.regime_calm_scale_permille));
+            cJSON_AddNumberToObject(arc_j, "regime_hot_scale_permille", static_cast<double>(ar.regime_hot_scale_permille));
+            cJSON_AddItemToObject(root, "alert_runtime_config", arc_j);
+        }
+    }
+
+    char *printed = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!printed) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
         return ESP_FAIL;
     }
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_type(req, "application/json; charset=utf-8");
-    return httpd_resp_send(req, body, static_cast<size_t>(n));
+    const esp_err_t se = httpd_resp_send(req, printed, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(printed);
+    return se;
 }
 
 static bool cjson_to_bool(const cJSON *j, bool *out)
@@ -146,6 +211,142 @@ static esp_err_t send_json_text(httpd_req_t *req, const char *status_line, const
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_type(req, "application/json; charset=utf-8");
     return httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+}
+
+/** Alleen positieve integers die in uint16 passen, geen breuken. */
+static bool json_u16_whole(const cJSON *j, uint16_t *out)
+{
+    if (!cJSON_IsNumber(j) || j == nullptr) {
+        return false;
+    }
+    const double d = j->valuedouble;
+    if (d < 0.0 || d > 65535.0) {
+        return false;
+    }
+    if (d != std::floor(d)) {
+        return false;
+    }
+    *out = static_cast<uint16_t>(d);
+    return true;
+}
+
+static esp_err_t handle_alert_runtime_post(httpd_req_t *req)
+{
+    char raw[512]{};
+    const int need = req->content_len;
+    if (need <= 0 || need >= static_cast<int>(sizeof(raw))) {
+        ESP_LOGW(TAG, "M-013f: POST body ontbreekt of te groot (%d)", need);
+        return send_json_text(req, "400 Bad Request",
+                              "{\"ok\":false,\"error\":\"body ontbreekt of te groot (max 511 bytes)\"}");
+    }
+    int got = 0;
+    while (got < need) {
+        const int r = httpd_req_recv(req, raw + got, (size_t)(need - got));
+        if (r < 0) {
+            ESP_LOGW(TAG, "M-013f: recv: %d", r);
+            return send_json_text(req, "400 Bad Request", "{\"ok\":false,\"error\":\"recv mislukt\"}");
+        }
+        if (r == 0) {
+            break;
+        }
+        got += r;
+    }
+    if (got != need) {
+        return send_json_text(req, "400 Bad Request", "{\"ok\":false,\"error\":\"body incompleet\"}");
+    }
+    raw[need] = '\0';
+
+    cJSON *root = cJSON_Parse(raw);
+    if (!root || !cJSON_IsObject(root)) {
+        if (root) {
+            cJSON_Delete(root);
+        }
+        ESP_LOGW(TAG, "M-013f: JSON parse/object");
+        return send_json_text(req, "400 Bad Request", "{\"ok\":false,\"error\":\"JSON moet een object zijn\"}");
+    }
+
+    int nchild = 0;
+    for (cJSON *c = root->child; c != nullptr; c = c->next) {
+        ++nchild;
+    }
+    if (nchild != 4) {
+        cJSON_Delete(root);
+        return send_json_text(req, "400 Bad Request",
+                              "{\"ok\":false,\"error\":\"exact vier velden vereist (M-003b subset)\"}");
+    }
+
+    config_store::AlertRuntimeConfig next{};
+    for (cJSON *c = root->child; c != nullptr; c = c->next) {
+        if (c->string == nullptr) {
+            cJSON_Delete(root);
+            return send_json_text(req, "400 Bad Request", "{\"ok\":false,\"error\":\"ongeldige sleutel\"}");
+        }
+        uint16_t v = 0;
+        if (!json_u16_whole(c, &v)) {
+            cJSON_Delete(root);
+            return send_json_text(
+                req, "400 Bad Request",
+                "{\"ok\":false,\"error\":\"alle waarden moeten niet-negatieve gehele getallen zijn\"}");
+        }
+        if (std::strcmp(c->string, "threshold_1m_bps") == 0) {
+            next.threshold_1m_bps = v;
+        } else if (std::strcmp(c->string, "threshold_5m_bps") == 0) {
+            next.threshold_5m_bps = v;
+        } else if (std::strcmp(c->string, "regime_calm_scale_permille") == 0) {
+            next.regime_calm_scale_permille = v;
+        } else if (std::strcmp(c->string, "regime_hot_scale_permille") == 0) {
+            next.regime_hot_scale_permille = v;
+        } else {
+            cJSON_Delete(root);
+            return send_json_text(req, "400 Bad Request",
+                                  "{\"ok\":false,\"error\":\"onbekende sleutel (alleen M-003b-velden)\"}");
+        }
+    }
+    cJSON_Delete(root);
+
+    const esp_err_t pe = config_store::persist_alert_runtime(next);
+    if (pe == ESP_ERR_INVALID_ARG) {
+        return send_json_text(
+            req, "400 Bad Request",
+            "{\"ok\":false,\"error\":\"waarde buiten toegestaan bereik (zie config_store constanten)\"}");
+    }
+    if (pe != ESP_OK) {
+        ESP_LOGW(TAG, "M-013f: persist_alert_runtime: %s", esp_err_to_name(pe));
+        return send_json_text(req, "500 Internal Server Error",
+                              "{\"ok\":false,\"error\":\"opslaan mislukt\"}");
+    }
+
+    const config_store::AlertRuntimeConfig &ar = config_store::alert_runtime();
+    cJSON *out = cJSON_CreateObject();
+    if (!out) {
+        return send_json_text(req, "500 Internal Server Error", "{\"ok\":false,\"error\":\"geen geheugen\"}");
+    }
+    cJSON_AddBoolToObject(out, "ok", true);
+    cJSON *cfg = cJSON_CreateObject();
+    if (cfg) {
+        cJSON_AddNumberToObject(cfg, "threshold_1m_bps", static_cast<double>(ar.threshold_1m_bps));
+        cJSON_AddNumberToObject(cfg, "threshold_5m_bps", static_cast<double>(ar.threshold_5m_bps));
+        cJSON_AddNumberToObject(cfg, "regime_calm_scale_permille",
+                                static_cast<double>(ar.regime_calm_scale_permille));
+        cJSON_AddNumberToObject(cfg, "regime_hot_scale_permille",
+                                static_cast<double>(ar.regime_hot_scale_permille));
+        cJSON_AddItemToObject(out, "alert_runtime_config", cfg);
+    }
+    cJSON_AddStringToObject(
+        out, "note",
+        "Opgeslagen in NVS — alert_engine gebruikt dit vanaf de volgende tick (geen herstart).");
+    char *printed = cJSON_PrintUnformatted(out);
+    cJSON_Delete(out);
+    if (!printed) {
+        return send_json_text(req, "500 Internal Server Error", "{\"ok\":false,\"error\":\"geen geheugen\"}");
+    }
+    ESP_LOGI(TAG,
+             "M-013f: alert runtime opgeslagen via POST (1m=%u 5m=%u bps calm=%u‰ hot=%u‰)",
+             (unsigned)ar.threshold_1m_bps, (unsigned)ar.threshold_5m_bps,
+             (unsigned)ar.regime_calm_scale_permille, (unsigned)ar.regime_hot_scale_permille);
+    const esp_err_t se = send_json_text(req, "200 OK", printed);
+    cJSON_free(printed);
+    return se;
 }
 
 static esp_err_t handle_services_post(httpd_req_t *req)
@@ -362,7 +563,7 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         return ESP_ERR_NO_MEM;
     }
 
-    const int n = std::snprintf(
+    int n = std::snprintf(
         html, k_html_alloc,
         "<!DOCTYPE html><html lang=\"nl\"><head><meta charset=\"utf-8\"/>"
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"/>"
@@ -373,8 +574,82 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         "<h1>CryptoAlert V2</h1>"
         "<p><strong>Versie</strong> %s · <strong>IP</strong> %s · <strong>WiFi IP bekend</strong> %s</p>"
         "<p><strong>Symbool</strong> %s · <strong>Prijs (EUR)</strong> %.4f · <strong>Geldig</strong> %s</p>"
-        "<p><strong>Verbinding feed</strong> %s · <strong>Bron tick</strong> %s</p>"
-        "<p><a href=\"/api/status.json\"><code>/api/status.json</code></a> (incl. OTA-velden, M-014b)</p>"
+        "<p><strong>Verbinding feed</strong> %s · <strong>Bron tick</strong> %s</p>",
+        app ? app->version : "?",
+        ipbuf[0] ? ipbuf : "—",
+        net_runtime::has_ip() ? "ja" : "nee",
+        snap.market_label[0] ? snap.market_label : "—",
+        snap.last_tick.price_eur,
+        snap.valid ? "ja" : "nee",
+        conn_str(snap.connection),
+        tick_str(snap.last_tick_source));
+    if (n <= 0 || static_cast<size_t>(n) >= k_html_alloc) {
+        ESP_LOGW(TAG, "M-013c/d: HTML deel1 overflow (n=%d)", n);
+        std::free(html);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
+        return ESP_FAIL;
+    }
+    size_t w = static_cast<size_t>(n);
+    const int na = alert_observability::append_alerts_html_section(html + w, k_html_alloc - w);
+    if (na < 0 || w + static_cast<size_t>(na) >= k_html_alloc) {
+        ESP_LOGW(TAG, "M-013d: HTML alerts-sectie overflow (na=%d)", na);
+        std::free(html);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
+        return ESP_FAIL;
+    }
+    w += static_cast<size_t>(na);
+    const int na5 = alert_observability::append_alerts_5m_html_section(html + w, k_html_alloc - w);
+    if (na5 < 0 || w + static_cast<size_t>(na5) >= k_html_alloc) {
+        ESP_LOGW(TAG, "M-010c: HTML 5m alerts-sectie overflow (na5=%d)", na5);
+        std::free(html);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
+        return ESP_FAIL;
+    }
+    w += static_cast<size_t>(na5);
+    const int nac = alert_observability::append_alerts_conf_1m5m_html_section(html + w, k_html_alloc - w);
+    if (nac < 0 || w + static_cast<size_t>(nac) >= k_html_alloc) {
+        ESP_LOGW(TAG, "M-010d: HTML confluence-sectie overflow (nac=%d)", nac);
+        std::free(html);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
+        return ESP_FAIL;
+    }
+    w += static_cast<size_t>(nac);
+    {
+        alert_engine::RegimeObservabilitySnapshot rob{};
+        alert_engine::get_regime_observability_snapshot(&rob);
+        const char *fb = rob.vol_unavailable_fallback ? " — <em>vol nog niet klaar: drempels tijdelijk basis (normal ‰)</em>" : "";
+        const int nreg = std::snprintf(
+            html + w,
+            k_html_alloc - w,
+            "<h2>Regime / drempels (M-013e, read-only)</h2>"
+            "<p><strong>Regime</strong> <code>%s</code> · <strong>Vol-metric</strong> %s · "
+            "<strong>gem. stap</strong> %.2f bps · <strong>paren</strong> %u%s<br/>"
+            "<strong>Schaal</strong> %d ‰ · <strong>Basis 1m / 5m</strong> %.3f %% / %.3f %% · "
+            "<strong>Effectief 1m / 5m</strong> %.3f %% / %.3f %%<br/>"
+            "<small>Confluence: |1m| en |5m| elk ≥ effectieve drempel (zelfde schaal als M-010f).</small></p>",
+            rob.regime[0] ? rob.regime : "?",
+            rob.vol_metric_ready ? "klaar" : "niet klaar",
+            rob.vol_mean_abs_step_bps,
+            static_cast<unsigned>(rob.vol_pairs_used),
+            fb,
+            rob.threshold_scale_permille,
+            rob.base_threshold_move_pct_1m,
+            rob.base_threshold_move_pct_5m,
+            rob.effective_threshold_move_pct_1m,
+            rob.effective_threshold_move_pct_5m);
+        if (nreg <= 0 || w + static_cast<size_t>(nreg) >= k_html_alloc) {
+            ESP_LOGW(TAG, "M-013e: HTML regime-sectie overflow (nreg=%d)", nreg);
+            std::free(html);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
+            return ESP_FAIL;
+        }
+        w += static_cast<size_t>(nreg);
+    }
+    n = std::snprintf(
+        html + w, k_html_alloc - w,
+        "<p><a href=\"/api/status.json\"><code>/api/status.json</code></a> "
+        "(incl. OTA, alerts_1m/5m/conf, <code>regime_observability</code>, "
+        "<code>alert_runtime_config</code>; POST <code>/api/alert-runtime.json</code> M-013f; M-014b)</p>"
         "<h2>OTA / boot</h2>"
         "<p><strong>Partitie</strong> %s @ 0x%08X · <strong>img-state</strong> %s<br/>"
         "<strong>Volgende update-slot</strong> %s · <strong>Reset</strong> %s<br/>"
@@ -423,14 +698,6 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         ".then(function(x){o.style.color=x.ok?'#063':'#800';o.textContent=x.t;})"
         ".catch(function(e){o.style.color='#800';o.textContent=''+e;});});})();</script>"
         "</body></html>",
-        app ? app->version : "?",
-        ipbuf[0] ? ipbuf : "—",
-        net_runtime::has_ip() ? "ja" : "nee",
-        snap.market_label[0] ? snap.market_label : "—",
-        snap.last_tick.price_eur,
-        snap.valid ? "ja" : "nee",
-        conn_str(snap.connection),
-        tick_str(snap.last_tick_source),
         ota.running_label[0] ? ota.running_label : "?",
         (unsigned)ota.running_address,
         ota.img_state[0] ? ota.img_state : "?",
@@ -443,16 +710,16 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         nt_chk,
         esc_topic,
         static_cast<unsigned>(config_store::kNtfyTopicMax - 1));
-
-    if (n <= 0 || static_cast<size_t>(n) >= k_html_alloc) {
-        ESP_LOGW(TAG, "M-013c: HTML overflow of snprintf-fout (n=%d)", n);
+    if (n <= 0 || w + static_cast<size_t>(n) >= k_html_alloc) {
+        ESP_LOGW(TAG, "M-013c/d: HTML deel2 overflow (n=%d)", n);
         std::free(html);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
         return ESP_FAIL;
     }
+    w += static_cast<size_t>(n);
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    const esp_err_t send_err = httpd_resp_send(req, html, static_cast<size_t>(n));
+    const esp_err_t send_err = httpd_resp_send(req, html, w);
     std::free(html);
     return send_err;
 }
@@ -510,9 +777,16 @@ esp_err_t init()
     us.handler = handle_services_post;
     us.user_ctx = nullptr;
 
+    httpd_uri_t ua{};
+    ua.uri = "/api/alert-runtime.json";
+    ua.method = HTTP_POST;
+    ua.handler = handle_alert_runtime_post;
+    ua.user_ctx = nullptr;
+
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uj), TAG, "reg json");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uh), TAG, "reg html");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &us), TAG, "reg services post");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &ua), TAG, "reg alert-runtime post");
 
     httpd_uri_t uo{};
     uo.uri = "/api/ota";
@@ -521,7 +795,10 @@ esp_err_t init()
     uo.user_ctx = nullptr;
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uo), TAG, "reg ota post");
 
-    ESP_LOGI(TAG, "M-013a/b/c + M-014a/b: webui poort %u — status+OTA-info, services, OTA-upload", static_cast<unsigned>(port));
+    ESP_LOGI(TAG,
+             "M-013a/b/c/d/f + M-014a/b: webui poort %u — status+alerts+OTA-info, services, alert-runtime POST, "
+             "OTA-upload",
+             static_cast<unsigned>(port));
     return ESP_OK;
 #endif
 }

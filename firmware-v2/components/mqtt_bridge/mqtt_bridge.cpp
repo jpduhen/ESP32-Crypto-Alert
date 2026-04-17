@@ -1,5 +1,7 @@
 /**
  * M-012a: eerste MQTT-route achter `service_outbound` — geen Home Assistant discovery.
+ * M-012b: JSON-publish voor 1m-domeinalert (topic uit Kconfig).
+ * M-010c/010d: 5m- en confluence-publish.
  */
 #include "mqtt_bridge/mqtt_bridge.hpp"
 #include "config_store/config_store.hpp"
@@ -10,6 +12,7 @@
 #include "sdkconfig.h"
 
 #if CONFIG_MQTT_BRIDGE_ENABLE
+#include <cstdio>
 #include <cstring>
 #endif
 
@@ -138,6 +141,228 @@ void request_application_ready_publish()
     if (s_connected) {
         try_flush_pending();
     }
+#endif
+}
+
+void publish_domain_alert_1m(const char *symbol,
+                             bool up,
+                             double price_eur,
+                             double pct_1m,
+                             int64_t ts_ms)
+{
+#if !CONFIG_MQTT_BRIDGE_ENABLE
+    (void)symbol;
+    (void)up;
+    (void)price_eur;
+    (void)pct_1m;
+    (void)ts_ms;
+    return;
+#else
+    const config_store::ServiceRuntimeConfig &svc = config_store::service_runtime();
+    if (!svc.mqtt_enabled) {
+        ESP_LOGD(TAG, "M-012b: mqtt runtime uit — geen domain alert MQTT");
+        return;
+    }
+    if (!s_client || strlen(svc.mqtt_broker_uri) == 0) {
+        ESP_LOGD(TAG, "M-012b: geen MQTT-client — skip domain alert");
+        return;
+    }
+    if (!s_connected) {
+        ESP_LOGW(TAG, "M-012b: MQTT niet verbonden — domain alert niet gepubliceerd");
+        return;
+    }
+
+    const char *sym_in = (symbol && symbol[0] != '\0') ? symbol : "?";
+    char sym_safe[28]{};
+    std::strncpy(sym_safe, sym_in, sizeof(sym_safe) - 1);
+    for (size_t i = 0; i < sizeof(sym_safe) && sym_safe[i] != '\0'; ++i) {
+        if (sym_safe[i] == '"' || sym_safe[i] == '\\') {
+            sym_safe[i] = '_';
+        }
+    }
+
+    const char *dir = up ? "UP" : "DOWN";
+    char payload[320];
+    const int plen = std::snprintf(payload,
+                                   sizeof(payload),
+                                   "{\"symbol\":\"%s\",\"dir\":\"%s\",\"price_eur\":%.4f,"
+                                   "\"pct_1m\":%.4f,\"ts_ms\":%lld}",
+                                   sym_safe,
+                                   dir,
+                                   price_eur,
+                                   pct_1m,
+                                   (long long)ts_ms);
+    if (plen <= 0 || plen >= static_cast<int>(sizeof(payload))) {
+        ESP_LOGW(TAG, "M-012b: domain alert JSON te lang of fout");
+        return;
+    }
+
+    ESP_LOGI(TAG,
+             "M-012b: publish domain alert 1m (topic=%s sym=%s %s)",
+             CONFIG_MQTT_TOPIC_DOMAIN_ALERT_1M,
+             sym_safe,
+             dir);
+
+    const int mid = esp_mqtt_client_publish(s_client,
+                                            CONFIG_MQTT_TOPIC_DOMAIN_ALERT_1M,
+                                            payload,
+                                            plen,
+                                            1,
+                                            0);
+    if (mid < 0) {
+        ESP_LOGW(TAG, "M-012b: publish domain alert mislukt (mid=%d)", mid);
+        return;
+    }
+    ESP_LOGI(TAG, "M-012b: domain alert gepubliceerd (mid=%d)", mid);
+#endif
+}
+
+void publish_domain_alert_5m(const char *symbol,
+                             bool up,
+                             double price_eur,
+                             double pct_5m,
+                             int64_t ts_ms)
+{
+#if !CONFIG_MQTT_BRIDGE_ENABLE
+    (void)symbol;
+    (void)up;
+    (void)price_eur;
+    (void)pct_5m;
+    (void)ts_ms;
+    return;
+#else
+    const config_store::ServiceRuntimeConfig &svc = config_store::service_runtime();
+    if (!svc.mqtt_enabled) {
+        ESP_LOGD(TAG, "M-010c: mqtt runtime uit — geen 5m domain alert MQTT");
+        return;
+    }
+    if (!s_client || strlen(svc.mqtt_broker_uri) == 0) {
+        ESP_LOGD(TAG, "M-010c: geen MQTT-client — skip 5m domain alert");
+        return;
+    }
+    if (!s_connected) {
+        ESP_LOGW(TAG, "M-010c: MQTT niet verbonden — 5m domain alert niet gepubliceerd");
+        return;
+    }
+
+    const char *sym_in = (symbol && symbol[0] != '\0') ? symbol : "?";
+    char sym_safe[28]{};
+    std::strncpy(sym_safe, sym_in, sizeof(sym_safe) - 1);
+    for (size_t i = 0; i < sizeof(sym_safe) && sym_safe[i] != '\0'; ++i) {
+        if (sym_safe[i] == '"' || sym_safe[i] == '\\') {
+            sym_safe[i] = '_';
+        }
+    }
+
+    const char *dir = up ? "UP" : "DOWN";
+    char payload[320];
+    const int plen = std::snprintf(payload,
+                                   sizeof(payload),
+                                   "{\"symbol\":\"%s\",\"dir\":\"%s\",\"price_eur\":%.4f,"
+                                   "\"pct_5m\":%.4f,\"ts_ms\":%lld}",
+                                   sym_safe,
+                                   dir,
+                                   price_eur,
+                                   pct_5m,
+                                   (long long)ts_ms);
+    if (plen <= 0 || plen >= static_cast<int>(sizeof(payload))) {
+        ESP_LOGW(TAG, "M-010c: 5m domain alert JSON te lang of fout");
+        return;
+    }
+
+    ESP_LOGI(TAG,
+             "M-010c: publish domain alert 5m (topic=%s sym=%s %s)",
+             CONFIG_MQTT_TOPIC_DOMAIN_ALERT_5M,
+             sym_safe,
+             dir);
+
+    const int mid = esp_mqtt_client_publish(s_client,
+                                            CONFIG_MQTT_TOPIC_DOMAIN_ALERT_5M,
+                                            payload,
+                                            plen,
+                                            1,
+                                            0);
+    if (mid < 0) {
+        ESP_LOGW(TAG, "M-010c: publish 5m domain alert mislukt (mid=%d)", mid);
+        return;
+    }
+    ESP_LOGI(TAG, "M-010c: 5m domain alert gepubliceerd (mid=%d)", mid);
+#endif
+}
+
+void publish_domain_alert_confluence_1m5m(const char *symbol,
+                                          bool up,
+                                          double price_eur,
+                                          double pct_1m,
+                                          double pct_5m,
+                                          int64_t ts_ms)
+{
+#if !CONFIG_MQTT_BRIDGE_ENABLE
+    (void)symbol;
+    (void)up;
+    (void)price_eur;
+    (void)pct_1m;
+    (void)pct_5m;
+    (void)ts_ms;
+    return;
+#else
+    const config_store::ServiceRuntimeConfig &svc = config_store::service_runtime();
+    if (!svc.mqtt_enabled) {
+        ESP_LOGD(TAG, "M-010d: mqtt runtime uit — geen confluence MQTT");
+        return;
+    }
+    if (!s_client || strlen(svc.mqtt_broker_uri) == 0) {
+        ESP_LOGD(TAG, "M-010d: geen MQTT-client — skip confluence");
+        return;
+    }
+    if (!s_connected) {
+        ESP_LOGW(TAG, "M-010d: MQTT niet verbonden — confluence niet gepubliceerd");
+        return;
+    }
+
+    const char *sym_in = (symbol && symbol[0] != '\0') ? symbol : "?";
+    char sym_safe[28]{};
+    std::strncpy(sym_safe, sym_in, sizeof(sym_safe) - 1);
+    for (size_t i = 0; i < sizeof(sym_safe) && sym_safe[i] != '\0'; ++i) {
+        if (sym_safe[i] == '"' || sym_safe[i] == '\\') {
+            sym_safe[i] = '_';
+        }
+    }
+
+    const char *dir = up ? "UP" : "DOWN";
+    char payload[384];
+    const int plen = std::snprintf(payload,
+                                   sizeof(payload),
+                                   "{\"symbol\":\"%s\",\"dir\":\"%s\",\"price_eur\":%.4f,"
+                                   "\"pct_1m\":%.4f,\"pct_5m\":%.4f,\"ts_ms\":%lld}",
+                                   sym_safe,
+                                   dir,
+                                   price_eur,
+                                   pct_1m,
+                                   pct_5m,
+                                   (long long)ts_ms);
+    if (plen <= 0 || plen >= static_cast<int>(sizeof(payload))) {
+        ESP_LOGW(TAG, "M-010d: confluence JSON te lang of fout");
+        return;
+    }
+
+    ESP_LOGI(TAG,
+             "M-010d: publish confluence (topic=%s sym=%s %s)",
+             CONFIG_MQTT_TOPIC_DOMAIN_ALERT_CONF_1M5M,
+             sym_safe,
+             dir);
+
+    const int mid = esp_mqtt_client_publish(s_client,
+                                            CONFIG_MQTT_TOPIC_DOMAIN_ALERT_CONF_1M5M,
+                                            payload,
+                                            plen,
+                                            1,
+                                            0);
+    if (mid < 0) {
+        ESP_LOGW(TAG, "M-010d: publish confluence mislukt (mid=%d)", mid);
+        return;
+    }
+    ESP_LOGI(TAG, "M-010d: confluence gepubliceerd (mid=%d)", mid);
 #endif
 }
 

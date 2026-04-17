@@ -19,6 +19,8 @@ void tick_heartbeat();
 #define DIAG_TAG_DISP     "diag_disp"
 #define DIAG_TAG_UI       "diag_ui"
 #define DIAG_TAG_MARKET   "diag_mkt"
+#define DIAG_TAG_METRICS  "diag_metrics"
+#define DIAG_TAG_ALERT    "diag_alert"
 #define DIAG_TAG_HEALTH   "diag_health"
 /** Exchange/TLS feed: REST/WS lifecycle (T-103b diagnose; grep `bv_feed`) */
 #define DIAG_TAG_BV_FEED  "bv_feed"
