@@ -49,6 +49,8 @@ struct MarketSnapshot {
     /** Marktlabel zoals aan exchange doorgegeven (bv. BTC-EUR). */
     char market_label[24]{};
     TickSource last_tick_source{TickSource::None};
+    /** Aantal binnenkomende WS-ticker-updates in de **afgelopen voltooide** wandklok-seconde (0 = geen of nog niet gesynchroniseerd). */
+    uint32_t ws_inbound_ticks_last_sec{0};
 };
 
 } // namespace market_types

@@ -154,6 +154,9 @@ static esp_err_t handle_status_json(httpd_req_t *req)
     cJSON_AddStringToObject(root, "connection", conn_str(snap.connection));
     cJSON_AddStringToObject(root, "tick_source", tick_str(snap.last_tick_source));
     cJSON_AddNumberToObject(root, "last_tick_ms", static_cast<double>(snap.last_tick.ts_ms));
+    cJSON_AddNumberToObject(root,
+                           "ws_inbound_ticks_last_sec",
+                           static_cast<double>(snap.ws_inbound_ticks_last_sec));
 
     cJSON *ota_j = cJSON_CreateObject();
     if (ota_j) {
@@ -894,7 +897,8 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         "<h1>CryptoAlert V2</h1>"
         "<p><strong>Versie</strong> %s · <strong>IP</strong> %s · <strong>WiFi IP bekend</strong> %s</p>"
         "<p><strong>Symbool</strong> %s · <strong>Prijs (EUR)</strong> %.4f · <strong>Geldig</strong> %s</p>"
-        "<p><strong>Verbinding feed</strong> %s · <strong>Bron tick</strong> %s</p>",
+        "<p><strong>Verbinding feed</strong> %s · <strong>Bron tick</strong> %s · "
+        "<strong>WS binnen (vorige volle s)</strong> %u</p>",
         app ? app->version : "?",
         ipbuf[0] ? ipbuf : "—",
         net_runtime::has_ip() ? "ja" : "nee",
@@ -902,7 +906,8 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         snap.last_tick.price_eur,
         snap.valid ? "ja" : "nee",
         conn_str(snap.connection),
-        tick_str(snap.last_tick_source));
+        tick_str(snap.last_tick_source),
+        static_cast<unsigned>(snap.ws_inbound_ticks_last_sec));
     if (n <= 0 || static_cast<size_t>(n) >= k_html_alloc) {
         ESP_LOGW(TAG, "M-013c/d: HTML deel1 overflow (n=%d)", n);
         std::free(html);

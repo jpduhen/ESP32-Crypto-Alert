@@ -22,14 +22,48 @@ static SemaphoreHandle_t s_metrics_mx;
 static char s_market[24]{};
 static market_types::MarketSnapshot *s_snap_ptr; // owned by exchange_bitvavo.cpp
 
+/** Wandklok-seconde voor teller `ws_inbound_ticks_last_sec` (voltooide vorige seconde). */
+static uint64_t s_stats_wall_sec{0};
+static uint32_t s_stats_cur_sec_count{0};
+
+static void commit_ticks_last_to_snap(uint32_t n)
+{
+    if (!s_metrics_mx || !s_snap_ptr) {
+        return;
+    }
+    if (xSemaphoreTake(s_metrics_mx, pdMS_TO_TICKS(50)) == pdTRUE) {
+        s_snap_ptr->ws_inbound_ticks_last_sec = n;
+        xSemaphoreGive(s_metrics_mx);
+    }
+}
+
+void sync_inbound_tick_stats()
+{
+    if (!s_snap_ptr) {
+        return;
+    }
+    const uint64_t w = esp_timer_get_time() / 1000000ULL;
+    if (s_stats_wall_sec == 0ULL) {
+        s_stats_wall_sec = w;
+        return;
+    }
+    while (w > s_stats_wall_sec) {
+        commit_ticks_last_to_snap(s_stats_cur_sec_count);
+        s_stats_cur_sec_count = 0;
+        ++s_stats_wall_sec;
+    }
+}
+
 static void apply_price(double p, int64_t ts_ms)
 {
+    sync_inbound_tick_stats();
     if (!s_metrics_mx || !s_snap_ptr) {
         return;
     }
     if (xSemaphoreTake(s_metrics_mx, pdMS_TO_TICKS(100)) != pdTRUE) {
         return;
     }
+    ++s_stats_cur_sec_count;
     s_snap_ptr->last_tick.price_eur = p;
     s_snap_ptr->last_tick.ts_ms = ts_ms;
     s_snap_ptr->valid = true;
@@ -142,6 +176,8 @@ esp_err_t start(market_types::MarketSnapshot *snap_sink, const char *market, Sem
     if (s_client != nullptr) {
         return ESP_OK;
     }
+    s_stats_wall_sec = 0;
+    s_stats_cur_sec_count = 0;
     s_snap_ptr = snap_sink;
     s_metrics_mx = metrics_mx;
     strncpy(s_market, market, sizeof(s_market) - 1);

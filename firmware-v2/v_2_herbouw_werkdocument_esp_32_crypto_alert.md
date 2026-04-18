@@ -2477,7 +2477,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-- **`app_core`:** na **`market_data::tick`** → **`domain_metrics::feed`** → **`alert_engine::tick`** → UI; **`poll()`** blijft outbound leegmaken.
+- **`app_core`:** korte hoofdtakt (**`vTaskDelay(100)`**, ~**10 Hz**) — **`market_data::tick`** → **`domain_metrics::feed`** → **`alert_engine::tick`** → **`service_outbound::poll()`** + **`diagnostics::tick_heartbeat`** iedere iteratie (lage latentie voor **domeinalerts** / outbound). **`ui::refresh_from_snapshot`** **maximaal 1× per seconde** (wandklok), los van de 100 ms-takt. Zie **§ M-010f** — *Operational: frequentie `app_core`-lus* voor **`feed`** vs. trage lussen.
 
 \
 
@@ -2630,6 +2630,18 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 \
 
 - **`alert_engine`:** drie regimes — **calm** (lage gem. stap), **normal** (tussengrenzen), **hot** (hoge gem. stap); **één toepassing:** **effectieve 1m- en 5m-drempels** (en daarmee confluence-drempels) worden met **‰-schaal** vermenigvuldigd (calm iets **lager** / hot iets **hoger**); **cooldowns** en **M-010e-suppressie** ongewijzigd. Logs: **vol** + **regime** + **schaal** + **eff_thr** bij eerste vol-klaar en bij **regimewissel**; eenmalige melding bij vol-warmup.
+
+\
+
+**Operational: frequentie `app_core`-lus (ingrediënt; fix o.a. apr. 2026)**
+
+\
+
+- **`domain_metrics::feed` moet minstens ~1× per seconde bereikt worden** (vaker mag: meerdere calls binnen dezelfde seconde vullen één bucket). **Secondegrenzen** volgen de **wandklok** (`esp_timer`), niet `last_tick.ts_ms`: Bitvavo WS hoeft **niet** elke seconde te pushen — anders ontstaan gaten tussen ring-samples en blijft **M-010f** vol “niet klaar”. Dubbele **`feed`**-calls met **dezelfde** `ts_ms` tellen niet opnieuw mee; stille seconden krijgen **carry-forward** van de laatste prijs. Roep je **`feed`** slechts om de **meerdere seconden** aan (bv. één keer per **5 s** via een trage hoofdloop), dan ontbreken er **wél** wandklok-seconden in de ring → zelfde vol-probleem. **`compute_vol_mean_abs_step_bps()`** telt paren met **Δt tussen 800 en 2200 ms** op opeenvolgende ring-samples; met **1 canonieke sample per seconde** is **Δt ≈ 1 s**.
+
+\
+
+- **Andere ketenonderdelen die gevoelig zijn voor (te) lage hoofdloop-frequentie** — mits ze **alleen** vanuit `app_core` worden aangestuurd: **`alert_engine::tick`** (beslissingen, cooldowns, suppressie-vensters; bij een trage lus blijft een drempel-kruising **langer onopgemerkt** tot de volgende iteratie), **`service_outbound::poll`** (uitgaande queue **sneller legen** bij hogere frequentie), **`diagnostics::tick_heartbeat`**. **`market_data::tick` / `exchange_bitvavo::tick`:** REST is **tijd-gegated** (`s_next_rest_ms`); vaker **`tick`** verandert die planning niet, maar geeft wel **snellere** reactie op **connectiestatus** en WS-start. **UI:** **1×/s** refresh — balans tussen actueel beeld en **LVGL**-belasting; **los** van de ~10 Hz alert-takt.
 
 \
 

@@ -42,6 +42,10 @@ void tick()
 {
     const uint64_t now = esp_timer_get_time() / 1000ULL;
 
+    if (s_ws_started) {
+        ws::sync_inbound_tick_stats();
+    }
+
     /* M-002: geen WiFi-reconnect hier — alleen gate op IP; STA-backoff leeft in net_runtime. */
     if (!net_runtime::has_ip()) {
         if (xSemaphoreTake(s_mx, pdMS_TO_TICKS(50)) == pdTRUE) {

@@ -14,6 +14,7 @@
 #include "lvgl.h"
 #include "sdkconfig.h"
 
+#include <cinttypes>
 #include <cstdio>
 
 /** Effectieve LVGL swap_bytes: alleen `DISPLAY_DIAG_PROFILE_*` — oude `CONFIG_UI_LVGL_SWAP_BYTES` in sdkconfig kan anders blijven staan en profiel 1 breken. */
@@ -48,6 +49,7 @@ static lv_obj_t *s_price_col = nullptr;
 static lv_obj_t *s_lbl_price = nullptr;
 /** Regel 2: eenheid «EUR» (secundair, onder bedrag). */
 static lv_obj_t *s_lbl_price_unit = nullptr;
+static lv_obj_t *s_lbl_ws_in = nullptr;
 static lv_obj_t *s_lbl_source = nullptr;
 
 static const char *tick_source_str(market_data::TickSource s)
@@ -156,6 +158,13 @@ esp_err_t init()
     lv_obj_set_style_text_align(s_lbl_price_unit, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_letter_space(s_lbl_price_unit, 1, 0);
 
+    s_lbl_ws_in = lv_label_create(scr);
+    lv_label_set_text(s_lbl_ws_in, "—");
+    lv_obj_set_style_text_color(s_lbl_ws_in, lv_color_hex(0x6B7280), 0);
+    lv_obj_set_style_text_opa(s_lbl_ws_in, LV_OPA_70, 0);
+    lv_obj_set_style_text_align(s_lbl_ws_in, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_lbl_ws_in, LV_ALIGN_BOTTOM_MID, 0, -32);
+
     s_lbl_source = lv_label_create(scr);
     lv_label_set_text(s_lbl_source, "Bron · —");
     lv_obj_set_style_text_color(s_lbl_source, lv_color_hex(0x5C6370), 0);
@@ -172,7 +181,8 @@ esp_err_t init()
 
 void refresh_from_snapshot(const market_data::MarketSnapshot &snap)
 {
-    if (!s_lbl_symbol || !s_price_col || !s_lbl_price || !s_lbl_price_unit || !s_lbl_source) {
+    if (!s_lbl_symbol || !s_price_col || !s_lbl_price || !s_lbl_price_unit || !s_lbl_ws_in ||
+        !s_lbl_source) {
         return;
     }
     if (!lvgl_port_lock(100)) {
@@ -191,11 +201,27 @@ void refresh_from_snapshot(const market_data::MarketSnapshot &snap)
     char src_line[40];
     std::snprintf(src_line, sizeof(src_line), "Bron · %s", tick_source_str(snap.last_tick_source));
 
+    char ws_in_line[40];
+    if (snap.valid && snap.last_tick_source == market_data::TickSource::Ws) {
+        std::snprintf(ws_in_line,
+                      sizeof(ws_in_line),
+                      "WS in · %" PRIu32 "/s",
+                      snap.ws_inbound_ticks_last_sec);
+    } else {
+        std::snprintf(ws_in_line, sizeof(ws_in_line), "WS in · —");
+    }
+
     lv_label_set_text(s_lbl_symbol, sym);
     lv_label_set_text(s_lbl_price, num_buf);
     lv_label_set_text(s_lbl_price_unit, snap.valid ? "EUR" : " ");
     lv_obj_set_style_text_opa(s_lbl_price_unit, snap.valid ? LV_OPA_80 : LV_OPA_TRANSP, 0);
+    lv_label_set_text(s_lbl_ws_in, ws_in_line);
     lv_label_set_text(s_lbl_source, src_line);
+
+    ESP_LOGI(DIAG_TAG_UI,
+             "ui refresh: prijs=%s WS in (voltooide vorige s)=%" PRIu32 "/s",
+             num_buf,
+             snap.ws_inbound_ticks_last_sec);
 
     lvgl_port_unlock();
 }

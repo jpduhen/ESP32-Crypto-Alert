@@ -93,7 +93,14 @@ esp_err_t run()
     ESP_LOGI(TAG, "runtime: idle (market_data tick)");
     service_outbound::emit(service_outbound::Event::ApplicationReady);
     service_outbound::poll();
+    /* Korte hoofdtakt: alert_engine + outbound moeten interessante koersbewegingen snel kunnen
+     * verzenden (~«real-time» notificaties). domain_metrics::feed meerdere keren per seconde is ok
+     * (zelfde sec_epoch → bucket vult verder; ≥1×/s bij seconde-overgang voor canonieke ring).
+     * UI: 1×/s om LVGL niet te overbelasten. */
+    constexpr uint32_t k_loop_ms = 100;
+    uint64_t last_ui_ms = 0;
     for (;;) {
+        const uint64_t now_ms = esp_timer_get_time() / 1000ULL;
         market_data::tick();
 #if CONFIG_MD_USE_EXCHANGE_BITVAVO
         t103_field_log_ws_via_market_data();
@@ -102,11 +109,14 @@ esp_err_t run()
             const market_data::MarketSnapshot snap = market_data::snapshot();
             domain_metrics::feed(snap);
             alert_engine::tick();
-            ui::refresh_from_snapshot(snap);
+            if (last_ui_ms == 0ULL || (now_ms - last_ui_ms) >= 1000ULL) {
+                last_ui_ms = now_ms;
+                ui::refresh_from_snapshot(snap);
+            }
         }
         diagnostics::tick_heartbeat();
         service_outbound::poll();
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        vTaskDelay(pdMS_TO_TICKS(k_loop_ms));
     }
 }
 

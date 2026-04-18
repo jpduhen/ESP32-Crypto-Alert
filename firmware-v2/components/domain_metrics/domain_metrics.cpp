@@ -53,6 +53,10 @@ static Sample s_ring[k_ring_cap]{};
 static size_t s_head{0};
 static size_t s_count{0};
 static SecondBucket s_bucket{};
+/** Laatste bekende EUR-prijs; voor carry-forward als een wandklok-seconde geen nieuwe WS-ts kreeg. */
+static double s_carry_price_eur{0.0};
+/** Dedup: zelfde `last_tick.ts_ms` niet opnieuw in dezelfde seconde tellen (voorkomt 10×/s spam bij 100 ms-loop). */
+static int64_t s_last_merged_tick_ts_ms{-1};
 
 static void ring_push(const Sample &s)
 {
@@ -85,6 +89,21 @@ static bool ring_latest(Sample *out)
     return true;
 }
 
+/** Vul ontbrekende wandklok-seconden (carry-prijs) als de hoofdloop een seconde oversloeg. */
+static void push_carry_seconds(int64_t from_sec_inclusive, int64_t to_sec_exclusive)
+{
+    if (s_carry_price_eur <= 0.0 || from_sec_inclusive >= to_sec_exclusive) {
+        return;
+    }
+    for (int64_t sec = from_sec_inclusive; sec < to_sec_exclusive; ++sec) {
+        Sample s{};
+        s.ts_ms = sec * 1000LL + 999LL;
+        s.price_eur = s_carry_price_eur;
+        ring_prune_before(s.ts_ms, 360000);
+        ring_push(s);
+    }
+}
+
 static void bucket_reset()
 {
     s_bucket = {};
@@ -92,11 +111,19 @@ static void bucket_reset()
 
 static void finalize_bucket()
 {
-    if (!s_bucket.active || s_bucket.tick_count == 0) {
+    if (!s_bucket.active) {
         return;
     }
-    const double canonical_price =
-        s_bucket.sum_price / static_cast<double>(s_bucket.tick_count);
+    double canonical_price = 0.0;
+    if (s_bucket.tick_count > 0) {
+        canonical_price =
+            s_bucket.sum_price / static_cast<double>(s_bucket.tick_count);
+    } else if (s_carry_price_eur > 0.0) {
+        /* Geen nieuw WS-bericht in deze wandklok-seconde — prijs gelijk houden voor 1×/s ring. */
+        canonical_price = s_carry_price_eur;
+    } else {
+        return;
+    }
     Sample s{};
     s.ts_ms = (s_bucket.sec_epoch * 1000LL) + 999LL;
     s.price_eur = canonical_price;
@@ -118,6 +145,8 @@ esp_err_t init()
 {
     s_head = 0;
     s_count = 0;
+    s_carry_price_eur = 0.0;
+    s_last_merged_tick_ts_ms = -1;
     bucket_reset();
     std::memset(s_ring, 0, sizeof(s_ring));
     ESP_LOGI(TAG,
@@ -131,32 +160,46 @@ void feed(const market_data::MarketSnapshot &snap)
     if (!snap.valid || snap.last_tick.price_eur <= 0.0) {
         return;
     }
-    int64_t ts_ms = snap.last_tick.ts_ms;
-    if (ts_ms <= 0) {
-        ts_ms = static_cast<int64_t>(esp_timer_get_time() / 1000LL);
-    }
-    const int64_t sec_epoch = ts_ms / 1000LL;
+    s_carry_price_eur = snap.last_tick.price_eur;
+    const int64_t wall_ms = static_cast<int64_t>(esp_timer_get_time() / 1000LL);
+    const int64_t wsec = wall_ms / 1000LL;
+
     if (!s_bucket.active) {
         s_bucket.active = true;
-        s_bucket.sec_epoch = sec_epoch;
+        s_bucket.sec_epoch = wsec;
+        s_last_merged_tick_ts_ms = snap.last_tick.ts_ms;
         s_bucket.sum_price = snap.last_tick.price_eur;
         s_bucket.tick_count = 1;
         s_bucket.first_price = snap.last_tick.price_eur;
         s_bucket.last_price = snap.last_tick.price_eur;
         return;
     }
-    if (sec_epoch == s_bucket.sec_epoch) {
-        s_bucket.sum_price += snap.last_tick.price_eur;
-        ++s_bucket.tick_count;
+
+    if (wsec > s_bucket.sec_epoch) {
+        const int64_t closing_sec = s_bucket.sec_epoch;
+        finalize_bucket();
+        push_carry_seconds(closing_sec + 1, wsec);
+        s_bucket.active = true;
+        s_bucket.sec_epoch = wsec;
+        s_last_merged_tick_ts_ms = snap.last_tick.ts_ms;
+        s_bucket.sum_price = snap.last_tick.price_eur;
+        s_bucket.tick_count = 1;
+        s_bucket.first_price = snap.last_tick.price_eur;
         s_bucket.last_price = snap.last_tick.price_eur;
         return;
     }
-    finalize_bucket();
-    s_bucket.active = true;
-    s_bucket.sec_epoch = sec_epoch;
-    s_bucket.sum_price = snap.last_tick.price_eur;
-    s_bucket.tick_count = 1;
-    s_bucket.first_price = snap.last_tick.price_eur;
+
+    if (wsec != s_bucket.sec_epoch) {
+        /* Tolerantie voor kleine klok- of volgorde-anomalieën: negeren. */
+        return;
+    }
+
+    if (snap.last_tick.ts_ms == s_last_merged_tick_ts_ms) {
+        return;
+    }
+    s_last_merged_tick_ts_ms = snap.last_tick.ts_ms;
+    s_bucket.sum_price += snap.last_tick.price_eur;
+    ++s_bucket.tick_count;
     s_bucket.last_price = snap.last_tick.price_eur;
 }
 
@@ -184,7 +227,7 @@ Metric1mMovePct compute_1m_move_pct()
     }
     m.ready = true;
     m.pct = (m.now_price_eur - m.ref_price_eur) / m.ref_price_eur * 100.0;
-    ESP_LOGI(TAG,
+    ESP_LOGD(TAG,
              "M-010b: metric-1m now=%.4f@%lld ref=%.4f@%lld pct=%.4f",
              m.now_price_eur,
              (long long)m.now_ts_ms,
@@ -218,7 +261,7 @@ Metric5mMovePct compute_5m_move_pct()
     }
     m.ready = true;
     m.pct = (m.now_price_eur - m.ref_price_eur) / m.ref_price_eur * 100.0;
-    ESP_LOGI(TAG,
+    ESP_LOGD(TAG,
              "M-010c: metric-5m now=%.4f@%lld ref=%.4f@%lld pct=%.4f",
              m.now_price_eur,
              (long long)m.now_ts_ms,
