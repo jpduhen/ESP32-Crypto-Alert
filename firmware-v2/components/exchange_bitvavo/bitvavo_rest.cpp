@@ -85,6 +85,7 @@ esp_err_t fetch_ticker_price(const char *market, double *out_eur, char *err_deta
         return ESP_ERR_INVALID_ARG;
     }
     if (!net_runtime::net_mutex_take(pdMS_TO_TICKS(20000))) {
+        ESP_LOGW(DIAG_TAG_BV_FEED, "M-002: net_mutex timeout — Bitvavo REST deferred (outbound/NTFY hold mutex?)");
         if (err_detail && err_len) {
             strncpy(err_detail, "net_mutex timeout", err_len - 1);
             err_detail[err_len - 1] = '\0';

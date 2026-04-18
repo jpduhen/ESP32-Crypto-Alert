@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include "esp_err.h"
 #include "service_outbound/types.hpp"
 
@@ -23,7 +25,19 @@ void emit_domain_alert_5m(const DomainAlert5mMovePayload &p);
 /** M-010d: confluence 1m+5m — enige route voor `Event::DomainAlertConfluence1m5m`. */
 void emit_domain_confluence_1m5m(const DomainConfluence1m5mPayload &p);
 
-/** Leegt de queue en verwerkt events (o.a. NTFY bij `ApplicationReady`). Aanroepen vanuit `app_core`-lus. */
+/**
+ * Leegt de queue en verwerkt events (o.a. NTFY bij `ApplicationReady`). Aanroepen vanuit `app_core`-lus.
+ * M-002: per aanroep maximaal een klein aantal events (TLS/HTTP in sinks) — rest blijft voor volgende polls.
+ */
 void poll();
+
+/** Wachtende events in outbound-queue (0 … capacity). */
+unsigned queue_waiting();
+
+/** Vaste queue-capaciteit (M-002c). */
+unsigned queue_capacity();
+
+/** Cumulatief aantal gedropte events (queue vol bij emit). */
+uint32_t drop_total();
 
 } // namespace service_outbound

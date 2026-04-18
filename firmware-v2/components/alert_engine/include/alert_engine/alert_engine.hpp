@@ -38,6 +38,23 @@ struct AlertDecisionObservabilitySnapshot {
     AlertPathDecisionSnapshot confluence_1m5m{};
 };
 
+/**
+ * C1: read-only totalen sinds boot — geen extra beslislogica; alleen voor field-test / spamreview.
+ * Cooldown-druk volgt uit `AlertPathDecisionSnapshot` (`status=cooldown`) per tick, niet als globale teller.
+ */
+struct AlertEngineRuntimeStatsSnapshot {
+    uint32_t emit_total_1m{};
+    uint32_t emit_total_5m{};
+    uint32_t emit_total_conf{};
+    /** `esp_timer_get_time()/1000`; `-1` = nog geen emit. */
+    int64_t last_emit_epoch_ms_1m{-1};
+    int64_t last_emit_epoch_ms_5m{-1};
+    int64_t last_emit_epoch_ms_conf{-1};
+    /** Losse 1m/5m onderdrukt door M-010e-venster na confluence (zelfde richting). */
+    uint32_t suppress_after_conf_window_1m{};
+    uint32_t suppress_after_conf_window_5m{};
+};
+
 /** Laatst bekende regime/vol/drempels (bijgewerkt aan het begin van elke `tick()`). Veldnamen stabiel voor JSON. */
 struct RegimeObservabilitySnapshot {
     bool vol_metric_ready{false};
@@ -65,5 +82,8 @@ void get_regime_observability_snapshot(RegimeObservabilitySnapshot *out);
 
 /** Read-only: laatste pad-beslissingen (M-013h). */
 void get_alert_decision_observability_snapshot(AlertDecisionObservabilitySnapshot *out);
+
+/** Read-only: emit-/suppress-totalen sinds boot (C1). */
+void get_alert_runtime_stats_snapshot(AlertEngineRuntimeStatsSnapshot *out);
 
 } // namespace alert_engine

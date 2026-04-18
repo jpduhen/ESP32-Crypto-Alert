@@ -17,6 +17,8 @@
  * M-013j: minimaal formulier op / voor alert-policy timing (POST naar alert-policy-timing.json).
  * M-013l: minimaal formulier op / voor confluence-policy (POST naar alert-confluence-policy.json; M-003d/M-013k).
  * M-013h: read-only alert-beslissing per pad (1m/5m/confluence) in status.json + compact op /.
+ * C1: read-only `alert_engine_runtime_stats` (emit-totalen + suppress-episodes) in status.json + compact op /.
+ * M-002h: read-only outbound-queue observability in status.json (geen nieuwe settings).
  */
 #include "webui/webui.hpp"
 #include "alert_engine/alert_engine.hpp"
@@ -32,6 +34,7 @@
 #include "market_data/market_data.hpp"
 #include "market_types/types.hpp"
 #include "net_runtime/net_runtime.hpp"
+#include "service_outbound/service_outbound.hpp"
 #include "sdkconfig.h"
 
 #if CONFIG_WEBUI_ENABLE
@@ -157,6 +160,15 @@ static esp_err_t handle_status_json(httpd_req_t *req)
     cJSON_AddNumberToObject(root,
                            "ws_inbound_ticks_last_sec",
                            static_cast<double>(snap.ws_inbound_ticks_last_sec));
+    cJSON_AddNumberToObject(root,
+                           "outbound_queue_waiting",
+                           static_cast<double>(service_outbound::queue_waiting()));
+    cJSON_AddNumberToObject(root,
+                           "outbound_queue_capacity",
+                           static_cast<double>(service_outbound::queue_capacity()));
+    cJSON_AddNumberToObject(root,
+                           "outbound_drop_total",
+                           static_cast<double>(service_outbound::drop_total()));
 
     cJSON *ota_j = cJSON_CreateObject();
     if (ota_j) {
@@ -216,6 +228,27 @@ static esp_err_t handle_status_json(httpd_req_t *req)
             add_alert_decision_path_json(ado_j, "5m", ado.tf_5m);
             add_alert_decision_path_json(ado_j, "confluence_1m5m", ado.confluence_1m5m);
             cJSON_AddItemToObject(root, "alert_decision_observability", ado_j);
+        }
+    }
+
+    {
+        alert_engine::AlertEngineRuntimeStatsSnapshot ars{};
+        alert_engine::get_alert_runtime_stats_snapshot(&ars);
+        cJSON *ars_j = cJSON_CreateObject();
+        if (ars_j) {
+            cJSON_AddNumberToObject(ars_j, "emit_total_1m", static_cast<double>(ars.emit_total_1m));
+            cJSON_AddNumberToObject(ars_j, "emit_total_5m", static_cast<double>(ars.emit_total_5m));
+            cJSON_AddNumberToObject(ars_j, "emit_total_confluence_1m5m",
+                                     static_cast<double>(ars.emit_total_conf));
+            cJSON_AddNumberToObject(ars_j, "last_emit_epoch_ms_1m", static_cast<double>(ars.last_emit_epoch_ms_1m));
+            cJSON_AddNumberToObject(ars_j, "last_emit_epoch_ms_5m", static_cast<double>(ars.last_emit_epoch_ms_5m));
+            cJSON_AddNumberToObject(ars_j, "last_emit_epoch_ms_confluence_1m5m",
+                                     static_cast<double>(ars.last_emit_epoch_ms_conf));
+            cJSON_AddNumberToObject(ars_j, "suppress_after_conf_window_episodes_1m",
+                                     static_cast<double>(ars.suppress_after_conf_window_1m));
+            cJSON_AddNumberToObject(ars_j, "suppress_after_conf_window_episodes_5m",
+                                     static_cast<double>(ars.suppress_after_conf_window_5m));
+            cJSON_AddItemToObject(root, "alert_engine_runtime_stats", ars_j);
         }
     }
 
@@ -1027,6 +1060,35 @@ static esp_err_t handle_root_html(httpd_req_t *req)
             return ESP_FAIL;
         }
         w += static_cast<size_t>(nd);
+    }
+    {
+        alert_engine::AlertEngineRuntimeStatsSnapshot ars{};
+        alert_engine::get_alert_runtime_stats_snapshot(&ars);
+        const int nst = std::snprintf(
+            html + w,
+            k_html_alloc - w,
+            "<h2>Alert-engine runtime-statistieken (C1, read-only)</h2>"
+            "<p class=\"hint\">Sinds boot: emit-totalen, laatste emit-tijd (ms sinds boot), "
+            "aantal suppress-episodes na confluence (M-010e). Zie ook <code>GET /api/status.json</code> "
+            "→ <code>alert_engine_runtime_stats</code>.</p>"
+            "<p><strong>Emits</strong> 1m=%u · 5m=%u · confluence=%u<br/>"
+            "<strong>Laatste emit (epoch ms)</strong> 1m=%lld · 5m=%lld · conf=%lld<br/>"
+            "<strong>Suppress-episodes (na conf)</strong> 1m=%u · 5m=%u</p>",
+            static_cast<unsigned>(ars.emit_total_1m),
+            static_cast<unsigned>(ars.emit_total_5m),
+            static_cast<unsigned>(ars.emit_total_conf),
+            (long long)ars.last_emit_epoch_ms_1m,
+            (long long)ars.last_emit_epoch_ms_5m,
+            (long long)ars.last_emit_epoch_ms_conf,
+            static_cast<unsigned>(ars.suppress_after_conf_window_1m),
+            static_cast<unsigned>(ars.suppress_after_conf_window_5m));
+        if (nst <= 0 || w + static_cast<size_t>(nst) >= k_html_alloc) {
+            ESP_LOGW(TAG, "C1: HTML runtime-stats overflow (nst=%d)", nst);
+            std::free(html);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
+            return ESP_FAIL;
+        }
+        w += static_cast<size_t>(nst);
     }
     {
         const config_store::AlertRuntimeConfig &ar = config_store::alert_runtime();

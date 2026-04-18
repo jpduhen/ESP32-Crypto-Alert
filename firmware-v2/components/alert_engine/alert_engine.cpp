@@ -6,6 +6,7 @@
  * M-010f: mini-regime (calm/normal/hot) uit vol-proxy — alleen lichte schaal van 1m/5m/conf-drempels.
  * M-011b: bij 1m-trigger payload naar `service_outbound::emit_domain_alert_1m`.
  * M-013h: decision-observability snapshot aan einde `tick()` (geen extra beslislogica buiten bestaande paden).
+ * C1: `AlertEngineRuntimeStatsSnapshot` — emit-tellers + suppress-venster (read-only, sinds boot).
  * M-003c: cooldown/suppress-timing uit `config_store::alert_policy_timing()` (fallback Kconfig via config_store).
  * M-003d: confluence-policy flags uit `config_store::alert_confluence_policy()` (defaults = M-010d/e).
  */
@@ -54,6 +55,7 @@
 namespace alert_engine {
 
 static AlertDecisionObservabilitySnapshot s_decision_obs{};
+static AlertEngineRuntimeStatsSnapshot s_runtime_stats{};
 
 namespace {
 
@@ -126,6 +128,10 @@ static int clamp_thr_scale_permille(int p)
 static bool s_m010f_vol_ready_logged{false};
 static bool s_m010f_logged_vol_unready_info{false};
 static Regime s_m010f_last_regime{Regime::Normal};
+
+/** C1: één suppress-telling per “episode” (niet elke tick tijdens het venster). */
+static bool s_sup_episode_active_1m{false};
+static bool s_sup_episode_active_5m{false};
 
 /** M-010e: losse alert onderdrukken — alleen binnen venster én zelfde richting als laatste confluence. */
 static bool loose_suppressed_after_confluence(int64_t now_ms, bool up_loose)
@@ -274,10 +280,13 @@ esp_err_t init()
     s_last_fire_1m_ms = -1;
     s_last_fire_5m_ms = -1;
     s_last_fire_conf_ms = -1;
+    s_runtime_stats = AlertEngineRuntimeStatsSnapshot{};
     s_suppress_loose_until_ms = -1;
     s_m010f_vol_ready_logged = false;
     s_m010f_logged_vol_unready_info = false;
     s_m010f_last_regime = Regime::Normal;
+    s_sup_episode_active_1m = false;
+    s_sup_episode_active_5m = false;
     std::memset(&s_regime_obs, 0, sizeof(s_regime_obs));
     std::strncpy(s_regime_obs.regime, "normal", sizeof(s_regime_obs.regime) - 1);
     s_regime_obs.vol_unavailable_fallback = true;
@@ -464,6 +473,8 @@ void tick()
             ESP_LOGI(TAG, "M-010d: queue DomainAlertConfluence1m5m (sym=%s)", pc.symbol);
             service_outbound::emit_domain_confluence_1m5m(pc);
             fired_conf_this_tick = true;
+            ++s_runtime_stats.emit_total_conf;
+            s_runtime_stats.last_emit_epoch_ms_conf = now_ms;
         }
     }
 
@@ -486,6 +497,9 @@ void tick()
 
     if (m1.ready) {
         const double ap = std::fabs(m1.pct);
+        if (ap < eff_thr_1m_pct) {
+            s_sup_episode_active_1m = false;
+        }
         if (ap >= eff_thr_1m_pct) {
             if (s_last_fire_1m_ms < 0 || (now_ms - s_last_fire_1m_ms) >= cd1_ms) {
                 const bool up = m1.pct >= 0.0;
@@ -493,6 +507,10 @@ void tick()
                     ESP_LOGD(TAG,
                              "M-003d: 1m alert suppressed — confluence policy loose gate (emit_loose_when_conf_fails=0)");
                 } else if (loose_suppressed_after_confluence(now_ms, up)) {
+                    if (!s_sup_episode_active_1m) {
+                        ++s_runtime_stats.suppress_after_conf_window_1m;
+                        s_sup_episode_active_1m = true;
+                    }
                     if (s_suppress_logged_1m_gen != s_suppress_gen) {
                         s_suppress_logged_1m_gen = s_suppress_gen;
                         const int64_t rem = s_suppress_loose_until_ms - now_ms;
@@ -503,6 +521,7 @@ void tick()
                                  (long long)rem);
                     }
                 } else {
+                    s_sup_episode_active_1m = false;
                     const char *dir = up ? "UP" : "DOWN";
                     ESP_LOGI(TAG,
                              "M-011b: 1m move alert %s pct=%.3f (now=%.4f @%lld ref=%.4f @%lld) thr=%.2f%%",
@@ -530,6 +549,8 @@ void tick()
                     ESP_LOGI(TAG, "M-011b: queue DomainAlert1mMove (sym=%s)", payload.symbol);
                     service_outbound::emit_domain_alert_1m(payload);
                     fired_1m_this_tick = true;
+                    ++s_runtime_stats.emit_total_1m;
+                    s_runtime_stats.last_emit_epoch_ms_1m = now_ms;
                 }
             }
         }
@@ -537,6 +558,9 @@ void tick()
 
     if (m5.ready) {
         const double ap5 = std::fabs(m5.pct);
+        if (ap5 < eff_thr_5m_pct) {
+            s_sup_episode_active_5m = false;
+        }
         if (ap5 >= eff_thr_5m_pct) {
             if (s_last_fire_5m_ms < 0 || (now_ms - s_last_fire_5m_ms) >= cd5_ms) {
                 const bool up5 = m5.pct >= 0.0;
@@ -544,6 +568,10 @@ void tick()
                     ESP_LOGD(TAG,
                              "M-003d: 5m alert suppressed — confluence policy loose gate (emit_loose_when_conf_fails=0)");
                 } else if (loose_suppressed_after_confluence(now_ms, up5)) {
+                    if (!s_sup_episode_active_5m) {
+                        ++s_runtime_stats.suppress_after_conf_window_5m;
+                        s_sup_episode_active_5m = true;
+                    }
                     if (s_suppress_logged_5m_gen != s_suppress_gen) {
                         s_suppress_logged_5m_gen = s_suppress_gen;
                         const int64_t rem = s_suppress_loose_until_ms - now_ms;
@@ -554,6 +582,7 @@ void tick()
                                  (long long)rem);
                     }
                 } else {
+                    s_sup_episode_active_5m = false;
                     const char *dir5 = up5 ? "UP" : "DOWN";
                     ESP_LOGI(TAG,
                              "M-010c: 5m move alert %s pct=%.3f (now=%.4f @%lld ref=%.4f @%lld) thr=%.2f%%",
@@ -581,6 +610,8 @@ void tick()
                     ESP_LOGI(TAG, "M-010c: queue DomainAlert5mMove (sym=%s)", p5.symbol);
                     service_outbound::emit_domain_alert_5m(p5);
                     fired_5m_this_tick = true;
+                    ++s_runtime_stats.emit_total_5m;
+                    s_runtime_stats.last_emit_epoch_ms_5m = now_ms;
                 }
             }
         }
@@ -605,6 +636,14 @@ void get_alert_decision_observability_snapshot(AlertDecisionObservabilitySnapsho
         return;
     }
     *out = s_decision_obs;
+}
+
+void get_alert_runtime_stats_snapshot(AlertEngineRuntimeStatsSnapshot *out)
+{
+    if (!out) {
+        return;
+    }
+    *out = s_runtime_stats;
 }
 
 } // namespace alert_engine

@@ -10,7 +10,9 @@
 #include "mqtt_bridge/mqtt_bridge.hpp"
 #include "ntfy_client/ntfy_client.hpp"
 #include "sdkconfig.h"
+#include "esp_timer.h"
 
+#include <cinttypes>
 #include <cstdio>
 
 namespace service_outbound {
@@ -22,7 +24,18 @@ static const char TAG[] = "svc_out";
 /** Diepte klein houden: alleen coalescing + toekomstige bursts; geen grote backlog. */
 static constexpr UBaseType_t k_queue_depth = 8;
 
+/**
+ * M-002 hardening: niet alle wachtende events in één `poll()` naar sinks sturen — elke dispatch kan
+ * lang blokkeren (NTFY HTTPS onder net_mutex). Spreiding over meerdere app_core-ticks (~10 Hz).
+ */
+static constexpr unsigned k_max_dispatch_per_poll = 2;
+
+/** Rate-limit backlog-waarschuwing (µs monotonic). */
+static constexpr uint64_t k_backlog_log_interval_us = 5000000ULL;
+
 static bool s_ready{false};
+static uint32_t s_drop_total{0};
+static uint64_t s_last_backlog_log_us{0};
 static QueueHandle_t s_q{nullptr};
 static bool s_app_ready_seen{false};
 
@@ -258,7 +271,10 @@ esp_err_t init()
         return ESP_ERR_NO_MEM;
     }
     s_ready = true;
-    ESP_LOGI(TAG, "M-002c: outbound queue ready (depth=%u, envelope)", static_cast<unsigned>(k_queue_depth));
+    ESP_LOGI(TAG,
+             "M-002c: outbound queue ready (depth=%u, max_dispatch/poll=%u)",
+             static_cast<unsigned>(k_queue_depth),
+             k_max_dispatch_per_poll);
     return ESP_OK;
 }
 
@@ -283,7 +299,11 @@ void emit(Event e)
     OutboundEnvelope env{};
     env.kind = e;
     if (xQueueSend(s_q, &env, 0) != pdTRUE) {
-        ESP_LOGW(TAG, "outbound queue full — drop event (kind=%u)", static_cast<unsigned>(e));
+        ++s_drop_total;
+        ESP_LOGW(TAG,
+                 "M-002: outbound queue full — drop event (kind=%u) drops_total=%" PRIu32,
+                 static_cast<unsigned>(e),
+                 s_drop_total);
     }
 }
 
@@ -296,7 +316,10 @@ void emit_domain_alert_1m(const DomainAlert1mMovePayload &p)
     env.kind = Event::DomainAlert1mMove;
     env.domain_1m = p;
     if (xQueueSend(s_q, &env, 0) != pdTRUE) {
-        ESP_LOGW(TAG, "outbound queue full — drop DomainAlert1mMove");
+        ++s_drop_total;
+        ESP_LOGW(TAG,
+                 "M-002: outbound queue full — drop DomainAlert1mMove drops_total=%" PRIu32,
+                 s_drop_total);
     }
 }
 
@@ -309,7 +332,10 @@ void emit_domain_alert_5m(const DomainAlert5mMovePayload &p)
     env.kind = Event::DomainAlert5mMove;
     env.domain_5m = p;
     if (xQueueSend(s_q, &env, 0) != pdTRUE) {
-        ESP_LOGW(TAG, "outbound queue full — drop DomainAlert5mMove");
+        ++s_drop_total;
+        ESP_LOGW(TAG,
+                 "M-002: outbound queue full — drop DomainAlert5mMove drops_total=%" PRIu32,
+                 s_drop_total);
     }
 }
 
@@ -322,7 +348,10 @@ void emit_domain_confluence_1m5m(const DomainConfluence1m5mPayload &p)
     env.kind = Event::DomainAlertConfluence1m5m;
     env.domain_conf_1m5m = p;
     if (xQueueSend(s_q, &env, 0) != pdTRUE) {
-        ESP_LOGW(TAG, "outbound queue full — drop DomainAlertConfluence1m5m");
+        ++s_drop_total;
+        ESP_LOGW(TAG,
+                 "M-002: outbound queue full — drop DomainAlertConfluence1m5m drops_total=%" PRIu32,
+                 s_drop_total);
     }
 }
 
@@ -332,9 +361,43 @@ void poll()
         return;
     }
     OutboundEnvelope env{};
-    while (xQueueReceive(s_q, &env, 0) == pdTRUE) {
+    unsigned n = 0;
+    while (n < k_max_dispatch_per_poll && xQueueReceive(s_q, &env, 0) == pdTRUE) {
         dispatch_envelope(env);
+        ++n;
     }
+    const UBaseType_t waiting = uxQueueMessagesWaiting(s_q);
+    if (waiting == 0) {
+        s_last_backlog_log_us = 0ULL;
+    } else {
+        const uint64_t now_us = esp_timer_get_time();
+        if (s_last_backlog_log_us == 0ULL ||
+            (now_us - s_last_backlog_log_us) >= k_backlog_log_interval_us) {
+            s_last_backlog_log_us = now_us;
+            ESP_LOGW(TAG,
+                     "M-002: outbound backlog %u event(s) remain (max %u/poll; NTFY/MQTT may be slow)",
+                     static_cast<unsigned>(waiting),
+                     k_max_dispatch_per_poll);
+        }
+    }
+}
+
+unsigned queue_waiting()
+{
+    if (!s_ready || !s_q) {
+        return 0;
+    }
+    return static_cast<unsigned>(uxQueueMessagesWaiting(s_q));
+}
+
+unsigned queue_capacity()
+{
+    return static_cast<unsigned>(k_queue_depth);
+}
+
+uint32_t drop_total()
+{
+    return s_drop_total;
 }
 
 } // namespace service_outbound

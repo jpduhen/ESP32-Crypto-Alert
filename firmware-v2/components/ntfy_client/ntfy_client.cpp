@@ -39,6 +39,7 @@ static esp_err_t send_locked(const char *title, const char *body)
     }
 
     if (!net_runtime::net_mutex_take(pdMS_TO_TICKS(20000))) {
+        ESP_LOGW(TAG, "M-002: net_mutex timeout — NTFY blocked (REST/WS hold mutex?)");
         return ESP_ERR_TIMEOUT;
     }
 

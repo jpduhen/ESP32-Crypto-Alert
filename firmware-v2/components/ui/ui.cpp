@@ -60,9 +60,9 @@ static const char *tick_source_str(market_data::TickSource s)
     case market_data::TickSource::Rest:
         return "REST";
     case market_data::TickSource::None:
-        return "—";
+        return "-";
     }
-    return "—";
+    return "-";
 }
 
 static void apply_screen_chrome(lv_obj_t *scr)
@@ -122,7 +122,7 @@ esp_err_t init()
     apply_screen_chrome(scr);
 
     s_lbl_symbol = lv_label_create(scr);
-    lv_label_set_text(s_lbl_symbol, "—");
+    lv_label_set_text(s_lbl_symbol, "-");
 #if LVGL_VERSION_MAJOR >= 9
     lv_label_set_long_mode(s_lbl_symbol, LV_LABEL_LONG_MODE_DOTS);
 #else
@@ -146,7 +146,7 @@ esp_err_t init()
     lv_obj_align(s_price_col, LV_ALIGN_CENTER, 0, -4);
 
     s_lbl_price = lv_label_create(s_price_col);
-    lv_label_set_text(s_lbl_price, "—");
+    lv_label_set_text(s_lbl_price, "-");
     lv_obj_set_style_text_color(s_lbl_price, lv_color_hex(0xF4FAF8), 0);
     lv_obj_set_style_text_align(s_lbl_price, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_letter_space(s_lbl_price, 2, 0);
@@ -159,14 +159,14 @@ esp_err_t init()
     lv_obj_set_style_text_letter_space(s_lbl_price_unit, 1, 0);
 
     s_lbl_ws_in = lv_label_create(scr);
-    lv_label_set_text(s_lbl_ws_in, "—");
+    lv_label_set_text(s_lbl_ws_in, "-");
     lv_obj_set_style_text_color(s_lbl_ws_in, lv_color_hex(0x6B7280), 0);
     lv_obj_set_style_text_opa(s_lbl_ws_in, LV_OPA_70, 0);
     lv_obj_set_style_text_align(s_lbl_ws_in, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_lbl_ws_in, LV_ALIGN_BOTTOM_MID, 0, -32);
 
     s_lbl_source = lv_label_create(scr);
-    lv_label_set_text(s_lbl_source, "Bron · —");
+    lv_label_set_text(s_lbl_source, "Bron: -");
     lv_obj_set_style_text_color(s_lbl_source, lv_color_hex(0x5C6370), 0);
     lv_obj_set_style_text_opa(s_lbl_source, LV_OPA_70, 0);
     lv_obj_set_style_text_align(s_lbl_source, LV_TEXT_ALIGN_CENTER, 0);
@@ -189,26 +189,26 @@ void refresh_from_snapshot(const market_data::MarketSnapshot &snap)
         return;
     }
 
-    const char *sym = snap.market_label[0] ? snap.market_label : "—";
+    const char *sym = snap.market_label[0] ? snap.market_label : "-";
 
     char num_buf[32];
     if (snap.valid) {
         std::snprintf(num_buf, sizeof(num_buf), "%.2f", snap.last_tick.price_eur);
     } else {
-        std::snprintf(num_buf, sizeof(num_buf), "—");
+        std::snprintf(num_buf, sizeof(num_buf), "-");
     }
 
     char src_line[40];
-    std::snprintf(src_line, sizeof(src_line), "Bron · %s", tick_source_str(snap.last_tick_source));
+    std::snprintf(src_line, sizeof(src_line), "Bron: %s", tick_source_str(snap.last_tick_source));
 
     char ws_in_line[40];
     if (snap.valid && snap.last_tick_source == market_data::TickSource::Ws) {
         std::snprintf(ws_in_line,
                       sizeof(ws_in_line),
-                      "WS in · %" PRIu32 "/s",
+                      "WS in %" PRIu32 "/s",
                       snap.ws_inbound_ticks_last_sec);
     } else {
-        std::snprintf(ws_in_line, sizeof(ws_in_line), "WS in · —");
+        std::snprintf(ws_in_line, sizeof(ws_in_line), "WS in -");
     }
 
     lv_label_set_text(s_lbl_symbol, sym);

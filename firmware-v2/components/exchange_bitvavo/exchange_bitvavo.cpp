@@ -1,3 +1,10 @@
+/**
+ * Bitvavo transport + snapshot-eigenaar (M-002):
+ * - WiFi / STA-reconnect: alleen `net_runtime` (hier geen `esp_wifi_*`).
+ * - WS: `ws::` + `esp_websocket_client` (geen `net_mutex` op WS-pad; mutex geldt voor REST/NTFY).
+ * - REST-bootstrap: `rest::` onder `net_mutex`.
+ * - Geen outbound (NTFY/MQTT/WebUI-servers): `service_outbound` / `webui` blijven gescheiden.
+ */
 #include "exchange_bitvavo/exchange_bitvavo.hpp"
 #include "exchange_bitvavo/detail/rest_api.hpp"
 #include "exchange_bitvavo/detail/ws_api.hpp"

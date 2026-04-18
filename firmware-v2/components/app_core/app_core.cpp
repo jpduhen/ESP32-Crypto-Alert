@@ -1,6 +1,10 @@
 /**
  * app_core — lifecycle-orchestratie alleen (M-002): geen exchange-URLs; marktdata via market_data::.
  * Outbound service-events: service_outbound:: (M-002c) — geen protocol in UI/display.
+ *
+ * M-002 hoofdlus: `market_data::tick` / alerts / UI eerst; `service_outbound::poll` daarna zodat
+ * feed/metrics niet achter trage NTFY/MQTT blokkeren. `poll` verwerkt max. enkele events per ronde
+ * (M-002h) om TLS-blokken te spreiden.
  */
 #include "app_core/app_core.hpp"
 #include "config_store/config_store.hpp"
@@ -115,6 +119,7 @@ esp_err_t run()
             }
         }
         diagnostics::tick_heartbeat();
+        /* Outbound na markt/alert: zie file-comment M-002. */
         service_outbound::poll();
         vTaskDelay(pdMS_TO_TICKS(k_loop_ms));
     }

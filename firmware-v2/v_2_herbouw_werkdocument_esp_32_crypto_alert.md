@@ -76,6 +76,12 @@ De huidige codebasis is functioneel sterk, maar architectonisch te ver doorgegro
 
 * een projectstructuur die beter past bij de huidige complexiteit dan een klassieke Arduino-sketch
 
+* **Geen V1-op-één migratie:** V2 is een **modulaire opvolger** — zelfde productdomein (crypto-alerts), **andere** architectuur.
+
+* **Robuustheid, onderhoudbaarheid, testbaarheid en heldere componentgrenzen** zijn leidend; snelle feature-stapeling zonder die basis niet.
+
+* **Functioneel einddoel (alert-timescales):** real-time alerts op **1m, 5m, 30m en 2h** horen bij het **beoogde** gedrag van het product. **1m/5m** zijn nu de **actieve V2-kern**; **30m en 2h** volgen **gefaseerd** en **schoon** opgebouwd (zie § **2** ontwerpstelling, § **WP-03a**, **D-010**).
+
 \
 
 ---
@@ -120,13 +126,25 @@ De huidige V1 blijft belangrijk als:
 
 \
 
-* functionele referentie
+* functionele referentie (wat voelt “goed” aan voor alerts en sturing)
 
-* visuele referentie
+* **UX-/UI-referentie:** schermopbouw, kleur, hiërarchie, prettige WebUI — **geen** architectuurblauwdruk
 
-* bron voor migratie van bewezen onderdelen
+* bron voor **bewuste** overname van bewezen ideeën (niet: kopiëren van bestandsstructuur)
 
 * fallback bij problemen in V2
+
+\
+
+### Ontwerpstelling — inhoud vs techniek (V2)
+
+\
+
+* **Inhoudelijk** willen we sterke **real-time marktalerts** op **1m, 5m, 30m en 2h**, met de **gebruikerservaring** van V1 (scherm + WebUI) als **richtinggevende referentie** voor lay-out en informatiehiërarchie.
+
+* **Technisch** bouwen we **niet** terug naar de **monolithische V1-alertketen** (`AlertEngine.cpp` als één knoop, globale koppelingen). Uitbreiding naar **30m/2h** gebeurt in **duidelijke stappen** (`domain_metrics` / `alert_engine` / outbound), **niet** als port van de oude complexiteit.
+
+* **Kort:** V2 neemt **niet** alle historische V1-complexiteit over, maar werkt **gefaseerd toe** naar een **schoner systeem** dat uiteindelijk de voor de gebruiker relevante schalen **1m, 5m, 30m en 2h** ondersteunt — met **1m/5m** eerst hard en toetsbaar.
 
 \
 
@@ -151,6 +169,8 @@ De huidige V1 blijft belangrijk als:
 \
 
 **M-002 hardening:** netwerk-eigenaarschappen en open risico’s staan in **[docs/architecture/M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md)**; ADR-002 is bijgewerkt met verwijzing.
+
+**WP-03a (V1-gap / alert-scope):** samenvatting, gap-matrix en consolidatie-roadmap **C1–C5** in § **WP-03a**; besluit **D-010**. **C1** (field-test 1m/5m): § **C1** + **[C1_FIELD_TEST_1M5M.md](../../docs/architecture/C1_FIELD_TEST_1M5M.md)**.
 
 \
 
@@ -192,6 +212,8 @@ De volgende onderdelen uit de huidige code worden gezien als waardevol en moeten
 
 * prettige schermbeleving
 
+* **Referentie voor V2:** gedrag, lay-out, leesbaarheid — **niet** als rechtvaardiging om oude **code- of componentstructuur** van V1 over te nemen
+
 \
 
 ### WebUI
@@ -203,6 +225,8 @@ De volgende onderdelen uit de huidige code worden gezien als waardevol en moeten
 * OTA-weergave met blokken/progressie
 
 * instellingenbeheer, maar met toekomstige opschoning op relevantie
+
+* **Referentie voor V2:** informatiehiërarchie en vormgeving — **ESP-IDF-componenten** (`webui`, `config_store`) blijven leidend, geen 1-op-1 overname van V1 `WebServer`-interne opbouw
 
 \
 
@@ -788,6 +812,34 @@ Gebruik dit hoofdstuk als formeel geheugen van gemaakte keuzes.
 
 \
 
+**ID:** D-010
+
+**Datum:** 2026-04-15 (**documentaire koersaanscherping:** zie toelichting hieronder)
+
+**Onderwerp:** WP-03a — V1-gap review en scopekeuzes alert-engine (stuurversie)
+
+**Besluit:** V2 is **geen** V1-op-één migratie en volgt **niet** de **architectuur** van V1 als blauwdruk. **Robuustheid, modulaire grenzen en debugbaarheid** zijn leidend.
+
+**Functioneel einddomein (product):** real-time alerts op **1m, 5m, 30m en 2h** zijn **gewenst eindrichting** — **niet** als kopie van de V1-implementatie, maar als **gefaseerde, schone** uitbreiding bovenop `domain_metrics` / `alert_engine` / `service_outbound`.
+
+**Huidige actieve V2-kern (nu gebouwd en te consolideren):** betrouwbare **1m/5m**-alerts, **confluence**, **mini-regime (M-010f)**, **NTFY/MQTT**, observability; roadmap **C1–C5** (§ **WP-03a**) richt zich op **stabiliteit en kwaliteit van deze kern** — **30m/2h-implementatie horen niet verplicht bij die eerste consolidatiefase**.
+
+**Technisch níet opnieuw importeren (als V1-vorm):** monolithische `AlertEngine.cpp`-structuur; volledige **RegimeEngine** (slap/geladen/energiek) als één-op-één port; **AnchorSystem** / **TrendDetector** / V1 **2h-alertfamilie** zoals geknoopt in V1; **night mode**; **HA discovery** — tenzij later **bewust** en **klein** herontworpen.
+
+**Scheiding expliciet:** “**Niet in de eerstvolgende consolidatiefase (C1–C5)**” (o.a. **30m/2h**-ontwikkeling, night mode) is **iets anders** dan “**niet gewenst als eindrichting**”. **30m en 2h** zijn **wél** gewenst functioneel; ze zijn **uitgesteld** tot na een **toetsbare, stabiele 1m/5m-kern**, niet geschrapt als doel.
+
+**Alternatieven:** V1-feature-pariteit door port; big-bang alle timeframes tegelijk.
+
+**Argumenten:** V1-complexiteit is onderhoudsrisico; eindgebruikers willen betrouwbare alerts op meerdere schalen **zonder** terugkeer naar één monoliet.
+
+**Consequenties:** **M-010** blijft “kern herschreven”; vervolg = kwaliteit + gefaseerde TF-uitbreiding. Zie § **WP-03a** voor matrix en C1–C5.
+
+**Actiepunten:** C1–C5 uitvoeren; daarna **aparte planning** voor **30m/2h**-verticale slices (metrics → engine → outbound), elk met dezelfde discipline als 1m/5m.
+
+**Status:** besloten; **koers** t.o.v. 30m/2h hierboven **aangescherpt** t.o.v. eerdere formulering (“uitgesteld” ≠ “afgewezen als productdoel”).
+
+\
+
 ---
 
 \
@@ -856,7 +908,7 @@ Gebruik dit hoofdstuk als formeel geheugen van gemaakte keuzes.
 
 * **Field-test** op GEEK (WiFi + live feed + alerts) blijft de **sanity-check**; geen vervanging voor latere test/releasecriteria (§ **9a** werkpakket 5).
 
-* **M-002** is deels gedaan (o.a. M-002a backoff); de **volledige hardening-batch** (queues, scheiding, randvoorwaarden) is het **eerstvolgende grote werkpakket** na korte afronding WebUI/config — zie `M002_NETWORK_BOUNDARIES.md`, § **9a**, § **10**.
+* **M-002:** M-002a backoff + **M-002h** hardening-batch (**§ M-002h**) zijn uitgevoerd; verdere net-worker/STA-tuning blijft optioneel — zie `M002_NETWORK_BOUNDARIES.md`, § **9a**, § **10**.
 
 * **Migratiematrix** en **V1-gap**: bewust kiezen wat gelijkwaardigheid betekent — niet eindeloos micro-verfijnen zonder werkpakket (§ **9a** werkpakket 3).
 
@@ -926,6 +978,8 @@ T-102 gold als de eerstvolgende harde fasepoort. Deze stap gold als geslaagd zod
 
 We zitten **niet meer** in de vroege **skeleton-/alleen-funderingfase**. Op **`v2/foundation`** is inmiddels **integraal** aanwezig: reproduceerbare ESP-IDF-baseline, **live market data** (Bitvavo achter `market_data`), **LVGL** op het referentieboard, **NTFY** en **MQTT**, **WebUI** met status en **gecontroleerde writes** (o.a. runtime-drempels/regime, policy-timing, **confluence-policy** — M-003b/c/d + M-013f/g/i/j/k/**l**), **OTA**, **domain_metrics** / **alert_engine** (1m, 5m, confluence, suppressie, mini-regime) met **NVS-runtimeconfig**.
 
+**Alert-schalen:** **1m en 5m** vormen nu de **actieve V2-kern**; **30m en 2h** zijn **gewenst einddoel** en volgen **logisch daarna**, **gefaseerd** en **zonder** terugval naar de V1-monoliet — zie § **2**, **D-010**, § **WP-03a** (C5).
+
 Dat plaatst het project in een **eerste geïntegreerde beta-/consolidatiefase**: de kern is **aanwezig en werkend**, maar **productierijpheid**, **multi-board** en een **afgesproken release** zijn **nog niet** bereikt — en worden hier ook **niet** als impliciet geclaimd.
 
 **Risico:** voortgang **verzandt in microstappen** (losse M-tickets zonder samenhang) terwijl de basis dat ritme niet meer nodig heeft als **primaire** sturing. **Gevolg:** de **primaire** planningseenheid verschuift naar **grotere werkpakketten** (zie hieronder); kleine stappen blijven nuttig **binnen** zo’n pakket, niet als default voor alle werk.
@@ -940,9 +994,9 @@ Dat plaatst het project in een **eerste geïntegreerde beta-/consolidatiefase**:
 
 |--------|-------------|
 
-| **Architectuur / fundering** | Grotendeels op orde (componenten, `config_store`, services-keten, TLS-baseline). **M-002-hardening** (queues, taakscheiding, randvoorwaarden) is nog een **expliciet** restpakket. |
+| **Architectuur / fundering** | Grotendeels op orde (componenten, `config_store`, services-keten, TLS-baseline). Eerste **M-002-hardening-batch** (**§ M-002h**) is **uitgevoerd**; verdere net-worker/tuning/STA-tuning blijft **optioneel** restwerk. |
 
-| **Productkern (alerts + marktdata)** | Aanwezig en werkend op GEEK; **spamkwaliteit**, randgevallen en **parity met V1** zijn nog geen afgerond pakket. |
+| **Productkern (alerts + marktdata)** | **1m/5m** (+ confluence, mini-regime, NTFY/MQTT) is de **huidige actieve kern**; **WP-03a** / **D-010** scheiden **V1-UX-referentie** van **architectuur** en leggen **C1–C5** vast op **stabiliteit van die kern**. **Einddoel** blijft alerts op **1m, 5m, 30m, 2h** — **30m/2h-implementatie** hoort bij **roadmap na** die kern, niet bij “alles of niets V2.0”. |
 
 | **Observability / beheer** | Ver gevorderd: WebUI-status, alert-/regime-observability, OTA-info, gerichte JSON-writes. |
 
@@ -962,11 +1016,11 @@ Geen vervanging van de migratiematrix, wel **samenhangende blokken** i.p.v. een 
 
 1. **WebUI/config op huidig niveau** — **afgerond** (incl. **M-013l**: minimaal form op **`/`** voor confluence-policy; zelfde subset als M-003d/M-013k). Geen nieuwe brede settings-laag tot expliciet besluit.
 
-2. **M-002 hardening-batch** — netwerk-eigenaarschap, queues/backpressure, scheiding WS/REST/MQTT/NTFY/WebUI, eventueel worker-task; bron: **`M002_NETWORK_BOUNDARIES.md`**. Dit is de **eerstvolgende grote technische sprint** (primaire focus na afronding (1)).
+2. **M-002 hardening-batch** — **afgerond** als samenhangend increment (**§ M-002h**): outbound drain-cap + drops/backlog-observability, mutex-timeout-logs, ownership-commentaar; bron: **`M002_NETWORK_BOUNDARIES.md`**. Verdere M-002 (worker-task, STA-tuning) **niet** in deze batch.
 
-3. **V1-gap review / bewuste scopekeuzes** — wat moet gelijkwaardig zijn aan V1, wat niet; vastleggen in matrix + besluitenlog.
+3. **V1-gap review / bewuste scopekeuzes** — **afgerond als stuurversie** (**§ WP-03a**, **D-010**): gap-matrix, keep/drop/defer; **geen** V1-architectuur als blauwdruk; **30m/2h** als **einddoel** vs **fase** expliciet gescheiden.
 
-4. **Alert-engine consolidatie** — tuning, spamkwaliteit, randgevallen; observability blijft **in lijn** met gedrag; geen feature-explosie.
+4. **Alert-engine consolidatie** — roadmap **C1–C5** (§ **WP-03a**) op de **1m/5m-kern**. **C1** tooling/docs gereed (§ **C1**); **veldtests** lopen volgens protocol; daarna **C2–C4**. **C5** = planning **30m/2h**-trajecten; geen feature-explosie.
 
 5. **Productierijpheid / operatie / test- en releasekwaliteit** — CI waar zinvol, flash/partitiebeleid, release-notes, **concrete** field-testcriteria (geen vage “nog veel werk”).
 
@@ -976,7 +1030,7 @@ Geen vervanging van de migratiematrix, wel **samenhangende blokken** i.p.v. een 
 
 \
 
-**Bedoelde volgorde:** (1) ~~kort afronden~~ **afgerond** → (2) als eerste **grote** increment (**nu** primaire technische focus) → (3) en (4) deels overlappend → (5) nadat (2)–(4) voortgang hebben → (6)–(7) volgens prioriteit en beschikbaarheid.
+**Bedoelde volgorde:** (1) **afgerond** → (2) **M-002h afgerond** → (3) en (4) als **volgende** grote technische lens (V1-gap / alert-consolidatie) deels overlappend → (5) nadat voortgang → (6)–(7) volgens prioriteit en beschikbaarheid.
 
 \
 
@@ -994,9 +1048,9 @@ Geen vervanging van de migratiematrix, wel **samenhangende blokken** i.p.v. een 
 
 1. **WebUI/config-lijn op dit capability-niveau — afgerond** — thresholds/regime (M-003b, M-013f/g), policy-timing (M-003c, M-013i/j), confluence-policy (M-003d, M-013k, form **M-013l**): eenduidige read/write-paden + browserforms waar voorzien. **Geen** verdere microstappen op deze lijn zonder nieuw besluit.
 
-2. **M-002 hardening-batch** — **eerstvolgende primaire focus** (groot werkpakket, **geen** microstap): één samenhangende increment volgens `M002_NETWORK_BOUNDARIES.md` en § **9a** werkpakket 2.
+2. **M-002 hardening-batch** — **afgerond** (**§ M-002h**); `M002_NETWORK_BOUNDARIES.md` bijgewerkt.
 
-3. **Consolidatie + V1-gap review** — alert-engine gedrag en migratiematrix; **expliciete** keuzes vóór verdere verbreding (UI-views, integraties, “nice-to-have”).
+3. **Consolidatie + V1-gap review** — **stuurversie vastgelegd** (**§ WP-03a**, **D-010**); **C1**-protocol + **`alert_engine_runtime_stats`** gereed (§ **C1**). **Uitvoeren:** veldsessies → **C2**; **30m/2h** = **roadmap na** stabiliteit (**C5**). Geen nieuwe WebUI-settings in consolidatiefase tenzij apart besloten.
 
 4. **Productierijpheid** (test, release, operatie) — pas als (1)–(3) **duidelijke** voortgang hebben; zie § **9a** werkpakket 5.
 
@@ -1058,7 +1112,7 @@ Op basis van de eerste inventarisatie uit de repo en de terugkoppeling van Curso
 
 * **P0 — Kritisch pad:** zonder deze onderdelen geen stabiele V2-basis
 
-* **P1 — Kernmigratie:** essentieel voor functionele gelijkwaardigheid met V1
+* **P1 — Kernmigratie:** essentieel voor de **functionele kern** van het product (**niet:** feature-pariteit of 1:1-V1-migratie)
 
 * **P2 — Secundair:** belangrijk, maar pas na stabiele basis
 
@@ -1121,6 +1175,10 @@ Op basis van de eerste inventarisatie uit de repo en de terugkoppeling van Curso
 | M-016 | Oude compatibiliteitslagen CYD / TTGO | historische boardpaden | **Schrappen / archiveren** | **P3** | n.v.t. | Geen prioriteit meer; niet meenemen in V2-kern |
 
 | M-017 | Oude/inconsistente V1-documentatie | `docs/CODE_INDEX.md`, `CODE_ANALYSIS.md` etc. | **Nader beoordelen** | **P3** | docs cleanup | Belangrijk voor netheid, maar niet blokkerend voor skeleton |
+
+\
+
+**WP-03a (2026-04):** rij **M-010** — V1→V2-gap vastgelegd (**§ WP-03a**, **D-010**); consolidatie **C1–C5** = kwaliteit **1m/5m-kern** + **C5**-planning voor **30m/2h**; geen import V1-monolith of volledige RegimeEngine; **einddoel** alert-schalen **1m–2h** blijft overeind.
 
 \
 
@@ -1454,9 +1512,9 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 1. **Afgerond:** **WebUI/config-lijn** op dit niveau — incl. **M-013l** (minimaal form op **`/`** voor confluence-policy; POST **M-013k**). Thresholds/regime/timing/confluence: read + write + form waar voorzien. **Geen** nieuwe brede settings-laag tot besluit.
 
-2. **Nu (geen microstap):** **M-002 hardening-batch** als **eerstvolgende** werk — queues, scheiding, randvoorwaarden — `M002_NETWORK_BOUNDARIES.md`, § **9a** werkpakket 2, § **10** punt 2.
+2. **Afgerond:** **M-002 hardening-batch** (**§ M-002h**) — queues/backpressure, mutex-observability, ownership — zie `M002_NETWORK_BOUNDARIES.md`.
 
-3. **Vervolgens:** **consolidatie** (alert-engine, spam/randgevallen) en **V1-gap review** met **bewuste** scopekeuzes (§ **9a** werkpakketten 3–4); **pas daarna** verdere verbreding (extra UI-views, integraties) en **productierijpheid** als apart pakket (§ **9a** werkpakket 5).
+3. **Vervolgens:** **V1-gap / scope** als stuurversie (**§ WP-03a**, **D-010**) — **afgerond**; **implementatie consolidatie** = **C1–C5**. **C1:** protocol + stats **klaar** (§ **C1**, [C1_FIELD_TEST_1M5M.md](../../docs/architecture/C1_FIELD_TEST_1M5M.md)); **veldsessies uitvoeren** → daarna **C2** (randgevallen). Overig: mini-regime review (**C3**), NTFY/MQTT (**C4**); **C5** = **roadmap/planning** **30m/2h**. **Pas daarna** verdere verbreding en **productierijpheid** (§ **9a** werkpakket 5).
 
 \
 
@@ -1475,6 +1533,162 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 * **M-002a:** STA-backoff + disconnect-logging; verdere M-002 volgt als **batch** (hierboven).
 
 * **Services / WebUI / OTA / alerts:** zie § **9** en migratiematrix (M-011 … M-014, M-003*, M-010*, enz.); **M-013l** sluit de browserforms voor de **kleine** config-subsets af vóór M-002-batch.
+
+\
+
+---
+
+\
+
+## WP-03a — V1-gap review + scopekeuzes alert-engine consolidatie (stuurversie 2026-04-15)
+
+\
+
+**Bronnen:** V1-referentie **`main`** / B-001 (`src/AlertEngine/`, `RegimeEngine/`, `PriceData/`, `VolatilityTracker/`, …); V2 **`v2/foundation`** (`firmware-v2/components/alert_engine/`, `domain_metrics/`, `service_outbound/`); `docs/ALERTS_TYPES.md`; pointer **[WP03a_V1_GAP_ALERT.md](../../docs/architecture/WP03a_V1_GAP_ALERT.md)**; aansluiting op § **9a**, § **10**, § **11b** (M-010), § **15**. **Besluit:** **D-010**.
+
+\
+
+### 1. Korte analyse V1 → V2 (kern)
+
+\
+
+| Domein | V1 (referentie) | V2 (nu) | Korte observatie |
+
+|--------|------------------|---------|------------------|
+
+| **Metrics / TF** | 1m, 5m, **30m**, **2h**-context; `PriceData` + buffers | Canoniek **per seconde** → **1m/5m %**; **nog** geen 30m/2h in `domain_metrics` | V2: deterministischer kernpad; **einddoel** = ook **30m/2h** (**gefaseerde** metrics-uitbreiding, zie **D-010**). |
+
+| **Alerts** | Spike/move + **2h-familie** (trend/compress/breakout/anchor-ctx), veel takken | **1m, 5m**, **confluence 1m+5m** (M-010d/e), suppress na conf | V2 dekt nu de **intraday-kern**; **geen** kopie van V1’s **2h-matrix**. **Einddoel** blijft o.a. **2h**-alerts **als** aparte, **schone** verticale slice — **niet** als “geen 2h ooit”. |
+
+| **Regime** | `RegimeEngine`: slap / geladen / energiek + vele multipliers | **M-010f** calm/normal/hot, **‰-schaal** op 1m/5m | Bewust **lichtgewicht** i.p.v. V1-regime-import. |
+
+| **Confluence** | “Smart” state (`LastOneMinuteEvent`, `usedInConfluence`, …) | Policy-driven (M-003d), zelfde richting + drempels, prioriteit + suppress | Vergelijkbaar op **1m∩5m**; minder interne state dan V1. |
+
+| **Notificaties** | Rijke `sendNotification`-paden | **NTFY** + **MQTT** achter queue (M-002h) | Functionele kern OK; geen verplichte **stijl**-pariteit. |
+
+| **Ruis / guards** | Night mode, WS-quality, regime-takken, anchors, … | Cooldowns + suppress + vol-regime | Minder codepaden; **field-test** nodig voor spamkwaliteit. |
+
+\
+
+### 2. Gap-matrix (samenvatting)
+
+\
+
+| Categorie | Inhoud |
+
+|-----------|--------|
+
+| **Al in V2 (kernpad)** | Bitvavo-feed; 1m/5m; drempels + cooldowns (Kconfig/NVS); confluence + suppress; mini-regime; NTFY+MQTT; observability + M-002h queue-stats. |
+
+| **Gewenst voor productkwaliteit (selectief, nu)** | Meetbare **spam-/randgevallen**; **field-testcriteria**; scherpte op defaults — **binnen** de **1m/5m-kern** (C1–C4). |
+
+| **Einddoel — gefaseerd na stabiele kern** | **30m**- en **2h**-alerts (metrics → engine → outbound): **gewenst functioneel**, **implementatie** volgt **na** toetsbare **1m/5m**-stabiliteit en expliciete planning (**C5**); **niet** als V1-port. |
+
+| **Bewust niet importeren (V1-vorm)** | Monolithische `AlertEngine.cpp`; V1’s volledige **2h**-takkenmatrix **zoals geknoopt**; **Anchor** + **TrendDetector** zoals V1; volledige **RegimeEngine**-port. |
+
+| **Later / andere thema’s** | Night mode; HA discovery; extra anti-spam boven huidige suppress (**eerst** meten); geen impliciete “we laten 30m/2h vallen”. |
+
+\
+
+### 3. Scopekeuzes — keep / drop / defer
+
+\
+
+**Keep — consolidatiekern (C1–C4 + kwaliteit op 1m/5m-pad)**
+
+\
+
+- Betrouwbare **1m- en 5m**-alerts met drempels, **cooldowns**, leesbare **NTFY/MQTT**.
+
+- **Confluence 1m+5m** met **M-003d**-policy en **M-010e**-suppress.
+
+- **Mini-regime (M-010f)** als enige regime-laag in deze fase (geen verplichte V1-`RegimeEngine`).
+
+- **Observability** zoals nu; geen nieuwe WebUI-settings in consolidatiefase tenzij apart besluit.
+
+- Architectuurgrenzen: `market_data`, `service_outbound`, `alert_engine` blijven gescheiden.
+
+\
+
+**Drop — geen V1-architectuur of 1:1-feature-pariteit (≠ “geen langere schalen ooit”)**
+
+\
+
+- **Geen** overname van **alle** V1-alerttypes **zoals geïmplementeerd** — met name **geen** port van V1’s **2h-familie** als één geknoopte matrix.
+
+- **RegimeEngine** en **AnchorSystem** **niet** 1-op-1.
+
+- Nieuwe **dashboards** / **HA discovery** als onderdeel van **dit** consolidatiepakket.
+
+\
+
+**Defer — niet in de eerstvolgende consolidatiefase (C1–C4); einddoel blijft staan**
+
+\
+
+- **Implementatie** van **30m** (metric/alert) en **2h**-signalen: **na** stabiele, toetsbare **1m/5m-kern**; inhoudelijk af te stemmen in **C5** (startmoment, slices) — zie **D-010**.
+
+- **Night mode** / tijdvensters.
+
+- Extra **anti-spam** boven huidige cooldown/suppress (**eerst** meten in C1–C2).
+
+\
+
+**Scheiding (verplicht leesregel):** *uitgesteld* (boven) is **niet** hetzelfde als *niet gewenst als eindrichting*. **30m** en **2h** horen bij het **functioneel einddomein**; ze zijn **niet** automatisch onderdeel van de **eerstvolgende** implementatiebatch.
+
+\
+
+### 4. Consolidatie-roadmap (implementatie volgt; 5 stappen)
+
+\
+
+| ID | Stap | Doel |
+
+|----|------|------|
+
+| **C1** | Field-testprotocol + spamreview | **Uitgewerkt:** protocol + spamreview-criteria in **[docs/architecture/C1_FIELD_TEST_1M5M.md](../../docs/architecture/C1_FIELD_TEST_1M5M.md)**; read-only **`alert_engine_runtime_stats`** in `status.json` / WebUI. **Uitvoeren:** minstens twee veldsessies volgens dat protocol — daarna C2 |
+
+| **C2** | Randgevallen documenteren | Oscillatie, WS-stilte, vol-warmup: verwacht vs defect |
+
+| **C3** | Mini-regime review | ‰-clamp en schaal vs praktijk; geen RegimeEngine zonder roadmap |
+
+| **C4** | Notificatie-consistentie | Titel/body NTFY/MQTT waar nuttig (klein, geen nieuwe features) |
+
+| **C5** | Roadmap **30m / 2h** | Na **C1–C4**: vastleggen **wanneer en hoe** verticale slices (**metrics → engine → outbound**) starten — **gewenst einddoel**, **niet** inbegrepen in C1–C4 — voorkomt scope-creep **in** de kernconsolidatie |
+
+\
+
+### 5. Gevolgen voor matrix en planning
+
+\
+
+- **§11b M-010:** “herschrijven” = kern **aanwezig**; consolidatie = **kwaliteit + bewijs** (**C1–C4** op **1m/5m**; **C5** = **30m/2h**-roadmap), geen V1-import.
+
+- **§9a / §10 / §15:** WP-03a sluit **stuurversie** af; **volgende werk** = **C1–C4** op **1m/5m-kern** + **C5** voor **30m/2h**-planning; **geen** terugval naar V1-monoliet.
+
+\
+
+---
+
+\
+
+## C1 — Field-test en spamreview (1m/5m-kern, consolidatie)
+
+\
+
+**Status:** **Protocol en meetinstrumenten** zijn **vastgelegd**; **veldsessies** zijn een **bewuste teststap** door de gebruiker (niet geautomatiseerd in CI).
+
+\
+
+**Volledige tekst:** **[docs/architecture/C1_FIELD_TEST_1M5M.md](../../docs/architecture/C1_FIELD_TEST_1M5M.md)** — testduur/momenten, welke JSON/logs te bewaren, classificatie **goed / twijfelachtig / defect**, spamreview-criteria, **wanneer C1 voldoende is** om naar **C2** te gaan.
+
+\
+
+**Firmware / WebUI (read-only, geen nieuwe settings):** `GET /api/status.json` bevat **`alert_engine_runtime_stats`**: emit-totalen per pad (1m, 5m, confluence), laatste emit-tijd (epoch ms sinds boot), aantal **suppress-episodes** na confluence (M-010e). Bestaande velden **`alert_decision_observability`**, **`regime_observability`**, policy/config-snapshots blijven leidend voor interpretatie.
+
+\
+
+**Niet onder C1:** 30m/2h-implementatie, nieuwe alerttypes, extra dashboards, HA-discovery-uitbreiding — zie **D-010**.
 
 \
 
@@ -1610,6 +1824,8 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 - **Begrenzing:** log alleen bij **prijsverandering** t.o.v. laatste log **of** minstens **30 s** sinds vorige log (geen dump per WS-tick).
 
+- **Inbound-teller (operationele observability):** `MarketSnapshot.ws_inbound_ticks_last_sec` — aantal door de Bitvavo-WS-laag verwerkte prijs-ticks in de **vorige voltooide wandklok-seconde**; zichtbaar op het **LVGL-scherm** als **WS in N/s** en in **WebUI** via **`GET /api/status.json`** (zelfde veldnaam).
+
 - **Optioneel scherm (T-103c):** `display_port::ws_live_validation_strip_toggle()` — pixelband **zonder** LVGL; bij **T-103d** niet meer gecombineerd met live UI (framebuffer-conflict).
 
 \
@@ -1634,7 +1850,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 - **`display_port`:** behoudt `esp_lcd` + SPI IO; exporteert `io_handle` / `panel_handle` / afmetingen; na init **zwarte** clear vóór LVGL (geen effen groen als eindstaat).
 
-- **`ui`:** `lvgl_port_init` + `lvgl_port_add_disp`; labels: **symbool**, **prijs (EUR)**, **bron** (`WS` / `REST` / —). Updates via `ui::refresh_from_snapshot(market_data::snapshot())` vanuit `app_core` ( **`lvgl_port_lock`** in `ui`).
+- **`ui`:** `lvgl_port_init` + `lvgl_port_add_disp`; labels: **symbool**, **prijs (EUR)**, **bron** (`Bron: …` met `WS` / `REST` / `-`), regel **WS in N/s** (inbound-ticks vorige seconde; zie **T-103c** inbound-teller). Tekenset: ASCII voor scheidtekens/plaatshouders (embedded font zonder o.a. middelstip «·»). Updates via `ui::refresh_from_snapshot(market_data::snapshot())` vanuit `app_core` ( **`lvgl_port_lock`** in `ui`).
 
 - **Scheiding:** geen `exchange_bitvavo` in `ui`.
 
@@ -1672,7 +1888,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Technische backlog (o.a. openstaand uit M-002; detail):** mutex/queue voor schrijf-paden; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c**. **Runtime service-config (typed, read-only overlay):** § **M-003a**. **Alert/regime tuning (typed, klein, non-secret):** § **M-003b**. **Alert-policy timing (cooldown/suppress, typed, non-secret):** § **M-003c**. **Confluence-policy subset (typed, status + JSON-write + form):** § **M-003d**, § **M-013k**, § **M-013l**. **NTFY-sink:** § **M-011a**; **domein 1m-alert → NTFY:** § **M-011b**. **MQTT-bridge (boot):** § **M-012a**; **1m-domeinalert → MQTT:** § **M-012b**. **WebUI (status + service-write + form + read-only alert-observability + regime/drempel-observability + alert-runtime JSON-write + minimaal alert-runtime-form + read-only alert-beslissing/cooldown/suppress-snapshot + alert-policy-timing JSON-write + minimaal alert-policy-timing-form + confluence-policy JSON-write + minimaal confluence-policy-form + OTA-basis + OTA-observability):** § **M-013a**–**M-013l**, § **M-014a**–**M-014b**. **Eerste domeinmetric + alert-slice:** § **M-010a**. **Per-seconde canonicalisatie op WS-input:** § **M-010b**. **Tweede timeframe (5m) parallel aan 1m:** § **M-010c**. **Eerste 1m+5m-confluence (eenvoudige regel):** § **M-010d**. **Prioriteit/suppressie losse TF t.o.v. confluence:** § **M-010e**. **Mini-regime (vol → calm/normal/hot) zonder volledige engine:** § **M-010f**.
+**Technische backlog (M-002; detail):** eerste hardening (**§ M-002h**) heeft outbound drain-cap, drops/backlog-logs en mutex-timeout-logs afgevangen; **optionele net-worker-task** en verdere mutex/queue-splitsing blijven open — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c** / **§ M-002h**. **Runtime service-config (typed, read-only overlay):** § **M-003a**. **Alert/regime tuning (typed, klein, non-secret):** § **M-003b**. **Alert-policy timing (cooldown/suppress, typed, non-secret):** § **M-003c**. **Confluence-policy subset (typed, status + JSON-write + form):** § **M-003d**, § **M-013k**, § **M-013l**. **NTFY-sink:** § **M-011a**; **domein 1m-alert → NTFY:** § **M-011b**. **MQTT-bridge (boot):** § **M-012a**; **1m-domeinalert → MQTT:** § **M-012b**. **WebUI (status + service-write + form + read-only alert-observability + regime/drempel-observability + alert-runtime JSON-write + minimaal alert-runtime-form + read-only alert-beslissing/cooldown/suppress-snapshot + alert-policy-timing JSON-write + minimaal alert-policy-timing-form + confluence-policy JSON-write + minimaal confluence-policy-form + OTA-basis + OTA-observability):** § **M-013a**–**M-013l**, § **M-014a**–**M-014b**. **Eerste domeinmetric + alert-slice:** § **M-010a**. **Per-seconde canonicalisatie op WS-input:** § **M-010b**. **Tweede timeframe (5m) parallel aan 1m:** § **M-010c**. **Eerste 1m+5m-confluence (eenvoudige regel):** § **M-010d**. **Prioriteit/suppressie losse TF t.o.v. confluence:** § **M-010e**. **Mini-regime (vol → calm/normal/hot) zonder volledige engine:** § **M-010f**.
 
 \
 
@@ -1741,6 +1957,50 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 \
 
 **Bewust open (na M-011a / M-012a / M-013a):** rijkere **payload-structs** per `Event`; net-worker-task; extra event-mappings.
+
+\
+
+---
+
+\
+
+## M-002h — Hardening-batch: outbound backpressure, mutex-observability, ownership (uitgevoerd)
+
+\
+
+**Doel:** eerste **grote** M-002-consolidatie na afronding WebUI/config — **geen** nieuwe productfeatures —: voorspelbaardere runtime, scherpere grenzen, gerichte observability. Bron: **[M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md)**.
+
+\
+
+**Wat is aangescherpt**
+
+\
+
+- **`service_outbound`:** `poll()` verwerkt **maximaal 2** queue-events per aanroep (spreiding TLS/HTTP over ~10 Hz `app_core`-rondes); bij **volle queue** blijft **drop + WARN** met cumulatieve **`drops_total`**; bij **achterstand** na een poll: **WARN** (rate-limit **5 s**, reset wanneer queue leeg). Init-log noemt `max_dispatch/poll`.
+
+\
+
+- **Mutex-contention:** bij **`net_mutex`-timeout** (20 s) — **WARN** in **`ntfy_client`** en **`bitvavo_rest`** (operationele hint: ander pad houdt mutex vast).
+
+\
+
+- **Eigenaarschap:** commentaar in **`exchange_bitvavo.cpp`** (WS/REST vs `net_runtime` vs geen outbound); **`app_core`** documenteert bewuste volgorde **markt/alert vóór** `service_outbound::poll`.
+
+\
+
+- **WebUI read-only:** **`GET /api/status.json`** — `outbound_queue_waiting`, `outbound_queue_capacity`, `outbound_drop_total` (geen nieuwe POST-routes of settings).
+
+\
+
+- **Worker-task:** **niet** ingevoerd; batch verankert expliciet **poll/queue**-aanpak. Toekomstige worker alleen na metingen.
+
+\
+
+**M-002-risico’s nu kleiner:** onbeperkte drain per tick; stille mutex-conflict; onduidelijke outbound-backlog.
+
+\
+
+**Bewust nog open (latere fase):** aparte **net-worker** of gesplitste synchronisatie; tunen STA-backoff; rijkere queue-metrics; WS/HTTP-resource-scheduling als metingen dat eisen.
 
 \
 
@@ -2369,7 +2629,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Doel:** **M-013k** levert de **POST** voor dezelfde vier booleans als **M-003d**, maar nog geen **browserformulier**. **M-013l** sluit de **WebUI/config-lijn** op dit capability-niveau af: één **kleine sectie** op **`GET /`**, **zelfde velden** en **zelfde endpoint** (`POST /api/alert-confluence-policy.json`) — **zonder** nieuwe backendroute, **zonder** auth en **zonder** scope-uitbreiding. **Volgende primaire focus** verschuift naar de **M-002 hardening-batch** (§ **9a** werkpakket 2), **niet** naar verdere config-microstappen.
+**Doel:** **M-013k** levert de **POST** voor dezelfde vier booleans als **M-003d**, maar nog geen **browserformulier**. **M-013l** sluit de **WebUI/config-lijn** op dit capability-niveau af: één **kleine sectie** op **`GET /`**, **zelfde velden** en **zelfde endpoint** (`POST /api/alert-confluence-policy.json`) — **zonder** nieuwe backendroute, **zonder** auth en **zonder** scope-uitbreiding. Historisch: daarna volgde de **M-002 hardening-batch** (**§ M-002h**); geen verdere config-microstappen als primaire lens.
 
 \
 

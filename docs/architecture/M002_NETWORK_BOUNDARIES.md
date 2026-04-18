@@ -1,7 +1,7 @@
 # M-002 — Netwerkcoördinatie: grenzen en verantwoordelijkheden (V2)
 
 **Status:** hardening-document (levend)  
-**Datum:** 2026-04-11  
+**Datum:** 2026-04-15  
 **Context:** `firmware-v2/`, ESP-IDF. Sluit aan op [ADR-002](ADR-002-bitvavo-exchange-and-m002.md).
 
 ## Doel
@@ -45,10 +45,16 @@ Voorkomen dat de V2-netwerklaag opnieuw een monoliet wordt (zoals beschreven in 
 
 ## Open M-002-risico’s (bewust)
 
-1. **Eén `net_mutex`** — serialiseert nu HTTP+WS; parallelle streams vragen later ontwerp (queue of gesplitste mutexen).
+1. **Eén `net_mutex`** — serialiseert vooral **HTTP (Bitvavo REST)** en **NTFY (`esp_http_client`)**. **Bitvavo WebSocket** draait via `esp_websocket_client` en gebruikt **deze mutex niet**; gelijktijdige TLS-last blijft mogelijk. Bij **mutex-timeout** (>20 s wacht): expliciete **WARN**-logs in REST en NTFY (zie M-002h).
 2. **WiFi-reconnect (deels afgehandeld in M-002a, 2026-04):** STA-backoff zit nu in `net_runtime` (timer + cap). Nog te tunen: basis/max intervallen.
-3. **Main-task stack** — netwerk zwaar (TLS); langere termijn: eigen worker-task (**TODO**), niet in deze hardening.
-4. **MQTT / NTFY / WebUI** — alleen **haakjes** in code/docs; geen nieuwe services in deze stap.
+3. **Main-task stack** — netwerk zwaar (TLS); langere termijn: eigen worker-task (**TODO**). **M-002h (2026-04):** geen aparte worker-task; `service_outbound::poll` verwerkt **maximaal 2 events per app_core-rondje** zodat meerdere HTTPS-sends niet in één `poll()` achter elkaar de hoofdtaak laten blokkeren; backlog → rate-limited **WARN** + counters.
+4. **MQTT** — `esp_mqtt_client`, geen `net_mutex` op publish-pad (eigen stack); **WebUI** (`esp_http_server`) geen exchange-eigenaar.
+
+### M-002h — Hardening-batch (consolidatie, 2026-04)
+
+- **Outbound:** `service_outbound` — queue diepte 8 ongewijzigd; **drain-cap** per `poll()`; **drop-teller** + duidelijke **M-002**-logs bij vol; backlog-waarschuwing (max. eens per 5 s zolang er werk blijft wachten).
+- **Observability:** `GET /api/status.json` — read-only `outbound_queue_waiting`, `outbound_queue_capacity`, `outbound_drop_total` (geen nieuwe instellingen).
+- **Worker-task:** bewust **niet** toegevoegd; herbeoordeling als metingen tonen dat hoofdtaak nog te lang in sinks blokkeert.
 
 ### Netwerkstatus richting bovenlagen (afbakening)
 
