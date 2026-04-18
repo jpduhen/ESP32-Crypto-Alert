@@ -22,6 +22,10 @@ Het document is bedoeld om op elk moment snel antwoord te geven op drie vragen:
 
 \
 
+* **Uitgebreide fase-antwoord** (waar we staan, volwassenheid, resterende werkpakketten): zie § **9a**.
+
+\
+
 Het document is geschreven zodat **Jan Pieter**, **ChatGPT** en **Cursor/Codex** er direct mee kunnen werken.
 
 \
@@ -698,7 +702,7 @@ Gebruik dit hoofdstuk als formeel geheugen van gemaakte keuzes.
 
 **Consequenties:** volgende werk zit in displaystack, exchange/netwerk en CI — niet in uitbreiding van het monolithische V1-pad.
 
-**Actiepunten:** zie §10 (prioriteit na skeleton).
+**Actiepunten:** zie § **9a** en § **10** (consolidatiefase; werkpakketten i.p.v. alleen skeleton-uitbreiding).
 
 **Status:** besloten
 
@@ -792,7 +796,7 @@ Gebruik dit hoofdstuk als formeel geheugen van gemaakte keuzes.
 
 \
 
-**Fase:** eerste **ESP-IDF skeletonfase** is **afgerond** in `firmware-v2/` (branch **`v2/foundation`**).
+**Fase:** de eerste **ESP-IDF skeleton- en integratiefase** in `firmware-v2/` (branch **`v2/foundation`**) is **afgerond**; het project zit nu in een **eerste geïntegreerde beta-/consolidatiefase** (zie § **9a** voor fasebeoordeling, volwassenheid en **resterende hoofdwerkpakketten**). We zitten **niet meer** in “alleen fundering”; we zitten ook **niet** op “bijna release”.
 
 **Referentieboard:** **ESP32-S3 GEEK** — enige concrete BSP in code (`bsp_s3_geek`); LCDWIKI/JC3248 alleen in strategie/matrix, nog geen code.
 
@@ -848,13 +852,13 @@ Gebruik dit hoofdstuk als formeel geheugen van gemaakte keuzes.
 
 \
 
-* basis display bring-up op de S3-GEEK is afgerond; volgende displaystap is pas later de keuze hoe en wanneer **LVGL** op deze route landt
+* **LVGL** staat op de GEEK-route; verdere UI-verbreding (tweede view, thema’s) blijft **bewust** achter tot na consolidatie — zie § **9a** / § **10**.
 
-* **T-103 softwarebasis** is neergezet (`exchange_bitvavo`, `net_runtime`, façade `market_data`); **field-test** op GEEK met WiFi + echte feed blijft gebruikerscheck
+* **Field-test** op GEEK (WiFi + live feed + alerts) blijft de **sanity-check**; geen vervanging voor latere test/releasecriteria (§ **9a** werkpakket 5).
 
-* **M-002** verder uitwerken (uitbreiding `net_runtime` / backoff / scheiding services) na eerste field-ervaring
+* **M-002** is deels gedaan (o.a. M-002a backoff); de **volledige hardening-batch** (queues, scheiding, randvoorwaarden) is het **eerstvolgende grote werkpakket** na korte afronding WebUI/config — zie `M002_NETWORK_BOUNDARIES.md`, § **9a**, § **10**.
 
-* migratiematrix blijft **verfijnen** (geen tegenstrijdigheid met §11 bedoeld)
+* **Migratiematrix** en **V1-gap**: bewust kiezen wat gelijkwaardigheid betekent — niet eindeloos micro-verfijnen zonder werkpakket (§ **9a** werkpakket 3).
 
 \
 
@@ -908,25 +912,99 @@ T-102 gold als de eerstvolgende harde fasepoort. Deze stap gold als geslaagd zod
 
 \
 
+---
+
+\
+
+## 9a. Huidige projectfase — fasebeoordeling, volwassenheid, werkpakketten
+
+\
+
+### Waar staan we nu echt?
+
+\
+
+We zitten **niet meer** in de vroege **skeleton-/alleen-funderingfase**. Op **`v2/foundation`** is inmiddels **integraal** aanwezig: reproduceerbare ESP-IDF-baseline, **live market data** (Bitvavo achter `market_data`), **LVGL** op het referentieboard, **NTFY** en **MQTT**, **WebUI** met status en **gecontroleerde writes** (o.a. runtime-drempels/regime, policy-timing, **confluence-policy** — M-003b/c/d + M-013f/g/i/j/k/**l**), **OTA**, **domain_metrics** / **alert_engine** (1m, 5m, confluence, suppressie, mini-regime) met **NVS-runtimeconfig**.
+
+Dat plaatst het project in een **eerste geïntegreerde beta-/consolidatiefase**: de kern is **aanwezig en werkend**, maar **productierijpheid**, **multi-board** en een **afgesproken release** zijn **nog niet** bereikt — en worden hier ook **niet** als impliciet geclaimd.
+
+**Risico:** voortgang **verzandt in microstappen** (losse M-tickets zonder samenhang) terwijl de basis dat ritme niet meer nodig heeft als **primaire** sturing. **Gevolg:** de **primaire** planningseenheid verschuift naar **grotere werkpakketten** (zie hieronder); kleine stappen blijven nuttig **binnen** zo’n pakket, niet als default voor alle werk.
+
+\
+
+### Volwassenheidsinschatting (compact)
+
+\
+
+| Domein | Inschatting |
+
+|--------|-------------|
+
+| **Architectuur / fundering** | Grotendeels op orde (componenten, `config_store`, services-keten, TLS-baseline). **M-002-hardening** (queues, taakscheiding, randvoorwaarden) is nog een **expliciet** restpakket. |
+
+| **Productkern (alerts + marktdata)** | Aanwezig en werkend op GEEK; **spamkwaliteit**, randgevallen en **parity met V1** zijn nog geen afgerond pakket. |
+
+| **Observability / beheer** | Ver gevorderd: WebUI-status, alert-/regime-observability, OTA-info, gerichte JSON-writes. |
+
+| **Productierijpheid** | Nog niet: teststrategie, releasecriteria en operatie ontbreken als **uitgewerkt** blok (wel erkenning in § **9a** werkpakket 5). |
+
+| **Multi-board** | Nog niet: **GEEK** is referentie; **JC3248W535** / **LCDWIKI** horen in een **apart** pakket, niet “erbij” in kleine haakjes. |
+
+\
+
+### Resterende hoofdwerkpakketten (richting eerste serieuze V2-release)
+
+\
+
+Geen vervanging van de migratiematrix, wel **samenhangende blokken** i.p.v. een lange micro-ticketlijst als enige lens:
+
+\
+
+1. **WebUI/config op huidig niveau** — **afgerond** (incl. **M-013l**: minimaal form op **`/`** voor confluence-policy; zelfde subset als M-003d/M-013k). Geen nieuwe brede settings-laag tot expliciet besluit.
+
+2. **M-002 hardening-batch** — netwerk-eigenaarschap, queues/backpressure, scheiding WS/REST/MQTT/NTFY/WebUI, eventueel worker-task; bron: **`M002_NETWORK_BOUNDARIES.md`**. Dit is de **eerstvolgende grote technische sprint** (primaire focus na afronding (1)).
+
+3. **V1-gap review / bewuste scopekeuzes** — wat moet gelijkwaardig zijn aan V1, wat niet; vastleggen in matrix + besluitenlog.
+
+4. **Alert-engine consolidatie** — tuning, spamkwaliteit, randgevallen; observability blijft **in lijn** met gedrag; geen feature-explosie.
+
+5. **Productierijpheid / operatie / test- en releasekwaliteit** — CI waar zinvol, flash/partitiebeleid, release-notes, **concrete** field-testcriteria (geen vage “nog veel werk”).
+
+6. **Extra boards (JC3248W535 / LCDWIKI)** — BSP/flash/display **na** besluit; los trekken van GEEK-consolidatie.
+
+7. **Release candidate / stabilisatiefase** — wat “ship” betekent voor V2, defectenlijst, korte stabilisatie-iteraties.
+
+\
+
+**Bedoelde volgorde:** (1) ~~kort afronden~~ **afgerond** → (2) als eerste **grote** increment (**nu** primaire technische focus) → (3) en (4) deels overlappend → (5) nadat (2)–(4) voortgang hebben → (6)–(7) volgens prioriteit en beschikbaarheid.
+
+\
+
+---
+
+\
+
 ## 10. Prioriteitenlijst
 
 \
 
-### Prioriteit nu (na T-103 softwarebasis)
+### Prioriteit nu (geïntegreerde beta / consolidatiefase — zie §9a)
 
 \
 
-1. V1 **formeel bevriezen** als referentie (geen grote functionele uitbreidingen zonder besluit).
+1. **WebUI/config-lijn op dit capability-niveau — afgerond** — thresholds/regime (M-003b, M-013f/g), policy-timing (M-003c, M-013i/j), confluence-policy (M-003d, M-013k, form **M-013l**): eenduidige read/write-paden + browserforms waar voorzien. **Geen** verdere microstappen op deze lijn zonder nieuw besluit.
 
-2. **Field-test T-103** op GEEK: WiFi via **onboarding (`CryptoAlert`)** of NVS, REST + WS tegen Bitvavo; logs/heartbeat controleren.
+2. **M-002 hardening-batch** — **eerstvolgende primaire focus** (groot werkpakket, **geen** microstap): één samenhangende increment volgens `M002_NETWORK_BOUNDARIES.md` en § **9a** werkpakket 2.
 
-3. **M-002** verdiepen: backoff, eventuele task-queue, scheiding MQTT/NTFY/WebUI wanneer die tickets starten.
+3. **Consolidatie + V1-gap review** — alert-engine gedrag en migratiematrix; **expliciete** keuzes vóór verdere verbreding (UI-views, integraties, “nice-to-have”).
 
-4. Voorbereiden van de volgende display/UI-beslissing: wanneer en hoe **LVGL** op de bevestigde `esp_lcd`-route landt.
+4. **Productierijpheid** (test, release, operatie) — pas als (1)–(3) **duidelijke** voortgang hebben; zie § **9a** werkpakket 5.
 
-5. **Migratiematrix** blijven aanscherpen.
+5. **Werkdocument en migratiematrix** bijwerken op **werkpakket**-niveau (§ **9a**), niet alleen losse M-nummers.
 
-6. Dit **werkdocument** bij elke mijlpaal bijwerken (§0 leidend).
+6. V1 blijft **bevroren referentie** (B-001); geen grote V1-uitbreidingen zonder besluit.
+
+7. **Field-test** op GEEK (WiFi, live feed, alerts) blijft de **lopende sanity-check**, geen vervanging voor een latere releasechecklist.
 
 \
 
@@ -1050,7 +1128,7 @@ Op basis van de eerste inventarisatie uit de repo en de terugkoppeling van Curso
 
 \
 
-De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (tickets S-001 … S-007; zie §9). Volgende stap: echte displaystack en exchange-laag, niet opnieuw dit blok “herdefiniëren”.
+De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (tickets S-001 … S-007; zie §9). **Displaystack, exchange-laag en vervolgstappen** zijn inmiddels **ingevuld** op GEEK; vervolgwerk volgt **werkpakketten** (§ **9a**), niet herdefiniëren van dit skeleton-blok.
 
 \
 
@@ -1298,17 +1376,21 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 * risico dat te veel tegelijk wordt opgepakt zonder duidelijke integratiestappen
 
+* risico op **verzanden in microstappen** zonder samenhang (te laat overschakelen naar **werkpakketten** — zie § **9a**)
+
 \
 
 ### Beheersmaatregelen
 
 \
 
-* kleine iteraties
+* **Werkpakketten** als primaire planseenheid naast de migratiematrix (§ **9a**); microstappen **binnen** pakketten blijven oké
+
+* kleine iteraties **waar** het past (bugfixes, afronding WebUI/config)
 
 * heldere besluitenlog
 
-* vaste prioriteitenlijst
+* vaste prioriteitenlijst (§ **10** — afgestemd op consolidatiefase)
 
 * migratiematrix als leidraad
 
@@ -1366,55 +1448,33 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Stap 1 (lopend):** dit werkdocument (§0) als leidende referentie houden; `docs/architecture/V2_WORKDOCUMENT_MASTER.md` alleen voor governance-overzicht — bij verschil eerst hier bijwerken.
+### Faseroute (nu — consolidatiefase)
 
 \
 
-**Stap 2 — klaar (T-101):** reproduceerbare **build**: ESP-IDF **v5.4.2**, `BUILD.md`, CI-smoke workflow.
+1. **Afgerond:** **WebUI/config-lijn** op dit niveau — incl. **M-013l** (minimaal form op **`/`** voor confluence-policy; POST **M-013k**). Thresholds/regime/timing/confluence: read + write + form waar voorzien. **Geen** nieuwe brede settings-laag tot besluit.
+
+2. **Nu (geen microstap):** **M-002 hardening-batch** als **eerstvolgende** werk — queues, scheiding, randvoorwaarden — `M002_NETWORK_BOUNDARIES.md`, § **9a** werkpakket 2, § **10** punt 2.
+
+3. **Vervolgens:** **consolidatie** (alert-engine, spam/randgevallen) en **V1-gap review** met **bewuste** scopekeuzes (§ **9a** werkpakketten 3–4); **pas daarna** verdere verbreding (extra UI-views, integraties) en **productierijpheid** als apart pakket (§ **9a** werkpakket 5).
 
 \
 
-**Stap 3 (T-102):** **display bring-up** op GEEK met expliciete fasepoort:
+**Discipline:** geen tegenstrijdigheid tussen “kleine afronding” en “grote pakketten” — de kleine afronding is **bewust de sluiting** van de huidige config-lijn; het **volgende** werk is **per definitie** groter gesneden.
 
 \
 
-* displayroute / ADR kiezen en vastleggen ✅
-
-* backlight + basis-init valideren ✅
-
-* zichtbare output op echt scherm aantonen ✅
-
-* build/CI groen houden ✅
-
-* **LVGL** alleen meenemen na expliciet en onderbouwd besluit ✅
+### Historisch bereikt (ter referentie — niet de volgende stap)
 
 \
 
-**Stap 4 — klaar:** **D-007** bevestigd op hardware; displaygeometrie getuned (**T-102**).
+* **T-101 … T-103(d):** build/CI, display bring-up (GEEK), `exchange_bitvavo` + `net_runtime` + `market_data`, WiFi-onboarding.
 
-\
+* **LVGL** op `esp_lcd` (**ADR-004**), live view + verfijning (§ **Stap 8b**).
 
-**Stap 5 — uitgevoerd (T-103):** `exchange_bitvavo` + `net_runtime` + façade `market_data` (**D-008**, **ADR-002**). Mock via `CONFIG_MD_USE_EXCHANGE_BITVAVO=n`.
+* **M-002a:** STA-backoff + disconnect-logging; verdere M-002 volgt als **batch** (hierboven).
 
-\
-
-**Stap 5b — uitgevoerd (WiFi onboarding):** `wifi_onboarding` + NVS-credentials (**D-009**, **ADR-003**); SoftAP **`CryptoAlert`**, portal `[http://192.168.4.1/`](http://192.168.4.1/`).
-
-\
-
-**Stap 6:** **M-002** verder uitwerken (backoff, queues, MQTT/NTFY/WebUI-scheiding) — niet blokkerend voor kleine V2-stappen.
-
-\
-
-**Stap 7 — uitgevoerd (T-103d):** **LVGL** op de `esp_lcd`-route (**ADR-004**); eerste echte UI: symbool + prijs + bron via `market_data::snapshot()` (geen exchange in `ui`).
-
-\
-
-**Stap 8 — deels uitgevoerd (M-002a):** STA **backoff** in `net_runtime` + disconnect-reason logging; zie § **M-002a**. Nog open: queues, MQTT/NTFY/WebUI-scheiding, worker-task.
-
-\
-
-**Stap 8b — uitgevoerd:** minimale verfijning van de bestaande live view (hiërarchie, spacing, bronregel); zie § **Stap 8b**. **Volgende kleine UI-stap (optioneel):** tweede view / thema — buiten deze scope tot besluit.
+* **Services / WebUI / OTA / alerts:** zie § **9** en migratiematrix (M-011 … M-014, M-003*, M-010*, enz.); **M-013l** sluit de browserforms voor de **kleine** config-subsets af vóór M-002-batch.
 
 \
 
@@ -1608,7 +1668,11 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Backlog (ongewijzigd t.o.v. M-002a):** mutex/queue voor schrijf-paden; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c**. **Runtime service-config (typed, read-only overlay):** § **M-003a**. **Alert/regime tuning (typed, klein, non-secret):** § **M-003b**. **Alert-policy timing (cooldown/suppress, typed, non-secret):** § **M-003c**. **Confluence-policy subset (typed, status + JSON-write):** § **M-003d**, § **M-013k**. **NTFY-sink:** § **M-011a**; **domein 1m-alert → NTFY:** § **M-011b**. **MQTT-bridge (boot):** § **M-012a**; **1m-domeinalert → MQTT:** § **M-012b**. **WebUI (status + service-write + form + read-only alert-observability + regime/drempel-observability + alert-runtime JSON-write + minimaal alert-runtime-form + read-only alert-beslissing/cooldown/suppress-snapshot + alert-policy-timing JSON-write + minimaal alert-policy-timing-form + confluence-policy JSON-write + OTA-basis + OTA-observability):** § **M-013a**–**M-013k**, § **M-014a**–**M-014b**. **Eerste domeinmetric + alert-slice:** § **M-010a**. **Per-seconde canonicalisatie op WS-input:** § **M-010b**. **Tweede timeframe (5m) parallel aan 1m:** § **M-010c**. **Eerste 1m+5m-confluence (eenvoudige regel):** § **M-010d**. **Prioriteit/suppressie losse TF t.o.v. confluence:** § **M-010e**. **Mini-regime (vol → calm/normal/hot) zonder volledige engine:** § **M-010f**.
+**Planningslens:** de **primaire sturing** richting een eerste serieuze V2-release staat in § **9a** (fase, volwassenheid, **hoofdwerkpakketten**) en § **10**; onderstaande regel blijft een **technische** spoor-index (M-nummers), geen vervanging van die werkpakketten.
+
+\
+
+**Technische backlog (o.a. openstaand uit M-002; detail):** mutex/queue voor schrijf-paden; optionele net-worker-task — zie [M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md). **REST-HTTP hergebruik (Bitvavo):** § **M-002b**. **Outbound queue + dispatch:** § **M-002c**. **Runtime service-config (typed, read-only overlay):** § **M-003a**. **Alert/regime tuning (typed, klein, non-secret):** § **M-003b**. **Alert-policy timing (cooldown/suppress, typed, non-secret):** § **M-003c**. **Confluence-policy subset (typed, status + JSON-write + form):** § **M-003d**, § **M-013k**, § **M-013l**. **NTFY-sink:** § **M-011a**; **domein 1m-alert → NTFY:** § **M-011b**. **MQTT-bridge (boot):** § **M-012a**; **1m-domeinalert → MQTT:** § **M-012b**. **WebUI (status + service-write + form + read-only alert-observability + regime/drempel-observability + alert-runtime JSON-write + minimaal alert-runtime-form + read-only alert-beslissing/cooldown/suppress-snapshot + alert-policy-timing JSON-write + minimaal alert-policy-timing-form + confluence-policy JSON-write + minimaal confluence-policy-form + OTA-basis + OTA-observability):** § **M-013a**–**M-013l**, § **M-014a**–**M-014b**. **Eerste domeinmetric + alert-slice:** § **M-010a**. **Per-seconde canonicalisatie op WS-input:** § **M-010b**. **Tweede timeframe (5m) parallel aan 1m:** § **M-010c**. **Eerste 1m+5m-confluence (eenvoudige regel):** § **M-010d**. **Prioriteit/suppressie losse TF t.o.v. confluence:** § **M-010e**. **Mini-regime (vol → calm/normal/hot) zonder volledige engine:** § **M-010f**.
 
 \
 
@@ -1804,7 +1868,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Doel:** confluence in **M-010d/e** was **hardcoded**; deze stap legt een **kleine typed** NVS-overlay (vier booleans) zodat **`alert_engine`** één **snapshot** uit **`config_store`** leest — **zonder** brede confluence-matrix en **zonder** V1-migratie. **Eerste WebUI-write** voor deze subset: § **M-013k**.
+**Doel:** confluence in **M-010d/e** was **hardcoded**; deze stap legt een **kleine typed** NVS-overlay (vier booleans) zodat **`alert_engine`** één **snapshot** uit **`config_store`** leest — **zonder** brede confluence-matrix en **zonder** V1-migratie. **Eerste WebUI-write:** § **M-013k**; **minimaal form op `/`:** § **M-013l**.
 
 \
 
@@ -1828,11 +1892,11 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-- **`webui`:** **`GET /api/status.json`** — **`alert_confluence_policy`** (+ `schema_version`); **write:** § **M-013k** (**geen** HTML-form in M-003d/M-013k).
+- **`webui`:** **`GET /api/status.json`** — **`alert_confluence_policy`** (+ `schema_version`); **write:** § **M-013k**; **form op `/`:** § **M-013l**.
 
 \
 
-**Bewust niet in M-003d:** auth; secrets; brede confluence-scorematrix; extra drempels buiten **M-003b**; extra cooldown/suppressie buiten **M-003c**; per-symbol tuning; HTML-form op **`/`** (bewust niet in M-003d/M-013k).
+**Bewust niet in M-003d:** auth; secrets; brede confluence-scorematrix; extra drempels buiten **M-003b**; extra cooldown/suppressie buiten **M-003c**; per-symbol tuning; HTML-form op **`/`** (volgt **M-013l**, niet in de kernstap M-003d zelf).
 
 \
 
@@ -2289,11 +2353,35 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-- **`webui`:** hintregel op **`/`** vermeldt de nieuwe POST-route (geen formulier).
+- **`webui`:** hintregel op **`/`** vermeldt de POST-route; **minimaal HTML-form:** § **M-013l**.
 
 \
 
-**Bewust niet in M-013k:** HTML-form op **`/`**; auth; secrets; brede confluence-matrix; extra drempels (**M-003b**) of timing (**M-003c**); per-symbol; tweede view; V1-migratie.
+**Bewust niet in M-013k:** HTML-form op **`/`** (**volgt § M-013l**); auth; secrets; brede confluence-matrix; extra drempels (**M-003b**) of timing (**M-003c**); per-symbol; tweede view; V1-migratie.
+
+\
+
+---
+
+\
+
+## M-013l — Minimaal WebUI-form op `/` voor confluence-policy (M-003d/M-013k) (uitgevoerd)
+
+\
+
+**Doel:** **M-013k** levert de **POST** voor dezelfde vier booleans als **M-003d**, maar nog geen **browserformulier**. **M-013l** sluit de **WebUI/config-lijn** op dit capability-niveau af: één **kleine sectie** op **`GET /`**, **zelfde velden** en **zelfde endpoint** (`POST /api/alert-confluence-policy.json`) — **zonder** nieuwe backendroute, **zonder** auth en **zonder** scope-uitbreiding. **Volgende primaire focus** verschuift naar de **M-002 hardening-batch** (§ **9a** werkpakket 2), **niet** naar verdere config-microstappen.
+
+\
+
+**Wat levert het op**
+
+\
+
+- **`webui`:** op de **hoofdpagina** een **formulier** met checkboxes voor `confluence_enabled`, `confluence_require_same_direction`, `confluence_require_both_thresholds`, `confluence_emit_loose_alerts_when_conf_fails`; huidige waarden uit **`config_store::alert_confluence_policy()`**; submit → **`POST /api/alert-confluence-policy.json`** (inline JS, zelfde patroon als M-013g/j); succes/fout in **`#alert-conf-msg`**; toelichting **volgende tick / geen herstart**.
+
+\
+
+**Bewust niet in M-013l:** auth; secrets; extra velden; tweede view; dashboard; nieuwe configuratiedomeinen; **M-002**-uitbreidingen in deze stap.
 
 \
 

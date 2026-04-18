@@ -15,6 +15,7 @@
  * M-013i: POST /api/alert-policy-timing.json → `persist_alert_policy_timing` (zelfde subset als M-003c).
  * M-013g: minimaal formulier op / voor diezelfde vier velden (POST naar alert-runtime.json).
  * M-013j: minimaal formulier op / voor alert-policy timing (POST naar alert-policy-timing.json).
+ * M-013l: minimaal formulier op / voor confluence-policy (POST naar alert-confluence-policy.json; M-003d/M-013k).
  * M-013h: read-only alert-beslissing per pad (1m/5m/confluence) in status.json + compact op /.
  */
 #include "webui/webui.hpp"
@@ -888,7 +889,7 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         "<title>CryptoAlert V2</title>"
         "<style>body{font-family:system-ui,sans-serif;margin:1rem;line-height:1.4}"
         "code{background:#eee;padding:2px 6px}fieldset{border:1px solid #ccc;border-radius:6px;padding:1rem;margin-top:1rem}"
-        "#svc-msg,#alert-runtime-msg,#alert-policy-msg{min-height:1.5em;margin-top:.75em;font-size:.95rem}"
+        "#svc-msg,#alert-runtime-msg,#alert-policy-msg,#alert-conf-msg{min-height:1.5em;margin-top:.75em;font-size:.95rem}"
         "</style></head><body>"
         "<h1>CryptoAlert V2</h1>"
         "<p><strong>Versie</strong> %s · <strong>IP</strong> %s · <strong>WiFi IP bekend</strong> %s</p>"
@@ -1143,6 +1144,59 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         }
         w += static_cast<size_t>(nap);
     }
+    {
+        const config_store::AlertConfluencePolicyConfig &acf = config_store::alert_confluence_policy();
+        const char *cf_en = acf.confluence_enabled ? " checked" : "";
+        const char *cf_sd = acf.confluence_require_same_direction ? " checked" : "";
+        const char *cf_bt = acf.confluence_require_both_thresholds ? " checked" : "";
+        const char *cf_lo = acf.confluence_emit_loose_alerts_when_conf_fails ? " checked" : "";
+        const int nacf = std::snprintf(
+            html + w,
+            k_html_alloc - w,
+            "<h2>Confluence-policy (M-013l)</h2>"
+            "<p class=\"hint\">Zelfde subset als M-003d/M-013k (booleans). <strong>Opslaan</strong> schrijft naar NVS; "
+            "<strong>alert_engine</strong> gebruikt de waarden vanaf de <strong>volgende tick</strong> "
+            "(geen firmware-herstart).</p>"
+            "<form id=\"alert-confluence-form\">"
+            "<fieldset><legend>Confluence-gedrag</legend>"
+            "<p><label><input type=\"checkbox\" id=\"acf_en\"%s/> confluence_enabled</label></p>"
+            "<p><label><input type=\"checkbox\" id=\"acf_sd\"%s/> confluence_require_same_direction</label></p>"
+            "<p><label><input type=\"checkbox\" id=\"acf_bt\"%s/> confluence_require_both_thresholds</label></p>"
+            "<p><label><input type=\"checkbox\" id=\"acf_lo\"%s/> confluence_emit_loose_alerts_when_conf_fails</label></p>"
+            "<p><button type=\"submit\">Confluence-policy opslaan</button></p>"
+            "</fieldset></form>"
+            "<p id=\"alert-conf-msg\"></p>"
+            "<script>"
+            "(function(){var f=document.getElementById('alert-confluence-form');"
+            "var m=document.getElementById('alert-conf-msg');if(!f||!m)return;"
+            "f.addEventListener('submit',function(e){e.preventDefault();m.textContent='Bezig…';m.style.color='#333';"
+            "var body=JSON.stringify({"
+            "confluence_enabled:document.getElementById('acf_en').checked,"
+            "confluence_require_same_direction:document.getElementById('acf_sd').checked,"
+            "confluence_require_both_thresholds:document.getElementById('acf_bt').checked,"
+            "confluence_emit_loose_alerts_when_conf_fails:document.getElementById('acf_lo').checked"
+            "});"
+            "fetch('/api/alert-confluence-policy.json',{method:'POST',headers:{'Content-Type':'application/json'},"
+            "body:body})"
+            ".then(function(r){return r.text().then(function(t){return {ok:r.ok,status:r.status,text:t};});})"
+            ".then(function(x){try{var j=JSON.parse(x.text);if(x.ok){m.style.color='#063';"
+            "m.textContent='Opgeslagen. '+(j.note||'');}else{m.style.color='#800';"
+            "m.textContent='Fout '+x.status+': '+(j.error||x.text);}}catch(err){"
+            "m.style.color=x.ok?'#063':'#800';m.textContent=x.ok?x.text:('Fout '+x.status+': '+x.text);}})"
+            ".catch(function(err){m.style.color='#800';m.textContent='Netwerkfout: '+err;});});})();"
+            "</script>",
+            cf_en,
+            cf_sd,
+            cf_bt,
+            cf_lo);
+        if (nacf <= 0 || w + static_cast<size_t>(nacf) >= k_html_alloc) {
+            ESP_LOGW(TAG, "M-013l: HTML confluence-policy-form overflow (nacf=%d)", nacf);
+            std::free(html);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
+            return ESP_FAIL;
+        }
+        w += static_cast<size_t>(nacf);
+    }
     n = std::snprintf(
         html + w, k_html_alloc - w,
         "<p><a href=\"/api/status.json\"><code>/api/status.json</code></a> "
@@ -1151,7 +1205,7 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         "<code>alert_runtime_config</code> M-003b, <code>alert_policy_timing</code> M-003c, "
         "<code>alert_confluence_policy</code> M-003d; "
         "POST <code>/api/alert-runtime.json</code> M-013f/g, <code>/api/alert-policy-timing.json</code> M-013i/j, "
-        "<code>/api/alert-confluence-policy.json</code> M-013k; "
+        "<code>/api/alert-confluence-policy.json</code> M-013k/l; "
         "M-014b)</p>"
         "<h2>OTA / boot</h2>"
         "<p><strong>Partitie</strong> %s @ 0x%08X · <strong>img-state</strong> %s<br/>"
@@ -1313,8 +1367,8 @@ esp_err_t init()
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &uo), TAG, "reg ota post");
 
     ESP_LOGI(TAG,
-             "M-013a–k + M-014a/b: webui poort %u — status+alerts+OTA, services, alert-runtime + "
-             "alert-policy + confluence-policy POST, OTA-upload",
+             "M-013a–l + M-014a/b: webui poort %u — status+alerts+OTA, services, alert-runtime + "
+             "alert-policy + confluence-policy POST+forms, OTA-upload",
              static_cast<unsigned>(port));
     return ESP_OK;
 #endif
