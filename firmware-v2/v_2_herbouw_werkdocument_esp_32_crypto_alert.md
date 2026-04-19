@@ -836,7 +836,7 @@ Gebruik dit hoofdstuk als formeel geheugen van gemaakte keuzes.
 
 **Consequenties:** **M-010** blijft “kern herschreven”; vervolg = kwaliteit + gefaseerde TF-uitbreiding. Zie § **WP-03a** voor matrix en C1–C5.
 
-**Actiepunten:** C1–C5 uitvoeren (**C5** = roadmap **30m/2h** vastgelegd in **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**); daarna **implementatie** van **30m/2h**-verticale slices (metrics → engine → outbound), elk met dezelfde discipline als 1m/5m — start **S30-1**.
+**Actiepunten:** C1–C5 uitvoeren (**C5** = roadmap **30m/2h** vastgelegd in **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**); **implementatie** van **30m/2h**-verticale slices (metrics → engine → outbound): **S30-1**–**S30-3** + **S2H-1**–**S2H-3** **afgerond** (§ **S30-1**–§ **S30-3**, § **S2H-1**–§ **S2H-3**); **productierijpheid:** **[PR01_RELEASE_READINESS_BASELINE.md](../../docs/architecture/PR01_RELEASE_READINESS_BASELINE.md)** + **[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**; **eerstvolgende uitvoering:** runs invullen + **PR-03** …
 
 **Status:** besloten; **koers** t.o.v. 30m/2h hierboven **aangescherpt** t.o.v. eerdere formulering (“uitgesteld” ≠ “afgewezen als productdoel”).
 
@@ -1002,7 +1002,7 @@ Dat plaatst het project in een **eerste geïntegreerde beta-/consolidatiefase**:
 
 | **Observability / beheer** | Ver gevorderd: WebUI-status, alert-/regime-observability, OTA-info, gerichte JSON-writes. |
 
-| **Productierijpheid** | Nog niet: teststrategie, releasecriteria en operatie ontbreken als **uitgewerkt** blok (wel erkenning in § **9a** werkpakket 5). |
+| **Productierijpheid** | **PR-01** baseline + **PR-02** testmatrix (**[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**) vastgelegd; release-doel, TM-01…TM-09, run-template. **Hardware-invulling** van runs + **PR-03** (blockers/known issues) volgt (zie § **9a** werkpakket 5). |
 
 | **Multi-board** | Nog niet: **GEEK** is referentie; **JC3248W535** / **LCDWIKI** horen in een **apart** pakket, niet “erbij” in kleine haakjes. |
 
@@ -1026,7 +1026,7 @@ Geen vervanging van de migratiematrix, wel **samenhangende blokken** i.p.v. een 
 
 4b. **RWS — parallel** (§ **RWS**) — **RWS-01** + **RWS-02** afgerond (ticker+`trades` subscribe, bounded trade-ring, read-only observability); **RWS-03+** = SecondSampler/aggregate (geen conflict met C3-volgorde tenzij herprioriteerd).
 
-5. **Productierijpheid / operatie / test- en releasekwaliteit** — CI waar zinvol, flash/partitiebeleid, release-notes, **concrete** field-testcriteria (geen vage “nog veel werk”).
+5. **Productierijpheid / operatie / test- en releasekwaliteit** — **PR-01** baseline (**[PR01_RELEASE_READINESS_BASELINE.md](../../docs/architecture/PR01_RELEASE_READINESS_BASELINE.md)**) + **PR-02** uitgewerkt (**[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**): uitvoerbare matrix TM-01…TM-09 + eerste-invulrun-template (GEEK, `v2/foundation`). **Vervolg:** hardware-runs invullen + **PR-03** blockers/known issues afdwingen → **PR-04** RC-checklist / eerste candidate. Geen brede CI-herbouw tenzij no-regret.
 
 6. **Extra boards (JC3248W535 / LCDWIKI)** — BSP/flash/display **na** besluit; los trekken van GEEK-consolidatie.
 
@@ -1054,11 +1054,11 @@ Geen vervanging van de migratiematrix, wel **samenhangende blokken** i.p.v. een 
 
 2. **M-002 hardening-batch** — **afgerond** (**§ M-002h**); `M002_NETWORK_BOUNDARIES.md` bijgewerkt.
 
-3. **Consolidatie + V1-gap review** — **stuurversie vastgelegd** (**§ WP-03a**, **D-010**); **C1** afgerond; **C2** uitgewerkt (§ **C2**); **C3** afgerond (§ **C3**); **C4** afgerond (§ **C4**); **C5** roadmap **30m/2h** afgerond (documentatie, § **C5**). **Volgende technische lens:** **S30-1** (30m-metrics-slice). Geen nieuwe WebUI-settings in consolidatiefase tenzij apart besloten.
+3. **Consolidatie + V1-gap review** — **stuurversie vastgelegd** (**§ WP-03a**, **D-010**); **C1**–**C5** afgerond. **S30-1**–**S30-3** + **S2H-1**–**S2H-3** afgerond (§ **S30-1**–§ **S30-3**, § **S2H-1**–§ **S2H-3**). **Productierijpheid:** **PR-01** + **PR-02** vastgelegd (**[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**); **eerstvolgende uitvoering:** testruns invullen + **PR-03**. Geen nieuwe WebUI-settings in consolidatiefase tenzij apart besloten.
 
 4. **RWS** (§ **RWS**) — parallel; **RWS-01** + **RWS-02** read-only (`ws_feed_observability`, `ws_trades_observability`); **geen** alert-semantiek-wijziging; officiële prijs ongewijzigd ticker-gebaseerd.
 
-5. **Productierijpheid** (test, release, operatie) — pas als (1)–(3) **duidelijke** voortgang hebben; zie § **9a** werkpakket 5.
+5. **Productierijpheid** (test, release, operatie) — **PR-01** + **PR-02** vastgelegd (**[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**); **eerstvolgende stap:** runs invullen op GEEK + **PR-03** (blockers/known issues); zie § **9a** werkpakket 5 en § **15**.
 
 6. **Werkdocument en migratiematrix** bijwerken op **werkpakket**-niveau (§ **9a**), niet alleen losse M-nummers.
 
@@ -1520,11 +1520,13 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 2. **Afgerond:** **M-002 hardening-batch** (**§ M-002h**) — queues/backpressure, mutex-observability, ownership — zie `M002_NETWORK_BOUNDARIES.md`.
 
-3. **Vervolgens:** **V1-gap / scope** (**§ WP-03a**, **D-010**) — **C1** afgerond, **C2** uitgewerkt ([C2_EDGE_CASES_1M5M.md](../../docs/architecture/C2_EDGE_CASES_1M5M.md)), **C3** afgerond (§ **C3**), **C4** afgerond (§ **C4**), **C5** roadmap **30m/2h** afgerond (§ **C5**, **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**). **Eerstvolgende implementatie:** slice **S30-1** (30m-metrics). **Parallel:** **RWS-01** + **RWS-02** afgerond (§ **RWS**); **RWS-03** = SecondSampler/aggregate. **Pas daarna** verdere verbreding en **productierijpheid** (§ **9a** werkpakket 5).
+3. **Afgerond:** **V1-gap / scope** (**§ WP-03a**, **D-010**) — **C1**–**C5** afgerond; **S30-1**–**S30-3** + **S2H-1**–**S2H-3** **afgerond** (§ **S30-1**–§ **S30-3**, § **S2H-1**–§ **S2H-3**).
+
+4. **Nu (productierijpheid — subfasen):** **PR-01** baseline (**[PR01_RELEASE_READINESS_BASELINE.md](../../docs/architecture/PR01_RELEASE_READINESS_BASELINE.md)**) + **PR-02** testmatrix **uitgewerkt** (**[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**): TM-01…TM-09, uitvoerbare stappen, invul-template en voorbeeldblok. **Eerstvolgende uitvoerbare substep:** minimaal **één** ingevulde run (§4 in PR-02) op **GEEK** + `v2/foundation`, daarna **PR-03** — blockers/known issues en go/no-go. Daarna: **PR-04** (RC-checklist / eerste candidate). **Parallel:** **RWS** (§ **RWS**); **RWS-03** — **niet** automatisch eerst.
 
 \
 
-**Discipline:** geen tegenstrijdigheid tussen “kleine afronding” en “grote pakketten” — de kleine afronding is **bewust de sluiting** van de huidige config-lijn; het **volgende** werk is **per definitie** groter gesneden.
+**Discipline:** geen tegenstrijdigheid tussen “kleine afronding” en “grote pakketten” — productierijpheid wordt **stap voor stap** toetsbaar gemaakt (PR-02…), niet alleen als intentie (§ **13**).
 
 \
 
@@ -1562,9 +1564,9 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 |--------|------------------|---------|------------------|
 
-| **Metrics / TF** | 1m, 5m, **30m**, **2h**-context; `PriceData` + buffers | Canoniek **per seconde** → **1m/5m %**; **nog** geen 30m/2h in `domain_metrics` | V2: deterministischer kernpad; **einddoel** = ook **30m/2h** (**gefaseerde** metrics-uitbreiding, zie **D-010**). |
+| **Metrics / TF** | 1m, 5m, **30m**, **2h**-context; `PriceData` + buffers | Canoniek **per seconde** → **1m/5m/30m**; **2h** via **minuut-ring** + `compute_2h_move_pct` (**S2H-1**) | V2: **2h**-engine + outbound (**S2H-2** / **S2H-3**) — **afgerond**. |
 
-| **Alerts** | Spike/move + **2h-familie** (trend/compress/breakout/anchor-ctx), veel takken | **1m, 5m**, **confluence 1m+5m** (M-010d/e), suppress na conf | V2 dekt nu de **intraday-kern**; **geen** kopie van V1’s **2h-matrix**. **Einddoel** blijft o.a. **2h**-alerts **als** aparte, **schone** verticale slice — **niet** als “geen 2h ooit”. |
+| **Alerts** | Spike/move + **2h-familie** (trend/compress/breakout/anchor-ctx), veel takken | **1m, 5m**, **30m** (NTFY/MQTT, **S30-3**), **2h** (NTFY/MQTT, **S2H-3**), **confluence 1m+5m** (M-010d/e), suppress na conf | V2: **2h** product-outbound **afgerond** (**S2H-3**). **Geen** kopie van V1’s **2h-matrix**. |
 
 | **Regime** | `RegimeEngine`: slap / geladen / energiek + vele multipliers | **M-010f** calm/normal/hot, **‰-schaal** op 1m/5m | Bewust **lichtgewicht** i.p.v. V1-regime-import. |
 
@@ -1632,7 +1634,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-- **Implementatie** van **30m** (metric/alert) en **2h**-signalen: **na** stabiele, toetsbare **1m/5m-kern**; **C5** heeft **roadmap + slices** vastgelegd (**[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**); **start** = **S30-1** — zie **D-010**.
+- **Implementatie** van **30m** (metric/alert) en **2h**-signalen: **na** stabiele, toetsbare **1m/5m-kern**; **C5** heeft **roadmap + slices** vastgelegd (**[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**); **S30-1** afgerond — zie **D-010** / § **S30-1**.
 
 - **Night mode** / tijdvensters.
 
@@ -1660,7 +1662,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 | **C4** | Notificatie-consistentie | **Afgerond:** uniforme NTFY-titels (`CryptoAlert V2 · <type> · UP/DOWN · symbool`); NTFY-bodyregel `Soort:` gelijk aan MQTT-`kind` (`alert_1m` / `alert_5m` / `alert_confluence_1m5m`); MQTT-JSON eerst `kind`, daarna `symbol`, `dir`, `price_eur`, pct-velden, `ts_ms` — zie § **C4** |
 
-| **C5** | Roadmap **30m / 2h** | **Afgerond (documentatie):** verticale slices en volgorde vastgelegd in **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**; **eerstvolgende implementatieslice:** **S30-1** (30m-metrics) — zie § **C5** |
+| **C5** | Roadmap **30m / 2h** | **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**; **S30-1**–**S30-3** + **S2H-1**–**S2H-3** **afgerond**; **productierijpheid:** **[PR01](../../docs/architecture/PR01_RELEASE_READINESS_BASELINE.md)** + **[PR02](../../docs/architecture/PR02_TEST_MATRIX.md)** → **PR-03** … **PR-04** |
 
 \
 
@@ -1670,7 +1672,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 - **§11b M-010:** “herschrijven” = kern **aanwezig**; consolidatie = **kwaliteit + bewijs** — **C1–C5** (roadmap **30m/2h** als documentaire stap) afgerond; **implementatie** TF-uitbreiding volgt **verticale slices** (§ **C5**, **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**); geen V1-import.
 
-- **§9a / §10 / §15:** **C1–C4** afgerond; **C5** roadmap **30m/2h** vastgelegd; **volgende technische stap** = **S30-1** (30m-metrics), niet de volledige TF in één keer; **geen** terugval naar V1-monoliet.
+- **§9a / §10 / §15:** **C1–C5** afgerond; **S30-1**–**S30-3** + **S2H-1**–**S2H-3** afgerond (§ **S30-1**–§ **S30-3**, § **S2H-1**–§ **S2H-3**); **productierijpheid** = **PR-01** + **PR-02** (**[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**) + uitvoering **PR-03**–**PR-04**; **geen** terugval naar V1-monoliet.
 
 \
 
@@ -1718,7 +1720,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Volgende stap:** implementatie **30m/2h** volgens **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)** — start **S30-1**; voorgangers **C3**–**C5** (§ **C3**, § **C4**, § **C5**).
+**Volgende stap:** **productierijpheid / releasekwaliteit** — **S30-1**–**S30-3** + **S2H-1**–**S2H-3** afgerond; zie **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**; voorgangers **C3**–**C5** (§ **C3**, § **C4**, § **C5**).
 
 \
 
@@ -1762,7 +1764,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Volgende stap:** **C5** roadmap afgerond (§ **C5**); **eerstvolgende bouw:** slice **S30-1**. **C4** notificaties: afgerond (§ **C4**).
+**Volgende stap:** **C5** roadmap afgerond (§ **C5**); **S30-1**–**S30-3** + **S2H-1**–**S2H-3** afgerond (§ **S30-1**–§ **S30-3**, § **S2H-1**–§ **S2H-3**); **eerstvolgende lens:** productierijpheid. **C4** notificaties: afgerond (§ **C4**).
 
 \
 
@@ -1798,7 +1800,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Volgende stap:** **C5** afgerond als documentatie — zie § **C5** en **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**; **eerstvolgende implementatie:** slice **S30-1** (30m-metrics).
+**Volgende stap:** **C5** afgerond als documentatie — zie § **C5** en **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**; **S30-1**–**S30-3** + **S2H-1**–**S2H-3** afgerond (§ **S30-1**–§ **S30-3**, § **S2H-1**–§ **S2H-3**); **eerstvolgende lens:** productierijpheid / releasekwaliteit.
 
 \
 
@@ -1826,15 +1828,218 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 - Zes slices in volgorde: **S30-1** (30m metrics) → **S30-2** (30m alert_engine) → **S30-3** (30m outbound/observability) → **S2H-1** (2h metrics) → **S2H-2** (2h alert_engine) → **S2H-3** (2h outbound/observability).
 - **Functioneel gewenst:** 30m- en 2h-alerts in V2-stijl; **technisch níet:** V1 2h-matrix, AnchorSystem, TrendDetector, brede RegimeEngine-port, policy-explosie.
-- **Huidige `domain_metrics`:** ring **~400** canonieke samples (**~6,7 min**) — **onvoldoende** voor naïeve 30m/2h zonder ontwerpkeuze (ring/decimatie); zie roadmap.
+- **`domain_metrics`:** canonieke ring **~1920** slots (**S30-1**, 30m); **2h**-metric (**S2H-1**) via **minuut-decimatie-ring** + `compute_2h_move_pct` (geen 7200×1 Hz — zie § **S2H-1**).
 
 \
 
-**Eerstvolgende implementatieslice:** **S30-1** — 30m-metrics in `domain_metrics` (parallel aan 1m/5m-patroon).
+**Slices S30-1 / S30-2 / S30-3 / S2H-1 / S2H-2 / S2H-3:** **afgerond** — zie § **S30-1**, § **S30-2**, § **S30-3**, § **S2H-1**, § **S2H-2**, § **S2H-3**.
 
 \
 
-**Bewust niet in C5-stap:** code voor 30m/2h alerts; WebUI-uitbreiding; RWS-03; extra boards.
+**Eerstvolgende grote lens:** **productierijpheid / releasekwaliteit** — 30m- en 2h-verticale slices zijn compleet; **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)** bijgewerkt; **PR-01** + **PR-02** (**[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**) vastgelegd; **eerstvolgende uitvoering:** ingevulde testrun(s) + **PR-03**. **RWS-03** blijft parallel en is **niet** automatisch de eerstvolgende bouwstap.
+
+\
+
+**Bewust niet in één keer combineren:** verdere TF-complexiteit (V1 2h-matrix, confluence 2h, …) vóór release-hardening; overmatige WebUI-uitbreiding; RWS-03 als impliciete blocker; extra boards.
+
+\
+
+---
+
+\
+
+## S30-1 — 30m-metrics (implementatieslice; afgerond)
+
+\
+
+**Status:** **Afgerond** (firmware).
+
+\
+
+**Doel:** eerste **30m signed %-move** op het **bestaande canonieke 1 Hz-prijspad**, parallel aan 1m/5m, **zonder** alert_engine/outbound.
+
+\
+
+**Techniek**
+
+- **Historie:** één **vergrote** rolling ring (`Sample`: `ts_ms` + `EUR`); cap = `CONFIG_DOMAIN_METRICS_30M_WINDOW_S` + `CONFIG_DOMAIN_METRICS_CANONICAL_RING_EXTRA_S` (default **1800 + 120** s). **Prune-horizon** gelijk aan die cap (zelfde idee als voorheen 6 min, nu ~32 min).
+- **Metric:** `compute_30m_move_pct()` → `Metric30mMovePct`: referentie = **nieuwste** canonieke sample met `ts ≤ now − window` (default 1800 s); `ready=false` bij onvoldoende historie; `ref_span_ms = now − ref` bij `ready`.
+- **Observability (read-only):** object **`metric_30m_observability`** in **`GET /api/status.json`** (`ready`, `pct`, prijzen, timestamps, `canonical_ring_samples`, `ring_cap`, `window_s`).
+
+\
+
+**Bewust niet gedaan (S30-1):** integratie in `alert_engine`, NTFY/MQTT, 2h, decimatie als **hoofd**-pad (alleen ringvergroting voor 30m — voldoende klein en reviewbaar).
+
+\
+
+**Volgende stap:** **S30-2** (30m alert_engine) — nu afgerond (§ **S30-2**).
+
+\
+
+---
+
+\
+
+## S30-2 — 30m alert_engine (implementatieslice; afgerond)
+
+\
+
+**Status:** **Afgerond** (firmware).
+
+\
+
+**Doel:** eerste **30m-beslispad** op `compute_30m_move_pct()` met **eigen** drempel en cooldown, **zelfde M-010f ‰-schaal** als 1m/5m, **zonder** koppeling aan confluence/suppress (M-010e). **Product-outbound** hoort bij **S30-3**.
+
+\
+
+**Techniek**
+
+- **Kconfig:** `CONFIG_ALERT_ENGINE_30M_THRESHOLD_BPS`, `CONFIG_ALERT_ENGINE_30M_COOLDOWN_S` (defaults in `sdkconfig.defaults`); **geen** NVS-runtime voor 30m in deze slice.
+- **Logica:** \|pct\| ≥ effectieve drempel ⇒ beslis-snapshot + `emit_total_30m` / `last_emit_epoch_ms_30m` (tellers voor outbound-events na **S30-3**).
+- **Observability (beslislaag):** `alert_decision_observability` met **`tf_30m`**; `regime_observability` met **basis/effectief** `move_pct_30m`; `alert_engine_runtime_stats` met 30m-emits en **`edge_30m`** (C2). WebUI read-only waar al aanwezig.
+
+\
+
+**Bewust niet in S30-2:** NTFY/MQTT (→ **S30-3**); nieuwe POST/WebUI-forms; 30m+5m confluence; 2h; RWS-03.
+
+\
+
+**Volgende stap:** **S30-3** — nu afgerond (§ **S30-3**).
+
+\
+
+---
+
+\
+
+## S30-3 — 30m outbound + observability (implementatieslice; afgerond)
+
+\
+
+**Status:** **Afgerond** (firmware **2.7.0**).
+
+\
+
+**Doel:** 30m-alert **productmatig** op dezelfde lijn als 1m/5m: **NTFY**, **MQTT** (`kind` **alert_30m**, topic `MQTT_TOPIC_DOMAIN_ALERT_30M`), read-only **alert-ring** + **`alerts_30m`** in **`GET /api/status.json`**, compacte HTML-sectie op **`/`** — **zonder** nieuwe policylaag, **zonder** 30m-confluence, **zonder** 2h.
+
+\
+
+**Techniek**
+
+- **`service_outbound`:** `Event::DomainAlert30mMove`, `DomainAlert30mMovePayload` (`pct_30m`, `price_eur`, `ts_ms`, `symbol`, `up`); `emit_domain_alert_30m` → queue → dispatch: `alert_observability::record_30m_alert` vóór NTFY/MQTT (zelfde volgorde als 1m/5m).
+- **`ntfy_client`:** titel `CryptoAlert V2 · 30m · …`, body `Soort: alert_30m` + prijs/%/ts_ms (C4).
+- **`mqtt_bridge`:** compact JSON parallel aan 5m; default topic `cryptoalert/v2/alert/30m`.
+- **`alert_observability`:** ring `alerts_30m` (items met `pct_30m`); `append_alerts_30m_html_section`.
+
+\
+
+**Bewust niet gedaan (S30-3):** 2h; 30m+1m/5m-confluence; NVS-runtime voor 30m; extra dashboards; RWS-03; WebUI-settings/forms.
+
+\
+
+**Volgende stap:** **S2H-1** — nu afgerond (§ **S2H-1**).
+
+\
+
+---
+
+\
+
+## S2H-1 — 2h-metrics (implementatieslice; afgerond)
+
+\
+
+**Status:** **Afgerond** (firmware **2.8.0**).
+
+\
+
+**Doel:** eerste **2h signed %-move** in `domain_metrics`, parallel aan 1m/5m/30m qua **betekenis** (`ready`, `pct`, ref/now, `ref_span_ms`), **zonder** 2h-alerts, **zonder** 2h-outbound.
+
+\
+
+**Waarom niet dezelfde ring als 30m:** een volledige **7200×** canonieke 1 Hz-buffer zou **~115 KiB** extra SRAM kosten (vs. **~30 KiB** voor ~32 min). **S2H-1** kiest daarom een **aparte rolling minuut-ring** (±`ceil(window/60)+extra` slots): **~2–3 KiB**, reviewbaar en voldoende voor een referentie **rond** \(t - 2h\).
+
+\
+
+**Techniek**
+
+- **Kconfig:** `DOMAIN_METRICS_2H_WINDOW_S` (default **7200**), `DOMAIN_METRICS_2H_MINUTE_RING_EXTRA_SLOTS` (default **24**); ringcap = `ceil(window_s/60) + extra + buffer`.
+- **Invoer:** bij elke canonieke seconde (inclusief **carry-forward** seconden) wordt de minuut-buffer bijgewerkt: bij **wandklok-minuutwissel** wordt de **laatste** sample van de vorige minuut gecommit.
+- **Metric:** `compute_2h_move_pct()` → `Metric2hMovePct`: **now** uit de bestaande 1 Hz-ring; **ref** = nieuwste minuut-slot met `ts_ms ≤ now − window`; `ready=false` tot er genoeg minuut-historie is (**warmup ≈ 2 uur** live).
+- **Observability:** **`metric_2h_observability`** in **`GET /api/status.json`** (`ready`, `pct`, prijzen, timestamps, `ref_span_ms`, `minute_ring_used`, `window_s`, `minute_ring_cap`).
+
+\
+
+**Bewust niet gedaan (S2H-1):** `alert_engine`, NTFY/MQTT, confluence, RWS-03, WebUI-settings.
+
+\
+
+**Volgende stap:** **S2H-2** — nu afgerond (§ **S2H-2**).
+
+\
+
+---
+
+\
+
+## S2H-2 — 2h alert_engine (implementatieslice; afgerond)
+
+\
+
+**Status:** **Afgerond** (firmware **2.9.0**).
+
+\
+
+**Doel:** eerste **2h %-move-beslispad** op `compute_2h_move_pct()` met **eigen** drempel en cooldown (Kconfig), **zelfde M-010f ‰-schaal** als 1m/5m/30m, **zonder** `service_outbound` (**S2H-3**) en **zonder** confluence/suppress uit M-010e.
+
+\
+
+**Techniek**
+
+- **Kconfig:** `CONFIG_ALERT_ENGINE_2H_THRESHOLD_BPS`, `CONFIG_ALERT_ENGINE_2H_COOLDOWN_S` (defaults in `sdkconfig.defaults`); **geen** NVS-runtime voor 2h in deze slice.
+- **Logica:** `m2h.ready` en \|pct\| ≥ effectieve drempel ⇒ seriële **`ESP_LOGI`** (`S2H-2: 2h move alert … — log only, geen outbound (S2H-3)`); `emit_total_2h` / `last_emit_epoch_ms_2h`; cooldown op **esp-timer ms** parallel aan 30m.
+- **Observability:** `alert_decision_observability.tf_2h`; `regime_observability` **basis/effectief** `move_pct_2h`; `alert_engine_runtime_stats` + **`edge_2h`** (C2). WebUI **`/`** + **`/api/status.json`** read-only.
+
+\
+
+**Bewust niet gedaan (S2H-2):** NTFY/MQTT, `alerts_2h`-ring, nieuwe WebUI-forms, 2h-confluence, RWS-03.
+
+\
+
+**Volgende stap:** **S2H-3** — nu afgerond (§ **S2H-3**).
+
+\
+
+---
+
+\
+
+## S2H-3 — 2h outbound + observability (implementatieslice; afgerond)
+
+\
+
+**Status:** **Afgerond** (firmware **3.0.0**).
+
+\
+
+**Doel:** 2h **%-move-alert** op dezelfde productkanalen als 1m/5m/30m: **NTFY**, **MQTT** (`kind` **alert_2h**, topic **`MQTT_TOPIC_DOMAIN_ALERT_2H`**), read-only **alert-ring** + **`alerts_2h`** in **`GET /api/status.json`**, compacte HTML-sectie op **`/`** — **zonder** nieuwe policylaag, **zonder** 2h-confluence of V1 2h-matrix.
+
+\
+
+**Techniek**
+
+- **`service_outbound`:** `Event::DomainAlert2hMove`, `DomainAlert2hMovePayload` (`pct_2h`), `emit_domain_alert_2h` → queue → `record_2h_alert` → NTFY + MQTT (zelfde volgorde als 30m).
+- **`mqtt_bridge`:** `publish_domain_alert_2h` — compacte JSON: `symbol`, `dir`, `price_eur`, `pct_2h`, `ts_ms`.
+- **`alert_observability`:** RAM-ring `alerts_2h` (max 8, zelfde patroon als 30m); `append_alerts_2h_html_section` op `/`.
+- **`alert_engine`:** bij vuur na drempel/cooldown: payload vullen + `emit_domain_alert_2h`; logs **`S2H-3:`**; `emit_total_2h` telt outbound-queue-events.
+
+\
+
+**Bewust niet gedaan (S2H-3):** 2h-confluence; NVS-runtime voor 2h; dashboards/grafieken; RWS-03; AnchorSystem / TrendDetector; V1-port.
+
+\
+
+**Volgende stap:** ingevulde **PR-02**-run(s) op GEEK + **PR-03** (blockers/known issues) — zie **[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**; RWS-03 blijft parallel (zie § **RWS**).
 
 \
 

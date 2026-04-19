@@ -137,6 +137,20 @@ menu "ESP32 Crypto Alert V2"
         help
             Zelfde vorm als 1m-topic; veld pct_5m.
 
+    config MQTT_TOPIC_DOMAIN_ALERT_30M
+        string "S30-3: MQTT topic voor 30m domeinalert (JSON)"
+        default "cryptoalert/v2/alert/30m"
+        depends on MQTT_BRIDGE_ENABLE
+        help
+            Zelfde vorm als 5m-topic; veld pct_30m, kind alert_30m.
+
+    config MQTT_TOPIC_DOMAIN_ALERT_2H
+        string "S2H-3: MQTT topic voor 2h domeinalert (JSON)"
+        default "cryptoalert/v2/alert/2h"
+        depends on MQTT_BRIDGE_ENABLE
+        help
+            Zelfde vorm als 30m-topic; veld pct_2h, kind alert_2h.
+
     config MQTT_TOPIC_DOMAIN_ALERT_CONF_1M5M
         string "M-010d: MQTT topic voor 1m+5m confluence (JSON)"
         default "cryptoalert/v2/alert/conf_1m5m"
@@ -155,6 +169,36 @@ menu "ESP32 Crypto Alert V2"
         range 1024 65535
         default 8080
         depends on WEBUI_ENABLE
+
+    config DOMAIN_METRICS_30M_WINDOW_S
+        int "S30-1: 30m-metric lookback (seconden)"
+        range 300 3600
+        default 1800
+        help
+            Signed procentuele move: referentie = nieuwste canonieke sample met ts ≤ now − window.
+            Canonieke ringcap = venster + DOMAIN_METRICS_CANONICAL_RING_EXTRA_S.
+
+    config DOMAIN_METRICS_CANONICAL_RING_EXTRA_S
+        int "S30-1: extra canonieke geschiedenis boven 30m-venster (seconden)"
+        range 30 600
+        default 120
+        help
+            Marge voor 1m/5m-metriek, bucketgrenzen en kleine gaps. Totale ring ≈ window + extra.
+
+    config DOMAIN_METRICS_2H_WINDOW_S
+        int "S2H-1: 2h-metric lookback (seconden)"
+        range 3600 28800
+        default 7200
+        help
+            Signed %-move: referentie = nieuwste minuut-slot met ts ≤ now − window.
+            Historie via aparte minuut-ring (geen 7200×1 Hz canonieke samples).
+
+    config DOMAIN_METRICS_2H_MINUTE_RING_EXTRA_SLOTS
+        int "S2H-1: extra minuut-slots boven lookback (marge / gaps)"
+        range 4 120
+        default 24
+        help
+            Ringcap = ceil(2h_window_s/60) + extra + kleine buffer.
 
     config ALERT_ENGINE_1M_THRESHOLD_BPS
         int "M-010a: 1m move alert threshold (honderdsten %; 16 = 0,16%)"
@@ -184,6 +228,36 @@ menu "ESP32 Crypto Alert V2"
         default 300
         help
             Minimum tijd tussen twee DomainAlert5mMove-events.
+
+    config ALERT_ENGINE_30M_THRESHOLD_BPS
+        int "S30-2: 30m move alert threshold (honderdsten %; 64 = 0,64%)"
+        range 1 5000
+        default 64
+        help
+            Absolute 30m procentuele prijsbeweging (|pct|) vóór een 30m-beslissing.
+            Zelfde M-010f ‰-schaal als 1m/5m. S30-2: alleen logs + observability (geen outbound).
+
+    config ALERT_ENGINE_30M_COOLDOWN_S
+        int "S30-2: cooldown tussen 30m-alert-beslissingen (seconden)"
+        range 60 14400
+        default 1800
+        help
+            Minimum tijd tussen twee 30m-fires (log + stats). Standaard 30 minuten.
+
+    config ALERT_ENGINE_2H_THRESHOLD_BPS
+        int "S2H-2: 2h move alert threshold (honderdsten %; 128 = 1,28%)"
+        range 1 10000
+        default 128
+        help
+            Absolute 2h procentuele prijsbeweging (|pct|) vóór een 2h-beslissing.
+            Zelfde M-010f ‰-schaal als 1m/5m/30m. S2H-2: alleen logs + observability (geen outbound tot S2H-3).
+
+    config ALERT_ENGINE_2H_COOLDOWN_S
+        int "S2H-2: cooldown tussen 2h-alert-beslissingen (seconden)"
+        range 300 86400
+        default 7200
+        help
+            Minimum tijd tussen twee 2h-fires (log + stats). Standaard 2 uur.
 
     config ALERT_ENGINE_CONF_1M5M_COOLDOWN_S
         int "M-010d: cooldown tussen confluence-alerts (1m+5m, seconden)"

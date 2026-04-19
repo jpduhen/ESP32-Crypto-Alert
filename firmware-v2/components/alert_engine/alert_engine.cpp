@@ -1,6 +1,8 @@
 /**
  * M-010a: eerste alert vertical slice — drempel + cooldown (1m).
  * M-010c: parallel 5m-route (eigen drempel/cooldown/event).
+ * S30-2/S30-3: parallel 30m-route — drempel/cooldown + logs + decision-observability; S30-3: outbound via `service_outbound`.
+ * S2H-2/S2H-3: parallel 2h-route op `compute_2h_move_pct` — drempel/cooldown + logs; S2H-3: outbound via `service_outbound`.
  * M-010d: eenvoudige confluence (1m+5m zelfde richting, beide boven drempel, eigen cooldown).
  * M-010e: confluence vóór losse TF; na confluence kort venster: zelfde richting 1m/5m niet dubbel.
  * M-010f: mini-regime (calm/normal/hot) uit vol-proxy — alleen lichte schaal van 1m/5m/conf-drempels.
@@ -29,6 +31,18 @@
 #endif
 #ifndef CONFIG_ALERT_ENGINE_5M_THRESHOLD_BPS
 #define CONFIG_ALERT_ENGINE_5M_THRESHOLD_BPS 32
+#endif
+#ifndef CONFIG_ALERT_ENGINE_30M_THRESHOLD_BPS
+#define CONFIG_ALERT_ENGINE_30M_THRESHOLD_BPS 64
+#endif
+#ifndef CONFIG_ALERT_ENGINE_30M_COOLDOWN_S
+#define CONFIG_ALERT_ENGINE_30M_COOLDOWN_S 1800
+#endif
+#ifndef CONFIG_ALERT_ENGINE_2H_THRESHOLD_BPS
+#define CONFIG_ALERT_ENGINE_2H_THRESHOLD_BPS 128
+#endif
+#ifndef CONFIG_ALERT_ENGINE_2H_COOLDOWN_S
+#define CONFIG_ALERT_ENGINE_2H_COOLDOWN_S 7200
 #endif
 #ifndef CONFIG_ALERT_REGIME_CALM_MAX_STEP_BPS
 #define CONFIG_ALERT_REGIME_CALM_MAX_STEP_BPS 6
@@ -63,6 +77,8 @@ static const char TAG[] = DIAG_TAG_ALERT;
 
 static int64_t s_last_fire_1m_ms{-1};
 static int64_t s_last_fire_5m_ms{-1};
+static int64_t s_last_fire_30m_ms{-1};
+static int64_t s_last_fire_2h_ms{-1};
 static int64_t s_last_fire_conf_ms{-1};
 
 /** Na confluence: tot deze tijd (esp-timer ms) geen losse 1m/5m met zelfde richting als confluence. */
@@ -205,15 +221,23 @@ static void path_set(AlertPathDecisionSnapshot *p,
 /** M-013h: één plek —zelfde voorwaarden als de emit-paden in `tick()`, na bijwerken van fire-timestamps. */
 static void refresh_decision_observability(const domain_metrics::Metric1mMovePct &m1,
                                            const domain_metrics::Metric5mMovePct &m5,
+                                           const domain_metrics::Metric30mMovePct &m30,
+                                           const domain_metrics::Metric2hMovePct &m2h,
                                            double eff_thr_1m_pct,
                                            double eff_thr_5m_pct,
+                                           double eff_thr_30m_pct,
+                                           double eff_thr_2h_pct,
                                            int64_t now_ms,
                                            int64_t cd1_ms,
                                            int64_t cd5_ms,
+                                           int64_t cd30_ms,
+                                           int64_t cd2h_ms,
                                            int64_t cd_cf_ms,
                                            bool fired_conf_this_tick,
                                            bool fired_1m_this_tick,
                                            bool fired_5m_this_tick,
+                                           bool fired_30m_this_tick,
+                                           bool fired_2h_this_tick,
                                            bool loose_blocked_by_conf_policy,
                                            const config_store::AlertConfluencePolicyConfig &cfp)
 {
@@ -298,8 +322,46 @@ static void refresh_decision_observability(const domain_metrics::Metric1mMovePct
         }
     }
 
+    /* --- 30m (S30-2: geen confluence/suppress uit M-010e) --- */
+    if (!m30.ready) {
+        path_set(&s_decision_obs.tf_30m, "not_ready", "metrics_not_ready", -1, -1);
+    } else {
+        const double ap30 = std::fabs(m30.pct);
+        if (ap30 < eff_thr_30m_pct) {
+            path_set(&s_decision_obs.tf_30m, "below_threshold", "", -1, -1);
+        } else if (!fired_30m_this_tick && s_last_fire_30m_ms >= 0 &&
+                   (now_ms - s_last_fire_30m_ms) < cd30_ms) {
+            const int64_t rem30 = cd30_ms - (now_ms - s_last_fire_30m_ms);
+            path_set(&s_decision_obs.tf_30m, "cooldown", "", rem30, -1);
+        } else if (fired_30m_this_tick) {
+            path_set(&s_decision_obs.tf_30m, "fired", "", cd30_ms, -1);
+        } else {
+            path_set(&s_decision_obs.tf_30m, "invalid", "internal", -1, -1);
+        }
+    }
+
+    /* --- 2h (S2H-2: geen confluence/suppress uit M-010e) --- */
+    if (!m2h.ready) {
+        path_set(&s_decision_obs.tf_2h, "not_ready", "metrics_not_ready", -1, -1);
+    } else {
+        const double ap2h = std::fabs(m2h.pct);
+        if (ap2h < eff_thr_2h_pct) {
+            path_set(&s_decision_obs.tf_2h, "below_threshold", "", -1, -1);
+        } else if (!fired_2h_this_tick && s_last_fire_2h_ms >= 0 &&
+                   (now_ms - s_last_fire_2h_ms) < cd2h_ms) {
+            const int64_t rem2h = cd2h_ms - (now_ms - s_last_fire_2h_ms);
+            path_set(&s_decision_obs.tf_2h, "cooldown", "", rem2h, -1);
+        } else if (fired_2h_this_tick) {
+            path_set(&s_decision_obs.tf_2h, "fired", "", cd2h_ms, -1);
+        } else {
+            path_set(&s_decision_obs.tf_2h, "invalid", "internal", -1, -1);
+        }
+    }
+
     bump_path_edge(prev_obs.tf_1m, s_decision_obs.tf_1m, now_ms, &s_runtime_stats.edge_1m);
     bump_path_edge(prev_obs.tf_5m, s_decision_obs.tf_5m, now_ms, &s_runtime_stats.edge_5m);
+    bump_path_edge(prev_obs.tf_30m, s_decision_obs.tf_30m, now_ms, &s_runtime_stats.edge_30m);
+    bump_path_edge(prev_obs.tf_2h, s_decision_obs.tf_2h, now_ms, &s_runtime_stats.edge_2h);
     bump_path_edge(prev_obs.confluence_1m5m, s_decision_obs.confluence_1m5m, now_ms,
                    &s_runtime_stats.edge_confluence);
 }
@@ -312,6 +374,8 @@ esp_err_t init()
 {
     s_last_fire_1m_ms = -1;
     s_last_fire_5m_ms = -1;
+    s_last_fire_30m_ms = -1;
+    s_last_fire_2h_ms = -1;
     s_last_fire_conf_ms = -1;
     s_runtime_stats = AlertEngineRuntimeStatsSnapshot{};
     s_suppress_loose_until_ms = -1;
@@ -335,22 +399,32 @@ esp_err_t init()
         const config_store::AlertRuntimeConfig &arc = config_store::alert_runtime();
         const double b1 = static_cast<double>(arc.threshold_1m_bps) / 100.0;
         const double b5 = static_cast<double>(arc.threshold_5m_bps) / 100.0;
+        const double b30 = static_cast<double>(CONFIG_ALERT_ENGINE_30M_THRESHOLD_BPS) / 100.0;
+        const double b2h = static_cast<double>(CONFIG_ALERT_ENGINE_2H_THRESHOLD_BPS) / 100.0;
         s_regime_obs.base_threshold_move_pct_1m = b1;
         s_regime_obs.base_threshold_move_pct_5m = b5;
+        s_regime_obs.base_threshold_move_pct_30m = b30;
+        s_regime_obs.base_threshold_move_pct_2h = b2h;
         s_regime_obs.effective_threshold_move_pct_1m = b1;
         s_regime_obs.effective_threshold_move_pct_5m = b5;
+        s_regime_obs.effective_threshold_move_pct_30m = b30;
+        s_regime_obs.effective_threshold_move_pct_2h = b2h;
     }
     {
         const config_store::AlertPolicyTimingConfig &pol = config_store::alert_policy_timing();
         const config_store::AlertConfluencePolicyConfig &cfp = config_store::alert_confluence_policy();
         ESP_LOGI(TAG,
-                 "M-003b/M-003c/M-003d/M-010: alert_engine init (basis 1m=%.2f%% 5m=%.2f%% uit config_store; "
-                 "cd 1m=%us 5m=%us | conf cd=%us | suppress loose %us | ‰ clamp [%d,%d] | "
-                 "conf en=%d same_dir=%d both_thr=%d emit_loose=%d)",
+                 "M-003b/M-003c/M-003d/M-010 + S30-2 + S2H-2: alert_engine init (basis 1m=%.2f%% 5m=%.2f%% uit config_store; "
+                 "30m=%.2f%% 2h=%.2f%% uit Kconfig; cd 1m=%us 5m=%us 30m=%us 2h=%us | conf cd=%us | suppress loose %us | ‰ "
+                 "clamp [%d,%d] | conf en=%d same_dir=%d both_thr=%d emit_loose=%d)",
                  s_regime_obs.base_threshold_move_pct_1m,
                  s_regime_obs.base_threshold_move_pct_5m,
+                 s_regime_obs.base_threshold_move_pct_30m,
+                 s_regime_obs.base_threshold_move_pct_2h,
                  (unsigned)pol.cooldown_1m_s,
                  (unsigned)pol.cooldown_5m_s,
+                 (unsigned)CONFIG_ALERT_ENGINE_30M_COOLDOWN_S,
+                 (unsigned)CONFIG_ALERT_ENGINE_2H_COOLDOWN_S,
                  (unsigned)pol.cooldown_conf_1m5m_s,
                  (unsigned)pol.suppress_loose_after_conf_s,
                  CONFIG_ALERT_REGIME_THR_SCALE_MIN_PERMILLE,
@@ -363,6 +437,8 @@ esp_err_t init()
     std::memset(&s_decision_obs, 0, sizeof(s_decision_obs));
     path_set(&s_decision_obs.tf_1m, "not_ready", "metrics_not_ready", -1, -1);
     path_set(&s_decision_obs.tf_5m, "not_ready", "metrics_not_ready", -1, -1);
+    path_set(&s_decision_obs.tf_30m, "not_ready", "metrics_not_ready", -1, -1);
+    path_set(&s_decision_obs.tf_2h, "not_ready", "metrics_not_ready", -1, -1);
     path_set(&s_decision_obs.confluence_1m5m, "not_ready", "metrics_not_ready", -1, -1);
     return ESP_OK;
 }
@@ -373,10 +449,14 @@ void tick()
     bool fired_conf_this_tick = false;
     bool fired_1m_this_tick = false;
     bool fired_5m_this_tick = false;
+    bool fired_30m_this_tick = false;
+    bool fired_2h_this_tick = false;
 
     const config_store::AlertPolicyTimingConfig &pol = config_store::alert_policy_timing();
     const int64_t cd1_ms = static_cast<int64_t>(pol.cooldown_1m_s) * 1000LL;
     const int64_t cd5_ms = static_cast<int64_t>(pol.cooldown_5m_s) * 1000LL;
+    const int64_t cd30_ms = static_cast<int64_t>(CONFIG_ALERT_ENGINE_30M_COOLDOWN_S) * 1000LL;
+    const int64_t cd2h_ms = static_cast<int64_t>(CONFIG_ALERT_ENGINE_2H_COOLDOWN_S) * 1000LL;
     const int64_t cd_cf_ms = static_cast<int64_t>(pol.cooldown_conf_1m5m_s) * 1000LL;
     const int64_t sup_loose_ms = static_cast<int64_t>(pol.suppress_loose_after_conf_s) * 1000LL;
 
@@ -464,6 +544,12 @@ void tick()
         base_1m_pct * static_cast<double>(scale_permille) / 1000.0;
     const double eff_thr_5m_pct =
         base_5m_pct * static_cast<double>(scale_permille) / 1000.0;
+    const double base_30m_pct = static_cast<double>(CONFIG_ALERT_ENGINE_30M_THRESHOLD_BPS) / 100.0;
+    const double eff_thr_30m_pct =
+        base_30m_pct * static_cast<double>(scale_permille) / 1000.0;
+    const double base_2h_pct = static_cast<double>(CONFIG_ALERT_ENGINE_2H_THRESHOLD_BPS) / 100.0;
+    const double eff_thr_2h_pct =
+        base_2h_pct * static_cast<double>(scale_permille) / 1000.0;
 
     s_regime_obs.vol_metric_ready = volm.ready;
     s_regime_obs.vol_mean_abs_step_bps = volm.ready ? volm.mean_abs_step_bps : 0.0;
@@ -483,11 +569,17 @@ void tick()
     s_regime_obs.regime_hot_min_step_bps = CONFIG_ALERT_REGIME_HOT_MIN_STEP_BPS;
     s_regime_obs.base_threshold_move_pct_1m = base_1m_pct;
     s_regime_obs.base_threshold_move_pct_5m = base_5m_pct;
+    s_regime_obs.base_threshold_move_pct_30m = base_30m_pct;
+    s_regime_obs.base_threshold_move_pct_2h = base_2h_pct;
     s_regime_obs.effective_threshold_move_pct_1m = eff_thr_1m_pct;
     s_regime_obs.effective_threshold_move_pct_5m = eff_thr_5m_pct;
+    s_regime_obs.effective_threshold_move_pct_30m = eff_thr_30m_pct;
+    s_regime_obs.effective_threshold_move_pct_2h = eff_thr_2h_pct;
 
     const domain_metrics::Metric1mMovePct m1 = domain_metrics::compute_1m_move_pct();
     const domain_metrics::Metric5mMovePct m5 = domain_metrics::compute_5m_move_pct();
+    const domain_metrics::Metric30mMovePct m30 = domain_metrics::compute_30m_move_pct();
+    const domain_metrics::Metric2hMovePct m2h = domain_metrics::compute_2h_move_pct();
 
     const config_store::AlertConfluencePolicyConfig &cfp = config_store::alert_confluence_policy();
 
@@ -690,9 +782,113 @@ void tick()
         }
     }
 
-    refresh_decision_observability(m1, m5, eff_thr_1m_pct, eff_thr_5m_pct, now_ms, cd1_ms, cd5_ms,
-                                   cd_cf_ms, fired_conf_this_tick, fired_1m_this_tick, fired_5m_this_tick,
-                                   loose_blocked_by_conf_policy, cfp);
+    /* S30-3: 30m-beslissing — zelfde ‰-schaal; outbound parallel aan 5m. */
+    if (m30.ready) {
+        const double ap30 = std::fabs(m30.pct);
+        if (ap30 >= eff_thr_30m_pct) {
+            if (s_last_fire_30m_ms < 0 || (now_ms - s_last_fire_30m_ms) >= cd30_ms) {
+                const bool up30 = m30.pct >= 0.0;
+                const char *dir30 = up30 ? "UP" : "DOWN";
+                ESP_LOGI(TAG,
+                         "S30-3: 30m move alert %s pct=%.3f (now=%.4f @%lld ref=%.4f @%lld span_ms=%lld) "
+                         "thr=%.3f%% (basis=%.2f%% · ‰=%d) → queue outbound",
+                         dir30,
+                         m30.pct,
+                         m30.now_price_eur,
+                         (long long)m30.now_ts_ms,
+                         m30.ref_price_eur,
+                         (long long)m30.ref_ts_ms,
+                         (long long)m30.ref_span_ms,
+                         eff_thr_30m_pct,
+                         base_30m_pct,
+                         scale_permille);
+                s_last_fire_30m_ms = now_ms;
+                fired_30m_this_tick = true;
+                ++s_runtime_stats.emit_total_30m;
+                s_runtime_stats.last_emit_epoch_ms_30m = now_ms;
+
+                const market_data::MarketSnapshot snap30 = market_data::snapshot();
+                service_outbound::DomainAlert30mMovePayload p30{};
+                p30.up = up30;
+                p30.price_eur = m30.now_price_eur;
+                p30.pct_30m = m30.pct;
+                p30.ts_ms = m30.now_ts_ms;
+                if (snap30.market_label[0] != '\0') {
+                    std::strncpy(p30.symbol, snap30.market_label, sizeof(p30.symbol) - 1);
+                } else {
+                    std::strncpy(p30.symbol, "—", sizeof(p30.symbol) - 1);
+                }
+                p30.symbol[sizeof(p30.symbol) - 1] = '\0';
+                ESP_LOGI(TAG, "S30-3: queue DomainAlert30mMove (sym=%s)", p30.symbol);
+                service_outbound::emit_domain_alert_30m(p30);
+            }
+        }
+    }
+
+    /* S2H-3: 2h-beslissing — zelfde ‰-schaal; outbound parallel aan 30m. */
+    if (m2h.ready) {
+        const double ap2h = std::fabs(m2h.pct);
+        if (ap2h >= eff_thr_2h_pct) {
+            if (s_last_fire_2h_ms < 0 || (now_ms - s_last_fire_2h_ms) >= cd2h_ms) {
+                const bool up2h = m2h.pct >= 0.0;
+                const char *dir2h = up2h ? "UP" : "DOWN";
+                ESP_LOGI(TAG,
+                         "S2H-3: 2h move alert %s pct=%.3f (now=%.4f @%lld ref=%.4f @%lld span_ms=%lld) "
+                         "thr=%.3f%% (basis=%.2f%% · ‰=%d) → queue outbound",
+                         dir2h,
+                         m2h.pct,
+                         m2h.now_price_eur,
+                         (long long)m2h.now_ts_ms,
+                         m2h.ref_price_eur,
+                         (long long)m2h.ref_ts_ms,
+                         (long long)m2h.ref_span_ms,
+                         eff_thr_2h_pct,
+                         base_2h_pct,
+                         scale_permille);
+                s_last_fire_2h_ms = now_ms;
+                fired_2h_this_tick = true;
+                ++s_runtime_stats.emit_total_2h;
+                s_runtime_stats.last_emit_epoch_ms_2h = now_ms;
+
+                const market_data::MarketSnapshot snap2h = market_data::snapshot();
+                service_outbound::DomainAlert2hMovePayload p2h{};
+                p2h.up = up2h;
+                p2h.price_eur = m2h.now_price_eur;
+                p2h.pct_2h = m2h.pct;
+                p2h.ts_ms = m2h.now_ts_ms;
+                if (snap2h.market_label[0] != '\0') {
+                    std::strncpy(p2h.symbol, snap2h.market_label, sizeof(p2h.symbol) - 1);
+                } else {
+                    std::strncpy(p2h.symbol, "—", sizeof(p2h.symbol) - 1);
+                }
+                p2h.symbol[sizeof(p2h.symbol) - 1] = '\0';
+                ESP_LOGI(TAG, "S2H-3: queue DomainAlert2hMove (sym=%s)", p2h.symbol);
+                service_outbound::emit_domain_alert_2h(p2h);
+            }
+        }
+    }
+
+    refresh_decision_observability(m1,
+                                   m5,
+                                   m30,
+                                   m2h,
+                                   eff_thr_1m_pct,
+                                   eff_thr_5m_pct,
+                                   eff_thr_30m_pct,
+                                   eff_thr_2h_pct,
+                                   now_ms,
+                                   cd1_ms,
+                                   cd5_ms,
+                                   cd30_ms,
+                                   cd2h_ms,
+                                   cd_cf_ms,
+                                   fired_conf_this_tick,
+                                   fired_1m_this_tick,
+                                   fired_5m_this_tick,
+                                   fired_30m_this_tick,
+                                   fired_2h_this_tick,
+                                   loose_blocked_by_conf_policy,
+                                   cfp);
 }
 
 void get_regime_observability_snapshot(RegimeObservabilitySnapshot *out)

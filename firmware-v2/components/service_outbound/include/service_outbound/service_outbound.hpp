@@ -22,6 +22,12 @@ void emit_domain_alert_1m(const DomainAlert1mMovePayload &p);
 /** M-010c: domein 5m-alert met payload — enige toegestane route voor `Event::DomainAlert5mMove`. */
 void emit_domain_alert_5m(const DomainAlert5mMovePayload &p);
 
+/** S30-3: domein 30m-alert met payload — enige route voor `Event::DomainAlert30mMove`. */
+void emit_domain_alert_30m(const DomainAlert30mMovePayload &p);
+
+/** S2H-3: domein 2h-alert met payload — enige route voor `Event::DomainAlert2hMove`. */
+void emit_domain_alert_2h(const DomainAlert2hMovePayload &p);
+
 /** M-010d: confluence 1m+5m — enige route voor `Event::DomainAlertConfluence1m5m`. */
 void emit_domain_confluence_1m5m(const DomainConfluence1m5mPayload &p);
 

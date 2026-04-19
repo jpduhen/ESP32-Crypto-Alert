@@ -16,14 +16,17 @@
  * M-013g: minimaal formulier op / voor diezelfde vier velden (POST naar alert-runtime.json).
  * M-013j: minimaal formulier op / voor alert-policy timing (POST naar alert-policy-timing.json).
  * M-013l: minimaal formulier op / voor confluence-policy (POST naar alert-confluence-policy.json; M-003d/M-013k).
- * M-013h: read-only alert-beslissing per pad (1m/5m/confluence) in status.json + compact op /.
+ * M-013h: read-only alert-beslissing per pad (1m/5m/30m/2h/confluence) in status.json + compact op /.
  * C1/C2: read-only `alert_engine_runtime_stats` (emits, suppress, edge-transities) + regime `last_regime_change_epoch_ms`.
  * M-002h: read-only outbound-queue observability in status.json (geen nieuwe settings).
+ * S30-1: read-only `metric_30m_observability` (domain_metrics::compute_30m_move_pct).
+ * S2H-1: read-only `metric_2h_observability` (domain_metrics::compute_2h_move_pct).
  */
 #include "webui/webui.hpp"
 #include "alert_engine/alert_engine.hpp"
 #include "alert_observability/alert_observability.hpp"
 #include "config_store/config_store.hpp"
+#include "domain_metrics/domain_metrics.hpp"
 #include "cJSON.h"
 #include "esp_app_desc.h"
 #include "esp_check.h"
@@ -211,6 +214,53 @@ static esp_err_t handle_status_json(httpd_req_t *req)
             cJSON_AddItemToObject(root, "ws_trades_observability", wst);
         }
     }
+    {
+        const domain_metrics::Metric30mMovePct m30 = domain_metrics::compute_30m_move_pct();
+        cJSON *m30j = cJSON_CreateObject();
+        if (m30j) {
+            cJSON_AddBoolToObject(m30j, "ready", m30.ready ? 1 : 0);
+            cJSON_AddNumberToObject(m30j, "pct", m30.pct);
+            cJSON_AddNumberToObject(m30j, "ref_ts_ms", static_cast<double>(m30.ref_ts_ms));
+            cJSON_AddNumberToObject(m30j, "now_ts_ms", static_cast<double>(m30.now_ts_ms));
+            cJSON_AddNumberToObject(m30j, "ref_price_eur", m30.ref_price_eur);
+            cJSON_AddNumberToObject(m30j, "now_price_eur", m30.now_price_eur);
+            cJSON_AddNumberToObject(m30j, "ref_span_ms", static_cast<double>(m30.ref_span_ms));
+            cJSON_AddNumberToObject(m30j,
+                                    "canonical_ring_samples",
+                                    static_cast<double>(domain_metrics::canonical_ring_count()));
+            cJSON_AddNumberToObject(m30j,
+                                    "ring_cap",
+                                    static_cast<double>(CONFIG_DOMAIN_METRICS_30M_WINDOW_S +
+                                                        CONFIG_DOMAIN_METRICS_CANONICAL_RING_EXTRA_S));
+            cJSON_AddNumberToObject(m30j,
+                                    "window_s",
+                                    static_cast<double>(CONFIG_DOMAIN_METRICS_30M_WINDOW_S));
+            cJSON_AddItemToObject(root, "metric_30m_observability", m30j);
+        }
+    }
+    {
+        const domain_metrics::Metric2hMovePct m2 = domain_metrics::compute_2h_move_pct();
+        cJSON *m2j = cJSON_CreateObject();
+        if (m2j) {
+            cJSON_AddBoolToObject(m2j, "ready", m2.ready ? 1 : 0);
+            cJSON_AddNumberToObject(m2j, "pct", m2.pct);
+            cJSON_AddNumberToObject(m2j, "ref_ts_ms", static_cast<double>(m2.ref_ts_ms));
+            cJSON_AddNumberToObject(m2j, "now_ts_ms", static_cast<double>(m2.now_ts_ms));
+            cJSON_AddNumberToObject(m2j, "ref_price_eur", m2.ref_price_eur);
+            cJSON_AddNumberToObject(m2j, "now_price_eur", m2.now_price_eur);
+            cJSON_AddNumberToObject(m2j, "ref_span_ms", static_cast<double>(m2.ref_span_ms));
+            cJSON_AddNumberToObject(m2j, "minute_ring_used", static_cast<double>(m2.minute_ring_used));
+            cJSON_AddNumberToObject(m2j,
+                                    "window_s",
+                                    static_cast<double>(CONFIG_DOMAIN_METRICS_2H_WINDOW_S));
+            cJSON_AddNumberToObject(
+                m2j,
+                "minute_ring_cap",
+                static_cast<double>((CONFIG_DOMAIN_METRICS_2H_WINDOW_S + 59) / 60 +
+                                    CONFIG_DOMAIN_METRICS_2H_MINUTE_RING_EXTRA_SLOTS + 2));
+            cJSON_AddItemToObject(root, "metric_2h_observability", m2j);
+        }
+    }
     cJSON_AddNumberToObject(root,
                            "outbound_queue_waiting",
                            static_cast<double>(service_outbound::queue_waiting()));
@@ -257,12 +307,16 @@ static esp_err_t handle_status_json(httpd_req_t *req)
         if (base_thr) {
             cJSON_AddNumberToObject(base_thr, "move_pct_1m", rob.base_threshold_move_pct_1m);
             cJSON_AddNumberToObject(base_thr, "move_pct_5m", rob.base_threshold_move_pct_5m);
+            cJSON_AddNumberToObject(base_thr, "move_pct_30m", rob.base_threshold_move_pct_30m);
+            cJSON_AddNumberToObject(base_thr, "move_pct_2h", rob.base_threshold_move_pct_2h);
             cJSON_AddItemToObject(reg_j, "base_threshold_move_pct", base_thr);
         }
         cJSON *eff_thr = cJSON_CreateObject();
         if (eff_thr) {
             cJSON_AddNumberToObject(eff_thr, "move_pct_1m", rob.effective_threshold_move_pct_1m);
             cJSON_AddNumberToObject(eff_thr, "move_pct_5m", rob.effective_threshold_move_pct_5m);
+            cJSON_AddNumberToObject(eff_thr, "move_pct_30m", rob.effective_threshold_move_pct_30m);
+            cJSON_AddNumberToObject(eff_thr, "move_pct_2h", rob.effective_threshold_move_pct_2h);
             cJSON_AddItemToObject(reg_j, "effective_threshold_move_pct", eff_thr);
         }
         cJSON *conf_g = cJSON_CreateObject();
@@ -283,6 +337,8 @@ static esp_err_t handle_status_json(httpd_req_t *req)
         if (ado_j) {
             add_alert_decision_path_json(ado_j, "1m", ado.tf_1m);
             add_alert_decision_path_json(ado_j, "5m", ado.tf_5m);
+            add_alert_decision_path_json(ado_j, "30m", ado.tf_30m);
+            add_alert_decision_path_json(ado_j, "2h", ado.tf_2h);
             add_alert_decision_path_json(ado_j, "confluence_1m5m", ado.confluence_1m5m);
             cJSON_AddItemToObject(root, "alert_decision_observability", ado_j);
         }
@@ -295,10 +351,14 @@ static esp_err_t handle_status_json(httpd_req_t *req)
         if (ars_j) {
             cJSON_AddNumberToObject(ars_j, "emit_total_1m", static_cast<double>(ars.emit_total_1m));
             cJSON_AddNumberToObject(ars_j, "emit_total_5m", static_cast<double>(ars.emit_total_5m));
+            cJSON_AddNumberToObject(ars_j, "emit_total_30m", static_cast<double>(ars.emit_total_30m));
+            cJSON_AddNumberToObject(ars_j, "emit_total_2h", static_cast<double>(ars.emit_total_2h));
             cJSON_AddNumberToObject(ars_j, "emit_total_confluence_1m5m",
                                      static_cast<double>(ars.emit_total_conf));
             cJSON_AddNumberToObject(ars_j, "last_emit_epoch_ms_1m", static_cast<double>(ars.last_emit_epoch_ms_1m));
             cJSON_AddNumberToObject(ars_j, "last_emit_epoch_ms_5m", static_cast<double>(ars.last_emit_epoch_ms_5m));
+            cJSON_AddNumberToObject(ars_j, "last_emit_epoch_ms_30m", static_cast<double>(ars.last_emit_epoch_ms_30m));
+            cJSON_AddNumberToObject(ars_j, "last_emit_epoch_ms_2h", static_cast<double>(ars.last_emit_epoch_ms_2h));
             cJSON_AddNumberToObject(ars_j, "last_emit_epoch_ms_confluence_1m5m",
                                      static_cast<double>(ars.last_emit_epoch_ms_conf));
             cJSON_AddNumberToObject(ars_j, "suppress_after_conf_window_episodes_1m",
@@ -307,6 +367,8 @@ static esp_err_t handle_status_json(httpd_req_t *req)
                                      static_cast<double>(ars.suppress_after_conf_window_5m));
             add_path_edge_json(ars_j, "edge_1m", ars.edge_1m);
             add_path_edge_json(ars_j, "edge_5m", ars.edge_5m);
+            add_path_edge_json(ars_j, "edge_30m", ars.edge_30m);
+            add_path_edge_json(ars_j, "edge_2h", ars.edge_2h);
             add_path_edge_json(ars_j, "edge_confluence_1m5m", ars.edge_confluence);
             cJSON_AddItemToObject(root, "alert_engine_runtime_stats", ars_j);
         }
@@ -1037,6 +1099,22 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         return ESP_FAIL;
     }
     w += static_cast<size_t>(na5);
+    const int na30 = alert_observability::append_alerts_30m_html_section(html + w, k_html_alloc - w);
+    if (na30 < 0 || w + static_cast<size_t>(na30) >= k_html_alloc) {
+        ESP_LOGW(TAG, "S30-3: HTML 30m alerts-sectie overflow (na30=%d)", na30);
+        std::free(html);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
+        return ESP_FAIL;
+    }
+    w += static_cast<size_t>(na30);
+    const int na2h = alert_observability::append_alerts_2h_html_section(html + w, k_html_alloc - w);
+    if (na2h < 0 || w + static_cast<size_t>(na2h) >= k_html_alloc) {
+        ESP_LOGW(TAG, "S2H-3: HTML 2h alerts-sectie overflow (na2h=%d)", na2h);
+        std::free(html);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
+        return ESP_FAIL;
+    }
+    w += static_cast<size_t>(na2h);
     const int nac = alert_observability::append_alerts_conf_1m5m_html_section(html + w, k_html_alloc - w);
     if (nac < 0 || w + static_cast<size_t>(nac) >= k_html_alloc) {
         ESP_LOGW(TAG, "M-010d: HTML confluence-sectie overflow (nac=%d)", nac);
@@ -1058,9 +1136,10 @@ static esp_err_t handle_root_html(httpd_req_t *req)
             "<strong>Grenzen (bps)</strong> calm &lt; %d · hot ≥ %d · "
             "<strong>‰</strong> eff %d (raw %d%s)<br/>"
             "<strong>Laatste regime-wissel (epoch ms)</strong> %lld (C2)<br/>"
-            "<strong>Basis 1m / 5m</strong> %.3f %% / %.3f %% · "
-            "<strong>Effectief 1m / 5m</strong> %.3f %% / %.3f %%<br/>"
-            "<small>Confluence: |1m| en |5m| elk ≥ effectieve drempel (zelfde schaal als M-010f).</small></p>",
+            "<strong>Basis 1m / 5m / 30m / 2h</strong> %.3f %% / %.3f %% / %.3f %% / %.3f %% · "
+            "<strong>Effectief 1m / 5m / 30m / 2h</strong> %.3f %% / %.3f %% / %.3f %% / %.3f %%<br/>"
+            "<small>Confluence: |1m| en |5m| elk ≥ effectieve drempel (zelfde schaal als M-010f). 30m/2h: Kconfig-drempels "
+            "(S30-2, S2H-2).</small></p>",
             rob.regime[0] ? rob.regime : "?",
             rob.vol_metric_ready ? "klaar" : "niet klaar",
             rob.vol_mean_abs_step_bps,
@@ -1074,8 +1153,12 @@ static esp_err_t handle_root_html(httpd_req_t *req)
             (long long)rob.last_regime_change_epoch_ms,
             rob.base_threshold_move_pct_1m,
             rob.base_threshold_move_pct_5m,
+            rob.base_threshold_move_pct_30m,
+            rob.base_threshold_move_pct_2h,
             rob.effective_threshold_move_pct_1m,
-            rob.effective_threshold_move_pct_5m);
+            rob.effective_threshold_move_pct_5m,
+            rob.effective_threshold_move_pct_30m,
+            rob.effective_threshold_move_pct_2h);
         if (nreg <= 0 || w + static_cast<size_t>(nreg) >= k_html_alloc) {
             ESP_LOGW(TAG, "M-013e: HTML regime-sectie overflow (nreg=%d)", nreg);
             std::free(html);
@@ -1089,12 +1172,20 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         alert_engine::get_alert_decision_observability_snapshot(&ado);
         char sfx1[88]{};
         char sfx5[88]{};
+        char sfx30[88]{};
+        char sfx2h[88]{};
         char sfxc[88]{};
         if (ado.tf_1m.reason[0] != '\0') {
             std::snprintf(sfx1, sizeof(sfx1), " · <code>%s</code>", ado.tf_1m.reason);
         }
         if (ado.tf_5m.reason[0] != '\0') {
             std::snprintf(sfx5, sizeof(sfx5), " · <code>%s</code>", ado.tf_5m.reason);
+        }
+        if (ado.tf_30m.reason[0] != '\0') {
+            std::snprintf(sfx30, sizeof(sfx30), " · <code>%s</code>", ado.tf_30m.reason);
+        }
+        if (ado.tf_2h.reason[0] != '\0') {
+            std::snprintf(sfx2h, sizeof(sfx2h), " · <code>%s</code>", ado.tf_2h.reason);
         }
         if (ado.confluence_1m5m.reason[0] != '\0') {
             std::snprintf(sfxc, sizeof(sfxc), " · <code>%s</code>", ado.confluence_1m5m.reason);
@@ -1103,12 +1194,20 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         char sup1[28]{};
         char cd5[28]{};
         char sup5[28]{};
+        char cd30[28]{};
+        char sup30[28]{};
+        char cd2h[28]{};
+        char sup2h[28]{};
         char cdc[28]{};
         char supc[28]{};
         fmt_rem_ms(cd1, sizeof(cd1), ado.tf_1m.remaining_cooldown_ms);
         fmt_rem_ms(sup1, sizeof(sup1), ado.tf_1m.remaining_suppress_ms);
         fmt_rem_ms(cd5, sizeof(cd5), ado.tf_5m.remaining_cooldown_ms);
         fmt_rem_ms(sup5, sizeof(sup5), ado.tf_5m.remaining_suppress_ms);
+        fmt_rem_ms(cd30, sizeof(cd30), ado.tf_30m.remaining_cooldown_ms);
+        fmt_rem_ms(sup30, sizeof(sup30), ado.tf_30m.remaining_suppress_ms);
+        fmt_rem_ms(cd2h, sizeof(cd2h), ado.tf_2h.remaining_cooldown_ms);
+        fmt_rem_ms(sup2h, sizeof(sup2h), ado.tf_2h.remaining_suppress_ms);
         fmt_rem_ms(cdc, sizeof(cdc), ado.confluence_1m5m.remaining_cooldown_ms);
         fmt_rem_ms(supc, sizeof(supc), ado.confluence_1m5m.remaining_suppress_ms);
         const int nd = std::snprintf(
@@ -1120,6 +1219,10 @@ static esp_err_t handle_root_html(httpd_req_t *req)
             "<small>Cooldown rest · %s · suppress rest · %s</small></p>"
             "<p><strong>5m</strong> <code>%s</code>%s<br/>"
             "<small>Cooldown rest · %s · suppress rest · %s</small></p>"
+            "<p><strong>30m</strong> <code>%s</code>%s<br/>"
+            "<small>Cooldown rest · %s · suppress rest · %s</small></p>"
+            "<p><strong>2h</strong> <code>%s</code>%s<br/>"
+            "<small>Cooldown rest · %s · suppress rest · %s</small></p>"
             "<p><strong>Confluence 1m+5m</strong> <code>%s</code>%s<br/>"
             "<small>Cooldown rest · %s · suppress rest · %s</small></p>",
             ado.tf_1m.status[0] ? ado.tf_1m.status : "?",
@@ -1130,6 +1233,14 @@ static esp_err_t handle_root_html(httpd_req_t *req)
             sfx5,
             cd5,
             sup5,
+            ado.tf_30m.status[0] ? ado.tf_30m.status : "?",
+            sfx30,
+            cd30,
+            sup30,
+            ado.tf_2h.status[0] ? ado.tf_2h.status : "?",
+            sfx2h,
+            cd2h,
+            sup2h,
             ado.confluence_1m5m.status[0] ? ado.confluence_1m5m.status : "?",
             sfxc,
             cdc,
@@ -1151,15 +1262,19 @@ static esp_err_t handle_root_html(httpd_req_t *req)
             "<h2>Alert-engine runtime-statistieken (C1/C2, read-only)</h2>"
             "<p class=\"hint\">Sinds boot: emits, suppress-episodes (M-010e), edge-transities (cooldown/suppressed/not_ready). "
             "Zie <code>GET /api/status.json</code> → <code>alert_engine_runtime_stats</code>.</p>"
-            "<p><strong>Emits</strong> 1m=%u · 5m=%u · confluence=%u<br/>"
-            "<strong>Laatste emit (epoch ms)</strong> 1m=%lld · 5m=%lld · conf=%lld<br/>"
+            "<p><strong>Emits</strong> 1m=%u · 5m=%u · 30m=%u · 2h=%u · confluence=%u<br/>"
+            "<strong>Laatste emit (epoch ms)</strong> 1m=%lld · 5m=%lld · 30m=%lld · 2h=%lld · conf=%lld<br/>"
             "<strong>Suppress-episodes (na conf)</strong> 1m=%u · 5m=%u<br/>"
-            "<strong>Edge-transities</strong> 1m cd/sup/nr=%u/%u/%u · 5m=%u/%u/%u · conf=%u/%u/%u</p>",
+            "<strong>Edge-transities</strong> 1m cd/sup/nr=%u/%u/%u · 5m=%u/%u/%u · 30m=%u/%u/%u · 2h=%u/%u/%u · conf=%u/%u/%u</p>",
             static_cast<unsigned>(ars.emit_total_1m),
             static_cast<unsigned>(ars.emit_total_5m),
+            static_cast<unsigned>(ars.emit_total_30m),
+            static_cast<unsigned>(ars.emit_total_2h),
             static_cast<unsigned>(ars.emit_total_conf),
             (long long)ars.last_emit_epoch_ms_1m,
             (long long)ars.last_emit_epoch_ms_5m,
+            (long long)ars.last_emit_epoch_ms_30m,
+            (long long)ars.last_emit_epoch_ms_2h,
             (long long)ars.last_emit_epoch_ms_conf,
             static_cast<unsigned>(ars.suppress_after_conf_window_1m),
             static_cast<unsigned>(ars.suppress_after_conf_window_5m),
@@ -1169,6 +1284,12 @@ static esp_err_t handle_root_html(httpd_req_t *req)
             static_cast<unsigned>(ars.edge_5m.enter_cooldown),
             static_cast<unsigned>(ars.edge_5m.enter_suppressed),
             static_cast<unsigned>(ars.edge_5m.enter_not_ready),
+            static_cast<unsigned>(ars.edge_30m.enter_cooldown),
+            static_cast<unsigned>(ars.edge_30m.enter_suppressed),
+            static_cast<unsigned>(ars.edge_30m.enter_not_ready),
+            static_cast<unsigned>(ars.edge_2h.enter_cooldown),
+            static_cast<unsigned>(ars.edge_2h.enter_suppressed),
+            static_cast<unsigned>(ars.edge_2h.enter_not_ready),
             static_cast<unsigned>(ars.edge_confluence.enter_cooldown),
             static_cast<unsigned>(ars.edge_confluence.enter_suppressed),
             static_cast<unsigned>(ars.edge_confluence.enter_not_ready));

@@ -2,6 +2,8 @@
  * M-012a: eerste MQTT-route achter `service_outbound` — geen Home Assistant discovery.
  * M-012b: JSON-publish voor 1m-domeinalert (topic uit Kconfig).
  * M-010c/010d: 5m- en confluence-publish.
+ * S30-3: 30m-publish.
+ * S2H-3: 2h-publish.
  */
 #include "mqtt_bridge/mqtt_bridge.hpp"
 #include "config_store/config_store.hpp"
@@ -287,6 +289,152 @@ void publish_domain_alert_5m(const char *symbol,
         return;
     }
     ESP_LOGI(TAG, "M-010c: 5m domain alert gepubliceerd (mid=%d)", mid);
+#endif
+}
+
+void publish_domain_alert_30m(const char *symbol,
+                              bool up,
+                              double price_eur,
+                              double pct_30m,
+                              int64_t ts_ms)
+{
+#if !CONFIG_MQTT_BRIDGE_ENABLE
+    (void)symbol;
+    (void)up;
+    (void)price_eur;
+    (void)pct_30m;
+    (void)ts_ms;
+    return;
+#else
+    const config_store::ServiceRuntimeConfig &svc = config_store::service_runtime();
+    if (!svc.mqtt_enabled) {
+        ESP_LOGD(TAG, "S30-3: mqtt runtime uit — geen 30m domain alert MQTT");
+        return;
+    }
+    if (!s_client || strlen(svc.mqtt_broker_uri) == 0) {
+        ESP_LOGD(TAG, "S30-3: geen MQTT-client — skip 30m domain alert");
+        return;
+    }
+    if (!s_connected) {
+        ESP_LOGW(TAG, "S30-3: MQTT niet verbonden — 30m domain alert niet gepubliceerd");
+        return;
+    }
+
+    const char *sym_in = (symbol && symbol[0] != '\0') ? symbol : "?";
+    char sym_safe[28]{};
+    std::strncpy(sym_safe, sym_in, sizeof(sym_safe) - 1);
+    for (size_t i = 0; i < sizeof(sym_safe) && sym_safe[i] != '\0'; ++i) {
+        if (sym_safe[i] == '"' || sym_safe[i] == '\\') {
+            sym_safe[i] = '_';
+        }
+    }
+
+    const char *dir = up ? "UP" : "DOWN";
+    char payload[352];
+    const int plen = std::snprintf(payload,
+                                   sizeof(payload),
+                                   "{\"kind\":\"alert_30m\",\"symbol\":\"%s\",\"dir\":\"%s\","
+                                   "\"price_eur\":%.4f,\"pct_30m\":%.4f,\"ts_ms\":%lld}",
+                                   sym_safe,
+                                   dir,
+                                   price_eur,
+                                   pct_30m,
+                                   (long long)ts_ms);
+    if (plen <= 0 || plen >= static_cast<int>(sizeof(payload))) {
+        ESP_LOGW(TAG, "S30-3: 30m domain alert JSON te lang of fout");
+        return;
+    }
+
+    ESP_LOGI(TAG,
+             "S30-3: publish kind=alert_30m (topic=%s sym=%s %s)",
+             CONFIG_MQTT_TOPIC_DOMAIN_ALERT_30M,
+             sym_safe,
+             dir);
+
+    const int mid = esp_mqtt_client_publish(s_client,
+                                            CONFIG_MQTT_TOPIC_DOMAIN_ALERT_30M,
+                                            payload,
+                                            plen,
+                                            1,
+                                            0);
+    if (mid < 0) {
+        ESP_LOGW(TAG, "S30-3: publish 30m domain alert mislukt (mid=%d)", mid);
+        return;
+    }
+    ESP_LOGI(TAG, "S30-3: 30m domain alert gepubliceerd (mid=%d)", mid);
+#endif
+}
+
+void publish_domain_alert_2h(const char *symbol,
+                             bool up,
+                             double price_eur,
+                             double pct_2h,
+                             int64_t ts_ms)
+{
+#if !CONFIG_MQTT_BRIDGE_ENABLE
+    (void)symbol;
+    (void)up;
+    (void)price_eur;
+    (void)pct_2h;
+    (void)ts_ms;
+    return;
+#else
+    const config_store::ServiceRuntimeConfig &svc = config_store::service_runtime();
+    if (!svc.mqtt_enabled) {
+        ESP_LOGD(TAG, "S2H-3: mqtt runtime uit — geen 2h domain alert MQTT");
+        return;
+    }
+    if (!s_client || strlen(svc.mqtt_broker_uri) == 0) {
+        ESP_LOGD(TAG, "S2H-3: geen MQTT-client — skip 2h domain alert");
+        return;
+    }
+    if (!s_connected) {
+        ESP_LOGW(TAG, "S2H-3: MQTT niet verbonden — 2h domain alert niet gepubliceerd");
+        return;
+    }
+
+    const char *sym_in = (symbol && symbol[0] != '\0') ? symbol : "?";
+    char sym_safe[28]{};
+    std::strncpy(sym_safe, sym_in, sizeof(sym_safe) - 1);
+    for (size_t i = 0; i < sizeof(sym_safe) && sym_safe[i] != '\0'; ++i) {
+        if (sym_safe[i] == '"' || sym_safe[i] == '\\') {
+            sym_safe[i] = '_';
+        }
+    }
+
+    const char *dir = up ? "UP" : "DOWN";
+    char payload[352];
+    const int plen = std::snprintf(payload,
+                                   sizeof(payload),
+                                   "{\"kind\":\"alert_2h\",\"symbol\":\"%s\",\"dir\":\"%s\","
+                                   "\"price_eur\":%.4f,\"pct_2h\":%.4f,\"ts_ms\":%lld}",
+                                   sym_safe,
+                                   dir,
+                                   price_eur,
+                                   pct_2h,
+                                   (long long)ts_ms);
+    if (plen <= 0 || plen >= static_cast<int>(sizeof(payload))) {
+        ESP_LOGW(TAG, "S2H-3: 2h domain alert JSON te lang of fout");
+        return;
+    }
+
+    ESP_LOGI(TAG,
+             "S2H-3: publish kind=alert_2h (topic=%s sym=%s %s)",
+             CONFIG_MQTT_TOPIC_DOMAIN_ALERT_2H,
+             sym_safe,
+             dir);
+
+    const int mid = esp_mqtt_client_publish(s_client,
+                                            CONFIG_MQTT_TOPIC_DOMAIN_ALERT_2H,
+                                            payload,
+                                            plen,
+                                            1,
+                                            0);
+    if (mid < 0) {
+        ESP_LOGW(TAG, "S2H-3: publish 2h domain alert mislukt (mid=%d)", mid);
+        return;
+    }
+    ESP_LOGI(TAG, "S2H-3: 2h domain alert gepubliceerd (mid=%d)", mid);
 #endif
 }
 

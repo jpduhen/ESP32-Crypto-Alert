@@ -30,13 +30,28 @@ CONFIG_DISPLAY_DIAG_PROFILE_SWAP_OFF=y
 # M-003a / M-013b: runtime service-toggles/poort/URI/topic — defaults uit Kconfig; NVS-overlay (schema v3, keys svc_*); M-013b: POST /api/services.json schrijft alleen mqtt/ntfy (geen webui_*).
 # M-011a: NTFY staat default uit; zet CONFIG_NTFY_CLIENT_ENABLE=y + NTFY_TOPIC via menuconfig voor echte push.
 # M-012a: MQTT-bridge default uit; zet CONFIG_MQTT_BRIDGE_ENABLE=y + MQTT_BROKER_URI voor echte publish.
-# M-013a: read-only WebUI default uit; zet CONFIG_WEBUI_ENABLE=y + WEBUI_PORT (bijv. 8080).
+# M-013a: read-only status-web — standaard aan (poort 8080); NVS `svc_wui_en` kan runtime uitzetten.
+CONFIG_WEBUI_ENABLE=y
+CONFIG_WEBUI_PORT=8080
+
+# S30-1: canonieke prijsring ~32 min (1800s venster + 120s marge) voor 30m-%-metric.
+CONFIG_DOMAIN_METRICS_30M_WINDOW_S=1800
+CONFIG_DOMAIN_METRICS_CANONICAL_RING_EXTRA_S=120
+# S2H-1: 2h %-move — aparte minuut-ring (~146 slots default), geen 7200×1 Hz canoniek.
+CONFIG_DOMAIN_METRICS_2H_WINDOW_S=7200
+CONFIG_DOMAIN_METRICS_2H_MINUTE_RING_EXTRA_SLOTS=24
 # M-014a: OTA-upload via POST /api/ota (ruwe .bin); dual-slot zie partitions_v2_16mb_ota.csv.
 # M-010a: domain_metrics + alert_engine — 1m-drempel 0,16% (zie ook sdkconfig).
 CONFIG_ALERT_ENGINE_1M_THRESHOLD_BPS=16
 CONFIG_ALERT_ENGINE_1M_COOLDOWN_S=120
 CONFIG_ALERT_ENGINE_5M_THRESHOLD_BPS=32
 CONFIG_ALERT_ENGINE_5M_COOLDOWN_S=300
+# S30-2: 30m drempel + cooldown (Kconfig-only; outbound volgt S30-3).
+CONFIG_ALERT_ENGINE_30M_THRESHOLD_BPS=64
+CONFIG_ALERT_ENGINE_30M_COOLDOWN_S=1800
+# S2H-2/S2H-3: 2h drempel + cooldown; outbound+observability via S2H-3 (NTFY/MQTT/alerts_2h).
+CONFIG_ALERT_ENGINE_2H_THRESHOLD_BPS=128
+CONFIG_ALERT_ENGINE_2H_COOLDOWN_S=7200
 CONFIG_ALERT_ENGINE_CONF_1M5M_COOLDOWN_S=600
 CONFIG_ALERT_ENGINE_CONF_SUPPRESS_LOOSE_S=8
 CONFIG_ALERT_REGIME_VOL_WINDOW_SEC=90

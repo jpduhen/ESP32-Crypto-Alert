@@ -10,6 +10,8 @@ namespace mqtt_bridge {
  * M-012b: één publish-pad voor 1m-domeinalert (JSON, topic uit Kconfig).
  * M-010c: idem voor 5m-domeinalert (`MQTT_TOPIC_DOMAIN_ALERT_5M`).
  * M-010d: confluence 1m+5m (`MQTT_TOPIC_DOMAIN_ALERT_CONF_1M5M`).
+ * S30-3: 30m-domeinalert (`MQTT_TOPIC_DOMAIN_ALERT_30M`).
+ * S2H-3: 2h-domeinalert (`MQTT_TOPIC_DOMAIN_ALERT_2H`).
  */
 esp_err_t init();
 
@@ -35,6 +37,20 @@ void publish_domain_alert_5m(const char *symbol,
                                bool up,
                                double price_eur,
                                double pct_5m,
+                               int64_t ts_ms);
+
+/** S30-3: JSON met `kind` (`alert_30m`), pct_30m, … naar `MQTT_TOPIC_DOMAIN_ALERT_30M`. */
+void publish_domain_alert_30m(const char *symbol,
+                                bool up,
+                                double price_eur,
+                                double pct_30m,
+                                int64_t ts_ms);
+
+/** S2H-3: JSON met `kind` (`alert_2h`), pct_2h, … naar `MQTT_TOPIC_DOMAIN_ALERT_2H`. */
+void publish_domain_alert_2h(const char *symbol,
+                               bool up,
+                               double price_eur,
+                               double pct_2h,
                                int64_t ts_ms);
 
 /** M-010d: JSON met `kind` (`alert_confluence_1m5m`), pct_1m + pct_5m. */

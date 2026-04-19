@@ -10,11 +10,13 @@ namespace alert_engine {
  * M-010a / M-011b: minimale 1m%-move drempel + cooldown; beslist op `domain_metrics`;
  * bij trigger: payload naar `service_outbound::emit_domain_alert_1m` (symbool via `market_data::snapshot`).
  * M-010c: parallel 5m%-move drempel + cooldown → `emit_domain_alert_5m` (geen confluence met 1m).
+ * S30-2/S30-3: parallel 30m%-move drempel + cooldown op `compute_30m_move_pct` — logs + decision-observability; S30-3: NTFY/MQTT/WebUI via `service_outbound` + `alert_observability`.
+ * S2H-2/S2H-3: parallel 2h%-move op `compute_2h_move_pct` — drempel/cooldown + logs + observability; S2H-3: NTFY/MQTT/WebUI via `service_outbound` + `alert_observability`.
  * M-010d: eerste confluence (1m+5m zelfde richting, beide ≥ drempel) → `emit_domain_confluence_1m5m`.
  * M-010e: confluence eerst; daarna losse 1m/5m — tijdelijk onderdrukken zelfde richting na confluence.
  * M-010f: mini-regime (calm/normal/hot) uit vol-proxy — alleen schaal van effectieve 1m/5m-drempels (+ confluence).
  * M-013e: read-only snapshot voor WebUI — geen extra beslislogica.
- * M-013h: read-only laatste beslissing per pad (1m / 5m / confluence) + suppress/cooldown-restant — alleen snapshot.
+ * M-013h: read-only laatste beslissing per pad (1m / 5m / 30m / 2h / confluence) + suppress/cooldown-restant — alleen snapshot.
  * M-003b: basis-drempels en calm/hot-‰ uit `config_store::alert_runtime()` (NVS-overlay op Kconfig).
  * M-003d: confluence-policy booleans uit `config_store::alert_confluence_policy()` (defaults = M-010d/e).
  */
@@ -35,6 +37,10 @@ struct AlertPathDecisionSnapshot {
 struct AlertDecisionObservabilitySnapshot {
     AlertPathDecisionSnapshot tf_1m{};
     AlertPathDecisionSnapshot tf_5m{};
+    /** S30-2: 30m pad (geen confluence/suppress uit M-010e). */
+    AlertPathDecisionSnapshot tf_30m{};
+    /** S2H-2: 2h pad (geen confluence/suppress uit M-010e). */
+    AlertPathDecisionSnapshot tf_2h{};
     AlertPathDecisionSnapshot confluence_1m5m{};
 };
 
@@ -57,16 +63,24 @@ struct AlertPathEdgeStats {
 struct AlertEngineRuntimeStatsSnapshot {
     uint32_t emit_total_1m{};
     uint32_t emit_total_5m{};
+    /** S30-2/S30-3: telling outbound-queue events (na drempel/cooldown). */
+    uint32_t emit_total_30m{};
+    /** S2H-2/S2H-3: telling outbound-queue events voor 2h (na drempel/cooldown). */
+    uint32_t emit_total_2h{};
     uint32_t emit_total_conf{};
     /** `esp_timer_get_time()/1000`; `-1` = nog geen emit. */
     int64_t last_emit_epoch_ms_1m{-1};
     int64_t last_emit_epoch_ms_5m{-1};
+    int64_t last_emit_epoch_ms_30m{-1};
+    int64_t last_emit_epoch_ms_2h{-1};
     int64_t last_emit_epoch_ms_conf{-1};
     /** Losse 1m/5m onderdrukt door M-010e-venster na confluence (zelfde richting). */
     uint32_t suppress_after_conf_window_1m{};
     uint32_t suppress_after_conf_window_5m{};
     AlertPathEdgeStats edge_1m{};
     AlertPathEdgeStats edge_5m{};
+    AlertPathEdgeStats edge_30m{};
+    AlertPathEdgeStats edge_2h{};
     AlertPathEdgeStats edge_confluence{};
 };
 
@@ -91,8 +105,14 @@ struct RegimeObservabilitySnapshot {
     int regime_hot_min_step_bps{0};
     double base_threshold_move_pct_1m{0.0};
     double base_threshold_move_pct_5m{0.0};
+    /** S30-2: uit Kconfig `ALERT_ENGINE_30M_THRESHOLD_BPS` (geen NVS in deze slice). */
+    double base_threshold_move_pct_30m{0.0};
+    /** S2H-2: uit Kconfig `ALERT_ENGINE_2H_THRESHOLD_BPS` (geen NVS in deze slice). */
+    double base_threshold_move_pct_2h{0.0};
     double effective_threshold_move_pct_1m{0.0};
     double effective_threshold_move_pct_5m{0.0};
+    double effective_threshold_move_pct_30m{0.0};
+    double effective_threshold_move_pct_2h{0.0};
     /** C2: laatste regime-labelwissel (calm/normal/hot); `-1` = nog geen wissel sinds boot. */
     int64_t last_regime_change_epoch_ms{-1};
 };

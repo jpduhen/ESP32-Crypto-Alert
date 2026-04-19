@@ -1,5 +1,5 @@
 /**
- * M-002c / M-011a / M-011b / M-012a / M-012b / M-010c / M-010d / M-013d: outbound queue + dispatch; sinks: ntfy + mqtt (Kconfig).
+ * M-002c / M-011a / M-011b / M-012a / M-012b / M-010c / M-010d / S30-3 / S2H-3 / M-013d: outbound queue + dispatch; sinks: ntfy + mqtt (Kconfig).
  */
 #include "alert_observability/alert_observability.hpp"
 #include "service_outbound/service_outbound.hpp"
@@ -121,6 +121,88 @@ static void dispatch_domain_alert_5m_ntfy(const DomainAlert5mMovePayload &p)
 #endif
 }
 
+static void dispatch_domain_alert_30m_ntfy(const DomainAlert30mMovePayload &p)
+{
+    const char *sym = p.symbol[0] != '\0' ? p.symbol : "?";
+    const char *dir = p.up ? "UP" : "DOWN";
+    char title[80];
+    snprintf(title, sizeof(title), "CryptoAlert V2 · 30m · %s · %s", dir, sym);
+
+    char body[256];
+    snprintf(body,
+             sizeof(body),
+             "%s\n"
+             "Soort: alert_30m\n"
+             "Prijs: %.4f EUR\n"
+             "30m: %+.4f %%\n"
+             "ts_ms: %lld",
+             sym,
+             p.price_eur,
+             p.pct_30m,
+             (long long)p.ts_ms);
+
+    ESP_LOGI(TAG,
+             "S30-3: DomainAlert30mMove → ntfy (sym=%s %s pct=%.4f price=%.4f)",
+             sym,
+             dir,
+             p.pct_30m,
+             p.price_eur);
+
+#if CONFIG_NTFY_CLIENT_ENABLE
+    const esp_err_t n = ntfy_client::send_notification(title, body);
+    if (n == ESP_OK) {
+        ESP_LOGI(TAG, "S30-3: NTFY 30m domain alert afgerond (ESP_OK)");
+    } else {
+        ESP_LOGW(TAG, "S30-3: NTFY 30m domain alert mislukt: %s", esp_err_to_name(n));
+    }
+#else
+    (void)title;
+    (void)body;
+    ESP_LOGI(TAG, "S30-3: NTFY build uit — 30m domain alert niet verstuurd");
+#endif
+}
+
+static void dispatch_domain_alert_2h_ntfy(const DomainAlert2hMovePayload &p)
+{
+    const char *sym = p.symbol[0] != '\0' ? p.symbol : "?";
+    const char *dir = p.up ? "UP" : "DOWN";
+    char title[80];
+    snprintf(title, sizeof(title), "CryptoAlert V2 · 2h · %s · %s", dir, sym);
+
+    char body[256];
+    snprintf(body,
+             sizeof(body),
+             "%s\n"
+             "Soort: alert_2h\n"
+             "Prijs: %.4f EUR\n"
+             "2h: %+.4f %%\n"
+             "ts_ms: %lld",
+             sym,
+             p.price_eur,
+             p.pct_2h,
+             (long long)p.ts_ms);
+
+    ESP_LOGI(TAG,
+             "S2H-3: DomainAlert2hMove → ntfy (sym=%s %s pct=%.4f price=%.4f)",
+             sym,
+             dir,
+             p.pct_2h,
+             p.price_eur);
+
+#if CONFIG_NTFY_CLIENT_ENABLE
+    const esp_err_t n = ntfy_client::send_notification(title, body);
+    if (n == ESP_OK) {
+        ESP_LOGI(TAG, "S2H-3: NTFY 2h domain alert afgerond (ESP_OK)");
+    } else {
+        ESP_LOGW(TAG, "S2H-3: NTFY 2h domain alert mislukt: %s", esp_err_to_name(n));
+    }
+#else
+    (void)title;
+    (void)body;
+    ESP_LOGI(TAG, "S2H-3: NTFY build uit — 2h domain alert niet verstuurd");
+#endif
+}
+
 static void dispatch_confluence_ntfy(const DomainConfluence1m5mPayload &p)
 {
     const char *sym = p.symbol[0] != '\0' ? p.symbol : "?";
@@ -233,6 +315,42 @@ static void dispatch_envelope(const OutboundEnvelope &env)
 #endif
         break;
     }
+    case Event::DomainAlert30mMove: {
+        const auto &d = env.domain_30m;
+        alert_observability::record_30m_alert(d.symbol, d.up, d.price_eur, d.pct_30m, d.ts_ms);
+        const char *sym = d.symbol[0] != '\0' ? d.symbol : "?";
+        ESP_LOGI(TAG,
+                 "S30-3: DomainAlert30mMove ontvangen (sym=%s up=%d pct_30m=%.4f)",
+                 sym,
+                 d.up ? 1 : 0,
+                 d.pct_30m);
+        dispatch_domain_alert_30m_ntfy(env.domain_30m);
+#if CONFIG_MQTT_BRIDGE_ENABLE
+        ESP_LOGI(TAG, "S30-3: MQTT domain alert 30m publish aanroepen");
+        mqtt_bridge::publish_domain_alert_30m(d.symbol, d.up, d.price_eur, d.pct_30m, d.ts_ms);
+#else
+        ESP_LOGD(TAG, "S30-3: MQTT bridge uit — geen 30m MQTT");
+#endif
+        break;
+    }
+    case Event::DomainAlert2hMove: {
+        const auto &d = env.domain_2h;
+        alert_observability::record_2h_alert(d.symbol, d.up, d.price_eur, d.pct_2h, d.ts_ms);
+        const char *sym = d.symbol[0] != '\0' ? d.symbol : "?";
+        ESP_LOGI(TAG,
+                 "S2H-3: DomainAlert2hMove ontvangen (sym=%s up=%d pct_2h=%.4f)",
+                 sym,
+                 d.up ? 1 : 0,
+                 d.pct_2h);
+        dispatch_domain_alert_2h_ntfy(env.domain_2h);
+#if CONFIG_MQTT_BRIDGE_ENABLE
+        ESP_LOGI(TAG, "S2H-3: MQTT domain alert 2h publish aanroepen");
+        mqtt_bridge::publish_domain_alert_2h(d.symbol, d.up, d.price_eur, d.pct_2h, d.ts_ms);
+#else
+        ESP_LOGD(TAG, "S2H-3: MQTT bridge uit — geen 2h MQTT");
+#endif
+        break;
+    }
     case Event::DomainAlertConfluence1m5m: {
         const auto &d = env.domain_conf_1m5m;
         alert_observability::record_conf_1m5m_alert(
@@ -294,6 +412,14 @@ void emit(Event e)
         ESP_LOGW(TAG, "emit(DomainAlert5mMove) zonder payload — gebruik emit_domain_alert_5m");
         return;
     }
+    if (e == Event::DomainAlert30mMove) {
+        ESP_LOGW(TAG, "emit(DomainAlert30mMove) zonder payload — gebruik emit_domain_alert_30m");
+        return;
+    }
+    if (e == Event::DomainAlert2hMove) {
+        ESP_LOGW(TAG, "emit(DomainAlert2hMove) zonder payload — gebruik emit_domain_alert_2h");
+        return;
+    }
     if (e == Event::DomainAlertConfluence1m5m) {
         ESP_LOGW(TAG,
                  "emit(DomainAlertConfluence1m5m) zonder payload — gebruik emit_domain_confluence_1m5m");
@@ -338,6 +464,38 @@ void emit_domain_alert_5m(const DomainAlert5mMovePayload &p)
         ++s_drop_total;
         ESP_LOGW(TAG,
                  "M-002: outbound queue full — drop DomainAlert5mMove drops_total=%" PRIu32,
+                 s_drop_total);
+    }
+}
+
+void emit_domain_alert_30m(const DomainAlert30mMovePayload &p)
+{
+    if (!s_ready || !s_q) {
+        return;
+    }
+    OutboundEnvelope env{};
+    env.kind = Event::DomainAlert30mMove;
+    env.domain_30m = p;
+    if (xQueueSend(s_q, &env, 0) != pdTRUE) {
+        ++s_drop_total;
+        ESP_LOGW(TAG,
+                 "M-002: outbound queue full — drop DomainAlert30mMove drops_total=%" PRIu32,
+                 s_drop_total);
+    }
+}
+
+void emit_domain_alert_2h(const DomainAlert2hMovePayload &p)
+{
+    if (!s_ready || !s_q) {
+        return;
+    }
+    OutboundEnvelope env{};
+    env.kind = Event::DomainAlert2hMove;
+    env.domain_2h = p;
+    if (xQueueSend(s_q, &env, 0) != pdTRUE) {
+        ++s_drop_total;
+        ESP_LOGW(TAG,
+                 "M-002: outbound queue full — drop DomainAlert2hMove drops_total=%" PRIu32,
                  s_drop_total);
     }
 }
