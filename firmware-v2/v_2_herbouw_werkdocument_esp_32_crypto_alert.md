@@ -836,7 +836,7 @@ Gebruik dit hoofdstuk als formeel geheugen van gemaakte keuzes.
 
 **Consequenties:** **M-010** blijft “kern herschreven”; vervolg = kwaliteit + gefaseerde TF-uitbreiding. Zie § **WP-03a** voor matrix en C1–C5.
 
-**Actiepunten:** C1–C5 uitvoeren; daarna **aparte planning** voor **30m/2h**-verticale slices (metrics → engine → outbound), elk met dezelfde discipline als 1m/5m.
+**Actiepunten:** C1–C5 uitvoeren (**C5** = roadmap **30m/2h** vastgelegd in **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**); daarna **implementatie** van **30m/2h**-verticale slices (metrics → engine → outbound), elk met dezelfde discipline als 1m/5m — start **S30-1**.
 
 **Status:** besloten; **koers** t.o.v. 30m/2h hierboven **aangescherpt** t.o.v. eerdere formulering (“uitgesteld” ≠ “afgewezen als productdoel”).
 
@@ -1022,7 +1022,7 @@ Geen vervanging van de migratiematrix, wel **samenhangende blokken** i.p.v. een 
 
 3. **V1-gap review / bewuste scopekeuzes** — **afgerond als stuurversie** (**§ WP-03a**, **D-010**): gap-matrix, keep/drop/defer; **geen** V1-architectuur als blauwdruk; **30m/2h** als **einddoel** vs **fase** expliciet gescheiden.
 
-4. **Alert-engine consolidatie** — roadmap **C1–C5** (§ **WP-03a**) op de **1m/5m-kern**. **C1** afgerond; **C2** randgevallen-doc + observability (§ **C2**); **C3** mini-regime review (§ **C3**); **volgende:** **C4**. **C5** = planning **30m/2h**-trajecten; geen feature-explosie.
+4. **Alert-engine consolidatie** — roadmap **C1–C5** (§ **WP-03a**) op de **1m/5m-kern**. **C1** afgerond; **C2** randgevallen-doc + observability (§ **C2**); **C3** mini-regime review (§ **C3**); **C4** NTFY/MQTT-consistentie afgerond (§ **C4**); **C5** roadmap **30m/2h** vastgelegd (**[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**). **Implementatie** TF-uitbreiding: verticale slices (**S30-1** … **S2H-3**), geen feature-explosie.
 
 4b. **RWS — parallel** (§ **RWS**) — **RWS-01** + **RWS-02** afgerond (ticker+`trades` subscribe, bounded trade-ring, read-only observability); **RWS-03+** = SecondSampler/aggregate (geen conflict met C3-volgorde tenzij herprioriteerd).
 
@@ -1054,7 +1054,7 @@ Geen vervanging van de migratiematrix, wel **samenhangende blokken** i.p.v. een 
 
 2. **M-002 hardening-batch** — **afgerond** (**§ M-002h**); `M002_NETWORK_BOUNDARIES.md` bijgewerkt.
 
-3. **Consolidatie + V1-gap review** — **stuurversie vastgelegd** (**§ WP-03a**, **D-010**); **C1** afgerond; **C2** uitgewerkt (§ **C2**); **C3** afgerond (§ **C3**). **Volgende:** **C4** (NTFY/MQTT-consistentie); **30m/2h** = **roadmap na** stabiliteit (**C5**). Geen nieuwe WebUI-settings in consolidatiefase tenzij apart besloten.
+3. **Consolidatie + V1-gap review** — **stuurversie vastgelegd** (**§ WP-03a**, **D-010**); **C1** afgerond; **C2** uitgewerkt (§ **C2**); **C3** afgerond (§ **C3**); **C4** afgerond (§ **C4**); **C5** roadmap **30m/2h** afgerond (documentatie, § **C5**). **Volgende technische lens:** **S30-1** (30m-metrics-slice). Geen nieuwe WebUI-settings in consolidatiefase tenzij apart besloten.
 
 4. **RWS** (§ **RWS**) — parallel; **RWS-01** + **RWS-02** read-only (`ws_feed_observability`, `ws_trades_observability`); **geen** alert-semantiek-wijziging; officiële prijs ongewijzigd ticker-gebaseerd.
 
@@ -1184,7 +1184,7 @@ Op basis van de eerste inventarisatie uit de repo en de terugkoppeling van Curso
 
 \
 
-**WP-03a (2026-04):** rij **M-010** — V1→V2-gap vastgelegd (**§ WP-03a**, **D-010**); consolidatie **C1–C5** = kwaliteit **1m/5m-kern** + **C5**-planning voor **30m/2h**; geen import V1-monolith of volledige RegimeEngine; **einddoel** alert-schalen **1m–2h** blijft overeind.
+**WP-03a (2026-04):** rij **M-010** — V1→V2-gap vastgelegd (**§ WP-03a**, **D-010**); consolidatie **C1–C5** = kwaliteit **1m/5m-kern** + **C5** roadmap **30m/2h** (**[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**); geen import V1-monolith of volledige RegimeEngine; **einddoel** alert-schalen **1m–2h** blijft overeind.
 
 \
 
@@ -1520,7 +1520,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 2. **Afgerond:** **M-002 hardening-batch** (**§ M-002h**) — queues/backpressure, mutex-observability, ownership — zie `M002_NETWORK_BOUNDARIES.md`.
 
-3. **Vervolgens:** **V1-gap / scope** (**§ WP-03a**, **D-010**) — **C1** afgerond, **C2** uitgewerkt ([C2_EDGE_CASES_1M5M.md](../../docs/architecture/C2_EDGE_CASES_1M5M.md)), **C3** afgerond (§ **C3**). **Volgende consolidatie:** **C4** (NTFY/MQTT); **C5** = **30m/2h**-roadmap. **Parallel:** **RWS-01** + **RWS-02** afgerond (§ **RWS**) — ticker+`trades` + bounded ring; **RWS-03** = SecondSampler/aggregate. **Pas daarna** verdere verbreding en **productierijpheid** (§ **9a** werkpakket 5).
+3. **Vervolgens:** **V1-gap / scope** (**§ WP-03a**, **D-010**) — **C1** afgerond, **C2** uitgewerkt ([C2_EDGE_CASES_1M5M.md](../../docs/architecture/C2_EDGE_CASES_1M5M.md)), **C3** afgerond (§ **C3**), **C4** afgerond (§ **C4**), **C5** roadmap **30m/2h** afgerond (§ **C5**, **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**). **Eerstvolgende implementatie:** slice **S30-1** (30m-metrics). **Parallel:** **RWS-01** + **RWS-02** afgerond (§ **RWS**); **RWS-03** = SecondSampler/aggregate. **Pas daarna** verdere verbreding en **productierijpheid** (§ **9a** werkpakket 5).
 
 \
 
@@ -1588,7 +1588,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 | **Gewenst voor productkwaliteit (selectief, nu)** | Meetbare **spam-/randgevallen**; **field-testcriteria**; scherpte op defaults — **binnen** de **1m/5m-kern** (C1–C4). |
 
-| **Einddoel — gefaseerd na stabiele kern** | **30m**- en **2h**-alerts (metrics → engine → outbound): **gewenst functioneel**, **implementatie** volgt **na** toetsbare **1m/5m**-stabiliteit en expliciete planning (**C5**); **niet** als V1-port. |
+| **Einddoel — gefaseerd na stabiele kern** | **30m**- en **2h**-alerts (metrics → engine → outbound): **gewenst functioneel**; **C5** = roadmap + slices vast (**[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**); **implementatie** per slice (**S30-1** …), **niet** als V1-port. |
 
 | **Bewust niet importeren (V1-vorm)** | Monolithische `AlertEngine.cpp`; V1’s volledige **2h**-takkenmatrix **zoals geknoopt**; **Anchor** + **TrendDetector** zoals V1; volledige **RegimeEngine**-port. |
 
@@ -1632,7 +1632,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-- **Implementatie** van **30m** (metric/alert) en **2h**-signalen: **na** stabiele, toetsbare **1m/5m-kern**; inhoudelijk af te stemmen in **C5** (startmoment, slices) — zie **D-010**.
+- **Implementatie** van **30m** (metric/alert) en **2h**-signalen: **na** stabiele, toetsbare **1m/5m-kern**; **C5** heeft **roadmap + slices** vastgelegd (**[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**); **start** = **S30-1** — zie **D-010**.
 
 - **Night mode** / tijdvensters.
 
@@ -1658,9 +1658,9 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 | **C3** | Mini-regime review | **Afgerond:** ‰ raw vs effectief + clamp-zichtbaarheid in `regime_observability` / logs; Kconfig-help clamp; grens-bps in snapshot — geen RegimeEngine; defaults calm/hot-bps en ‰ ongewijzigd (field-tuning blijft mogelijk) |
 
-| **C4** | Notificatie-consistentie | Titel/body NTFY/MQTT waar nuttig (klein, geen nieuwe features) |
+| **C4** | Notificatie-consistentie | **Afgerond:** uniforme NTFY-titels (`CryptoAlert V2 · <type> · UP/DOWN · symbool`); NTFY-bodyregel `Soort:` gelijk aan MQTT-`kind` (`alert_1m` / `alert_5m` / `alert_confluence_1m5m`); MQTT-JSON eerst `kind`, daarna `symbol`, `dir`, `price_eur`, pct-velden, `ts_ms` — zie § **C4** |
 
-| **C5** | Roadmap **30m / 2h** | Na **C1–C4**: vastleggen **wanneer en hoe** verticale slices (**metrics → engine → outbound**) starten — **gewenst einddoel**, **niet** inbegrepen in C1–C4 — voorkomt scope-creep **in** de kernconsolidatie |
+| **C5** | Roadmap **30m / 2h** | **Afgerond (documentatie):** verticale slices en volgorde vastgelegd in **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**; **eerstvolgende implementatieslice:** **S30-1** (30m-metrics) — zie § **C5** |
 
 \
 
@@ -1668,9 +1668,9 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-- **§11b M-010:** “herschrijven” = kern **aanwezig**; consolidatie = **kwaliteit + bewijs** — **C1–C3** afgerond; **C4** volgende op **1m/5m**; **C5** = **30m/2h**-roadmap; geen V1-import.
+- **§11b M-010:** “herschrijven” = kern **aanwezig**; consolidatie = **kwaliteit + bewijs** — **C1–C5** (roadmap **30m/2h** als documentaire stap) afgerond; **implementatie** TF-uitbreiding volgt **verticale slices** (§ **C5**, **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**); geen V1-import.
 
-- **§9a / §10 / §15:** **C1** afgerond, **C2** uitgewerkt, **C3** afgerond; **volgende** = **C4** op **1m/5m-kern** + **C5** voor **30m/2h**-planning; **geen** terugval naar V1-monoliet.
+- **§9a / §10 / §15:** **C1–C4** afgerond; **C5** roadmap **30m/2h** vastgelegd; **volgende technische stap** = **S30-1** (30m-metrics), niet de volledige TF in één keer; **geen** terugval naar V1-monoliet.
 
 \
 
@@ -1718,7 +1718,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Volgende stap:** **C4** — NTFY/MQTT-notificatie-consistentie (klein), zie **WP-03a** roadmap.
+**Volgende stap:** implementatie **30m/2h** volgens **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)** — start **S30-1**; voorgangers **C3**–**C5** (§ **C3**, § **C4**, § **C5**).
 
 \
 
@@ -1762,7 +1762,79 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Volgende stap:** **C4** — zie **WP-03a** roadmap.
+**Volgende stap:** **C5** roadmap afgerond (§ **C5**); **eerstvolgende bouw:** slice **S30-1**. **C4** notificaties: afgerond (§ **C4**).
+
+\
+
+---
+
+\
+
+## C4 — NTFY/MQTT-notificatie-consistentie (1m/5m-kern, consolidatie)
+
+\
+
+**Status:** **Afgerond** — bewust klein gehouden: **geen** nieuwe alerttypes, **geen** nieuwe outbound-architectuur, **geen** HA-discovery of topic-uitbreiding.
+
+\
+
+**Doel (WP-03a / §9a / §10 / §15):** dezelfde domeinalerts (**1m**, **5m**, **confluence 1m+5m**) laten **semantisch overeenkomen** tussen **NTFY** (menselijk leesbaar) en **MQTT** (compact JSON), zonder V1-pariteit als doel.
+
+\
+
+**Geleverd:**
+
+- **NTFY-titels** uniform: `CryptoAlert V2 · <1m | 5m | confluence 1m+5m> · UP|DOWN · symbool` (zelfde segmentstructuur voor alle drie).
+- **NTFY-body:** regel `Soort: alert_1m` / `alert_5m` / `alert_confluence_1m5m` — dezelfde strings als MQTT-veld **`kind`**.
+- **MQTT-JSON:** eerst **`kind`**, daarna `symbol`, `dir` (UP/DOWN), `price_eur`, `pct_1m` / `pct_5m` (confluence: beide), `ts_ms` — logs noemen `kind=…` bij publish.
+
+\
+
+**Bewust niet gedaan:** wijziging **ApplicationReady**-NTFY/MQTT; payload-schemaversionering; nieuwe MQTT-topics; 30m/2h outbound; RWS-03; WebUI-settings.
+
+\
+
+**Code (referentie):** `service_outbound` (NTFY-titel/body), `mqtt_bridge` (JSON + logs).
+
+\
+
+**Volgende stap:** **C5** afgerond als documentatie — zie § **C5** en **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**; **eerstvolgende implementatie:** slice **S30-1** (30m-metrics).
+
+\
+
+---
+
+\
+
+## C5 — Roadmap **30m / 2h** (verticale slices; documentaire stap)
+
+\
+
+**Status:** **Afgerond** (planning vastgelegd) — **geen** volledige 30m/2h-implementatie in deze stap; **geen** nieuwe live alerttypes in deze stap.
+
+\
+
+**Afstemming:** **§2** (gefaseerde TF-uitbreiding, geen V1-monoliet), **D-010** (einddomein 1m–2h; V1-complexiteit niet importeren), **§9a / §10 / §15**, **WP-03a** (C5 = wanneer/hoe slices).
+
+\
+
+**Volledige roadmap (slices, scope, risico’s, uitsluitingen):** **[docs/architecture/C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**.
+
+\
+
+**Kernpunten:**
+
+- Zes slices in volgorde: **S30-1** (30m metrics) → **S30-2** (30m alert_engine) → **S30-3** (30m outbound/observability) → **S2H-1** (2h metrics) → **S2H-2** (2h alert_engine) → **S2H-3** (2h outbound/observability).
+- **Functioneel gewenst:** 30m- en 2h-alerts in V2-stijl; **technisch níet:** V1 2h-matrix, AnchorSystem, TrendDetector, brede RegimeEngine-port, policy-explosie.
+- **Huidige `domain_metrics`:** ring **~400** canonieke samples (**~6,7 min**) — **onvoldoende** voor naïeve 30m/2h zonder ontwerpkeuze (ring/decimatie); zie roadmap.
+
+\
+
+**Eerstvolgende implementatieslice:** **S30-1** — 30m-metrics in `domain_metrics` (parallel aan 1m/5m-patroon).
+
+\
+
+**Bewust niet in C5-stap:** code voor 30m/2h alerts; WebUI-uitbreiding; RWS-03; extra boards.
 
 \
 
@@ -1774,7 +1846,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Doel:** een **tweede generatie** secondeprijs-/marktdata-architectuur voorbereiden — **zonder** de lopende **C3/C4/C5**-consolidatielijn te vervangen en **zonder** de huidige **1m/5m**-kern te destabiliseren. **30m/2h** blijven **gewenst einddoel**; dit spoor wordt later **direct relevant** voor betrouwbare langere horizons en rijkere input.
+**Doel:** een **tweede generatie** secondeprijs-/marktdata-architectuur voorbereiden — **zonder** de **1m/5m**-kern te destabiliseren en **zonder** de vastgelegde **30m/2h**-slicevolgorde (§ **C5**) te vervangen. **30m/2h** blijven **gewenst einddoel**; dit spoor wordt later **direct relevant** voor betrouwbare langere horizons en rijkere input.
 
 \
 
@@ -1844,7 +1916,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 - **C3** (mini-regime), **C4** (NTFY/MQTT), **C5** (30m/2h-roadmap) blijven de **hoofdlijn** consolidatie alert-engine.
 
-- **RWS** is een **parallelle voorbereidingslijn** op `exchange_bitvavo` / `market_data` / (later) `domain_metrics` — **geen** invoeging vóór de lopende **C4**-kern tenzij expliciet herprioriteerd.
+- **RWS** is een **parallelle voorbereidingslijn** op `exchange_bitvavo` / `market_data` / (later) `domain_metrics` — **C4** (NTFY/MQTT) is **afgerond**; **RWS-03+** blijft **parallel** aan hoofdlijn **C5** en start **niet automatisch eerder** tenzij expliciet herprioriteerd.
 
 \
 
@@ -2436,7 +2508,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-- **`mqtt_bridge::publish_domain_alert_1m(...)`:** compacte JSON (`symbol`, `dir` UP/DOWN, `price_eur`, `pct_1m`, `ts_ms`) naar **`MQTT_TOPIC_DOMAIN_ALERT_1M`** (default `cryptoalert/v2/alert/1m`), QoS 1, geen retain — alleen als MQTT build+runtime aan en client **verbonden**; anders duidelijke log, geen queue/backlog in M-012b.
+- **`mqtt_bridge::publish_domain_alert_1m(...)`:** compacte JSON (`kind`=`alert_1m`, `symbol`, `dir` UP/DOWN, `price_eur`, `pct_1m`, `ts_ms`) naar **`MQTT_TOPIC_DOMAIN_ALERT_1M`** (default `cryptoalert/v2/alert/1m`), QoS 1, geen retain — alleen als MQTT build+runtime aan en client **verbonden**; anders duidelijke log, geen queue/backlog in M-012b. (5m/confluence: zie § **C4** / `mqtt_bridge`.)
 
 \
 

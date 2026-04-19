@@ -182,11 +182,11 @@ void publish_domain_alert_1m(const char *symbol,
     }
 
     const char *dir = up ? "UP" : "DOWN";
-    char payload[320];
+    char payload[352];
     const int plen = std::snprintf(payload,
                                    sizeof(payload),
-                                   "{\"symbol\":\"%s\",\"dir\":\"%s\",\"price_eur\":%.4f,"
-                                   "\"pct_1m\":%.4f,\"ts_ms\":%lld}",
+                                   "{\"kind\":\"alert_1m\",\"symbol\":\"%s\",\"dir\":\"%s\","
+                                   "\"price_eur\":%.4f,\"pct_1m\":%.4f,\"ts_ms\":%lld}",
                                    sym_safe,
                                    dir,
                                    price_eur,
@@ -198,7 +198,7 @@ void publish_domain_alert_1m(const char *symbol,
     }
 
     ESP_LOGI(TAG,
-             "M-012b: publish domain alert 1m (topic=%s sym=%s %s)",
+             "M-012b: publish kind=alert_1m (topic=%s sym=%s %s)",
              CONFIG_MQTT_TOPIC_DOMAIN_ALERT_1M,
              sym_safe,
              dir);
@@ -255,11 +255,11 @@ void publish_domain_alert_5m(const char *symbol,
     }
 
     const char *dir = up ? "UP" : "DOWN";
-    char payload[320];
+    char payload[352];
     const int plen = std::snprintf(payload,
                                    sizeof(payload),
-                                   "{\"symbol\":\"%s\",\"dir\":\"%s\",\"price_eur\":%.4f,"
-                                   "\"pct_5m\":%.4f,\"ts_ms\":%lld}",
+                                   "{\"kind\":\"alert_5m\",\"symbol\":\"%s\",\"dir\":\"%s\","
+                                   "\"price_eur\":%.4f,\"pct_5m\":%.4f,\"ts_ms\":%lld}",
                                    sym_safe,
                                    dir,
                                    price_eur,
@@ -271,7 +271,7 @@ void publish_domain_alert_5m(const char *symbol,
     }
 
     ESP_LOGI(TAG,
-             "M-010c: publish domain alert 5m (topic=%s sym=%s %s)",
+             "M-010c: publish kind=alert_5m (topic=%s sym=%s %s)",
              CONFIG_MQTT_TOPIC_DOMAIN_ALERT_5M,
              sym_safe,
              dir);
@@ -330,11 +330,12 @@ void publish_domain_alert_confluence_1m5m(const char *symbol,
     }
 
     const char *dir = up ? "UP" : "DOWN";
-    char payload[384];
+    char payload[416];
     const int plen = std::snprintf(payload,
                                    sizeof(payload),
-                                   "{\"symbol\":\"%s\",\"dir\":\"%s\",\"price_eur\":%.4f,"
-                                   "\"pct_1m\":%.4f,\"pct_5m\":%.4f,\"ts_ms\":%lld}",
+                                   "{\"kind\":\"alert_confluence_1m5m\",\"symbol\":\"%s\",\"dir\":\"%s\","
+                                   "\"price_eur\":%.4f,\"pct_1m\":%.4f,\"pct_5m\":%.4f,"
+                                   "\"ts_ms\":%lld}",
                                    sym_safe,
                                    dir,
                                    price_eur,
@@ -347,7 +348,7 @@ void publish_domain_alert_confluence_1m5m(const char *symbol,
     }
 
     ESP_LOGI(TAG,
-             "M-010d: publish confluence (topic=%s sym=%s %s)",
+             "M-010d: publish kind=alert_confluence_1m5m (topic=%s sym=%s %s)",
              CONFIG_MQTT_TOPIC_DOMAIN_ALERT_CONF_1M5M,
              sym_safe,
              dir);

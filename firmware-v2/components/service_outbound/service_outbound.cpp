@@ -44,16 +44,13 @@ static void dispatch_domain_alert_ntfy(const DomainAlert1mMovePayload &p)
     const char *sym = p.symbol[0] != '\0' ? p.symbol : "?";
     const char *dir = p.up ? "UP" : "DOWN";
     char title[80];
-    snprintf(title,
-             sizeof(title),
-             "CryptoAlert V2 · 1m %s · %s",
-             dir,
-             sym);
+    snprintf(title, sizeof(title), "CryptoAlert V2 · 1m · %s · %s", dir, sym);
 
-    char body[224];
+    char body[256];
     snprintf(body,
              sizeof(body),
              "%s\n"
+             "Soort: alert_1m\n"
              "Prijs: %.4f EUR\n"
              "1m: %+.4f %%\n"
              "ts_ms: %lld",
@@ -88,12 +85,13 @@ static void dispatch_domain_alert_5m_ntfy(const DomainAlert5mMovePayload &p)
     const char *sym = p.symbol[0] != '\0' ? p.symbol : "?";
     const char *dir = p.up ? "UP" : "DOWN";
     char title[80];
-    snprintf(title, sizeof(title), "CryptoAlert V2 · 5m %s · %s", dir, sym);
+    snprintf(title, sizeof(title), "CryptoAlert V2 · 5m · %s · %s", dir, sym);
 
-    char body[224];
+    char body[256];
     snprintf(body,
              sizeof(body),
              "%s\n"
+             "Soort: alert_5m\n"
              "Prijs: %.4f EUR\n"
              "5m: %+.4f %%\n"
              "ts_ms: %lld",
@@ -127,13 +125,18 @@ static void dispatch_confluence_ntfy(const DomainConfluence1m5mPayload &p)
 {
     const char *sym = p.symbol[0] != '\0' ? p.symbol : "?";
     const char *dir = p.up ? "UP" : "DOWN";
-    char title[96];
-    snprintf(title, sizeof(title), "CryptoAlert V2 · 1m+5m confluence %s · %s", dir, sym);
+    char title[112];
+    snprintf(title,
+             sizeof(title),
+             "CryptoAlert V2 · confluence 1m+5m · %s · %s",
+             dir,
+             sym);
 
-    char body[256];
+    char body[288];
     snprintf(body,
              sizeof(body),
              "%s\n"
+             "Soort: alert_confluence_1m5m\n"
              "Prijs: %.4f EUR\n"
              "1m: %+.4f %%\n"
              "5m: %+.4f %%\n"

@@ -2,6 +2,7 @@ idf_component_register(
     SRCS "display_port.cpp"
     INCLUDE_DIRS "include"
     REQUIRES bsp_s3_geek diagnostics esp_lcd
+    PRIV_REQUIRES esp_driver_gpio
 )
 
 # Optioneel fabriekstest: RGBK-flash + hoekmarkers — zet aan met:

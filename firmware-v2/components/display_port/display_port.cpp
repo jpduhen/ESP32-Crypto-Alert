@@ -9,6 +9,7 @@
 #include "bsp_s3_geek/bsp_s3_geek.hpp"
 #include "bsp_s3_geek/geek_pins.hpp"
 #include "diagnostics/diagnostics.hpp"
+#include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
@@ -151,8 +152,8 @@ esp_err_t init()
              DISPLAY_USE_BGR ? "BGR" : "RGB");
 
     spi_bus_config_t buscfg = {};
-    buscfg.sclk_io_num = SCLK;
-    buscfg.mosi_io_num = MOSI;
+    buscfg.sclk_io_num = static_cast<gpio_num_t>(SCLK);
+    buscfg.mosi_io_num = static_cast<gpio_num_t>(MOSI);
     buscfg.miso_io_num = -1;
     buscfg.quadwp_io_num = -1;
     buscfg.quadhd_io_num = -1;
@@ -162,8 +163,8 @@ esp_err_t init()
 
     esp_lcd_panel_io_handle_t io_handle = nullptr;
     esp_lcd_panel_io_spi_config_t io_config = {};
-    io_config.cs_gpio_num = CS;
-    io_config.dc_gpio_num = DC;
+    io_config.cs_gpio_num = static_cast<gpio_num_t>(CS);
+    io_config.dc_gpio_num = static_cast<gpio_num_t>(DC);
     io_config.spi_mode = 0;
     io_config.pclk_hz = DISPLAY_PCLK_EFFECTIVE;
     io_config.trans_queue_depth = 10;
@@ -176,7 +177,7 @@ esp_err_t init()
     s_io_handle = io_handle;
 
     esp_lcd_panel_dev_config_t panel_config = {};
-    panel_config.reset_gpio_num = RST;
+    panel_config.reset_gpio_num = static_cast<gpio_num_t>(RST);
     panel_config.rgb_ele_order =
         DISPLAY_USE_BGR ? LCD_RGB_ELEMENT_ORDER_BGR : LCD_RGB_ELEMENT_ORDER_RGB;
     panel_config.bits_per_pixel = 16;

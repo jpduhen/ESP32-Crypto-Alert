@@ -21,6 +21,7 @@ void request_application_ready_publish();
 
 /**
  * M-012b: publiceert compacte JSON naar `MQTT_TOPIC_DOMAIN_ALERT_1M` (QoS1, geen retain).
+ * Payload bevat o.a. `kind` (`alert_1m`), `symbol`, `dir`, `price_eur`, `pct_1m`, `ts_ms`.
  * Alleen als MQTT build+runtime aan en client verbonden; anders log + no-op.
  */
 void publish_domain_alert_1m(const char *symbol,
@@ -29,14 +30,14 @@ void publish_domain_alert_1m(const char *symbol,
                              double pct_1m,
                              int64_t ts_ms);
 
-/** M-010c: JSON met pct_5m naar `MQTT_TOPIC_DOMAIN_ALERT_5M` (QoS1, geen retain). */
+/** M-010c: JSON met `kind` (`alert_5m`), pct_5m, … naar `MQTT_TOPIC_DOMAIN_ALERT_5M` (QoS1, geen retain). */
 void publish_domain_alert_5m(const char *symbol,
                                bool up,
                                double price_eur,
                                double pct_5m,
                                int64_t ts_ms);
 
-/** M-010d: JSON met pct_1m + pct_5m. */
+/** M-010d: JSON met `kind` (`alert_confluence_1m5m`), pct_1m + pct_5m. */
 void publish_domain_alert_confluence_1m5m(const char *symbol,
                                            bool up,
                                            double price_eur,
