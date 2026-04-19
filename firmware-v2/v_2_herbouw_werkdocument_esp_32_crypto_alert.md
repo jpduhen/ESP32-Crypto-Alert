@@ -170,7 +170,9 @@ De huidige V1 blijft belangrijk als:
 
 **M-002 hardening:** netwerk-eigenaarschappen en open risico’s staan in **[docs/architecture/M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md)**; ADR-002 is bijgewerkt met verwijzing.
 
-**WP-03a (V1-gap / alert-scope):** samenvatting, gap-matrix en consolidatie-roadmap **C1–C5** in § **WP-03a**; besluit **D-010**. **C1** (field-test 1m/5m): § **C1** + **[C1_FIELD_TEST_1M5M.md](../../docs/architecture/C1_FIELD_TEST_1M5M.md)**.
+**WP-03a (V1-gap / alert-scope):** samenvatting, gap-matrix en consolidatie-roadmap **C1–C5** in § **WP-03a**; besluit **D-010**. **C1** afgerond (§ **C1**); **C2** randgevallen: **[C2_EDGE_CASES_1M5M.md](../../docs/architecture/C2_EDGE_CASES_1M5M.md)**; **C3** mini-regime (§ **C3**).
+
+**RWS (rijkere Bitvavo WS-marktdata):** parallel spoor — § **RWS**; **RWS-01** instrumentatie; **RWS-02** `trades` + bounded ring + `ws_trades_observability` (zie § **RWS**).
 
 \
 
@@ -1020,7 +1022,9 @@ Geen vervanging van de migratiematrix, wel **samenhangende blokken** i.p.v. een 
 
 3. **V1-gap review / bewuste scopekeuzes** — **afgerond als stuurversie** (**§ WP-03a**, **D-010**): gap-matrix, keep/drop/defer; **geen** V1-architectuur als blauwdruk; **30m/2h** als **einddoel** vs **fase** expliciet gescheiden.
 
-4. **Alert-engine consolidatie** — roadmap **C1–C5** (§ **WP-03a**) op de **1m/5m-kern**. **C1** tooling/docs gereed (§ **C1**); **veldtests** lopen volgens protocol; daarna **C2–C4**. **C5** = planning **30m/2h**-trajecten; geen feature-explosie.
+4. **Alert-engine consolidatie** — roadmap **C1–C5** (§ **WP-03a**) op de **1m/5m-kern**. **C1** afgerond; **C2** randgevallen-doc + observability (§ **C2**); **C3** mini-regime review (§ **C3**); **volgende:** **C4**. **C5** = planning **30m/2h**-trajecten; geen feature-explosie.
+
+4b. **RWS — parallel** (§ **RWS**) — **RWS-01** + **RWS-02** afgerond (ticker+`trades` subscribe, bounded trade-ring, read-only observability); **RWS-03+** = SecondSampler/aggregate (geen conflict met C3-volgorde tenzij herprioriteerd).
 
 5. **Productierijpheid / operatie / test- en releasekwaliteit** — CI waar zinvol, flash/partitiebeleid, release-notes, **concrete** field-testcriteria (geen vage “nog veel werk”).
 
@@ -1050,15 +1054,17 @@ Geen vervanging van de migratiematrix, wel **samenhangende blokken** i.p.v. een 
 
 2. **M-002 hardening-batch** — **afgerond** (**§ M-002h**); `M002_NETWORK_BOUNDARIES.md` bijgewerkt.
 
-3. **Consolidatie + V1-gap review** — **stuurversie vastgelegd** (**§ WP-03a**, **D-010**); **C1**-protocol + **`alert_engine_runtime_stats`** gereed (§ **C1**). **Uitvoeren:** veldsessies → **C2**; **30m/2h** = **roadmap na** stabiliteit (**C5**). Geen nieuwe WebUI-settings in consolidatiefase tenzij apart besloten.
+3. **Consolidatie + V1-gap review** — **stuurversie vastgelegd** (**§ WP-03a**, **D-010**); **C1** afgerond; **C2** uitgewerkt (§ **C2**); **C3** afgerond (§ **C3**). **Volgende:** **C4** (NTFY/MQTT-consistentie); **30m/2h** = **roadmap na** stabiliteit (**C5**). Geen nieuwe WebUI-settings in consolidatiefase tenzij apart besloten.
 
-4. **Productierijpheid** (test, release, operatie) — pas als (1)–(3) **duidelijke** voortgang hebben; zie § **9a** werkpakket 5.
+4. **RWS** (§ **RWS**) — parallel; **RWS-01** + **RWS-02** read-only (`ws_feed_observability`, `ws_trades_observability`); **geen** alert-semantiek-wijziging; officiële prijs ongewijzigd ticker-gebaseerd.
 
-5. **Werkdocument en migratiematrix** bijwerken op **werkpakket**-niveau (§ **9a**), niet alleen losse M-nummers.
+5. **Productierijpheid** (test, release, operatie) — pas als (1)–(3) **duidelijke** voortgang hebben; zie § **9a** werkpakket 5.
 
-6. V1 blijft **bevroren referentie** (B-001); geen grote V1-uitbreidingen zonder besluit.
+6. **Werkdocument en migratiematrix** bijwerken op **werkpakket**-niveau (§ **9a**), niet alleen losse M-nummers.
 
-7. **Field-test** op GEEK (WiFi, live feed, alerts) blijft de **lopende sanity-check**, geen vervanging voor een latere releasechecklist.
+7. V1 blijft **bevroren referentie** (B-001); geen grote V1-uitbreidingen zonder besluit.
+
+8. **Field-test** op GEEK (WiFi, live feed, alerts) blijft de **lopende sanity-check**, geen vervanging voor een latere releasechecklist.
 
 \
 
@@ -1514,7 +1520,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 2. **Afgerond:** **M-002 hardening-batch** (**§ M-002h**) — queues/backpressure, mutex-observability, ownership — zie `M002_NETWORK_BOUNDARIES.md`.
 
-3. **Vervolgens:** **V1-gap / scope** als stuurversie (**§ WP-03a**, **D-010**) — **afgerond**; **implementatie consolidatie** = **C1–C5**. **C1:** protocol + stats **klaar** (§ **C1**, [C1_FIELD_TEST_1M5M.md](../../docs/architecture/C1_FIELD_TEST_1M5M.md)); **veldsessies uitvoeren** → daarna **C2** (randgevallen). Overig: mini-regime review (**C3**), NTFY/MQTT (**C4**); **C5** = **roadmap/planning** **30m/2h**. **Pas daarna** verdere verbreding en **productierijpheid** (§ **9a** werkpakket 5).
+3. **Vervolgens:** **V1-gap / scope** (**§ WP-03a**, **D-010**) — **C1** afgerond, **C2** uitgewerkt ([C2_EDGE_CASES_1M5M.md](../../docs/architecture/C2_EDGE_CASES_1M5M.md)), **C3** afgerond (§ **C3**). **Volgende consolidatie:** **C4** (NTFY/MQTT); **C5** = **30m/2h**-roadmap. **Parallel:** **RWS-01** + **RWS-02** afgerond (§ **RWS**) — ticker+`trades` + bounded ring; **RWS-03** = SecondSampler/aggregate. **Pas daarna** verdere verbreding en **productierijpheid** (§ **9a** werkpakket 5).
 
 \
 
@@ -1646,11 +1652,11 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 |----|------|------|
 
-| **C1** | Field-testprotocol + spamreview | **Uitgewerkt:** protocol + spamreview-criteria in **[docs/architecture/C1_FIELD_TEST_1M5M.md](../../docs/architecture/C1_FIELD_TEST_1M5M.md)**; read-only **`alert_engine_runtime_stats`** in `status.json` / WebUI. **Uitvoeren:** minstens twee veldsessies volgens dat protocol — daarna C2 |
+| **C1** | Field-testprotocol + spamreview | **Afgerond:** veldsessies met meerdere 1m/5m-emits, confluence en suppressie; protocol **[C1_FIELD_TEST_1M5M.md](../../docs/architecture/C1_FIELD_TEST_1M5M.md)**; read-only **`alert_engine_runtime_stats`** |
 
-| **C2** | Randgevallen documenteren | Oscillatie, WS-stilte, vol-warmup: verwacht vs defect |
+| **C2** | Randgevallen documenteren | **Uitgewerkt:** **[C2_EDGE_CASES_1M5M.md](../../docs/architecture/C2_EDGE_CASES_1M5M.md)** + edge-observability in `status.json` (`edge_*`, `last_regime_change_epoch_ms`) — oscillatie, confluence-grenzen, suppress, cooldown, WS-stilte, vol-warmup, regime-wissels |
 
-| **C3** | Mini-regime review | ‰-clamp en schaal vs praktijk; geen RegimeEngine zonder roadmap |
+| **C3** | Mini-regime review | **Afgerond:** ‰ raw vs effectief + clamp-zichtbaarheid in `regime_observability` / logs; Kconfig-help clamp; grens-bps in snapshot — geen RegimeEngine; defaults calm/hot-bps en ‰ ongewijzigd (field-tuning blijft mogelijk) |
 
 | **C4** | Notificatie-consistentie | Titel/body NTFY/MQTT waar nuttig (klein, geen nieuwe features) |
 
@@ -1662,9 +1668,9 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-- **§11b M-010:** “herschrijven” = kern **aanwezig**; consolidatie = **kwaliteit + bewijs** (**C1–C4** op **1m/5m**; **C5** = **30m/2h**-roadmap), geen V1-import.
+- **§11b M-010:** “herschrijven” = kern **aanwezig**; consolidatie = **kwaliteit + bewijs** — **C1–C3** afgerond; **C4** volgende op **1m/5m**; **C5** = **30m/2h**-roadmap; geen V1-import.
 
-- **§9a / §10 / §15:** WP-03a sluit **stuurversie** af; **volgende werk** = **C1–C4** op **1m/5m-kern** + **C5** voor **30m/2h**-planning; **geen** terugval naar V1-monoliet.
+- **§9a / §10 / §15:** **C1** afgerond, **C2** uitgewerkt, **C3** afgerond; **volgende** = **C4** op **1m/5m-kern** + **C5** voor **30m/2h**-planning; **geen** terugval naar V1-monoliet.
 
 \
 
@@ -1676,19 +1682,169 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Status:** **Protocol en meetinstrumenten** zijn **vastgelegd**; **veldsessies** zijn een **bewuste teststap** door de gebruiker (niet geautomatiseerd in CI).
+**Status:** **Afgerond** — veldsessies hebben **meerdere** 1m- en 5m-emits, **minstens één** confluence- en **minstens één** suppressie-episode aangetoond; zie **[C1_FIELD_TEST_1M5M.md](../../docs/architecture/C1_FIELD_TEST_1M5M.md)** § 8.
 
 \
 
-**Volledige tekst:** **[docs/architecture/C1_FIELD_TEST_1M5M.md](../../docs/architecture/C1_FIELD_TEST_1M5M.md)** — testduur/momenten, welke JSON/logs te bewaren, classificatie **goed / twijfelachtig / defect**, spamreview-criteria, **wanneer C1 voldoende is** om naar **C2** te gaan.
+**Volledige tekst:** **[docs/architecture/C1_FIELD_TEST_1M5M.md](../../docs/architecture/C1_FIELD_TEST_1M5M.md)** — testduur/momenten, JSON/logs, spamreview-criteria.
 
 \
 
-**Firmware / WebUI (read-only, geen nieuwe settings):** `GET /api/status.json` bevat **`alert_engine_runtime_stats`**: emit-totalen per pad (1m, 5m, confluence), laatste emit-tijd (epoch ms sinds boot), aantal **suppress-episodes** na confluence (M-010e). Bestaande velden **`alert_decision_observability`**, **`regime_observability`**, policy/config-snapshots blijven leidend voor interpretatie.
+**Firmware / WebUI (read-only):** `GET /api/status.json` → **`alert_engine_runtime_stats`** (emits, suppress-episodes, edge-transities in **C2**), **`alert_decision_observability`**, **`regime_observability`**.
 
 \
 
-**Niet onder C1:** 30m/2h-implementatie, nieuwe alerttypes, extra dashboards, HA-discovery-uitbreiding — zie **D-010**.
+**Niet onder C1:** 30m/2h-implementatie, nieuwe alerttypes, extra dashboards — zie **D-010**.
+
+\
+
+---
+
+\
+
+## C2 — Randgevallen 1m/5m-kern (consolidatie)
+
+\
+
+**Status:** **Documentatie + read-only observability uitgewerkt** — geen nieuwe tuning-UI, geen nieuwe alerttypes.
+
+\
+
+**Volledige tekst:** **[docs/architecture/C2_EDGE_CASES_1M5M.md](../../docs/architecture/C2_EDGE_CASES_1M5M.md)** — per randgeval: verwacht / twijfelachtig / defect + welke JSON-velden.
+
+\
+
+**Observability (read-only):** `alert_engine_runtime_stats` bevat **`edge_1m`**, **`edge_5m`**, **`edge_confluence_1m5m`** (transitietellingen en laatste epoch bij binnenkomst cooldown / suppressed / not_ready). **`regime_observability.last_regime_change_epoch_ms`**: tijdstip laatste **calm/normal/hot**-wissel.
+
+\
+
+**Volgende stap:** **C4** — NTFY/MQTT-notificatie-consistentie (klein), zie **WP-03a** roadmap.
+
+\
+
+---
+
+\
+
+## C3 — Mini-regime review (M-010f, ‰-clamp en schaal vs praktijk)
+
+\
+
+**Status:** **Afgerond** — geen V1-RegimeEngine; **M-010f** blijft de lichte calm/normal/hot-laag op basis van `domain_metrics::compute_vol_mean_abs_step_bps` (gemiddelde \|Δ\| tussen canonieke ~1s-stappen in het configureerbare venster) en ‰-schaal op 1m/5m/confluence-drempels.
+
+\
+
+**Beoordeling (kern):**
+
+- **Grenzen calm/normal/hot** (default Kconfig: calm als gem. stap **strikt &lt;** `ALERT_REGIME_CALM_MAX_STEP_BPS` bps, hot vanaf **`ALERT_REGIME_HOT_MIN_STEP_BPS`**, anders normal) zijn **bewust eenvoudig**; de brede **normal-band** tussen de drempels beperkt pingpong; oscillatie precies op de grens blijft een **field-tuning**-thema (hysteresis is **niet** toegevoegd — complexiteit).
+
+- **‰-schalen:** calm/hot komen uit NVS (`regime_*_scale_permille`, binnen vaste ranges); **normal** blijft 1000‰. De **engine-clamp** \[`ALERT_REGIME_THR_SCALE_MIN_PERMILLE`, `MAX`\] kan het effect van een geldige NVS-waarde nog begrenzen (bijv. 700‰ calm → 750‰ effectief) — dit was **moeilijk zichtbaar** in status; dat is nu **expliciet**.
+
+- **Clamps/guards:** NVS-validatie (config_store) + engine-clamp + bestaande vol-warmup (geen regime op vol tot `pairs_used` voldoende) blijven de kern; **geen** extra beleidslaag.
+
+\
+
+**Geleverd in deze stap (C3):**
+
+- Read-only **`regime_observability`**: `threshold_scale_permille_raw`, `threshold_scale_clamped`, `regime_calm_max_step_bps`, `regime_hot_min_step_bps` (naast bestaande velden); compact HTML-blok op WebUI-`/` bijgewerkt.
+
+- Seriële logs: bij eerste vol-ready en bij regime-wissel — hint op ‰-clamp; **`ESP_LOGW`** wanneer raw≠effectief met grenzen.
+
+- Kconfig **help** op clamp min/max (verwijzing naar status.json).
+
+\
+
+**Risico’s kleiner:** verkeerde interpretatie van “waarom voelt de drempel anders dan NVS?” (vooral 700‰ calm vs 750‰ effectief); moeilijk field-debuggen zonder raw/clamp — **gedeeltelijk opgelost**.
+
+\
+
+**Bewust niet gedaan:** hysteresis / dubbele drempels, wijziging default calm/hot **bps** of default ‰, 30m/2h, RWS-03, extra WebUI-settings, dashboards.
+
+\
+
+**Volgende stap:** **C4** — zie **WP-03a** roadmap.
+
+\
+
+---
+
+\
+
+## RWS — Rijkere Bitvavo WS-marktdata (parallel architectuurspoor)
+
+\
+
+**Doel:** een **tweede generatie** secondeprijs-/marktdata-architectuur voorbereiden — **zonder** de lopende **C3/C4/C5**-consolidatielijn te vervangen en **zonder** de huidige **1m/5m**-kern te destabiliseren. **30m/2h** blijven **gewenst einddoel**; dit spoor wordt later **direct relevant** voor betrouwbare langere horizons en rijkere input.
+
+\
+
+### Huidig V2-pad vs beoogde evolutie
+
+\
+
+| | **Nu (productiepad)** | **Beoogd (evolutie)** |
+|--|------------------------|-------------------------|
+| **Invoer** | Bitvavo **ticker**-kanaal → officiële prijs; **trades** parallel ingeschakeld (RWS-02), nog **niet** doorrekenen naar metrics | **ticker + trades** volledig benut (micro-events → aggregate RWS-03), bounded queues |
+| **Tijd** | Per-seconde **canonicalisatie** op WS-input (`domain_metrics` blijft 1 Hz-analysekern) | Zelfde **1 Hz officiële stroom** voor metrics/alerts; ruwe events **gescheiden** afgeleid |
+| **ticker24h** | Niet gebruikt als primaire bron | Hoogstens **heartbeat/fallback** (RWS-05) |
+| **book / Market Data Pro** | Niet | **Niet** als eerste productiestap |
+
+\
+
+### Architectuurprincipes
+
+\
+
+1. **Ruwe WS-events** en **afgeleide secondeprijs** blijven **conceptueel gescheiden** (later: aparte buffers / aggregators).
+
+2. **Alerts** draaien **niet** rechtstreeks op ruwe WS-events — alleen op de **bestaande** domein-/seconde-logica.
+
+3. De **1 Hz-officiële prijsstroom** (`market_data` → `domain_metrics` → `alert_engine`) blijft de **analysekern** tot expliciet besloten switch (RWS-04).
+
+4. **Trade-events** krijgen **prioriteit** boven tickers waar de ontwerpfase dat voorschrijft (**RWS-03+** voor aggregate/seconde-synthese). **RWS-02** vangt trades parallel (**bounded ring**); **officiële 1 Hz-prijs** blijft **ticker** (`apply_price`).
+
+5. **Bounded queues**, **backpressure** en **tellers** zijn verplicht op nieuwe paden — RWS-01 levert **observability** op het **bestaande** ticker-pad als no-regret basis.
+
+\
+
+### Roadmap (RWS-01 … RWS-06)
+
+\
+
+| ID | Omschrijving |
+|----|----------------|
+| **RWS-01** | **No-regret voorbereiding:** huidige **ticker-only** WS-route beter instrumenteren (raw vs canonical, gaps, bronlabel); logs `[WS_RX]` / `[WS_AGG]` / `[WS_GAP]`; **`ws_feed_observability`** in `status.json`. **Geen** trades-subscribe, **geen** wijziging alert-semantiek. |
+| **RWS-02** | **Afgerond:** `trades` parallel subscriben (zelfde WS als ticker); parse `"event":"trade"` → `WsRawTradeSample`; **bounded ring** (64, overwrite oudste); observability `ws_trades_observability` + logs `[WS_TRD_RX]` / `[WS_TRD_DROP]` / `[WS_TRD_GAP]`. **Niet:** geen koppeling aan `domain_metrics` / alerts. |
+| **RWS-03** | `SecondSampler` / `SecondAggregate` — officiële seconde uit events. |
+| **RWS-04** | Metrics **optioneel** laten lezen van nieuwe aggregate-serie (feature-flag / schakelbaar pad). |
+| **RWS-05** | `ticker24h` als heartbeat/fallback + **bronzichtbaarheid** in observability. |
+| **RWS-06** | Evaluatie of **orderboek (`book`)** nog nodig is voor productdoelen. |
+
+\
+
+### RWS-02 — vastgelegd (technisch)
+
+\
+
+- **Subscribe:** één JSON naar `wss://ws.bitvavo.com/v2/` met `channels`: **`ticker`** + **`trades`** (zelfde markt).
+
+- **Routing:** TEXT-frame eerst als **trade** (`"event":"trade"` + `"price":`) → **geen** `apply_price`; anders **ticker**-parse → bestaande canonical prijs.
+
+- **Opslag:** `WsRawTradeSample` in een **ringbuffer** (cap 64); bij vol → oudste overschrijven, teller **`ring_drop_total`**.
+
+- **Observability:** `GET /api/status.json` → **`ws_trades_observability`** (`trades_last_sec`, `trades_total_since_boot`, ring, gaps, `last_trade_local_ms`); compact op **`/`**; logs **`[WS_TRD_*]`**.
+
+- **Bewust niet:** trades **niet** naar `domain_metrics` / `alert_engine`; geen tweede officiële prijsstroom.
+
+\
+
+### Positie t.o.v. C3 / C4 / C5
+
+\
+
+- **C3** (mini-regime), **C4** (NTFY/MQTT), **C5** (30m/2h-roadmap) blijven de **hoofdlijn** consolidatie alert-engine.
+
+- **RWS** is een **parallelle voorbereidingslijn** op `exchange_bitvavo` / `market_data` / (later) `domain_metrics` — **geen** invoeging vóór de lopende **C4**-kern tenzij expliciet herprioriteerd.
 
 \
 
@@ -1824,7 +1980,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 - **Begrenzing:** log alleen bij **prijsverandering** t.o.v. laatste log **of** minstens **30 s** sinds vorige log (geen dump per WS-tick).
 
-- **Inbound-teller (operationele observability):** `MarketSnapshot.ws_inbound_ticks_last_sec` — aantal door de Bitvavo-WS-laag verwerkte prijs-ticks in de **vorige voltooide wandklok-seconde**; zichtbaar op het **LVGL-scherm** als **WS in N/s** en in **WebUI** via **`GET /api/status.json`** (zelfde veldnaam).
+- **Inbound / RWS-01 + RWS-02:** `ws_raw_msgs_last_sec` (alle WS TEXT-frames in de vorige voltooide seconde), `ws_inbound_ticks_last_sec` (**canonical** = geslaagde **ticker**-parse → `apply_price`), gaps + `ws_official_price_stream` (`bitvavo_ticker_ws_v1`). **RWS-02:** parallel **`trades`**-kanaal → `ws_trades_observability` (o.a. `trades_last_sec`, ring, drops, trade-gap); **geen** wijziging alert-/metrics-ingang. WebUI: **`ws_feed_observability`** + **`ws_trades_observability`** in **`GET /api/status.json`**; compact op **`/`**. Logs: `[WS_RX]` / `[WS_AGG]` / `[WS_GAP]`; `[WS_TRD_RX]` / `[WS_TRD_DROP]` / `[WS_TRD_GAP]`. LVGL: historisch **WS in N/s** = canonical-teller.
 
 - **Optioneel scherm (T-103c):** `display_port::ws_live_validation_strip_toggle()` — pixelband **zonder** LVGL; bij **T-103d** niet meer gecombineerd met live UI (framebuffer-conflict).
 

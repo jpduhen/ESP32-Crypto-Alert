@@ -8,4 +8,6 @@
 
 Geen duplicaat van de gap-analyse: alle tabellen, keep/drop/defer en roadmap **C1–C5** staan in het werkdocument. **Koers:** **1m/5m** = huidige actieve kern; **30m/2h** = **gewenst einddoel**, gefaseerd (**C5**), **niet** “uit scope” in algemene zin — zie **D-010**.
 
-**C1 (field-test 1m/5m):** uitgewerkt in **[C1_FIELD_TEST_1M5M.md](C1_FIELD_TEST_1M5M.md)** + werkdocument § **C1**; read-only **`alert_engine_runtime_stats`** in `status.json`.
+**C1 (field-test 1m/5m):** afgerond — **[C1_FIELD_TEST_1M5M.md](C1_FIELD_TEST_1M5M.md)** § 8 + werkdocument § **C1**.
+
+**C2 (randgevallen):** **[C2_EDGE_CASES_1M5M.md](C2_EDGE_CASES_1M5M.md)** + `edge_*` / `last_regime_change_epoch_ms` in `status.json`.

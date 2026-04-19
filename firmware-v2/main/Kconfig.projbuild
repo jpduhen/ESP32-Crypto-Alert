@@ -253,10 +253,15 @@ menu "ESP32 Crypto Alert V2"
         int "M-010f: clamp ondergrens effectieve schaal (‰)"
         range 600 950
         default 750
+        help
+            Past toe ná gekozen calm/hot-‰ uit NVS/Kconfig. Bijv. NVS calm 700‰ → effectief minstens deze waarde.
+            C3: zie status.json threshold_scale_permille_raw vs threshold_scale_permille.
 
     config ALERT_REGIME_THR_SCALE_MAX_PERMILLE
         int "M-010f: clamp bovengrens effectieve schaal (‰)"
         range 1000 1600
         default 1350
+        help
+            Past toe ná gekozen hot-‰; te hoge hot-waarde wordt hierop begrensd.
 
 endmenu

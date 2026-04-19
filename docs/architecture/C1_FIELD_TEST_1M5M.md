@@ -84,3 +84,13 @@ Als alles **twijfelachtig** blijft zonder defect: **mag** doorgaan naar C2 met d
 - Nieuwe WebUI-settings, nieuwe alerttypes  
 - Home Assistant discovery, extra boards  
 - Grote refactor `alert_engine`
+
+---
+
+## 8. Formele afronding C1 (project)
+
+**Status: voldoende afgerond** voor de eerste consolidatieronde.
+
+**Bewijs (veldsessies):** er zijn **meerdere** 1m-emits, **meerdere** 5m-emits, **minstens één** confluence-event en **minstens één** suppressie-episode (M-010e) waargenomen op echte feed — daarmee zijn de kernpaden praktisch afgedekt.
+
+**Vervolg:** **[C2_EDGE_CASES_1M5M.md](C2_EDGE_CASES_1M5M.md)** — randgevallen expliciet maken vóór verdere consolidatie (**C3** …).

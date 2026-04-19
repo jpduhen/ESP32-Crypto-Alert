@@ -6,7 +6,7 @@
  * M-010f: mini-regime (calm/normal/hot) uit vol-proxy — alleen lichte schaal van 1m/5m/conf-drempels.
  * M-011b: bij 1m-trigger payload naar `service_outbound::emit_domain_alert_1m`.
  * M-013h: decision-observability snapshot aan einde `tick()` (geen extra beslislogica buiten bestaande paden).
- * C1: `AlertEngineRuntimeStatsSnapshot` — emit-tellers + suppress-venster (read-only, sinds boot).
+ * C1/C2: `AlertEngineRuntimeStatsSnapshot` — emit-tellers + suppress-venster + edge-transities (read-only).
  * M-003c: cooldown/suppress-timing uit `config_store::alert_policy_timing()` (fallback Kconfig via config_store).
  * M-003d: confluence-policy flags uit `config_store::alert_confluence_policy()` (defaults = M-010d/e).
  */
@@ -133,6 +133,9 @@ static Regime s_m010f_last_regime{Regime::Normal};
 static bool s_sup_episode_active_1m{false};
 static bool s_sup_episode_active_5m{false};
 
+/** C2: vorig regime-label — wissel → `last_regime_change_epoch_ms`. */
+static char s_prev_regime_label_c2[16] = "normal";
+
 /** M-010e: losse alert onderdrukken — alleen binnen venster én zelfde richting als laatste confluence. */
 static bool loose_suppressed_after_confluence(int64_t now_ms, bool up_loose)
 {
@@ -153,6 +156,29 @@ static bool confluence_thresholds_pass(const config_store::AlertConfluencePolicy
         return a1 >= eff1 && a5 >= eff2;
     }
     return a1 >= eff1 || a5 >= eff2;
+}
+
+static void bump_path_edge(const AlertPathDecisionSnapshot &prev,
+                            const AlertPathDecisionSnapshot &cur,
+                            int64_t now_ms,
+                            AlertPathEdgeStats *out)
+{
+    if (!out) {
+        return;
+    }
+    if (std::strcmp(prev.status, cur.status) == 0) {
+        return;
+    }
+    if (std::strcmp(cur.status, "cooldown") == 0) {
+        ++out->enter_cooldown;
+        out->last_epoch_ms_enter_cooldown = now_ms;
+    } else if (std::strcmp(cur.status, "suppressed") == 0) {
+        ++out->enter_suppressed;
+        out->last_epoch_ms_enter_suppressed = now_ms;
+    } else if (std::strcmp(cur.status, "not_ready") == 0) {
+        ++out->enter_not_ready;
+        out->last_epoch_ms_enter_not_ready = now_ms;
+    }
 }
 
 static void path_set(AlertPathDecisionSnapshot *p,
@@ -191,6 +217,8 @@ static void refresh_decision_observability(const domain_metrics::Metric1mMovePct
                                            bool loose_blocked_by_conf_policy,
                                            const config_store::AlertConfluencePolicyConfig &cfp)
 {
+    const AlertDecisionObservabilitySnapshot prev_obs = s_decision_obs;
+
     /* --- Confluence --- */
     if (!cfp.confluence_enabled) {
         path_set(&s_decision_obs.confluence_1m5m, "disabled", "confluence_disabled", -1, -1);
@@ -269,6 +297,11 @@ static void refresh_decision_observability(const domain_metrics::Metric1mMovePct
             path_set(&s_decision_obs.tf_5m, "invalid", "internal", -1, -1);
         }
     }
+
+    bump_path_edge(prev_obs.tf_1m, s_decision_obs.tf_1m, now_ms, &s_runtime_stats.edge_1m);
+    bump_path_edge(prev_obs.tf_5m, s_decision_obs.tf_5m, now_ms, &s_runtime_stats.edge_5m);
+    bump_path_edge(prev_obs.confluence_1m5m, s_decision_obs.confluence_1m5m, now_ms,
+                   &s_runtime_stats.edge_confluence);
 }
 
 } // namespace
@@ -289,8 +322,15 @@ esp_err_t init()
     s_sup_episode_active_5m = false;
     std::memset(&s_regime_obs, 0, sizeof(s_regime_obs));
     std::strncpy(s_regime_obs.regime, "normal", sizeof(s_regime_obs.regime) - 1);
+    s_regime_obs.last_regime_change_epoch_ms = -1;
+    std::strncpy(s_prev_regime_label_c2, "normal", sizeof(s_prev_regime_label_c2) - 1);
+    s_prev_regime_label_c2[sizeof(s_prev_regime_label_c2) - 1] = '\0';
     s_regime_obs.vol_unavailable_fallback = true;
     s_regime_obs.threshold_scale_permille = CONFIG_ALERT_REGIME_THR_SCALE_NORMAL_PERMILLE;
+    s_regime_obs.threshold_scale_permille_raw = CONFIG_ALERT_REGIME_THR_SCALE_NORMAL_PERMILLE;
+    s_regime_obs.threshold_scale_clamped = false;
+    s_regime_obs.regime_calm_max_step_bps = CONFIG_ALERT_REGIME_CALM_MAX_STEP_BPS;
+    s_regime_obs.regime_hot_min_step_bps = CONFIG_ALERT_REGIME_HOT_MIN_STEP_BPS;
     {
         const config_store::AlertRuntimeConfig &arc = config_store::alert_runtime();
         const double b1 = static_cast<double>(arc.threshold_1m_bps) / 100.0;
@@ -347,9 +387,13 @@ void tick()
     const domain_metrics::MetricVolMeanAbsStepBps volm = domain_metrics::compute_vol_mean_abs_step_bps();
     Regime regime = Regime::Normal;
     int scale_permille = CONFIG_ALERT_REGIME_THR_SCALE_NORMAL_PERMILLE;
+    int scale_permille_raw = CONFIG_ALERT_REGIME_THR_SCALE_NORMAL_PERMILLE;
+    bool scale_clamped = false;
     if (volm.ready) {
         regime = regime_from_vol_bps(volm.mean_abs_step_bps);
-        scale_permille = clamp_thr_scale_permille(thr_scale_permille_for_regime(regime, arc));
+        scale_permille_raw = thr_scale_permille_for_regime(regime, arc);
+        scale_permille = clamp_thr_scale_permille(scale_permille_raw);
+        scale_clamped = (scale_permille != scale_permille_raw);
         if (!s_m010f_vol_ready_logged) {
             s_m010f_vol_ready_logged = true;
             s_m010f_logged_vol_unready_info = false;
@@ -359,7 +403,7 @@ void tick()
                 base_5m_pct * static_cast<double>(scale_permille) / 1000.0;
             ESP_LOGI(TAG,
                      "M-010f: vol ready vol_mean_abs_step_bps=%.2f pairs=%u regime=%s scale=%d‰ "
-                     "(calm|<%d hot|≥%d bps) → eff_thr 1m=%.3f%% 5m=%.3f%% (basis 1m=%.2f%% 5m=%.2f%%)",
+                     "(calm|<%d hot|≥%d bps) → eff_thr 1m=%.3f%% 5m=%.3f%% (basis 1m=%.2f%% 5m=%.2f%%)%s",
                      volm.mean_abs_step_bps,
                      static_cast<unsigned>(volm.pairs_used),
                      regime_label(regime),
@@ -369,7 +413,16 @@ void tick()
                      eff1,
                      eff5,
                      base_1m_pct,
-                     base_5m_pct);
+                     base_5m_pct,
+                     scale_clamped ? " · ‰ clamp actief (zie status.json)" : "");
+            if (scale_clamped) {
+                ESP_LOGW(TAG,
+                         "M-010f: ‰-schaal begrensd [%d,%d]: raw=%d‰ → eff=%d‰",
+                         CONFIG_ALERT_REGIME_THR_SCALE_MIN_PERMILLE,
+                         CONFIG_ALERT_REGIME_THR_SCALE_MAX_PERMILLE,
+                         scale_permille_raw,
+                         scale_permille);
+            }
             s_m010f_last_regime = regime;
         } else if (regime != s_m010f_last_regime) {
             s_m010f_last_regime = regime;
@@ -379,15 +432,26 @@ void tick()
                 base_5m_pct * static_cast<double>(scale_permille) / 1000.0;
             ESP_LOGI(TAG,
                      "M-010f: regime → %s vol_mean_abs_step_bps=%.2f scale=%d‰ "
-                     "eff_thr 1m=%.3f%% 5m=%.3f%% (cooldown/suppress ongewijzigd)",
+                     "eff_thr 1m=%.3f%% 5m=%.3f%% (cooldown/suppress ongewijzigd)%s",
                      regime_label(regime),
                      volm.mean_abs_step_bps,
                      scale_permille,
                      eff1,
-                     eff5);
+                     eff5,
+                     scale_clamped ? " · ‰ raw≠eff (clamp)" : "");
+            if (scale_clamped) {
+                ESP_LOGW(TAG,
+                         "M-010f: ‰-schaal begrensd [%d,%d]: raw=%d‰ → eff=%d‰",
+                         CONFIG_ALERT_REGIME_THR_SCALE_MIN_PERMILLE,
+                         CONFIG_ALERT_REGIME_THR_SCALE_MAX_PERMILLE,
+                         scale_permille_raw,
+                         scale_permille);
+            }
         }
     } else {
         scale_permille = CONFIG_ALERT_REGIME_THR_SCALE_NORMAL_PERMILLE;
+        scale_permille_raw = CONFIG_ALERT_REGIME_THR_SCALE_NORMAL_PERMILLE;
+        scale_clamped = false;
         if (!s_m010f_logged_vol_unready_info) {
             s_m010f_logged_vol_unready_info = true;
             ESP_LOGI(TAG,
@@ -407,7 +471,16 @@ void tick()
     s_regime_obs.vol_unavailable_fallback = !volm.ready;
     std::strncpy(s_regime_obs.regime, regime_label(regime), sizeof(s_regime_obs.regime) - 1);
     s_regime_obs.regime[sizeof(s_regime_obs.regime) - 1] = '\0';
+    if (std::strcmp(s_prev_regime_label_c2, s_regime_obs.regime) != 0) {
+        s_regime_obs.last_regime_change_epoch_ms = now_ms;
+        std::strncpy(s_prev_regime_label_c2, s_regime_obs.regime, sizeof(s_prev_regime_label_c2) - 1);
+        s_prev_regime_label_c2[sizeof(s_prev_regime_label_c2) - 1] = '\0';
+    }
     s_regime_obs.threshold_scale_permille = scale_permille;
+    s_regime_obs.threshold_scale_permille_raw = scale_permille_raw;
+    s_regime_obs.threshold_scale_clamped = scale_clamped;
+    s_regime_obs.regime_calm_max_step_bps = CONFIG_ALERT_REGIME_CALM_MAX_STEP_BPS;
+    s_regime_obs.regime_hot_min_step_bps = CONFIG_ALERT_REGIME_HOT_MIN_STEP_BPS;
     s_regime_obs.base_threshold_move_pct_1m = base_1m_pct;
     s_regime_obs.base_threshold_move_pct_5m = base_5m_pct;
     s_regime_obs.effective_threshold_move_pct_1m = eff_thr_1m_pct;

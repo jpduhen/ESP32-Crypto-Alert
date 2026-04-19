@@ -49,8 +49,49 @@ struct MarketSnapshot {
     /** Marktlabel zoals aan exchange doorgegeven (bv. BTC-EUR). */
     char market_label[24]{};
     TickSource last_tick_source{TickSource::None};
-    /** Aantal binnenkomende WS-ticker-updates in de **afgelopen voltooide** wandklok-seconde (0 = geen of nog niet gesynchroniseerd). */
+    /**
+     * RWS-01: ruwe Bitvavo WS TEXT-frames (opcode text) in de **afgelopen voltooide** wandklok-seconde —
+     * vóór parse; kan hoger zijn dan canonical als er non-ticker of parse-fail is.
+     */
+    uint32_t ws_raw_msgs_last_sec{0};
+    /**
+     * Aantal **geslaagde ticker-parses** → officiële prijs-update (`apply_price`) in de **afgelopen voltooide**
+     * wandklok-seconde (= canonical pad voor 1 Hz-analyse); zelfde als historische `ws_inbound_ticks_last_sec`-semantiek.
+     */
     uint32_t ws_inbound_ticks_last_sec{0};
+    /** RWS-01: seconden sinds laatste ruwe WS TEXT-frame (0 = nog geen frame sinds boot). */
+    uint32_t ws_gap_sec_since_last_raw{0};
+    /** RWS-01: seconden sinds laatste geslaagde canonical tick (parse→prijs). */
+    uint32_t ws_gap_sec_since_last_canonical{0};
+    /**
+     * RWS-01: vast label huidige officiële seconde-prijsketen (geen runtime-switch in RWS-01).
+     * Waarde `"bitvavo_ticker_ws_v1"`.
+     */
+    char ws_official_price_stream[28]{};
+
+    /** RWS-02: geparste trade-events in de **afgelopen voltooide** wandklok-seconde (parallel; niet de officiële prijs). */
+    uint32_t ws_trade_events_last_sec{0};
+    /** RWS-02: cumulatief aantal geparste trade-events sinds boot (WebSocket-pad). */
+    uint32_t ws_trades_total_since_boot{0};
+    /** RWS-02: capaciteit van de interne trade-ring (vast). */
+    uint16_t ws_trade_ring_capacity{0};
+    /** RWS-02: huidige bezetting van de trade-ring. */
+    uint16_t ws_trade_ring_occupancy{0};
+    /** RWS-02: trade-ring vol → oudste vervangen (backpressure-teller). */
+    uint32_t ws_trade_ring_drop_total{0};
+    /** RWS-02: seconden sinds laatste geparste trade (0 = nog geen trade sinds boot). */
+    uint32_t ws_gap_sec_since_last_trade{0};
+    /** RWS-02: lokale monotoon tijdstip laatste trade (ms, esp_timer_get_time/1000); 0 = nog geen trade. */
+    int64_t ws_last_trade_local_ms{0};
+};
+
+/**
+ * RWS-02: één vastgelegde trade uit WS (parallel capture; geen doorrekening naar `last_tick` / alerts in deze fase).
+ */
+struct WsRawTradeSample {
+    double price_eur{0.0};
+    int64_t ts_local_ms{0};
+    int64_t ts_exchange_ms{0};
 };
 
 } // namespace market_types

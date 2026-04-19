@@ -37,6 +37,8 @@ esp_err_t init(const char *market_symbol)
     strncpy(s_symbol, market_symbol, sizeof(s_symbol) - 1);
     s_snap = {};
     strncpy(s_snap.market_label, market_symbol, sizeof(s_snap.market_label) - 1);
+    strncpy(s_snap.ws_official_price_stream, "bitvavo_ticker_ws_v1", sizeof(s_snap.ws_official_price_stream) - 1);
+    s_snap.ws_official_price_stream[sizeof(s_snap.ws_official_price_stream) - 1] = '\0';
     s_snap.connection = market_types::ConnectionState::Disconnected;
     s_next_rest_ms = 0;
     s_ws_started = false;
@@ -51,6 +53,7 @@ void tick()
 
     if (s_ws_started) {
         ws::sync_inbound_tick_stats();
+        ws::publish_gap_metrics();
     }
 
     /* M-002: geen WiFi-reconnect hier — alleen gate op IP; STA-backoff leeft in net_runtime. */

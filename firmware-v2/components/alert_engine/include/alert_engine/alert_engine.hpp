@@ -38,8 +38,20 @@ struct AlertDecisionObservabilitySnapshot {
     AlertPathDecisionSnapshot confluence_1m5m{};
 };
 
+/** C2: randen — alleen transitie-tellingen + laatste epoch (geen extra beslislogica). */
+struct AlertPathEdgeStats {
+    uint32_t enter_cooldown{};
+    uint32_t enter_suppressed{};
+    uint32_t enter_not_ready{};
+    /** Laatste keer `status` naar deze toestand ging (edge). */
+    int64_t last_epoch_ms_enter_cooldown{-1};
+    int64_t last_epoch_ms_enter_suppressed{-1};
+    int64_t last_epoch_ms_enter_not_ready{-1};
+};
+
 /**
  * C1: read-only totalen sinds boot — geen extra beslislogica; alleen voor field-test / spamreview.
+ * C2: `edge_*` — transitie-tellers + timestamps voor randgevallen-debug.
  * Cooldown-druk volgt uit `AlertPathDecisionSnapshot` (`status=cooldown`) per tick, niet als globale teller.
  */
 struct AlertEngineRuntimeStatsSnapshot {
@@ -53,6 +65,9 @@ struct AlertEngineRuntimeStatsSnapshot {
     /** Losse 1m/5m onderdrukt door M-010e-venster na confluence (zelfde richting). */
     uint32_t suppress_after_conf_window_1m{};
     uint32_t suppress_after_conf_window_5m{};
+    AlertPathEdgeStats edge_1m{};
+    AlertPathEdgeStats edge_5m{};
+    AlertPathEdgeStats edge_confluence{};
 };
 
 /** Laatst bekende regime/vol/drempels (bijgewerkt aan het begin van elke `tick()`). Veldnamen stabiel voor JSON. */
@@ -65,11 +80,21 @@ struct RegimeObservabilitySnapshot {
     bool vol_unavailable_fallback{false};
     /** `"calm"` | `"normal"` | `"hot"` */
     char regime[16]{};
+    /** Effectieve schaal na M-010f ‰-clamp ([CONFIG_ALERT_REGIME_THR_SCALE_MIN/MAX_PERMILLE]). */
     int threshold_scale_permille{1000};
+    /** Schaal rechtstreeks uit regime + `alert_runtime` vóór clamp (C3). */
+    int threshold_scale_permille_raw{1000};
+    /** `true` als `threshold_scale_permille_raw` ≠ effectieve schaal (NVS kan 700‰ calm zijn → 750‰ effectief). */
+    bool threshold_scale_clamped{false};
+    /** Compile-time grenzen calm/normal/hot (Kconfig), voor field-debug naast `vol_mean_abs_step_bps`. */
+    int regime_calm_max_step_bps{0};
+    int regime_hot_min_step_bps{0};
     double base_threshold_move_pct_1m{0.0};
     double base_threshold_move_pct_5m{0.0};
     double effective_threshold_move_pct_1m{0.0};
     double effective_threshold_move_pct_5m{0.0};
+    /** C2: laatste regime-labelwissel (calm/normal/hot); `-1` = nog geen wissel sinds boot. */
+    int64_t last_regime_change_epoch_ms{-1};
 };
 
 esp_err_t init();

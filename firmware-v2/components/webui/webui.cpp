@@ -17,7 +17,7 @@
  * M-013j: minimaal formulier op / voor alert-policy timing (POST naar alert-policy-timing.json).
  * M-013l: minimaal formulier op / voor confluence-policy (POST naar alert-confluence-policy.json; M-003d/M-013k).
  * M-013h: read-only alert-beslissing per pad (1m/5m/confluence) in status.json + compact op /.
- * C1: read-only `alert_engine_runtime_stats` (emit-totalen + suppress-episodes) in status.json + compact op /.
+ * C1/C2: read-only `alert_engine_runtime_stats` (emits, suppress, edge-transities) + regime `last_regime_change_epoch_ms`.
  * M-002h: read-only outbound-queue observability in status.json (geen nieuwe settings).
  */
 #include "webui/webui.hpp"
@@ -112,6 +112,26 @@ static void add_alert_decision_path_json(cJSON *parent,
     cJSON_AddItemToObject(parent, key, o);
 }
 
+static void add_path_edge_json(cJSON *parent,
+                               const char *key,
+                               const alert_engine::AlertPathEdgeStats &e)
+{
+    cJSON *o = cJSON_CreateObject();
+    if (!o || !parent || !key) {
+        return;
+    }
+    cJSON_AddNumberToObject(o, "enter_cooldown", static_cast<double>(e.enter_cooldown));
+    cJSON_AddNumberToObject(o, "enter_suppressed", static_cast<double>(e.enter_suppressed));
+    cJSON_AddNumberToObject(o, "enter_not_ready", static_cast<double>(e.enter_not_ready));
+    cJSON_AddNumberToObject(o, "last_epoch_ms_enter_cooldown",
+                             static_cast<double>(e.last_epoch_ms_enter_cooldown));
+    cJSON_AddNumberToObject(o, "last_epoch_ms_enter_suppressed",
+                             static_cast<double>(e.last_epoch_ms_enter_suppressed));
+    cJSON_AddNumberToObject(o, "last_epoch_ms_enter_not_ready",
+                             static_cast<double>(e.last_epoch_ms_enter_not_ready));
+    cJSON_AddItemToObject(parent, key, o);
+}
+
 static void sta_ip_str(char *out, size_t out_len)
 {
     out[0] = '\0';
@@ -160,6 +180,37 @@ static esp_err_t handle_status_json(httpd_req_t *req)
     cJSON_AddNumberToObject(root,
                            "ws_inbound_ticks_last_sec",
                            static_cast<double>(snap.ws_inbound_ticks_last_sec));
+    {
+        cJSON *wsf = cJSON_CreateObject();
+        if (wsf) {
+            cJSON_AddStringToObject(wsf, "official_price_stream",
+                                     snap.ws_official_price_stream[0] ? snap.ws_official_price_stream
+                                                                      : "bitvavo_ticker_ws_v1");
+            cJSON_AddNumberToObject(wsf, "raw_msgs_last_sec", static_cast<double>(snap.ws_raw_msgs_last_sec));
+            cJSON_AddNumberToObject(wsf, "canonical_ticks_last_sec",
+                                     static_cast<double>(snap.ws_inbound_ticks_last_sec));
+            cJSON_AddNumberToObject(wsf, "gap_sec_since_last_raw",
+                                     static_cast<double>(snap.ws_gap_sec_since_last_raw));
+            cJSON_AddNumberToObject(wsf, "gap_sec_since_last_canonical",
+                                     static_cast<double>(snap.ws_gap_sec_since_last_canonical));
+            cJSON_AddItemToObject(root, "ws_feed_observability", wsf);
+        }
+    }
+    {
+        cJSON *wst = cJSON_CreateObject();
+        if (wst) {
+            cJSON_AddNumberToObject(wst, "trades_last_sec", static_cast<double>(snap.ws_trade_events_last_sec));
+            cJSON_AddNumberToObject(wst, "trades_total_since_boot",
+                                     static_cast<double>(snap.ws_trades_total_since_boot));
+            cJSON_AddNumberToObject(wst, "ring_capacity", static_cast<double>(snap.ws_trade_ring_capacity));
+            cJSON_AddNumberToObject(wst, "ring_occupancy", static_cast<double>(snap.ws_trade_ring_occupancy));
+            cJSON_AddNumberToObject(wst, "ring_drop_total", static_cast<double>(snap.ws_trade_ring_drop_total));
+            cJSON_AddNumberToObject(wst, "gap_sec_since_last_trade",
+                                     static_cast<double>(snap.ws_gap_sec_since_last_trade));
+            cJSON_AddNumberToObject(wst, "last_trade_local_ms", static_cast<double>(snap.ws_last_trade_local_ms));
+            cJSON_AddItemToObject(root, "ws_trades_observability", wst);
+        }
+    }
     cJSON_AddNumberToObject(root,
                            "outbound_queue_waiting",
                            static_cast<double>(service_outbound::queue_waiting()));
@@ -198,6 +249,10 @@ static esp_err_t handle_status_json(httpd_req_t *req)
         cJSON_AddNumberToObject(reg_j, "vol_pairs_used", static_cast<double>(rob.vol_pairs_used));
         cJSON_AddBoolToObject(reg_j, "vol_unavailable_fallback", rob.vol_unavailable_fallback ? 1 : 0);
         cJSON_AddNumberToObject(reg_j, "threshold_scale_permille", static_cast<double>(rob.threshold_scale_permille));
+        cJSON_AddNumberToObject(reg_j, "threshold_scale_permille_raw", static_cast<double>(rob.threshold_scale_permille_raw));
+        cJSON_AddBoolToObject(reg_j, "threshold_scale_clamped", rob.threshold_scale_clamped ? 1 : 0);
+        cJSON_AddNumberToObject(reg_j, "regime_calm_max_step_bps", static_cast<double>(rob.regime_calm_max_step_bps));
+        cJSON_AddNumberToObject(reg_j, "regime_hot_min_step_bps", static_cast<double>(rob.regime_hot_min_step_bps));
         cJSON *base_thr = cJSON_CreateObject();
         if (base_thr) {
             cJSON_AddNumberToObject(base_thr, "move_pct_1m", rob.base_threshold_move_pct_1m);
@@ -216,6 +271,8 @@ static esp_err_t handle_status_json(httpd_req_t *req)
             cJSON_AddNumberToObject(conf_g, "requires_abs_move_pct_5m", rob.effective_threshold_move_pct_5m);
             cJSON_AddItemToObject(reg_j, "confluence_effective_gate_pct", conf_g);
         }
+        cJSON_AddNumberToObject(reg_j, "last_regime_change_epoch_ms",
+                                 static_cast<double>(rob.last_regime_change_epoch_ms));
         cJSON_AddItemToObject(root, "regime_observability", reg_j);
     }
 
@@ -248,6 +305,9 @@ static esp_err_t handle_status_json(httpd_req_t *req)
                                      static_cast<double>(ars.suppress_after_conf_window_1m));
             cJSON_AddNumberToObject(ars_j, "suppress_after_conf_window_episodes_5m",
                                      static_cast<double>(ars.suppress_after_conf_window_5m));
+            add_path_edge_json(ars_j, "edge_1m", ars.edge_1m);
+            add_path_edge_json(ars_j, "edge_5m", ars.edge_5m);
+            add_path_edge_json(ars_j, "edge_confluence_1m5m", ars.edge_confluence);
             cJSON_AddItemToObject(root, "alert_engine_runtime_stats", ars_j);
         }
     }
@@ -931,7 +991,9 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         "<p><strong>Versie</strong> %s · <strong>IP</strong> %s · <strong>WiFi IP bekend</strong> %s</p>"
         "<p><strong>Symbool</strong> %s · <strong>Prijs (EUR)</strong> %.4f · <strong>Geldig</strong> %s</p>"
         "<p><strong>Verbinding feed</strong> %s · <strong>Bron tick</strong> %s · "
-        "<strong>WS binnen (vorige volle s)</strong> %u</p>",
+        "<strong>WS raw/canonical (vorige s)</strong> %u/%u · "
+        "<strong>GAP raw/canonical (s)</strong> %u/%u · <code>%s</code></p>"
+        "<p><strong>WS trades (RWS-02)</strong> %u/s · tot %u · ring %u/%u · drops %u · gap %us</p>",
         app ? app->version : "?",
         ipbuf[0] ? ipbuf : "—",
         net_runtime::has_ip() ? "ja" : "nee",
@@ -940,7 +1002,18 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         snap.valid ? "ja" : "nee",
         conn_str(snap.connection),
         tick_str(snap.last_tick_source),
-        static_cast<unsigned>(snap.ws_inbound_ticks_last_sec));
+        static_cast<unsigned>(snap.ws_raw_msgs_last_sec),
+        static_cast<unsigned>(snap.ws_inbound_ticks_last_sec),
+        static_cast<unsigned>(snap.ws_gap_sec_since_last_raw),
+        static_cast<unsigned>(snap.ws_gap_sec_since_last_canonical),
+        snap.ws_official_price_stream[0] ? snap.ws_official_price_stream : "bitvavo_ticker_ws_v1",
+        static_cast<unsigned>(snap.ws_trade_events_last_sec),
+        static_cast<unsigned>(snap.ws_trades_total_since_boot),
+        static_cast<unsigned>(snap.ws_trade_ring_occupancy),
+        snap.ws_trade_ring_capacity != 0u ? static_cast<unsigned>(snap.ws_trade_ring_capacity)
+                                          : static_cast<unsigned>(64),
+        static_cast<unsigned>(snap.ws_trade_ring_drop_total),
+        static_cast<unsigned>(snap.ws_gap_sec_since_last_trade));
     if (n <= 0 || static_cast<size_t>(n) >= k_html_alloc) {
         ESP_LOGW(TAG, "M-013c/d: HTML deel1 overflow (n=%d)", n);
         std::free(html);
@@ -982,7 +1055,10 @@ static esp_err_t handle_root_html(httpd_req_t *req)
             "<h2>Regime / drempels (M-013e, read-only)</h2>"
             "<p><strong>Regime</strong> <code>%s</code> · <strong>Vol-metric</strong> %s · "
             "<strong>gem. stap</strong> %.2f bps · <strong>paren</strong> %u%s<br/>"
-            "<strong>Schaal</strong> %d ‰ · <strong>Basis 1m / 5m</strong> %.3f %% / %.3f %% · "
+            "<strong>Grenzen (bps)</strong> calm &lt; %d · hot ≥ %d · "
+            "<strong>‰</strong> eff %d (raw %d%s)<br/>"
+            "<strong>Laatste regime-wissel (epoch ms)</strong> %lld (C2)<br/>"
+            "<strong>Basis 1m / 5m</strong> %.3f %% / %.3f %% · "
             "<strong>Effectief 1m / 5m</strong> %.3f %% / %.3f %%<br/>"
             "<small>Confluence: |1m| en |5m| elk ≥ effectieve drempel (zelfde schaal als M-010f).</small></p>",
             rob.regime[0] ? rob.regime : "?",
@@ -990,7 +1066,12 @@ static esp_err_t handle_root_html(httpd_req_t *req)
             rob.vol_mean_abs_step_bps,
             static_cast<unsigned>(rob.vol_pairs_used),
             fb,
+            rob.regime_calm_max_step_bps,
+            rob.regime_hot_min_step_bps,
             rob.threshold_scale_permille,
+            rob.threshold_scale_permille_raw,
+            rob.threshold_scale_clamped ? ", clamp" : "",
+            (long long)rob.last_regime_change_epoch_ms,
             rob.base_threshold_move_pct_1m,
             rob.base_threshold_move_pct_5m,
             rob.effective_threshold_move_pct_1m,
@@ -1067,13 +1148,13 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         const int nst = std::snprintf(
             html + w,
             k_html_alloc - w,
-            "<h2>Alert-engine runtime-statistieken (C1, read-only)</h2>"
-            "<p class=\"hint\">Sinds boot: emit-totalen, laatste emit-tijd (ms sinds boot), "
-            "aantal suppress-episodes na confluence (M-010e). Zie ook <code>GET /api/status.json</code> "
-            "→ <code>alert_engine_runtime_stats</code>.</p>"
+            "<h2>Alert-engine runtime-statistieken (C1/C2, read-only)</h2>"
+            "<p class=\"hint\">Sinds boot: emits, suppress-episodes (M-010e), edge-transities (cooldown/suppressed/not_ready). "
+            "Zie <code>GET /api/status.json</code> → <code>alert_engine_runtime_stats</code>.</p>"
             "<p><strong>Emits</strong> 1m=%u · 5m=%u · confluence=%u<br/>"
             "<strong>Laatste emit (epoch ms)</strong> 1m=%lld · 5m=%lld · conf=%lld<br/>"
-            "<strong>Suppress-episodes (na conf)</strong> 1m=%u · 5m=%u</p>",
+            "<strong>Suppress-episodes (na conf)</strong> 1m=%u · 5m=%u<br/>"
+            "<strong>Edge-transities</strong> 1m cd/sup/nr=%u/%u/%u · 5m=%u/%u/%u · conf=%u/%u/%u</p>",
             static_cast<unsigned>(ars.emit_total_1m),
             static_cast<unsigned>(ars.emit_total_5m),
             static_cast<unsigned>(ars.emit_total_conf),
@@ -1081,7 +1162,16 @@ static esp_err_t handle_root_html(httpd_req_t *req)
             (long long)ars.last_emit_epoch_ms_5m,
             (long long)ars.last_emit_epoch_ms_conf,
             static_cast<unsigned>(ars.suppress_after_conf_window_1m),
-            static_cast<unsigned>(ars.suppress_after_conf_window_5m));
+            static_cast<unsigned>(ars.suppress_after_conf_window_5m),
+            static_cast<unsigned>(ars.edge_1m.enter_cooldown),
+            static_cast<unsigned>(ars.edge_1m.enter_suppressed),
+            static_cast<unsigned>(ars.edge_1m.enter_not_ready),
+            static_cast<unsigned>(ars.edge_5m.enter_cooldown),
+            static_cast<unsigned>(ars.edge_5m.enter_suppressed),
+            static_cast<unsigned>(ars.edge_5m.enter_not_ready),
+            static_cast<unsigned>(ars.edge_confluence.enter_cooldown),
+            static_cast<unsigned>(ars.edge_confluence.enter_suppressed),
+            static_cast<unsigned>(ars.edge_confluence.enter_not_ready));
         if (nst <= 0 || w + static_cast<size_t>(nst) >= k_html_alloc) {
             ESP_LOGW(TAG, "C1: HTML runtime-stats overflow (nst=%d)", nst);
             std::free(html);
