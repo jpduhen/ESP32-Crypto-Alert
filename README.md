@@ -63,7 +63,16 @@ The complete English user guide is split into separate chapters for better reada
 
 ### Firmware V2 (preparation)
 
-A controlled rebuild (documentation layout, migration notes, `firmware-v2/` placeholder) is tracked on branch [**`v2/foundation`**](https://github.com/jpduhen/ESP32-Crypto-Alert/tree/v2/foundation). Production-ready firmware remains on **`main`** until V2 matures.
+A controlled rebuild (ESP-IDF skeleton under `firmware-v2/`, docs) is tracked on branch [**`v2/foundation`**](https://github.com/jpduhen/ESP32-Crypto-Alert/tree/v2/foundation). Production-ready firmware remains on **`main`** until V2 matures.
+
+**Primary V2 status (decisions, priorities, migration):** [firmware-v2/v_2_herbouw_werkdocument_esp_32_crypto_alert.md](firmware-v2/v_2_herbouw_werkdocument_esp_32_crypto_alert.md).  
+**Governance summary:** [docs/architecture/V2_WORKDOCUMENT_MASTER.md](docs/architecture/V2_WORKDOCUMENT_MASTER.md).  
+**Build V2 firmware (ESP-IDF v5.4.2):** [firmware-v2/BUILD.md](firmware-v2/BUILD.md) · [firmware-v2/README.md](firmware-v2/README.md).
+
+### V1 vs V2 (B-001)
+
+- **V1 (Arduino, repo root)** is de **formele referentie-/onderhoudslijn** op branch **`main`**; optionele tag **`v1-reference-frozen`** — zie **[docs/V1_REFERENCE_FREEZE_B001.md](docs/V1_REFERENCE_FREEZE_B001.md)**.
+- **V2** (`firmware-v2/`, branch `v2/foundation`) is de **actieve herbouw**; geen verplichting tot feature-pariteit tot die beslissing expliciet is.
 
 ## Quick Start
 1. Choose a compatible board (e.g., Cheap Yellow Display).

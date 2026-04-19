@@ -1,5 +1,11 @@
 # Migratiematrix V2 — concept (draft)
 
+**V2-traject:** status en besluiten staan in [../architecture/V2_WORKDOCUMENT_MASTER.md](../architecture/V2_WORKDOCUMENT_MASTER.md). Deze matrix is een levend hulpmiddel en volgt de prioriteiten uit dat document.
+
+## Eerste skeleton (ESP-IDF, april 2026)
+
+De buildbare basis onder `firmware-v2/` vertaakt de onderste rijen van deze matrix naar concrete componenten (nog **zonder** feature-pariteit): **orchestratie** → `app_core` + `main`; **platform** → `bsp_common` / `bsp_s3_geek`; **NVS/settings** → `config_store`; **diagnose** → `diagnostics`; **display/UI** → `display_port` / `ui` (placeholders); **koers** → `market_data` (mock). Detail: [../architecture/V2_SKELETON_NOTES.md](../architecture/V2_SKELETON_NOTES.md).
+
 **Doel:** eerste onderbouw voor besluitvorming. Geen vast contract.  
 **Legenda status:** *Behouden* = concept/logica waardevol; *Herschrijven* = opnieuw in V2 (andere HAL/build); *Schrappen* = verwacht geen rechtstreekse port; *Nader beoordelen* = afhankelijk van scope/risico.
 

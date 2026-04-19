@@ -1,31 +1,65 @@
-# Firmware V2 (voorbereiding)
+# Firmware V2 (ESP-IDF)
 
-Deze map is de geplande plek voor de **nieuwe firmware** tijdens de gecontroleerde V2-herbouw. V1 blijft in de repo-root (`ESP32-Crypto-Alert.ino`, `src/`, `platform_config.h`) de functionele referentie.
+Nieuwe firmwarebasis voor **ESP32 Crypto Alert V2**. V1 blijft in de repo-root de functionele referentie (`ESP32-Crypto-Alert.ino`, `src/`).
 
-## Richting
+**Primair — status, besluiten, prioriteiten, migratierichting:** [v_2_herbouw_werkdocument_esp_32_crypto_alert.md](v_2_herbouw_werkdocument_esp_32_crypto_alert.md)  
+**Aanvullend — governance-overzicht:** [docs/architecture/V2_WORKDOCUMENT_MASTER.md](../docs/architecture/V2_WORKDOCUMENT_MASTER.md)  
+**Technische skeleton-notities:** [docs/architecture/V2_SKELETON_NOTES.md](../docs/architecture/V2_SKELETON_NOTES.md)
 
-- **Voorkeur:** ESP-IDF als bouwsysteem voor productierijpheid, componenten en tooling.
-- **Status:** nog geen volledig ESP-IDF-project; deze stap levert alleen structuur en documentatie.
+## ESP-IDF-versie (vastgelegd)
 
-## Beoogde lay-out (ESP-IDF-conventie)
+**V2 gebruikt ESP-IDF v5.4.2** — zie [`ESP_IDF_VERSION`](ESP_IDF_VERSION) en [BUILD.md](BUILD.md) (clone, `install.sh esp32s3`, `export.sh`, troubleshooting).
 
-Wanneer de migratie start, kan de inhoud er ongeveer zo uitzien:
+**CI:** GitHub Actions smoke build met Docker `espressif/idf:v5.4.2` (workflow: `.github/workflows/firmware-v2-smoke.yml`).
+
+## Skeletonfase (huidig)
+
+- **Buildsysteem:** ESP-IDF (`CMakeLists.txt` in deze map = projectroot).
+- **Eerste board:** ESP32-S3 GEEK (`components/bsp_s3_geek/`).
+- **Geen** feature-pariteit met V1; **T-103** levert Bitvavo REST/WS achter `market_data` (geen WebUI/MQTT/NTFY in deze stap).
+- **UI:** eerste LVGL-scherm op `esp_lcd` (**[ADR-004](../docs/architecture/ADR-004-lvgl-esp-lcd-ui-layer.md)**); live data alleen via `market_data::snapshot()`.
+
+### Structuur
 
 ```
 firmware-v2/
-├── CMakeLists.txt          # project() — nog toe te voegen
-├── sdkconfig.defaults      # board defaults — nog toe te voegen
+├── CMakeLists.txt
+├── ESP_IDF_VERSION
+├── sdkconfig.defaults
+├── BUILD.md
 ├── main/
-│   ├── CMakeLists.txt
-│   ├── Kconfig.projbuild   # optioneel
-│   └── …                   # broncode, entry `app_main`
-├── components/             # optioneel: eigen herbruikbare componenten
-└── README.md               # dit bestand
+│   └── idf_component.yml      # esp_lvgl_port (ADR-004)
+├── components/
+│   ├── app_core/
+│   ├── config_store/
+│   ├── diagnostics/
+│   ├── bsp_common/
+│   ├── bsp_s3_geek/
+│   ├── display_port/
+│   ├── ui/
+│   ├── market_types/
+│   ├── net_runtime/
+│   ├── wifi_onboarding/
+│   ├── exchange_bitvavo/
+│   └── market_data/
+└── README.md
 ```
 
-De map `main/` is nu voorbereid met een placeholder (`.gitkeep`) zodat de structuur in Git zichtbaar blijft.
+### Bouwen (kort)
+
+```bash
+cd firmware-v2
+idf.py set-target esp32s3
+idf.py build
+```
+
+Vereist werkende ESP-IDF **v5.4.2**-omgeving — zie **[BUILD.md](BUILD.md)**.
+
+`build/`, gegenereerde `sdkconfig` en `managed_components/` staan in `.gitignore`.
 
 ## Relatie met V1
 
-- Domeinlogica (alerts, metrics, warm start, enz.) wordt **conceptueel** hergebruikt of opnieuw gemodelleerd; **geen copy-paste-migratie** zonder review.
-- Zie ook: `docs/migration/` en `docs/architecture/`.
+- **V1:** Arduino-firmware in de **repo-root** op **`main`** — referentie en onderhoud; formeel vastgelegd onder **[B-001](../docs/V1_REFERENCE_FREEZE_B001.md)** (optionele tag `v1-reference-frozen`).
+- **V2:** deze map op branch **`v2/foundation`** — actieve ontwikkeling.
+- Geen automatische migratie van broncode: domeinlogica wordt gefaseerd gemapt (zie `docs/migration/MIGRATION_MATRIX_V2_DRAFT.md`).
+- **Netwerkgrenzen (M-002):** [docs/architecture/M002_NETWORK_BOUNDARIES.md](../docs/architecture/M002_NETWORK_BOUNDARIES.md).

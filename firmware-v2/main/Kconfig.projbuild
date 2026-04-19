@@ -1,0 +1,267 @@
+menu "ESP32 Crypto Alert V2"
+
+    config MD_USE_EXCHANGE_BITVAVO
+        bool "Market data: Bitvavo exchange (REST+WS)"
+        default y
+        help
+            Zet uit voor mock-only feed (CI/offline zonder netwerk).
+
+    config NET_WIFI_STA_SSID
+        string "WiFi STA SSID (leeg = geen WiFi)"
+        default ""
+        help
+            Vereist voor live Bitvavo. Leeg laat WiFi uit (alleen net stack init).
+
+    config NET_WIFI_STA_PASS
+        string "WiFi STA password"
+        default ""
+        help
+            WPA2-PSK; leeg als open netwerk (niet aanbevolen).
+            Alleen fallback als NVS leeg is (ontwikkelaars); normaal: onboarding portal.
+
+    config WIFI_ONBOARDING_FORCE
+        bool "WiFi: wis NVS-credentials en start altijd provisioning (SoftAP)"
+        default n
+        help
+            Test/factory: bij boot worden wifi_ssid/wifi_pass gewist en opent de portal opnieuw.
+
+    choice DISPLAY_DIAG_PROFILE
+        prompt "Display: A/B diagnoseprofiel (wissel → fullclean + build)"
+        default DISPLAY_DIAG_PROFILE_SWAP_OFF
+        help
+            Standaard **ESP32-S3 GEEK**: profiel 1 (LVGL swap_bytes=0, RGB, 27 MHz) — field-test bevestigd.
+            Eén profiel per build; zet swap_bytes, rgb_order en SPI-klok.
+            Als de seriële log niet verandert: rm build sdkconfig sdkconfig.old && idf.py set-target esp32s3
+
+        config DISPLAY_DIAG_PROFILE_BASELINE
+            bool "0 — swap=1, RGB, 27 MHz (alternatief / diagnose)"
+
+        config DISPLAY_DIAG_PROFILE_SWAP_OFF
+            bool "1 — swap=0, RGB, 27 MHz (standaard GEEK, ST7789+LVGL 9)"
+
+        config DISPLAY_DIAG_PROFILE_BGR
+            bool "2 — swap=1, BGR, 27 MHz (esp_lcd rgb order)"
+
+        config DISPLAY_DIAG_PROFILE_SPI_20M
+            bool "3 — swap=1, RGB, 20 MHz SPI"
+    endchoice
+
+    config UI_LVGL_SWAP_BYTES
+        int
+        range 0 1
+        default 0 if DISPLAY_DIAG_PROFILE_SWAP_OFF
+        default 1
+        help
+            Afgeleid van Display diagnoseprofiel (hier niet handmatig zetten).
+
+    config DISPLAY_ST7789_BGR_ORDER
+        int
+        range 0 1
+        default 1 if DISPLAY_DIAG_PROFILE_BGR
+        default 0
+        help
+            Afgeleid van Display diagnoseprofiel.
+
+    config DISPLAY_SPI_PCLK_HZ
+        int
+        range 8000000 40000000
+        default 20000000 if DISPLAY_DIAG_PROFILE_SPI_20M
+        default 27000000
+        help
+            Afgeleid van Display diagnoseprofiel.
+
+    config NTFY_CLIENT_ENABLE
+        bool "M-011a: NTFY-notificaties (HTTPS, eerste sink)"
+        default n
+        help
+            Publiceert via ntfy achter `service_outbound`. Zonder topic: geen netwerk.
+
+    config NTFY_SERVER
+        string "NTFY server (basis-URL, geen slash aan einde)"
+        default "https://ntfy.sh"
+        depends on NTFY_CLIENT_ENABLE
+        help
+            Bijv. https://ntfy.sh of eigen host.
+
+    config NTFY_TOPIC
+        string "NTFY topic (leeg = geen push)"
+        default ""
+        depends on NTFY_CLIENT_ENABLE
+
+    config NTFY_ACCESS_TOKEN
+        string "NTFY Bearer-token (optioneel)"
+        default ""
+        depends on NTFY_CLIENT_ENABLE
+        help
+            Leeg voor open topic op ntfy.sh; anders Authorization: Bearer …
+
+    config MQTT_BRIDGE_ENABLE
+        bool "M-012a: MQTT-bridge (minimaal publish)"
+        default n
+        help
+            Eerste MQTT-pad achter service_outbound. Zonder broker-URI: geen client.
+
+    config MQTT_BROKER_URI
+        string "MQTT broker URI (leeg = uit)"
+        default ""
+        depends on MQTT_BRIDGE_ENABLE
+        help
+            Bijv. mqtt://192.168.1.10:1883 of mqtts://host:8883
+
+    config MQTT_BRIDGE_USER
+        string "MQTT gebruikersnaam (optioneel)"
+        default ""
+        depends on MQTT_BRIDGE_ENABLE
+
+    config MQTT_BRIDGE_PASSWORD
+        string "MQTT wachtwoord (optioneel)"
+        default ""
+        depends on MQTT_BRIDGE_ENABLE
+
+    config MQTT_TOPIC_BOOT
+        string "MQTT topic voor ApplicationReady (payload: online)"
+        default "cryptoalert/v2/status"
+        depends on MQTT_BRIDGE_ENABLE
+
+    config MQTT_TOPIC_DOMAIN_ALERT_1M
+        string "M-012b: MQTT topic voor 1m domeinalert (JSON)"
+        default "cryptoalert/v2/alert/1m"
+        depends on MQTT_BRIDGE_ENABLE
+        help
+            Compacte JSON: symbol, dir, price_eur, pct_1m, ts_ms.
+
+    config MQTT_TOPIC_DOMAIN_ALERT_5M
+        string "M-010c: MQTT topic voor 5m domeinalert (JSON)"
+        default "cryptoalert/v2/alert/5m"
+        depends on MQTT_BRIDGE_ENABLE
+        help
+            Zelfde vorm als 1m-topic; veld pct_5m.
+
+    config MQTT_TOPIC_DOMAIN_ALERT_CONF_1M5M
+        string "M-010d: MQTT topic voor 1m+5m confluence (JSON)"
+        default "cryptoalert/v2/alert/conf_1m5m"
+        depends on MQTT_BRIDGE_ENABLE
+        help
+            JSON: symbol, dir, price_eur, pct_1m, pct_5m, ts_ms.
+
+    config WEBUI_ENABLE
+        bool "M-013a: read-only status-web (HTTP)"
+        default n
+        help
+            GET / en /api/status.json — geen POST, geen auth. Standaard poort 8080.
+
+    config WEBUI_PORT
+        int "WebUI TCP-poort"
+        range 1024 65535
+        default 8080
+        depends on WEBUI_ENABLE
+
+    config ALERT_ENGINE_1M_THRESHOLD_BPS
+        int "M-010a: 1m move alert threshold (honderdsten %; 16 = 0,16%)"
+        range 1 1000
+        default 16
+        help
+            Absolute 1-minuut procentuele prijsbeweging (|pct|) vóór een alert-event.
+            Waarde gedeeld door 100 = drempel in procent (bijv. 16 → 0,16 %, 100 → 1,00 %).
+
+    config ALERT_ENGINE_1M_COOLDOWN_S
+        int "M-010a: cooldown tussen 1m-alerts (seconden)"
+        range 10 3600
+        default 120
+        help
+            Minimum tijd tussen twee DomainAlert1mMove-events.
+
+    config ALERT_ENGINE_5M_THRESHOLD_BPS
+        int "M-010c: 5m move alert threshold (honderdsten %; 32 = 0,32%)"
+        range 1 2000
+        default 32
+        help
+            Absolute 5-minuten procentuele prijsbeweging (|pct|) vóór DomainAlert5mMove.
+
+    config ALERT_ENGINE_5M_COOLDOWN_S
+        int "M-010c: cooldown tussen 5m-alerts (seconden)"
+        range 60 7200
+        default 300
+        help
+            Minimum tijd tussen twee DomainAlert5mMove-events.
+
+    config ALERT_ENGINE_CONF_1M5M_COOLDOWN_S
+        int "M-010d: cooldown tussen confluence-alerts (1m+5m, seconden)"
+        range 60 7200
+        default 600
+        help
+            Minimum tijd tussen twee DomainAlertConfluence1m5m-events (los van 1m/5m cooldowns).
+
+    config ALERT_ENGINE_CONF_SUPPRESS_LOOSE_S
+        int "M-010e: venster na confluence — onderdruk losse 1m/5m zelfde richting (seconden)"
+        range 1 120
+        default 8
+        help
+            Na een DomainAlertConfluence1m5m worden losse 1m/5m-alerts met dezelfde richting
+            tijdelijk niet verstuurd (dubbelmeldingen beperken). Tegenovergestelde richting blijft mogelijk.
+
+    config ALERT_REGIME_VOL_WINDOW_SEC
+        int "M-010f: vol-venster (seconden) voor gem. |Δ| tussen canonieke secondes"
+        range 30 300
+        default 90
+        help
+            Rolling venster op de canonieke prijsring; langere vensters = stabielere vol-schatting.
+
+    config ALERT_REGIME_VOL_MIN_PAIRS
+        int "M-010f: minimaal aantal ~1s-stappen in venster (vol metric)"
+        range 8 120
+        default 30
+
+    config ALERT_REGIME_VOL_PAIR_MIN_MS
+        int "M-010f: minimum ms tussen samples voor opeenvolgende stap"
+        range 400 1500
+        default 800
+
+    config ALERT_REGIME_VOL_PAIR_MAX_MS
+        int "M-010f: maximum ms tussen samples voor opeenvolgende stap"
+        range 1200 5000
+        default 2200
+
+    config ALERT_REGIME_CALM_MAX_STEP_BPS
+        int "M-010f: gem. stap (bps) strikt onder deze waarde ⇒ calm"
+        range 1 80
+        default 6
+        help
+            1 bp = 0,01 %. Lage gemiddelde stap ⇒ rustiger markt.
+
+    config ALERT_REGIME_HOT_MIN_STEP_BPS
+        int "M-010f: gem. stap (bps) vanaf deze waarde ⇒ hot"
+        range 5 200
+        default 28
+
+    config ALERT_REGIME_THR_SCALE_CALM_PERMILLE
+        int "M-010f: drempelschaal calm (‰ van basis, 900 = 0,90×)"
+        range 700 1000
+        default 900
+
+    config ALERT_REGIME_THR_SCALE_NORMAL_PERMILLE
+        int "M-010f: drempelschaal normal (‰)"
+        range 950 1050
+        default 1000
+
+    config ALERT_REGIME_THR_SCALE_HOT_PERMILLE
+        int "M-010f: drempelschaal hot (‰, >1000 = strengere drempel)"
+        range 1000 1500
+        default 1180
+
+    config ALERT_REGIME_THR_SCALE_MIN_PERMILLE
+        int "M-010f: clamp ondergrens effectieve schaal (‰)"
+        range 600 950
+        default 750
+        help
+            Past toe ná gekozen calm/hot-‰ uit NVS/Kconfig. Bijv. NVS calm 700‰ → effectief minstens deze waarde.
+            C3: zie status.json threshold_scale_permille_raw vs threshold_scale_permille.
+
+    config ALERT_REGIME_THR_SCALE_MAX_PERMILLE
+        int "M-010f: clamp bovengrens effectieve schaal (‰)"
+        range 1000 1600
+        default 1350
+        help
+            Past toe ná gekozen hot-‰; te hoge hot-waarde wordt hierop begrensd.
+
+endmenu

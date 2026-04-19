@@ -1,0 +1,41 @@
+# T-101: reproduceerbare smoke build voor V2-skeleton (ESP32-S3).
+# ESP-IDF-versie staat in firmware-v2/ESP_IDF_VERSION — CI-image moet daarmee matchen.
+name: Firmware V2 — smoke build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'firmware-v2/**'
+      - '.github/workflows/firmware-v2-smoke.yml'
+  pull_request:
+    paths:
+      - 'firmware-v2/**'
+      - '.github/workflows/firmware-v2-smoke.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-v2-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-esp32s3:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.4.2
+    defaults:
+      run:
+        shell: bash
+        working-directory: firmware-v2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify IDF version (sanity)
+        run: idf.py --version
+
+      - name: Configure & build (ESP32-S3)
+        run: |
+          idf.py set-target esp32s3
+          idf.py build

@@ -49,6 +49,10 @@ public:
     
     // Handler voor webTask (blijft in .ino, maar kan module method aanroepen)
     void handleClient();
+    /// Forensiek: eerste keer WiFi=OK in webTask — anker voor WEBTRACE_FIRST_SERVICE_DELAY_MS (zie platform_config.h).
+    void markWebTraceWifiSteadyMs(unsigned long steadyMs);
+    /// Forensiek: voer uitgestelde server->begin() één keer uit (WEBTRACE_DELAY_SERVER_BEGIN_MS).
+    void pollDeferredServerBegin();
 
     // Productie webTask: markeer recente HTTP-activiteit (idle → burst polling in webTask).
     static void notifyWebActivity();

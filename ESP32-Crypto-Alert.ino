@@ -919,6 +919,9 @@ void publishMqttAnchorEvent(float anchor_price, const char* event_type);
 void apiTask(void *parameter);
 void uiTask(void *parameter);
 void webTask(void *parameter);
+#if EXTRA_DUMMY_TASK_DIAG
+void dummyDiagTask(void *parameter);
+#endif
 void priceRepeatTask(void *parameter); // Aparte task voor periodieke prijs herhaling
 void wifiConnectionAndFetchPrice();
 void setDisplayBrigthness();
@@ -938,6 +941,12 @@ static uint8_t ntfyFailStreak = 0;
 
 // apiTask-handle: direct wakker maken na enqueue (leeg→niet-leeg) i.p.v. volledige UPDATE_API_INTERVAL wachten
 static TaskHandle_t s_apiTaskHandle = nullptr;
+
+#if STACK_DIAG_TASK_STACK_HWM
+static unsigned stackDiagHwmBytes(void) {
+    return (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t));
+}
+#endif
 #ifndef DEBUG_NTFY_API_WAKE
 #define DEBUG_NTFY_API_WAKE 0
 #endif
@@ -1116,6 +1125,9 @@ unsigned long lastMqttReconnectAttempt = 0;
 #endif
 static bool s_mqttInitialOrchestrationDone = false; // na BootNet-timestamp in setup (vóór: geen MQTT)
 static uint8_t s_postTasksRestFetchOkCount = 0; // succesvolle Bitvavo REST price-fetches na orchestratie (cap op gate-drempel)
+static volatile uint8_t s_postTaskApiSuccessCount = 0; // succesvolle post-task REST price cycli (apiTask) voor MQTT vrijgave
+// Log 56: eerste 1–2 post-task REST-success paden ([POSTOK] / [APILOOP] koppeling)
+static uint8_t s_postOkDiagSeq = 0;
 static bool s_mqttGateExternalRestFailSinceTasks = false; // REST price-fetch gefaald na start tasks
 static bool s_mqttInitialHealthGateLogged = false;
 static unsigned long s_bootNetWsGateUntilMs = 0;
@@ -3747,11 +3759,19 @@ void netMutexLock(const char* taskName)
     
     const char* safeTaskName = (taskName != nullptr) ? taskName : "net";
     const bool suppressWsReconnectAcqRel = (safeTaskName != nullptr && strstr(safeTaskName, "reconnect loop") != nullptr);
+    const unsigned long tNetMutexEnterUs = micros();
     // Rate-limited waiting logs om connect-heavy acties te kunnen correleren.
     uint32_t lastWaitLogMs = 0;
     const uint32_t waitLogEveryMs = 2000;
     for (;;) {
         if (xSemaphoreTake(gNetMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+#if NET_MUTEX_LOG_WAIT_DIAG
+            if (strstr(safeTaskName, "WebServer") != nullptr ||
+                strstr(safeTaskName, "fetchBitvavoPrice") != nullptr) {
+                const unsigned long waitUs = micros() - tNetMutexEnterUs;
+                Serial.printf(F("[NETWAIT] owner=%s wait_us=%lu\n"), safeTaskName, (unsigned long)waitUs);
+            }
+#endif
             #if !DEBUG_BUTTON_ONLY
             if (!suppressWsReconnectAcqRel) {
                 Serial.printf(F("[NET] acquire %s\n"), safeTaskName);
@@ -6830,12 +6850,23 @@ void publishMqttDiscovery() {
 // MQTT connect functie (niet-blokkerend)
 void connectMQTT() {
     if (mqttConnected) return;
+    Serial.println(F("[MQTTSRC] entered connectMQTT body"));
 #if BOOT_DIAG_DISABLE_MQTT_START
     {
         static bool s_bootDiagMqttOnce = false;
         if (!s_bootDiagMqttOnce) {
             s_bootDiagMqttOnce = true;
             Serial.println(F("[BOOT_DIAG] MQTT connect disabled (BOOT_DIAG_DISABLE_MQTT_START)"));
+        }
+    }
+    return;
+#endif
+#if BOOTTEST_SUPPRESS_POSTTASK_MQTT_CONNECT
+    {
+        static bool s_bootTestMqttSuppressedOnce = false;
+        if (!s_bootTestMqttSuppressedOnce) {
+            s_bootTestMqttSuppressedOnce = true;
+            Serial.println(F("[BOOTTEST] suppressed MQTT connect path"));
         }
     }
     return;
@@ -8623,6 +8654,32 @@ static void updateLatestKlineMetricsIfNeeded()
     if (WiFi.status() != WL_CONNECTED) {
         return;
     }
+#if BOOTTEST_SUPPRESS_POSTTASK_KLINE_REST
+    static bool s_klineSuppressLogOnce = false;
+    if (!s_klineSuppressLogOnce) {
+        s_klineSuppressLogOnce = true;
+        Serial.println(F("[BOOTTEST] suppressed post-task candles path: updateLatestKlineMetricsIfNeeded"));
+    }
+    return;
+#endif
+    // Post-task kline REST: pas na meerdere geslaagde REST price-cycli (zelfde teller als MQTT-orchestratie-pad).
+    if (s_postTaskApiSuccessCount < 5) {
+        static unsigned long s_lastKlineGateLogMs = 0;
+        const unsigned long tGate = millis();
+        if (tGate - s_lastKlineGateLogMs >= 5000UL) {
+            s_lastKlineGateLogMs = tGate;
+            Serial.printf(F("[KLINEGATE] skip post-task kline REST (%u/5)\n"),
+                          (unsigned)s_postTaskApiSuccessCount);
+        }
+        return;
+    }
+    {
+        static bool s_klineGateOpenedLogged = false;
+        if (!s_klineGateOpenedLogged) {
+            s_klineGateOpenedLogged = true;
+            Serial.println(F("[KLINEGATE] post-task kline REST now allowed"));
+        }
+    }
     const unsigned long now = millis();
     if (candlesNextAllowedMs != 0 && now < candlesNextAllowedMs) {
         return;
@@ -8699,8 +8756,23 @@ static void updateLatestKlineMetricsIfNeeded()
     }
 #endif
 
+    {
+        static bool s_candleSrcEnterLogged = false;
+        if (!s_candleSrcEnterLogged) {
+            s_candleSrcEnterLogged = true;
+            Serial.printf(
+                "[CANDLESRC] caller=updateLatestKlineMetricsIfNeeded task=API_Task core=%d entering_rest_1m_5m\n",
+                (int)xPortGetCoreID());
+        }
+    }
+
     if (last1mFetchMs == 0 || (now - last1mFetchMs) >= 60000UL) {
         float temp1mPrices[2];
+        static bool s_candleSrc1mLogged = false;
+        if (!s_candleSrc1mLogged) {
+            s_candleSrc1mLogged = true;
+            Serial.println(F("[CANDLESRC] fetchBitvavoCandles interval=1m"));
+        }
         int fetched1m = fetchBitvavoCandles(bitvavoSymbol, "1m", 2, temp1mPrices, nullptr, 2);
         if (fetched1m > 0) {
             last1mFetchMs = now;
@@ -8709,6 +8781,11 @@ static void updateLatestKlineMetricsIfNeeded()
     
     if (last5mFetchMs == 0 || (now - last5mFetchMs) >= 300000UL) {
         float temp5mPrices[2];
+        static bool s_candleSrc5mLogged = false;
+        if (!s_candleSrc5mLogged) {
+            s_candleSrc5mLogged = true;
+            Serial.println(F("[CANDLESRC] fetchBitvavoCandles interval=5m"));
+        }
         int fetched5m = fetchBitvavoCandles(bitvavoSymbol, "5m", 2, temp5mPrices, nullptr, 2);
         if (fetched5m > 0) {
             last5mFetchMs = now;
@@ -8797,9 +8874,20 @@ void fetchPrice()
         }
         // Gebruik laatste bekende prijs als fallback (al ingesteld als fetched = prices[0])
     } else {
+        const bool postOkTrace =
+            s_mqttInitialOrchestrationDone && !usedWs && s_postOkDiagSeq < 2;
+        if (postOkTrace) {
+            Serial.printf(
+                F("[POSTOK] enter success path orch=%d seq=%u\n"),
+                s_mqttInitialOrchestrationDone ? 1 : 0,
+                (unsigned)s_postOkDiagSeq);
+        }
         // Succesvol opgehaald: alleen REST-prijs afronden (WS blijft ongerond). Niet-BTC: centen i.p.v. hele euro.
         if (!usedWs) {
             fetched = roundRestFetchedQuotePrice(fetched);
+        }
+        if (postOkTrace) {
+            Serial.println(F("[POSTOK] after apiClient.fetchBitvavoPrice"));
         }
         #if !DEBUG_BUTTON_ONLY
         if (!usedWs && fetchTime > 1200) {
@@ -8831,9 +8919,19 @@ void fetchPrice()
                 s_netdiagFirstRestOkMs = lastApiMs;
                 Serial_printf(F("[NETDIAG] first REST OK wall_ms=%lu\n"), (unsigned long)s_netdiagFirstRestOkMs);
             }
+            if (postOkTrace) {
+                Serial.println(F("[POSTOK] before post-task counters"));
+            }
             if (s_mqttInitialOrchestrationDone && !usedWs &&
                 s_postTasksRestFetchOkCount < MQTT_INITIAL_ENABLE_REST_OK_COUNT) {
                 s_postTasksRestFetchOkCount++;
+            }
+            if (s_mqttInitialOrchestrationDone && !usedWs && s_postTaskApiSuccessCount < 255) {
+                s_postTaskApiSuccessCount++;
+            }
+            if (postOkTrace) {
+                Serial.println(F("[POSTOK] after post-task counters"));
+                Serial.println(F("[POSTOK] after rest-ok bookkeeping"));
             }
 
             prices[0] = fetched;
@@ -9130,6 +9228,10 @@ void fetchPrice()
             
             // Publiceer waarden naar MQTT
             publishMqttValues(fetchedLocal, ret1mLocal, ret5mLocal, ret30mLocal);
+            if (postOkTrace) {
+                Serial.println(F("[POSTOK] leaving fetchPrice success path"));
+                s_postOkDiagSeq++;
+            }
         } else {
             // Fase 4.1: Geconsolideerde mutex timeout handling
             handleMutexTimeout(mutexTimeoutCount, "API", bitvavoSymbol);
@@ -9463,6 +9565,78 @@ static void logBootDiagConfigOnce(void)
 #if BOOT_DIAG_MINIMAL_UI_LOAD
     Serial.printf("[BOOT_DIAG] minimal UI load active\n");
 #endif
+}
+
+// Compile-time WEBTRACE / NET-gate (altijd zichtbaar op Serial).
+static void logWebTraceForensicConfigOnce(void)
+{
+    static bool s_logged = false;
+    if (s_logged) {
+        return;
+    }
+    s_logged = true;
+    Serial.printf(
+        "[WEBTRACECFG] serialize_handleclient_with_net_gate=%d noop=%d first_service_delay_ms=%lu\n",
+        WEBTRACE_SERIALIZE_HANDLECLIENT_WITH_NET_GATE,
+        WEBTRACE_HANDLECLIENT_NOOP,
+        (unsigned long)WEBTRACE_FIRST_SERVICE_DELAY_MS);
+    Serial.printf(
+        "[WEBTRACECFG] delay_server_begin_ms=%lu\n",
+        (unsigned long)WEBTRACE_DELAY_SERVER_BEGIN_MS);
+}
+
+static void logWebTaskCfgOnce(void)
+{
+    static bool s_logged = false;
+    if (s_logged) {
+        return;
+    }
+    s_logged = true;
+    Serial.printf(
+        "[WEBTASKCFG] empty_skeleton_mode=%d force_core1_for_diag=%d present_but_inert_test=%d\n",
+        WEBTASK_EMPTY_SKELETON_MODE,
+        WEBTASK_FORCE_CORE1_FOR_DIAG,
+        WEBTASK_PRESENT_BUT_INERT_TEST);
+}
+
+static void logDummyTaskCfgOnce(void)
+{
+    static bool s_logged = false;
+    if (s_logged) {
+        return;
+    }
+    s_logged = true;
+    Serial.printf(
+        "[DUMMYTASKCFG] extra_dummy_task_diag=%d suspend_immediately_diag=%d delete_immediately_diag=%d block_forever_diag=%d\n",
+        EXTRA_DUMMY_TASK_DIAG,
+        DUMMY_TASK_SUSPEND_IMMEDIATELY_DIAG,
+        DUMMY_TASK_DELETE_IMMEDIATELY_DIAG,
+        DUMMY_TASK_BLOCK_FOREVER_DIAG);
+}
+
+static void logInlineDummyCfgOnce(void)
+{
+    static bool s_logged = false;
+    if (s_logged) {
+        return;
+    }
+    s_logged = true;
+    Serial.printf("[INLINECFG] inline_dummy_in_pricerepeat_diag=%d\n", INLINE_DUMMY_IN_PRICEREPEAT_DIAG);
+}
+
+static void logWebRuntimeInlineCfgOnce(void)
+{
+    static bool s_logged = false;
+    if (s_logged) {
+        return;
+    }
+    s_logged = true;
+    Serial.printf(
+        "[WEBRUNTIMECFG] web_runtime_inline_in_price_task=%d noop_inline_test=%d skip_service_slice_test=%d price_repeat_classic_loop_test=%d\n",
+        WEB_RUNTIME_INLINE_IN_PRICE_TASK,
+        WEBTRACE_HANDLECLIENT_NOOP_INLINE_TEST,
+        WEB_RUNTIME_INLINE_SKIP_SERVICE_SLICE_TEST,
+        PRICE_REPEAT_CLASSIC_LOOP_TEST);
 }
 
 static void setupSerialAndDevice()
@@ -9935,27 +10109,126 @@ static void allocateDynamicArrays()
     }
 }
 
+#if EXTRA_DUMMY_TASK_DIAG || INLINE_DUMMY_IN_PRICEREPEAT_DIAG
+// Compact heap ([TASKMEM]) — Dummy_Task lifecycle of inline dummy in priceRepeatTask.
+static void logDummyTaskMem(const char* phase)
+{
+    const uint32_t freeHeap = ESP.getFreeHeap();
+    const size_t intFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t intLargest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    Serial.printf(
+        "[TASKMEM] %s free=%u int_free=%u int_largest=%u\n",
+        phase,
+        (unsigned)freeHeap,
+        (unsigned)intFree,
+        (unsigned)intLargest);
+}
+#endif
+
 static void startFreeRTOSTasks()
 {
     // M1: Heap telemetry vóór startFreeRTOSTasks
     logHeap("TASKS_START_PRE");
     
-    // FreeRTOS Tasks voor multi-core processing
-    // ESP32-S3 heeft mogelijk meer stack ruimte nodig
-    #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
-    const uint32_t apiTaskStack = 10240;  // ESP32-S3: meer stack voor API task
-    const uint32_t uiTaskStack = 10240;   // ESP32-S3: meer stack voor UI task
-    const uint32_t webTaskStack = 6144;   // ESP32-S3: meer stack voor web task
-    #elif defined(PLATFORM_ESP32S3_LCDWIKI_28)
-    const uint32_t apiTaskStack = 8192;
-    const uint32_t uiTaskStack = 8192;
-    // Grotere marge na canary Web_Task; grote webbuffers staan nu deels static in WebServer.cpp
-    const uint32_t webTaskStack = 8192;
-    #else
-    const uint32_t apiTaskStack = 8192;   // ESP32: standaard stack
-    const uint32_t uiTaskStack = 8192;    // ESP32: standaard stack
-    const uint32_t webTaskStack = 5120;   // ESP32: verhoogd voor debug logging (was 4096)
-    #endif
+    // FreeRTOS Tasks — stackprofiel: zie platform_config.h (TASK_STACK_OVERRIDE_*).
+    // S3_RICH_RUNTIME: web=8192 (eerdere GEEK-baseline was 6144; gelijkgetrokken).
+    uint32_t apiTaskStack;
+    uint32_t uiTaskStack;
+    uint32_t webTaskStack;
+    uint32_t priceRepeatTaskStack;
+    const char* stackProfile;
+#if defined(PLATFORM_ESP32S3_GEEK) || defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_JC3248W535) \
+    || defined(PLATFORM_ESP32S3_LCDWIKI_28) || defined(PLATFORM_ESP32S3_AMOLED_206)
+    apiTaskStack = 10240;
+    uiTaskStack = 10240;
+    webTaskStack = 8192;
+    priceRepeatTaskStack = 4096;
+    stackProfile = "S3_RICH_RUNTIME";
+#else
+    apiTaskStack = 8192;
+    uiTaskStack = 8192;
+    webTaskStack = 5120;
+    priceRepeatTaskStack = 3072;
+    stackProfile = "GENERIC_NON_S3";
+#endif
+#ifdef TASK_STACK_OVERRIDE_API
+    apiTaskStack = (uint32_t)TASK_STACK_OVERRIDE_API;
+#endif
+#ifdef TASK_STACK_OVERRIDE_UI
+    uiTaskStack = (uint32_t)TASK_STACK_OVERRIDE_UI;
+#endif
+#ifdef TASK_STACK_OVERRIDE_WEB
+    webTaskStack = (uint32_t)TASK_STACK_OVERRIDE_WEB;
+#endif
+#ifdef TASK_STACK_OVERRIDE_PRICE_REPEAT
+    priceRepeatTaskStack = (uint32_t)TASK_STACK_OVERRIDE_PRICE_REPEAT;
+#endif
+#if defined(PLATFORM_ESP32S3_JC3248W535) && WEB_RUNTIME_INLINE_IN_PRICE_TASK
+    // Proef: zelfde task draait nu ook web handleClient-slices — extra stack voor TLS/HTTP stackframes.
+    priceRepeatTaskStack = 7168;
+#endif
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+    // Fase 2 JC3248: task stack footprint parity met stabiele baseline commit a969ffc (GENERIC_NON_S3-waarden).
+    apiTaskStack = 8192;
+    uiTaskStack = 8192;
+    webTaskStack = 5120;
+    priceRepeatTaskStack = 3072;
+    stackProfile = "JC_A969FFC_PARITY";
+    Serial.printf(
+        F("[STACKCFG] board=JC3248W535 profile=JC_A969FFC_PARITY api=%lu ui=%lu web=%lu priceRepeat=%lu\n"),
+        (unsigned long)apiTaskStack,
+        (unsigned long)uiTaskStack,
+        (unsigned long)webTaskStack,
+        (unsigned long)priceRepeatTaskStack);
+#endif
+
+#if STACK_DIAG_TASK_STACK_HWM
+    {
+        const char* stackCfgBoard =
+#if defined(PLATFORM_ESP32S3_JC3248W535)
+            "JC3248W535";
+#elif defined(PLATFORM_ESP32S3_GEEK)
+            "S3_GEEK";
+#elif defined(PLATFORM_ESP32S3_SUPERMINI)
+            "S3_SUPERMINI";
+#elif defined(PLATFORM_ESP32S3_LCDWIKI_28)
+            "LCDWIKI_28";
+#elif defined(PLATFORM_ESP32S3_AMOLED_206)
+            "AMOLED_206";
+#else
+            "UNKNOWN";
+#endif
+        char stackOv[80] = "";
+        {
+            int n = 0;
+#ifdef TASK_STACK_OVERRIDE_API
+            n += snprintf(stackOv + n, sizeof(stackOv) - (size_t)n, "%sapi", n ? "," : "");
+#endif
+#ifdef TASK_STACK_OVERRIDE_UI
+            n += snprintf(stackOv + n, sizeof(stackOv) - (size_t)n, "%sui", n ? "," : "");
+#endif
+#ifdef TASK_STACK_OVERRIDE_WEB
+            n += snprintf(stackOv + n, sizeof(stackOv) - (size_t)n, "%sweb", n ? "," : "");
+#endif
+#ifdef TASK_STACK_OVERRIDE_PRICE_REPEAT
+            n += snprintf(stackOv + n, sizeof(stackOv) - (size_t)n, "%spr", n ? "," : "");
+#endif
+            if (stackOv[0] == '\0') {
+                (void)snprintf(stackOv, sizeof(stackOv), "none");
+            }
+        }
+        Serial.printf(
+            "[STACKCFG] board=%s profile=%s api=%lu ui=%lu web=%lu priceRepeat=%lu ov=%s cores=api@1 ui@0 web@%d priceRepeat@1\n",
+            stackCfgBoard,
+            stackProfile,
+            (unsigned long)apiTaskStack,
+            (unsigned long)uiTaskStack,
+            (unsigned long)webTaskStack,
+            (unsigned long)priceRepeatTaskStack,
+            stackOv,
+            WEBTASK_FORCE_CORE1_FOR_DIAG ? 1 : 0);
+    }
+#endif
     
     // Core 1: API calls (elke seconde)
     xTaskCreatePinnedToCore(
@@ -9970,11 +10243,6 @@ static void startFreeRTOSTasks()
 
     // Core 1: Periodieke prijs herhaling (elke 2 seconden) - onafhankelijk van API calls
     // Stack size moet groot genoeg zijn voor mutex calls en Serial.printf
-    #if defined(PLATFORM_ESP32S3_SUPERMINI) || defined(PLATFORM_ESP32S3_GEEK)
-    const uint32_t priceRepeatTaskStack = 4096; // ESP32-S3: meer stack
-    #else
-    const uint32_t priceRepeatTaskStack = 3072; // ESP32: voldoende stack voor mutex en debug logging
-    #endif
     xTaskCreatePinnedToCore(
         priceRepeatTask,   // Task function
         "PriceRepeat",     // Task name
@@ -9996,22 +10264,74 @@ static void startFreeRTOSTasks()
         0                  // Core 0 (Arduino loop core)
     );
 
-    // Core 2: Web server (elke 5 seconden, maar server.handleClient() continu)
-#if !BOOT_DIAG_DISABLE_WEB_TASK
+    // Web task, Dummy_Task, inline web in PriceRepeat, of geen web.
+#if WEBTASK_PRESENT_BUT_INERT_TEST
+    {
+        const BaseType_t webTaskCore =
+#if WEBTASK_FORCE_CORE1_FOR_DIAG
+            (BaseType_t)1
+#else
+            (BaseType_t)0
+#endif
+            ;
+        xTaskCreatePinnedToCore(
+            webTask, "Web_Task", webTaskStack, NULL, 1, NULL, webTaskCore);
+    }
+    // webTask draait in INERT-modus (direct suspend); zie [WEBTASKCFG] present_but_inert_test.
+#elif INLINE_DUMMY_IN_PRICEREPEAT_DIAG && !WEB_RUNTIME_INLINE_IN_PRICE_TASK
+    // Geen extra xTaskCreate voor Web/Dummy; zie [INLINECFG] en priceRepeatTask.
+#elif WEB_RUNTIME_INLINE_IN_PRICE_TASK
+    // Geen webTask: serviceWebServerInlineSlice() in priceRepeatTask — zie [WEBRUNTIMECFG].
+#elif EXTRA_DUMMY_TASK_DIAG
+    logDummyTaskMem("dummy pre-create");
     xTaskCreatePinnedToCore(
-        webTask,           // Task function
-        "Web_Task",        // Task name
-        webTaskStack,      // Stack size (platform-specifiek)
+        dummyDiagTask,     // Task function
+        "Dummy_Task",      // Task name
+        webTaskStack,      // zelfde als Web_Task
         NULL,              // Parameters
-        1,                 // Priority
+        1,                 // Priority (zelfde als webTask)
         NULL,              // Task handle
-        0                  // Core 0 (Arduino loop core)
+        1                  // Core 1 (zoals skeleton webTask op Core 1)
     );
+    logDummyTaskMem("dummy post-create");
+#elif !BOOT_DIAG_DISABLE_WEB_TASK
+    {
+        const BaseType_t webTaskCore =
+#if WEBTASK_FORCE_CORE1_FOR_DIAG
+            (BaseType_t)1
+#else
+            (BaseType_t)0
+#endif
+            ;
+        xTaskCreatePinnedToCore(
+            webTask,           // Task function
+            "Web_Task",        // Task name
+            webTaskStack,      // Stack size (platform-specifiek)
+            NULL,              // Parameters
+            1,                 // Priority
+            NULL,              // Task handle
+            webTaskCore
+        );
+    }
 #else
     Serial.println(F("[BOOT_DIAG] Web_Task not started (BOOT_DIAG_DISABLE_WEB_TASK)"));
 #endif
 
-    Serial.println("[FreeRTOS] Tasks gestart op Core 1 (API) en Core 0 (UI/Web)");
+#if WEBTASK_PRESENT_BUT_INERT_TEST
+    Serial.printf(
+        "[FreeRTOS] Tasks: API+PriceRepeat@1, UI@0, Web@%d (INERT suspend)\n",
+        WEBTASK_FORCE_CORE1_FOR_DIAG ? 1 : 0);
+#elif WEB_RUNTIME_INLINE_IN_PRICE_TASK
+    Serial.println(F("[FreeRTOS] Tasks: API+PriceRepeat@1 (web inline), UI@0, Web=off"));
+#elif INLINE_DUMMY_IN_PRICEREPEAT_DIAG
+    Serial.println(F("[FreeRTOS] Tasks: API+PriceRepeat@1, UI@0, Web=off (inline dummy in PriceRepeat)"));
+#elif EXTRA_DUMMY_TASK_DIAG
+    Serial.println(F("[FreeRTOS] Tasks: API+PriceRepeat@1, UI@0, Web=off Dummy@1"));
+#else
+    Serial.printf(
+        "[FreeRTOS] Tasks: API+PriceRepeat@1, UI@0, Web@%d\n",
+        WEBTASK_FORCE_CORE1_FOR_DIAG ? 1 : 0);
+#endif
     
     // M1: Heap telemetry na startFreeRTOSTasks
     logHeap("TASKS_START_POST");
@@ -10022,6 +10342,11 @@ void setup()
     // Setup in logical sections for better readability and maintainability
     setupSerialAndDevice();
     logBootDiagConfigOnce();
+    logWebTraceForensicConfigOnce();
+    logWebTaskCfgOnce();
+    logDummyTaskCfgOnce();
+    logInlineDummyCfgOnce();
+    logWebRuntimeInlineCfgOnce();
     logBootStage("after serial+device");
     setupDisplay();
     logBootStage("after display");
@@ -10168,6 +10493,7 @@ void setup()
     Serial.println(F("[NETDIAG2] milestone: after startFreeRTOSTasks"));
     logBootStage("after tasks");
 
+#if !BOOTNET_POSTTASK_ORCHESTRATION_DISABLE_TEST
     s_bootFlowEpochMs = millis();
     Serial_printf(F("[BOOTFLOW] network orchestration epoch wall_ms=%lu\n"), (unsigned long)s_bootFlowEpochMs);
 
@@ -10180,6 +10506,12 @@ void setup()
             (unsigned long)(CRYPTO_ALERT_BOOTNET_MQTT_DELAY_MS + CRYPTO_ALERT_BOOTNET_WS_EXTRA_DELAY_MS),
             (unsigned long)MQTT_INITIAL_ENABLE_MIN_EPOCH_MS);
     }
+#elif BOOTNET_POSTTASK_MQTT_FLAG_ONLY_TEST
+    Serial.println(F("[BOOTTEST] mqtt orchestration flag ONLY enabled"));
+    s_mqttInitialOrchestrationDone = true;
+#else
+    Serial.println(F("[BOOTTEST] post-task orchestration DISABLED"));
+#endif
 }
 
 // Toon verbindingsinfo (SSID en IP-adres) en "Opening Bitvavo Session" op het scherm
@@ -10528,6 +10860,9 @@ void apiTask(void *parameter)
     const uint32_t apiIntervalMs = UPDATE_API_INTERVAL;
     
     Serial.println(F("[API Task] Gestart op Core 1"));
+#if STACK_DIAG_TASK_STACK_HWM
+    Serial.printf("[STACK][API] HWM=%u bytes (task start)\n", stackDiagHwmBytes());
+#endif
     
     // Wacht tot mutex is aangemaakt
     while (dataMutex == NULL) {
@@ -10547,6 +10882,9 @@ void apiTask(void *parameter)
     const unsigned long HEAP_LOG_INTERVAL_MS = 60000;  // 60 seconden
     
     static bool wsInitAttempted = false;
+#if STACK_DIAG_TASK_STACK_HWM
+    static unsigned long s_apiStackDiagLastMs = 0;
+#endif
     for (;;)
     {
         static bool s_apiFirstLoopMilestone = false;
@@ -10555,6 +10893,15 @@ void apiTask(void *parameter)
             Serial.println(F("[NETDIAG2] milestone: apiTask first loop"));
         }
         uint32_t t0 = millis();
+
+#if STACK_DIAG_TASK_STACK_HWM
+        if (s_apiStackDiagLastMs == 0) {
+            s_apiStackDiagLastMs = t0;
+        } else if ((t0 - s_apiStackDiagLastMs) >= 30000UL) {
+            s_apiStackDiagLastMs = t0;
+            Serial.printf("[STACK][API] HWM=%u bytes (periodic)\n", stackDiagHwmBytes());
+        }
+#endif
         
         // M1: Rate-limited heap telemetry in apiTask (elke 60s)
         if ((t0 - lastHeapLog) >= HEAP_LOG_INTERVAL_MS) {
@@ -10570,7 +10917,17 @@ void apiTask(void *parameter)
                 apiTaskNtfyExclusiveStateMachine();
             } else {
                 const bool ntfyWantExclusive = ntfyHasFlushablePendingForExclusive();
-                const bool ntfyBootBlocked = ntfyWantExclusive && bootShouldBlockNtfyExclusiveWs();
+                bool ntfyBootBlocked = ntfyWantExclusive && bootShouldBlockNtfyExclusiveWs();
+#if BOOTTEST_SUPPRESS_NTFY_EXCLUSIVE_DEFERRED_PATH
+                if (ntfyBootBlocked) {
+                    static bool s_ntfyDeferredSuppressLogged = false;
+                    if (!s_ntfyDeferredSuppressLogged) {
+                        s_ntfyDeferredSuppressLogged = true;
+                        Serial.println(F("[BOOTTEST] suppressed NTFY exclusive deferred path"));
+                    }
+                    ntfyBootBlocked = false;
+                }
+#endif
                 if (ntfyWantExclusive && !ntfyBootBlocked) {
                     Serial_println(F("[NTFY][EXCL] enter"));
                     if (ntfyExclusiveShouldSkipWsStopPhase()) {
@@ -10595,6 +10952,17 @@ void apiTask(void *parameter)
                     // Voer 1 API call uit (alleen buiten NTFY-exclusive slot)
                     fetchPrice();
 
+                    {
+                        static uint8_t s_apiLoopDiagN = 0;
+                        const bool apiLoopDiag =
+                            s_mqttInitialOrchestrationDone && (s_apiLoopDiagN < 2);
+                        if (apiLoopDiag) {
+                            Serial.printf(
+                                F("[APILOOP] after fetchPrice orch=%d seq=%u\n"),
+                                s_mqttInitialOrchestrationDone ? 1 : 0,
+                                (unsigned)s_apiLoopDiagN);
+                            Serial.println(F("[APILOOP] before ws boot branch"));
+                        }
                     // WS init pas na eerste succesvolle API-prijs (en warm-start klaar), en na boot-net gate (na MQTT-fase).
 #if BOOT_DIAG_DISABLE_WS_BOOT_START
                     if (!wsInitAttempted && lastApiMs > 0) {
@@ -10602,6 +10970,7 @@ void apiTask(void *parameter)
                         if (!s_bootDiagWsSkipOnce) {
                             s_bootDiagWsSkipOnce = true;
                             wsInitAttempted = true;
+                            Serial.println(F("[BOOTTEST] staged WS boot suppressed"));
                             Serial.println(F("[BOOT_DIAG] WS boot start skipped (BOOT_DIAG_DISABLE_WS_BOOT_START)"));
                         }
                     }
@@ -10637,7 +11006,17 @@ void apiTask(void *parameter)
                         }
                     }
 #endif
+                        if (apiLoopDiag) {
+                            Serial.println(F("[APILOOP] after ws boot branch"));
+                            Serial.println(F("[APILOOP] before kline metrics"));
+                        }
                     updateLatestKlineMetricsIfNeeded();
+                        if (apiLoopDiag) {
+                            Serial.println(F("[APILOOP] after kline metrics"));
+                            Serial.println(F("[APILOOP] loop end"));
+                            s_apiLoopDiagN++;
+                        }
+                    }
 
                     // C1: Verwerk pending anchor setting (network-safe: gebeurt in apiTask waar HTTPS calls al zijn)
                     if (pendingAnchorSetting.pending) {
@@ -10696,19 +11075,173 @@ void apiTask(void *parameter)
     }
 }
 
+// --- Web handleClient timing (gedeeld door webTask en priceRepeat inline-runtime) — lokaal, zie WEB_TASK_WAKE_MS ---
+#ifndef WEB_TASK_WAKE_MS
+#define WEB_TASK_WAKE_MS 200
+#endif
+#ifndef WEB_HANDLE_IDLE_MS
+#define WEB_HANDLE_IDLE_MS 1000
+#endif
+#ifndef WEB_HANDLE_BURST_MS
+#define WEB_HANDLE_BURST_MS 625
+#endif
+#ifndef WEB_ACTIVITY_BURST_HOLD_MS
+#define WEB_ACTIVITY_BURST_HOLD_MS 5000
+#endif
+#ifndef CRYPTO_ALERT_WEB_HANDLECLIENT_MODE_LOG
+#define CRYPTO_ALERT_WEB_HANDLECLIENT_MODE_LOG 0
+#endif
+
+#if WEB_RUNTIME_INLINE_IN_PRICE_TASK
+// Voormalige webTask runtime-scheduler (idle/burst), zonder mark/poll/deferred begin — alleen handleClient.
+static void serviceWebServerInlineSlice(void)
+{
+    if (WiFi.status() != WL_CONNECTED) {
+        return;
+    }
+    const unsigned long nowLoop = millis();
+    const uint32_t lastAct = webServerModule.getLastWebActivityMs();
+    const bool inBurst = (lastAct != 0u) &&
+                         ((nowLoop - (unsigned long)lastAct) < (unsigned long)WEB_ACTIVITY_BURST_HOLD_MS);
+    const unsigned long minIv =
+        inBurst ? (unsigned long)WEB_HANDLE_BURST_MS : (unsigned long)WEB_HANDLE_IDLE_MS;
+    static unsigned long s_lastInlineHandleClientMs = 0;
+    static bool s_loggedFirstInlineHandleClient = false;
+    const unsigned long nowHc = millis();
+    if (s_lastInlineHandleClientMs == 0UL || (nowHc - s_lastInlineHandleClientMs) >= minIv) {
+        s_lastInlineHandleClientMs = nowHc;
+#if WEBTRACE_HANDLECLIENT_NOOP_INLINE_TEST
+        if (!s_loggedFirstInlineHandleClient) {
+            s_loggedFirstInlineHandleClient = true;
+            Serial.println(F("[InlineWeb] NOOP handleClient suppressed"));
+        }
+#else
+        webServerModule.handleClient();
+        if (!s_loggedFirstInlineHandleClient) {
+            s_loggedFirstInlineHandleClient = true;
+            Serial.println(F("[InlineWeb] first handleClient() from PriceRepeat"));
+        }
+#if CRYPTO_ALERT_WEB_HANDLECLIENT_MODE_LOG
+        static bool s_webHcWasBurstInline = false;
+        if (inBurst != s_webHcWasBurstInline) {
+            if (inBurst) {
+                Serial.println(F("[WEB_HC] BURST"));
+            } else {
+                Serial.println(F("[WEB_HC] IDLE"));
+            }
+            s_webHcWasBurstInline = inBurst;
+        }
+#endif
+#endif  // !WEBTRACE_HANDLECLIENT_NOOP_INLINE_TEST
+    }
+}
+#endif  // WEB_RUNTIME_INLINE_IN_PRICE_TASK
+
 // FreeRTOS Task: 1 Hz sampler — enige schrijver naar secondPrices/fiveMinutePrices (addPriceToSecondArray)
 // Bron: primair laatst afgesloten WS-seconde-close, fallback latestKnownPrice; API-poll blijft UPDATE_API_INTERVAL
 void priceRepeatTask(void *parameter)
 {
+#if STACK_DIAG_TASK_STACK_HWM
+    static unsigned long s_priceRepeatStackDiagLastMs = 0;
+#endif
     // Wacht tot WiFi verbonden is
     while (WiFi.status() != WL_CONNECTED) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
-    
-    Serial.println(F("[PriceSample] 1 Hz task gestart (PRICE_SAMPLE_INTERVAL_MS)"));
-    
-    for (;;)
+
+#if INLINE_DUMMY_IN_PRICEREPEAT_DIAG && !WEB_RUNTIME_INLINE_IN_PRICE_TASK
     {
+        static bool s_inlineDummyPriceRepeatOnce = false;
+        if (!s_inlineDummyPriceRepeatOnce) {
+            s_inlineDummyPriceRepeatOnce = true;
+            logDummyTaskMem("inline_dummy PriceRepeat pre-log");
+            Serial.println(F("[Inline Dummy] active in PriceRepeat"));
+            logDummyTaskMem("inline_dummy PriceRepeat post-log");
+        }
+    }
+#endif
+
+    Serial.println(F("[PriceSample] 1 Hz task gestart (PRICE_SAMPLE_INTERVAL_MS)"));
+#if WEBTASK_PRESENT_BUT_INERT_TEST
+    Serial.println(F("[PriceRepeat] classic 1 Hz loop (WEBTASK inert topology; no inline runtime)"));
+#elif WEB_RUNTIME_INLINE_IN_PRICE_TASK && PRICE_REPEAT_CLASSIC_LOOP_TEST
+    Serial.println(F("[PriceRepeat] CLASSIC_LOOP_TEST active (no web service, no 200 ms wake loop)"));
+#elif WEB_RUNTIME_INLINE_IN_PRICE_TASK
+    Serial.println(F("[PriceRepeat] WEB_RUNTIME_INLINE: handleClient slices in this task; no webTask"));
+#endif
+#if STACK_DIAG_TASK_STACK_HWM
+    Serial.printf("[STACK][PriceRepeat] HWM=%u bytes (task start)\n", stackDiagHwmBytes());
+#endif
+
+#if WEB_RUNTIME_INLINE_IN_PRICE_TASK && !PRICE_REPEAT_CLASSIC_LOOP_TEST && !WEBTASK_PRESENT_BUT_INERT_TEST
+    TickType_t lastWakeTime = xTaskGetTickCount();
+    const TickType_t kPriceWakeTicks = pdMS_TO_TICKS(WEB_TASK_WAKE_MS);
+    unsigned long lastSampleAtMs = 0;
+    for (;;) {
+#if WEB_RUNTIME_INLINE_SKIP_SERVICE_SLICE_TEST
+        {
+            static bool s_loggedSliceBypassed = false;
+            if (!s_loggedSliceBypassed) {
+                s_loggedSliceBypassed = true;
+                Serial.println(F("[InlineWeb] service slice fully bypassed"));
+            }
+        }
+#else
+        serviceWebServerInlineSlice();
+#endif
+
+        const unsigned long tNow = millis();
+        if (lastSampleAtMs == 0UL) {
+            lastSampleAtMs = tNow;
+        }
+        if ((tNow - lastSampleAtMs) >= (unsigned long)PRICE_SAMPLE_INTERVAL_MS) {
+            lastSampleAtMs = tNow;
+            if (dataMutex != nullptr && safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "priceRepeatTask")) {
+                float p = latestKnownPrice;
+                const uint32_t nowBucket = (uint32_t)(millis() / 1000UL);
+                if (wsSecondAggLastClosed.valid) {
+                    const uint32_t ageBuckets = (nowBucket >= wsSecondAggLastClosed.secondBucket)
+                        ? (nowBucket - wsSecondAggLastClosed.secondBucket)
+                        : (UINT32_MAX - wsSecondAggLastClosed.secondBucket + nowBucket + 1U);
+                    if (ageBuckets <= 1U && wsSecondAggLastClosed.secondClose > 0.0f) {
+                        p = wsSecondAggLastClosed.secondClose;
+                    }
+                }
+                if (p > 0.0f) {
+                    priceData.addPriceToSecondArray(p);
+                }
+                safeMutexGive(dataMutex, "priceRepeatTask");
+            }
+        }
+
+#if STACK_DIAG_TASK_STACK_HWM
+        {
+            const unsigned long tPr = millis();
+            if (s_priceRepeatStackDiagLastMs == 0) {
+                s_priceRepeatStackDiagLastMs = tPr;
+            } else if ((tPr - s_priceRepeatStackDiagLastMs) >= 30000UL) {
+                s_priceRepeatStackDiagLastMs = tPr;
+                Serial.printf(
+                    "[STACK][PriceRepeat] HWM=%u bytes (periodic; inline web runtime)\n",
+                    stackDiagHwmBytes());
+            }
+        }
+#endif
+        vTaskDelayUntil(&lastWakeTime, kPriceWakeTicks);
+    }
+#elif !WEB_RUNTIME_INLINE_IN_PRICE_TASK || WEBTASK_PRESENT_BUT_INERT_TEST
+    for (;;) {
+#if STACK_DIAG_TASK_STACK_HWM
+        {
+            const unsigned long tPr = millis();
+            if (s_priceRepeatStackDiagLastMs == 0) {
+                s_priceRepeatStackDiagLastMs = tPr;
+            } else if ((tPr - s_priceRepeatStackDiagLastMs) >= 30000UL) {
+                s_priceRepeatStackDiagLastMs = tPr;
+                Serial.printf("[STACK][PriceRepeat] HWM=%u bytes (periodic)\n", stackDiagHwmBytes());
+            }
+        }
+#endif
         if (dataMutex != nullptr && safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "priceRepeatTask")) {
             float p = latestKnownPrice;
             const uint32_t nowBucket = (uint32_t)(millis() / 1000UL);
@@ -10728,6 +11261,40 @@ void priceRepeatTask(void *parameter)
 
         vTaskDelay(pdMS_TO_TICKS(PRICE_SAMPLE_INTERVAL_MS));
     }
+#else
+    // WEB_RUNTIME_INLINE_IN_PRICE_TASK && PRICE_REPEAT_CLASSIC_LOOP_TEST: zelfde body als legacy loop hierboven.
+    for (;;) {
+#if STACK_DIAG_TASK_STACK_HWM
+        {
+            const unsigned long tPr = millis();
+            if (s_priceRepeatStackDiagLastMs == 0) {
+                s_priceRepeatStackDiagLastMs = tPr;
+            } else if ((tPr - s_priceRepeatStackDiagLastMs) >= 30000UL) {
+                s_priceRepeatStackDiagLastMs = tPr;
+                Serial.printf("[STACK][PriceRepeat] HWM=%u bytes (periodic)\n", stackDiagHwmBytes());
+            }
+        }
+#endif
+        if (dataMutex != nullptr && safeMutexTake(dataMutex, pdMS_TO_TICKS(100), "priceRepeatTask")) {
+            float p = latestKnownPrice;
+            const uint32_t nowBucket = (uint32_t)(millis() / 1000UL);
+            if (wsSecondAggLastClosed.valid) {
+                const uint32_t ageBuckets = (nowBucket >= wsSecondAggLastClosed.secondBucket)
+                    ? (nowBucket - wsSecondAggLastClosed.secondBucket)
+                    : (UINT32_MAX - wsSecondAggLastClosed.secondBucket + nowBucket + 1U);
+                if (ageBuckets <= 1U && wsSecondAggLastClosed.secondClose > 0.0f) {
+                    p = wsSecondAggLastClosed.secondClose;
+                }
+            }
+            if (p > 0.0f) {
+                priceData.addPriceToSecondArray(p);
+            }
+            safeMutexGive(dataMutex, "priceRepeatTask");
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(PRICE_SAMPLE_INTERVAL_MS));
+    }
+#endif  // WEB_RUNTIME_INLINE / PRICE_REPEAT_CLASSIC_LOOP_TEST branches
 }
 
 // FreeRTOS Task: UI updates op Core 0 (elke seconde)
@@ -10742,16 +11309,35 @@ void uiTask(void *parameter)
 #endif
     
     Serial.println("[UI Task] Gestart op Core 0");
+#if STACK_DIAG_TASK_STACK_HWM
+    Serial.printf("[STACK][UI] HWM=%u bytes (task start)\n", stackDiagHwmBytes());
+#endif
     
     // Wacht tot mutex is aangemaakt
     while (dataMutex == NULL) {
         vTaskDelay(pdMS_TO_TICKS(100));
     }
+
+#if STACK_DIAG_TASK_STACK_HWM
+    static unsigned long s_uiStackDiagLastMs = 0;
+#endif
     
     for (;;)
     {
         // Meet CPU usage: start tijd
         unsigned long taskStartTime = millis();
+
+#if STACK_DIAG_TASK_STACK_HWM
+        {
+            const unsigned long tUi = millis();
+            if (s_uiStackDiagLastMs == 0) {
+                s_uiStackDiagLastMs = tUi;
+            } else if ((tUi - s_uiStackDiagLastMs) >= 30000UL) {
+                s_uiStackDiagLastMs = tUi;
+                Serial.printf("[STACK][UI] HWM=%u bytes (periodic)\n", stackDiagHwmBytes());
+            }
+        }
+#endif
         
         // Apply deferred display rotation on UI core
         applyPendingDisplayRotation();
@@ -10838,39 +11424,71 @@ void uiTask(void *parameter)
     }
 }
 
-// Stack-HWM logging voor Web_Task (vrij resterend stack in bytes). Standaard uit; zet op 1 voor diagnose.
-#ifndef WEB_TASK_STACK_LOG
-#define WEB_TASK_STACK_LOG 0
-#endif
+// Stack-HWM: zie STACK_DIAG_TASK_STACK_HWM in platform_config.h (was WEB_TASK_STACK_LOG).
+// WEB_TASK_WAKE_MS / WEB_HANDLE_* / WEB_ACTIVITY_*: zie blok vóór priceRepeatTask (gedeeld met inline web-runtime).
 
-// --- webTask: handleClient-scheduler (JC3248W535 WAN-stabiliteit) — lokaal, geen platform_config ---
-// Effectieve min. interval tussen handleClient(): idle ≥1000 ms, burst =625 ms (diagnose: <625 ms instabiel).
-#ifndef WEB_TASK_WAKE_MS
-#define WEB_TASK_WAKE_MS 200
+#if EXTRA_DUMMY_TASK_DIAG
+// Zelfde stack/priority/core als webTask-vervanger; anders: zelfde wake-cadans als webTask-loop (einde). Geen WiFi/web.
+void dummyDiagTask(void *parameter)
+{
+    Serial.printf("[Dummy Task] Gestart op Core %d\n", (int)xPortGetCoreID());
+#if DUMMY_TASK_DELETE_IMMEDIATELY_DIAG
+    const char* const kDummyChosen = "delete_immediately";
+#elif DUMMY_TASK_SUSPEND_IMMEDIATELY_DIAG
+    const char* const kDummyChosen = "suspend_immediately";
+#elif DUMMY_TASK_BLOCK_FOREVER_DIAG
+    const char* const kDummyChosen = "block_forever";
+#else
+    const char* const kDummyChosen = "periodic_loop";
 #endif
-#ifndef WEB_HANDLE_IDLE_MS
-#define WEB_HANDLE_IDLE_MS 1000
+    Serial.printf(
+        "[Dummy Task] EFFECTIVE_CFG del=%d susp=%d blk=%d CHOSEN=%s\n",
+        DUMMY_TASK_DELETE_IMMEDIATELY_DIAG,
+        DUMMY_TASK_SUSPEND_IMMEDIATELY_DIAG,
+        DUMMY_TASK_BLOCK_FOREVER_DIAG,
+        kDummyChosen);
+#if DUMMY_TASK_DELETE_IMMEDIATELY_DIAG
+    Serial.println(F("[Dummy Task] delete-immediately mode active"));
+    logDummyTaskMem("dummy pre-delete");
+    vTaskDelete(NULL);
+#elif DUMMY_TASK_SUSPEND_IMMEDIATELY_DIAG
+    Serial.println(F("[Dummy Task] suspend-immediately mode active"));
+    logDummyTaskMem("dummy pre-suspend");
+    vTaskSuspend(NULL);  // taak blijft bestaan; geen periodieke wake-ups meer
+#elif DUMMY_TASK_BLOCK_FOREVER_DIAG
+    Serial.println(F("[Dummy Task] block-forever mode active"));
+    logDummyTaskMem("dummy pre-block-forever");
+    (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+#else
+    TickType_t lastWakeTime = xTaskGetTickCount();
+    for (;;) {
+#if BOOT_DIAG_WEBTASK_HANDLECLIENT_INTERVAL_MS > 0
+        const TickType_t periodTicks = pdMS_TO_TICKS(100);
+#else
+        const TickType_t periodTicks = pdMS_TO_TICKS(WEB_TASK_WAKE_MS);
 #endif
-#ifndef WEB_HANDLE_BURST_MS
-#define WEB_HANDLE_BURST_MS 625
+        vTaskDelayUntil(&lastWakeTime, periodTicks);
+    }
 #endif
-#ifndef WEB_ACTIVITY_BURST_HOLD_MS
-#define WEB_ACTIVITY_BURST_HOLD_MS 5000
-#endif
-// 1 = alleen [WEB_HC] IDLE↔BURST bij moduswissel (geen spam)
-#ifndef CRYPTO_ALERT_WEB_HANDLECLIENT_MODE_LOG
-#define CRYPTO_ALERT_WEB_HANDLECLIENT_MODE_LOG 0
-#endif
+}
+#endif  // EXTRA_DUMMY_TASK_DIAG
 
-// FreeRTOS Task: Web server op Core 0 — zie WEB_TASK_WAKE_MS / WEB_HANDLE_* hierboven
+// FreeRTOS Task: web server scheduler — pinned core: default 0, WEBTASK_FORCE_CORE1_FOR_DIAG → 1. Zie WEB_TASK_WAKE_MS / WEB_HANDLE_*.
 void webTask(void *parameter)
 {
+#if WEBTASK_PRESENT_BUT_INERT_TEST
+    Serial.printf("[Web Task] Gestart op Core %d\n", (int)xPortGetCoreID());
+    Serial.println(F("[Web Task] INERT_TEST active (task present, runtime suspended)"));
+    vTaskSuspend(NULL);
+#else
     TickType_t lastWakeTime = xTaskGetTickCount();
 
-    Serial.println("[Web Task] Gestart op Core 0");
-#if WEB_TASK_STACK_LOG
-    Serial.printf("[STACK][Web] HWM=%u bytes (task start)\n",
-                  (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
+    Serial.printf("[Web Task] Gestart op Core %d\n", (int)xPortGetCoreID());
+#if WEBTASK_EMPTY_SKELETON_MODE
+    Serial.println(F("[WEBTASK] skeleton mode active"));
+#endif
+#if STACK_DIAG_TASK_STACK_HWM
+    Serial.printf("[STACK][Web] HWM=%u bytes (task start)\n", stackDiagHwmBytes());
 #endif
     
     // Wacht tot WiFi verbonden is voordat we beginnen
@@ -10881,20 +11499,36 @@ void webTask(void *parameter)
     lastWakeTime = xTaskGetTickCount();
 
     Serial.println("[Web Task] WiFi verbonden, start web server");
+#if STACK_DIAG_TASK_STACK_HWM
+#if WEBTASK_EMPTY_SKELETON_MODE
+    Serial.printf("[STACK][Web] HWM=%u bytes (skeleton: geen handleClient in webTask-loop)\n",
+                  stackDiagHwmBytes());
+#else
     // setupWebServer() draait al in setup() (wifiConnectionAndFetchPrice); deze HWM is vóór eerste handleClient()
-#if WEB_TASK_STACK_LOG
     Serial.printf("[STACK][Web] HWM=%u bytes (before first handleClient; setupWebServer ran on setup stack)\n",
-                  (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
+                  stackDiagHwmBytes());
+#endif
 #endif
 
     static unsigned long s_lastWebStackLogMs = 0;
     const unsigned long WEB_STACK_LOG_INTERVAL_MS = 30000;
-#if WEB_TASK_STACK_LOG
+#if STACK_DIAG_TASK_STACK_HWM
     static bool s_loggedHwmAfterFirstHandle = false;
 #endif
 
     for (;;)
     {
+#if WEBTASK_EMPTY_SKELETON_MODE
+        // Zelfde task + wake-cadans; geen WebServerModule (mark / poll / handleClient).
+        if (WiFi.status() != WL_CONNECTED) {
+            Serial.println(F("[Web Task] WiFi verbinding verloren, wachten op reconnect..."));
+            while (WiFi.status() != WL_CONNECTED) {
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
+            lastWakeTime = xTaskGetTickCount();
+            Serial.println(F("[Web Task] WiFi weer verbonden"));
+        }
+#else
         const bool wifiOk = (WiFi.status() == WL_CONNECTED);
         bool inBurst = false;
         const unsigned long nowLoop = millis();
@@ -10907,6 +11541,14 @@ void webTask(void *parameter)
         // Handle web server requests alleen als WiFi verbonden is
         // Fase 9.1.2: Gebruik module versie
         if (wifiOk) {
+#if (WEBTRACE_FIRST_SERVICE_DELAY_MS > 0) || (WEBTRACE_DELAY_SERVER_BEGIN_MS > 0)
+            static bool s_webTraceWifiSteadyMarked = false;
+            if (!s_webTraceWifiSteadyMarked) {
+                s_webTraceWifiSteadyMarked = true;
+                webServerModule.markWebTraceWifiSteadyMs(millis());
+            }
+#endif
+            webServerModule.pollDeferredServerBegin();
 #if BOOT_DIAG_WEBTASK_HANDLECLIENT_INTERVAL_MS > 0
             static unsigned long s_lastWebHandleClientMs = 0;
             static bool s_webHandleIntervalLogged = false;
@@ -10954,11 +11596,11 @@ void webTask(void *parameter)
 #endif
             }
 #endif
-#if WEB_TASK_STACK_LOG
+#if STACK_DIAG_TASK_STACK_HWM
             if (!s_loggedHwmAfterFirstHandle) {
                 s_loggedHwmAfterFirstHandle = true;
                 Serial.printf("[STACK][Web] HWM=%u bytes (after first handleClient iteration)\n",
-                              (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
+                              stackDiagHwmBytes());
             }
 #endif
         } else {
@@ -10970,14 +11612,16 @@ void webTask(void *parameter)
             lastWakeTime = xTaskGetTickCount();
             Serial.println("[Web Task] WiFi weer verbonden");
         }
+#endif  // !WEBTASK_EMPTY_SKELETON_MODE
 
-#if WEB_TASK_STACK_LOG
+#if STACK_DIAG_TASK_STACK_HWM
         {
             const unsigned long nowMs = millis();
-            if (s_lastWebStackLogMs == 0 || (nowMs - s_lastWebStackLogMs) >= WEB_STACK_LOG_INTERVAL_MS) {
+            if (s_lastWebStackLogMs == 0) {
                 s_lastWebStackLogMs = nowMs;
-                Serial.printf("[STACK][Web] HWM=%u bytes (periodic)\n",
-                              (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
+            } else if ((nowMs - s_lastWebStackLogMs) >= WEB_STACK_LOG_INTERVAL_MS) {
+                s_lastWebStackLogMs = nowMs;
+                Serial.printf("[STACK][Web] HWM=%u bytes (periodic)\n", stackDiagHwmBytes());
             }
         }
 #endif
@@ -10990,6 +11634,7 @@ void webTask(void *parameter)
 #endif
         vTaskDelayUntil(&lastWakeTime, periodTicks);
     }
+#endif  // !WEBTASK_PRESENT_BUT_INERT_TEST
 }
 
 void loop()
@@ -11038,9 +11683,30 @@ void loop()
             }
 
             if (lastMqttReconnectAttempt == 0 || (now - lastMqttReconnectAttempt >= reconnectInterval)) {
-                lastMqttReconnectAttempt = now;
-                mqttReconnectAttemptCount++;
-                connectMQTT();
+                if (s_postTaskApiSuccessCount < 3) {
+                    static unsigned long s_mqttGateSkipLogReconnectMs = 0;
+                    if (s_mqttGateSkipLogReconnectMs == 0 ||
+                        (now - s_mqttGateSkipLogReconnectMs) >= 5000UL) {
+                        s_mqttGateSkipLogReconnectMs = now;
+                        Serial.printf(
+                            F("[MQTTGATE] skip connectMQTT at caller (%u/3)\n"),
+                            (unsigned)s_postTaskApiSuccessCount);
+                    }
+                } else {
+                    lastMqttReconnectAttempt = now;
+                    mqttReconnectAttemptCount++;
+                    static bool s_mqttSrcLoopReconnectLogged = false;
+                    if (!s_mqttSrcLoopReconnectLogged) {
+                        s_mqttSrcLoopReconnectLogged = true;
+                        Serial.printf(
+                            "[MQTTSRC] caller=loop/reconnect task=arduino_loop core=%d entering\n",
+                            (int)xPortGetCoreID());
+                        if (s_mqttInitialOrchestrationDone) {
+                            Serial.println(F("[MQTTSRC] connectMQTT allowed by orchestration flag"));
+                        }
+                    }
+                    connectMQTT();
+                }
             }
         }
     }
@@ -11185,7 +11851,29 @@ void loop()
                 }
                 // Probeer MQTT reconnect na WiFi reconnect
                 if (!mqttConnected) {
-                    connectMQTT();
+                    if (s_postTaskApiSuccessCount < 3) {
+                        static unsigned long s_mqttGateSkipLogWifiMs = 0;
+                        const unsigned long nw = millis();
+                        if (s_mqttGateSkipLogWifiMs == 0 ||
+                            (nw - s_mqttGateSkipLogWifiMs) >= 5000UL) {
+                            s_mqttGateSkipLogWifiMs = nw;
+                            Serial.printf(
+                                F("[MQTTGATE] skip connectMQTT at caller (%u/3)\n"),
+                                (unsigned)s_postTaskApiSuccessCount);
+                        }
+                    } else {
+                        static bool s_mqttSrcWifiReconnectLogged = false;
+                        if (!s_mqttSrcWifiReconnectLogged) {
+                            s_mqttSrcWifiReconnectLogged = true;
+                            Serial.printf(
+                                "[MQTTSRC] caller=loop/wifi_reconnect task=arduino_loop core=%d entering\n",
+                                (int)xPortGetCoreID());
+                            if (s_mqttInitialOrchestrationDone) {
+                                Serial.println(F("[MQTTSRC] connectMQTT allowed by orchestration flag"));
+                            }
+                        }
+                        connectMQTT();
+                    }
                 }
             } else {
                 Serial.printf("[WiFi] Reconnect timeout (poging %u)\n", reconnectAttemptCount);

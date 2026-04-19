@@ -30,6 +30,94 @@
 #define DEBUG_BUTTON_ONLY 0
 #endif
 
+// Forensische stack-HWM + boot stackgroottes ([STACKCFG] / [STACK][Web|UI|API|PriceRepeat]). Alleen Serial — geen timing/netwerk/gedrag.
+#ifndef STACK_DIAG_TASK_STACK_HWM
+#define STACK_DIAG_TASK_STACK_HWM 1
+#endif
+
+// Optioneel: per-task stack override (bytes) voor root-cause-diagnose. Alleen definiëren als build-flag of tijdelijk hier.
+// Voorbeeld: #define TASK_STACK_OVERRIDE_WEB 8192
+
+// --- WebServer runtime forensics ([WEBTRACE]) — alleen Serial/timing; geen netwerkrefactor ---
+// 1: vóór/na server->handleClient(), dt, eerste 10 iteraties, post client.connected/available (Arduino WebServer API).
+#ifndef WEBTRACE_HANDLECLIENT_FORENSICS
+#define WEBTRACE_HANDLECLIENT_FORENSICS 1
+#endif
+// 1: luisterende server + routes blijven actief; server->handleClient() wordt niet aangeroepen (no-op pad).
+#ifndef WEBTRACE_HANDLECLIENT_NOOP
+#define WEBTRACE_HANDLECLIENT_NOOP 0
+#endif
+// >0: eerste echte server->handleClient() pas zoveel ms na eerste webTask-moment dat WiFi=connected (anchor via markWebTraceWifiSteadyMs).
+// Diagnose A/B: 15000 — flatliner vóór vs ná eerste toegestane service-call.
+#ifndef WEBTRACE_FIRST_SERVICE_DELAY_MS
+#define WEBTRACE_FIRST_SERVICE_DELAY_MS 0UL
+#endif
+// >0: server->begin() (luistersocket) uitgesteld; één keer in webTask na zelfde anchor + delay. 0 = direct in setupWebServer().
+#ifndef WEBTRACE_DELAY_SERVER_BEGIN_MS
+#define WEBTRACE_DELAY_SERVER_BEGIN_MS 0UL
+#endif
+// 1: server->handleClient() serialiseren met dezelfde gNetMutex als API/WS (causale A/B).
+// Diagnosebuild: aan — zet op 0 voor productie zonder gated handleClient.
+#ifndef WEBTRACE_SERIALIZE_HANDLECLIENT_WITH_NET_GATE
+#define WEBTRACE_SERIALIZE_HANDLECLIENT_WITH_NET_GATE 0
+#endif
+// 1: bij lock van gNetMutex [NETWAIT] loggen voor WebServer + fetchBitvavoPrice (wait_us sinds lock-start).
+#ifndef NET_MUTEX_LOG_WAIT_DIAG
+#define NET_MUTEX_LOG_WAIT_DIAG 0
+#endif
+
+// 1: webTask draait met zelfde core/priority/wake; geen markWebTraceWifiSteadyMs / pollDeferredServerBegin / handleClient (causale A/B).
+#ifndef WEBTASK_EMPTY_SKELETON_MODE
+#define WEBTASK_EMPTY_SKELETON_MODE 0
+#endif
+
+// 1: webTask tijdelijk op Core 1 pinnen (alleen xTaskCreatePinnedToCore core-arg; zelfde stack/priority/skeleton-loop) — causale A/B vs Core-0-belasting.
+#ifndef WEBTASK_FORCE_CORE1_FOR_DIAG
+#define WEBTASK_FORCE_CORE1_FOR_DIAG 0
+#endif
+
+// Dummy_Task A/B — expliciet gezet (geen #ifndef), zodat delete niet stiekem 1 blijft. Block-forever test: zie DUMMYTASKCFG + [Dummy Task] EFFECTIVE_*.
+#define EXTRA_DUMMY_TASK_DIAG 0
+#define DUMMY_TASK_SUSPEND_IMMEDIATELY_DIAG 0
+#define DUMMY_TASK_DELETE_IMMEDIATELY_DIAG 0
+#define DUMMY_TASK_BLOCK_FOREVER_DIAG 0
+
+#if EXTRA_DUMMY_TASK_DIAG \
+    && ((DUMMY_TASK_SUSPEND_IMMEDIATELY_DIAG) + (DUMMY_TASK_DELETE_IMMEDIATELY_DIAG) \
+        + (DUMMY_TASK_BLOCK_FOREVER_DIAG) > 1)
+#error "Max. één van: DUMMY_TASK_SUSPEND_IMMEDIATELY_DIAG, DUMMY_TASK_DELETE_IMMEDIATELY_DIAG, DUMMY_TASK_BLOCK_FOREVER_DIAG op 1."
+#endif
+
+// 1: minimale inline-diagnose in priceRepeatTask i.p.v. Dummy_Task/Web_Task (causale A/B vs extra task-entiteit).
+#ifndef INLINE_DUMMY_IN_PRICEREPEAT_DIAG
+#define INLINE_DUMMY_IN_PRICEREPEAT_DIAG 0
+#endif
+#if INLINE_DUMMY_IN_PRICEREPEAT_DIAG && EXTRA_DUMMY_TASK_DIAG
+#error "INLINE_DUMMY_IN_PRICEREPEAT_DIAG en EXTRA_DUMMY_TASK_DIAG sluiten elkaar uit (zet EXTRA_DUMMY_TASK_DIAG op 0 voor deze test)."
+#endif
+
+// 1: geen aparte webTask; handleClient-scheduler in priceRepeatTask (JC3248 proef). 0 = klassieke webTask.
+#ifndef WEB_RUNTIME_INLINE_IN_PRICE_TASK
+#define WEB_RUNTIME_INLINE_IN_PRICE_TASK 1
+#endif
+// 1: serviceWebServerInlineSlice() volgt cadans maar roept geen handleClient() aan (A/B vs echte service). Alleen met WEB_RUNTIME_INLINE_IN_PRICE_TASK.
+#ifndef WEBTRACE_HANDLECLIENT_NOOP_INLINE_TEST
+#define WEBTRACE_HANDLECLIENT_NOOP_INLINE_TEST 1
+#endif
+// 1: priceRepeatTask roept serviceWebServerInlineSlice() niet aan — A/B: 200 ms wake-loop vs inline helper (NOOP/handleClient uit).
+#ifndef WEB_RUNTIME_INLINE_SKIP_SERVICE_SLICE_TEST
+#define WEB_RUNTIME_INLINE_SKIP_SERVICE_SLICE_TEST 1
+#endif
+// 1: priceRepeatTask = originele 1 Hz vTaskDelay-loop (geen 200 ms wake); nog steeds geen webTask als WEB_RUNTIME_INLINE_IN_PRICE_TASK=1.
+#ifndef PRICE_REPEAT_CLASSIC_LOOP_TEST
+#define PRICE_REPEAT_CLASSIC_LOOP_TEST 1
+#endif
+// 1: klassieke task-topologie met webTask, maar webTask direct suspend — A/B vs geen webTask-entiteit.
+#ifndef WEBTASK_PRESENT_BUT_INERT_TEST
+#define WEBTASK_PRESENT_BUT_INERT_TEST 1
+#endif
+// Tijdens inline-web-proef: INLINE_DUMMY_IN_PRICEREPEAT_DIAG op 0 voor schone logs (anders blijft [INLINECFG] aan staan).
+
 // --- NTFY runtime-diagnostiek (Fase 1 tracker) ---
 // Master-vlag: op 1 = o.a. NTFY “Reboot / setup compleet” na boot + optionele WS-live health ping (zie .ino).
 // Periodic test blijft uit tenzij je CRYPTO_ALERT_NTFY_PERIODIC_TEST op 1 zet in ESP32-Crypto-Alert.ino.
@@ -40,7 +128,7 @@
 
 // --- Boot / WAN-isolatie (A/B-diagnose; productietestbuild: alles uit / normaal gedrag) ---
 #ifndef BOOT_DIAG_DISABLE_MQTT_START
-#define BOOT_DIAG_DISABLE_MQTT_START 1
+#define BOOT_DIAG_DISABLE_MQTT_START 0
 #endif
 #ifndef BOOT_DIAG_DISABLE_NTFY_STARTUP_TEST
 #define BOOT_DIAG_DISABLE_NTFY_STARTUP_TEST 0
@@ -48,9 +136,40 @@
 #ifndef BOOT_DIAG_DISABLE_WEB_TASK
 #define BOOT_DIAG_DISABLE_WEB_TASK 0
 #endif
+// JC3248 fase 2 log 48: 1 = geen staged WS boot vanuit apiTask (maybeInitWebSocketAfterWarmStart); 0 = normaal.
 #ifndef BOOT_DIAG_DISABLE_WS_BOOT_START
-#define BOOT_DIAG_DISABLE_WS_BOOT_START 0
+#define BOOT_DIAG_DISABLE_WS_BOOT_START 1
 #endif
+
+// JC3248 fase 2: 1 = setup() slaat post-task BootNet-staging over (s_bootFlowEpochMs / WS-gate / mqtt orchestration flag).
+// 0 = normaal. Standaard 1 voor causale proef; zet op 0 voor productie.
+#ifndef BOOTNET_POSTTASK_ORCHESTRATION_DISABLE_TEST
+#define BOOTNET_POSTTASK_ORCHESTRATION_DISABLE_TEST 1
+#endif
+// Alleen met BOOTNET_POSTTASK_ORCHESTRATION_DISABLE_TEST==1: zet alleen s_mqttInitialOrchestrationDone=true (geen epoch/WS-gate).
+// 0 = volledig orchestration uit (log 46-pad). 1 = causale proef op MQTT-vlag alleen.
+#ifndef BOOTNET_POSTTASK_MQTT_FLAG_ONLY_TEST
+#define BOOTNET_POSTTASK_MQTT_FLAG_ONLY_TEST 1
+#endif
+
+// JC3248 log 49: 1 = geen post-task REST 1m/5m kline in updateLatestKlineMetricsIfNeeded (apiTask). 0 = normaal;
+// post-task kline gebruikt daarnaast [KLINEGATE] (5 REST price-OK’s) vóór eerste candle-REST.
+#ifndef BOOTTEST_SUPPRESS_POSTTASK_KLINE_REST
+#define BOOTTEST_SUPPRESS_POSTTASK_KLINE_REST 1
+#endif
+
+// JC3248 log 51 / log 55 langdurige controle: 1 = connectMQTT() returnt direct (geen TCP-connect); 0 = normaal.
+#ifndef BOOTTEST_SUPPRESS_POSTTASK_MQTT_CONNECT
+#define BOOTTEST_SUPPRESS_POSTTASK_MQTT_CONNECT 1
+#endif
+
+// JC3248 log 58: 1 = geen boot-defer van NTFY-exclusive (geen [BOOTFLOW] deferred… + geen 8s log); ga zo mogelijk naar [NTFY][EXCL].
+#ifndef BOOTTEST_SUPPRESS_NTFY_EXCLUSIVE_DEFERRED_PATH
+#define BOOTTEST_SUPPRESS_NTFY_EXCLUSIVE_DEFERRED_PATH 1
+#endif
+
+// Fase-2 transportprobe (log 67+): macro’s in TransportDiagFetchPrice.h — incl. TRANSPORT_DIAG_FETCHPRICE_STREAM (streamlaag onder GET).
+#include "TransportDiagFetchPrice.h"
 
 // Periodieke LAN vs WAN netwerkdiagnose ([NETDIAG2] in Serial). Productietestbuild: uit.
 #ifndef CRYPTO_ALERT_NETDIAG2_ENABLED
@@ -78,7 +197,16 @@
 
 // A/B: setupWebServer() registreert geen routes en roept geen server->begin() — handleClient() kan nog wel draaien.
 #ifndef BOOT_DIAG_DISABLE_WEBSERVER_INIT
-#define BOOT_DIAG_DISABLE_WEBSERVER_INIT 1
+#define BOOT_DIAG_DISABLE_WEBSERVER_INIT 0
+#endif
+// A/B: routes + onNotFound wel, alleen server->begin() overslaan (geen listen socket). Alleen als INIT=0 actief is.
+#ifndef BOOT_DIAG_DISABLE_WEBSERVER_BEGIN
+#define BOOT_DIAG_DISABLE_WEBSERVER_BEGIN 0
+#endif
+
+// A/B: grafiekkleur-modus + handmatige kleur in WebUI (form + status + save) — default uit voor isolatie-test.
+#ifndef BOOT_DIAG_DISABLE_WEBUI_COLOR_FEATURE
+#define BOOT_DIAG_DISABLE_WEBUI_COLOR_FEATURE 0
 #endif
 
 // A/B: vroege candle-REST alleen na vaste tijd sinds s_bootFlowEpochMs (geen vrijgave via WS-ticker in deze test).
