@@ -83,6 +83,48 @@ struct MarketSnapshot {
     uint32_t ws_gap_sec_since_last_trade{0};
     /** RWS-02: lokale monotoon tijdstip laatste trade (ms, esp_timer_get_time/1000); 0 = nog geen trade. */
     int64_t ws_last_trade_local_ms{0};
+
+    /**
+     * RWS-03: laatste **voltooide** wandklok-seconde — aggregate uit **trade**-events (parallel; niet de officiële ticker-prijs).
+     * `wall_sec` = monotoon seconde-id (zelfde basis als interne WS-stats).
+     */
+    uint64_t ws_second_agg_wall_sec{0};
+    bool ws_second_agg_has_trades{false};
+    uint32_t ws_second_agg_trade_count{0};
+    double ws_second_agg_first_eur{0.0};
+    double ws_second_agg_last_eur{0.0};
+    double ws_second_agg_min_eur{0.0};
+    double ws_second_agg_max_eur{0.0};
+    /** Arithmetic mean trade price wanneer `has_trades`; anders 0. */
+    double ws_second_agg_mean_eur{0.0};
+    /** Minstens één canonical ticker-tick in die seconde (aanvullende context). */
+    bool ws_second_agg_ticker_seen{false};
+    uint32_t ws_second_agg_canonical_ticks{0};
+    uint16_t ws_second_ring_capacity{0};
+    uint16_t ws_second_ring_used{0};
+    uint32_t ws_second_ring_writes_total{0};
+
+    /**
+     * RWS-05: parallel **ticker24h**-kanaal (heartbeat/bronzichtbaarheid) — **niet** de officiële prijsbron;
+     * `last_tick` / `apply_price` blijft **ticker** (`bitvavo_ticker_ws_v1`).
+     */
+    int64_t ws_last_ticker24h_local_ms{0};
+    uint32_t ws_ticker24h_msgs_total{0};
+    /** RWS-05: events in de **afgelopen voltooide** wandklok-seconde (zoals andere WS-tellers). */
+    uint32_t ws_ticker24h_events_last_sec{0};
+    uint32_t ws_gap_sec_since_last_ticker24h{0};
+    bool ws_ticker24h_seen_recently{false};
+    /** Laatst geparste `"last"` uit ticker24h (alleen observability; niet `last_tick`). */
+    double ws_ticker24h_last_eur{0.0};
+    /**
+     * RWS-05: feed-health / heartbeat-redencode — o.a. `ok`, `canonical_gap_24h_alive`, `feed_stale`
+     * (canonical-gap ≥12 s logica; geen alert-policy).
+     */
+    char ws_heartbeat_reason_code[24]{};
+    /**
+     * RWS-05: leesbare bron/heartbeat — o.a. `canonical_ticker_ws`, `ticker24h_secondary_heartbeat`, `stale`.
+     */
+    char ws_heartbeat_source_visibility[40]{};
 };
 
 /**

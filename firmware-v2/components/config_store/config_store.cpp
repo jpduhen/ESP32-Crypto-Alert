@@ -20,6 +20,8 @@ static const char KEY_SVC_WUI_EN[] = "svc_wui_en";
 static const char KEY_SVC_WUI_PT[] = "svc_wui_pt";
 static const char KEY_SVC_MQ_EN[] = "svc_mqtt_en";
 static const char KEY_SVC_MQ_URI[] = "svc_mqtt_uri";
+static const char KEY_SVC_MQ_USR[] = "svc_mqtt_user";
+static const char KEY_SVC_MQ_PW[] = "svc_mqtt_pw";
 static const char KEY_SVC_NT_EN[] = "svc_ntfy_en";
 static const char KEY_SVC_NT_TP[] = "svc_ntfy_tp";
 
@@ -78,6 +80,20 @@ static void service_apply_kconfig_defaults(ServiceRuntimeConfig &s)
     s.mqtt_broker_uri[0] = '\0';
 #endif
     s.mqtt_broker_uri[sizeof(s.mqtt_broker_uri) - 1] = '\0';
+
+#if defined(CONFIG_MQTT_BRIDGE_USER)
+    strncpy(s.mqtt_username, CONFIG_MQTT_BRIDGE_USER, sizeof(s.mqtt_username) - 1);
+#else
+    s.mqtt_username[0] = '\0';
+#endif
+    s.mqtt_username[sizeof(s.mqtt_username) - 1] = '\0';
+
+#if defined(CONFIG_MQTT_BRIDGE_PASSWORD)
+    strncpy(s.mqtt_password, CONFIG_MQTT_BRIDGE_PASSWORD, sizeof(s.mqtt_password) - 1);
+#else
+    s.mqtt_password[0] = '\0';
+#endif
+    s.mqtt_password[sizeof(s.mqtt_password) - 1] = '\0';
 
 #ifdef CONFIG_NTFY_CLIENT_ENABLE
     s.ntfy_enabled = CONFIG_NTFY_CLIENT_ENABLE;
@@ -233,6 +249,17 @@ static void load_service_overlay(nvs_handle_t h, ServiceRuntimeConfig &s)
     e = nvs_get_str(h, KEY_SVC_MQ_URI, s.mqtt_broker_uri, &sz);
     if (e != ESP_OK && e != ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGW(DIAG_TAG_CFG, "nvs_get_str svc_mqtt_uri: %s", esp_err_to_name(e));
+    }
+
+    sz = sizeof(s.mqtt_username);
+    e = nvs_get_str(h, KEY_SVC_MQ_USR, s.mqtt_username, &sz);
+    if (e != ESP_OK && e != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(DIAG_TAG_CFG, "nvs_get_str svc_mqtt_user: %s", esp_err_to_name(e));
+    }
+    sz = sizeof(s.mqtt_password);
+    e = nvs_get_str(h, KEY_SVC_MQ_PW, s.mqtt_password, &sz);
+    if (e != ESP_OK && e != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(DIAG_TAG_CFG, "nvs_get_str svc_mqtt_pw: %s", esp_err_to_name(e));
     }
 
     e = nvs_get_u8(h, KEY_SVC_NT_EN, &u8v);
@@ -391,7 +418,8 @@ static bool svc_string_ok(const char *s)
 
 esp_err_t persist_service_connectivity(const ServiceRuntimeConfig &mqtt_ntfy)
 {
-    if (!svc_string_ok(mqtt_ntfy.mqtt_broker_uri) || !svc_string_ok(mqtt_ntfy.ntfy_topic)) {
+    if (!svc_string_ok(mqtt_ntfy.mqtt_broker_uri) || !svc_string_ok(mqtt_ntfy.ntfy_topic) ||
+        !svc_string_ok(mqtt_ntfy.mqtt_username) || !svc_string_ok(mqtt_ntfy.mqtt_password)) {
         ESP_LOGW(DIAG_TAG_CFG, "M-013b: mqtt/ntfy string bevat ongeldige tekens");
         return ESP_ERR_INVALID_ARG;
     }
@@ -400,17 +428,15 @@ esp_err_t persist_service_connectivity(const ServiceRuntimeConfig &mqtt_ntfy)
         return ESP_ERR_INVALID_ARG;
     }
     if (strlen(mqtt_ntfy.mqtt_broker_uri) >= kMqttBrokerUriMax ||
-        strlen(mqtt_ntfy.ntfy_topic) >= kNtfyTopicMax) {
+        strlen(mqtt_ntfy.ntfy_topic) >= kNtfyTopicMax ||
+        strlen(mqtt_ntfy.mqtt_username) >= kMqttUserMax ||
+        strlen(mqtt_ntfy.mqtt_password) >= kMqttPassMax) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    ServiceRuntimeConfig next = g_service_cache;
-    next.mqtt_enabled = mqtt_ntfy.mqtt_enabled;
-    strncpy(next.mqtt_broker_uri, mqtt_ntfy.mqtt_broker_uri, sizeof(next.mqtt_broker_uri) - 1);
-    next.mqtt_broker_uri[sizeof(next.mqtt_broker_uri) - 1] = '\0';
-    next.ntfy_enabled = mqtt_ntfy.ntfy_enabled;
-    strncpy(next.ntfy_topic, mqtt_ntfy.ntfy_topic, sizeof(next.ntfy_topic) - 1);
-    next.ntfy_topic[sizeof(next.ntfy_topic) - 1] = '\0';
+    ServiceRuntimeConfig next = mqtt_ntfy;
+    next.webui_enabled = g_service_cache.webui_enabled;
+    next.webui_port = g_service_cache.webui_port;
 
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
@@ -427,6 +453,12 @@ esp_err_t persist_service_connectivity(const ServiceRuntimeConfig &mqtt_ntfy)
     }
     if (err == ESP_OK) {
         err = nvs_set_str(h, KEY_SVC_MQ_URI, next.mqtt_broker_uri);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_str(h, KEY_SVC_MQ_USR, next.mqtt_username);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_str(h, KEY_SVC_MQ_PW, next.mqtt_password);
     }
     if (err == ESP_OK) {
         err = nvs_set_u8(h, KEY_SVC_NT_EN, nt_en);

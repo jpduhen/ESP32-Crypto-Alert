@@ -172,7 +172,7 @@ De huidige V1 blijft belangrijk als:
 
 **WP-03a (V1-gap / alert-scope):** samenvatting, gap-matrix en consolidatie-roadmap **C1–C5** in § **WP-03a**; besluit **D-010**. **C1** afgerond (§ **C1**); **C2** randgevallen: **[C2_EDGE_CASES_1M5M.md](../../docs/architecture/C2_EDGE_CASES_1M5M.md)**; **C3** mini-regime (§ **C3**).
 
-**RWS (rijkere Bitvavo WS-marktdata):** parallel spoor — § **RWS**; **RWS-01** instrumentatie; **RWS-02** `trades` + bounded ring + `ws_trades_observability` (zie § **RWS**).
+**RWS (rijkere Bitvavo WS-marktdata):** parallel spoor — § **RWS**; **RWS-01** instrumentatie; **RWS-02** `trades` + bounded ring + `ws_trades_observability`; **RWS-03** `second_aggregate` + `ws_second_observability`; **RWS-04** optionele `domain_metrics`-ingang + `metrics_input_observability`; **RWS-04b** A/B + large-delta observability + `[RWS04AB]` (zie § **RWS**).
 
 \
 
@@ -836,7 +836,7 @@ Gebruik dit hoofdstuk als formeel geheugen van gemaakte keuzes.
 
 **Consequenties:** **M-010** blijft “kern herschreven”; vervolg = kwaliteit + gefaseerde TF-uitbreiding. Zie § **WP-03a** voor matrix en C1–C5.
 
-**Actiepunten:** C1–C5 uitvoeren (**C5** = roadmap **30m/2h** vastgelegd in **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**); **implementatie** van **30m/2h**-verticale slices (metrics → engine → outbound): **S30-1**–**S30-3** + **S2H-1**–**S2H-3** **afgerond** (§ **S30-1**–§ **S30-3**, § **S2H-1**–§ **S2H-3**); **productierijpheid:** **[PR01_RELEASE_READINESS_BASELINE.md](../../docs/architecture/PR01_RELEASE_READINESS_BASELINE.md)** + **[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**; **eerstvolgende uitvoering:** runs invullen + **PR-03** …
+**Actiepunten:** C1–C5 uitvoeren (**C5** = roadmap **30m/2h** vastgelegd in **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**); **implementatie** van **30m/2h**-verticale slices (metrics → engine → outbound): **S30-1**–**S30-3** + **S2H-1**–**S2H-3** **afgerond** (§ **S30-1**–§ **S30-3**, § **S2H-1**–§ **S2H-3**); **productierijpheid:** **[PR01](../../docs/architecture/PR01_RELEASE_READINESS_BASELINE.md)** + **[PR02](../../docs/architecture/PR02_TEST_MATRIX.md)** + **[PR03](../../docs/architecture/PR03_BLOCKERS_KNOWN_ISSUES.md)** + **[PR04](../../docs/architecture/PR04_RC_CHECKLIST.md)**; **eerstvolgende uitvoering:** **RC-go** (checklist invullen, o.a. **PR02-RUN-002**) …
 
 **Status:** besloten; **koers** t.o.v. 30m/2h hierboven **aangescherpt** t.o.v. eerdere formulering (“uitgesteld” ≠ “afgewezen als productdoel”).
 
@@ -1002,7 +1002,7 @@ Dat plaatst het project in een **eerste geïntegreerde beta-/consolidatiefase**:
 
 | **Observability / beheer** | Ver gevorderd: WebUI-status, alert-/regime-observability, OTA-info, gerichte JSON-writes. |
 
-| **Productierijpheid** | **PR-01** baseline + **PR-02** testmatrix (**[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**) vastgelegd; release-doel, TM-01…TM-09, run-template. **Hardware-invulling** van runs + **PR-03** (blockers/known issues) volgt (zie § **9a** werkpakket 5). |
+| **Productierijpheid** | **PR-01**–**PR-04** vastgelegd (**[PR04_RC_CHECKLIST.md](../../docs/architecture/PR04_RC_CHECKLIST.md)**): RC-checklist + PR03-koppeling. **Open voor echte RC-go:** veld **PR02-RUN-002** + TM-08/TM-09 PASS of N/A ([PR04 §10](../../docs/architecture/PR04_RC_CHECKLIST.md#10-wat-nog-open-is-voor-echte-rc-go-samenvatting)). **Eerstvolgende uitvoering:** **RC-go** (checklist + tag-besluit) — zie § **9a** werkpakket 5. |
 
 | **Multi-board** | Nog niet: **GEEK** is referentie; **JC3248W535** / **LCDWIKI** horen in een **apart** pakket, niet “erbij” in kleine haakjes. |
 
@@ -1024,9 +1024,9 @@ Geen vervanging van de migratiematrix, wel **samenhangende blokken** i.p.v. een 
 
 4. **Alert-engine consolidatie** — roadmap **C1–C5** (§ **WP-03a**) op de **1m/5m-kern**. **C1** afgerond; **C2** randgevallen-doc + observability (§ **C2**); **C3** mini-regime review (§ **C3**); **C4** NTFY/MQTT-consistentie afgerond (§ **C4**); **C5** roadmap **30m/2h** vastgelegd (**[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**). **Implementatie** TF-uitbreiding: verticale slices (**S30-1** … **S2H-3**), geen feature-explosie.
 
-4b. **RWS — parallel** (§ **RWS**) — **RWS-01** + **RWS-02** afgerond (ticker+`trades` subscribe, bounded trade-ring, read-only observability); **RWS-03+** = SecondSampler/aggregate (geen conflict met C3-volgorde tenzij herprioriteerd).
+4b. **RWS — parallel** (§ **RWS**) — **RWS-01** … **RWS-03** afgerond (ticker+`trades`, trade-ring, **`second_aggregate`** + `ws_second_observability`); **RWS-04+** = optionele `domain_metrics`-koppeling (geen conflict met C3-volgorde tenzij herprioriteerd).
 
-5. **Productierijpheid / operatie / test- en releasekwaliteit** — **PR-01** baseline (**[PR01_RELEASE_READINESS_BASELINE.md](../../docs/architecture/PR01_RELEASE_READINESS_BASELINE.md)**) + **PR-02** uitgewerkt (**[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**): uitvoerbare matrix TM-01…TM-09 + eerste-invulrun-template (GEEK, `v2/foundation`). **Vervolg:** hardware-runs invullen + **PR-03** blockers/known issues afdwingen → **PR-04** RC-checklist / eerste candidate. Geen brede CI-herbouw tenzij no-regret.
+5. **Productierijpheid / operatie / test- en releasekwaliteit** — **PR-01** … **PR-04** (**[PR04_RC_CHECKLIST.md](../../docs/architecture/PR04_RC_CHECKLIST.md)**): TM-01…TM-09, **PR02-RUN-001**, PR03-register, **RC-checklist**. **Nog open voor RC-tag:** PR03-exit (§6 PR04) + aanbevolen **PR02-RUN-002**. **Daarna:** tag / release notes ([PR04 §11](../../docs/architecture/PR04_RC_CHECKLIST.md#11-wat-logisch-volgt-na-pr-04-document)). Geen brede CI-herbouw tenzij no-regret.
 
 6. **Extra boards (JC3248W535 / LCDWIKI)** — BSP/flash/display **na** besluit; los trekken van GEEK-consolidatie.
 
@@ -1054,11 +1054,11 @@ Geen vervanging van de migratiematrix, wel **samenhangende blokken** i.p.v. een 
 
 2. **M-002 hardening-batch** — **afgerond** (**§ M-002h**); `M002_NETWORK_BOUNDARIES.md` bijgewerkt.
 
-3. **Consolidatie + V1-gap review** — **stuurversie vastgelegd** (**§ WP-03a**, **D-010**); **C1**–**C5** afgerond. **S30-1**–**S30-3** + **S2H-1**–**S2H-3** afgerond (§ **S30-1**–§ **S30-3**, § **S2H-1**–§ **S2H-3**). **Productierijpheid:** **PR-01** + **PR-02** vastgelegd (**[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**); **eerstvolgende uitvoering:** testruns invullen + **PR-03**. Geen nieuwe WebUI-settings in consolidatiefase tenzij apart besloten.
+3. **Consolidatie + V1-gap review** — **stuurversie vastgelegd** (**§ WP-03a**, **D-010**); **C1**–**C5** afgerond. **S30-1**–**S30-3** + **S2H-1**–**S2H-3** afgerond (§ **S30-1**–§ **S30-3**, § **S2H-1**–§ **S2H-3**). **Productierijpheid:** **PR-01**–**PR-04** (**[PR04_RC_CHECKLIST.md](../../docs/architecture/PR04_RC_CHECKLIST.md)**); **eerstvolgende uitvoering:** **RC-go** op checklist. Geen nieuwe WebUI-settings in consolidatiefase tenzij apart besloten.
 
-4. **RWS** (§ **RWS**) — parallel; **RWS-01** + **RWS-02** read-only (`ws_feed_observability`, `ws_trades_observability`); **geen** alert-semantiek-wijziging; officiële prijs ongewijzigd ticker-gebaseerd.
+4. **RWS** (§ **RWS**) — parallel; **RWS-01** … **RWS-03** read-only (`ws_feed_observability`, `ws_trades_observability`, `ws_second_observability`); **geen** alert-semantiek-wijziging; officiële prijs ongewijzigd ticker-gebaseerd.
 
-5. **Productierijpheid** (test, release, operatie) — **PR-01** + **PR-02** vastgelegd (**[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**); **eerstvolgende stap:** runs invullen op GEEK + **PR-03** (blockers/known issues); zie § **9a** werkpakket 5 en § **15**.
+5. **Productierijpheid** (test, release, operatie) — **PR-01**–**PR-04** (**[PR04_RC_CHECKLIST.md](../../docs/architecture/PR04_RC_CHECKLIST.md)**); **eerstvolgende stap:** **RC-go** (veld + checklist); zie § **9a** werkpakket 5 en § **15**.
 
 6. **Werkdocument en migratiematrix** bijwerken op **werkpakket**-niveau (§ **9a**), niet alleen losse M-nummers.
 
@@ -1436,6 +1436,8 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 * risico dat WebUI en config te breed blijven
 
+* **PR-02 / PR-03 (veld + run + beslislaag):** WebUI **`GET /`** — **HTTP 500** `overflow` na langere uptime (bevinding **PR02-BF-001**, **PR02-RUN-001**): cumulatieve HTML overschreed vaste buffer; server bleef op poort luisteren. **Mitigatie in firmware:** grotere `k_html_alloc` + diagnostische log. **`/api/status.json`** ander pad (`cJSON_Print`). **Classificatie / exit:** **[PR03_BLOCKERS_KNOWN_ISSUES.md](../../docs/architecture/PR03_BLOCKERS_KNOWN_ISSUES.md)** (P1 tot TM-07 soak-PASS of acceptatie); structureel optioneel later chunked/limieten.
+
 * risico dat technische schuld uit V1 ongemerkt mee verhuist
 
 * risico dat te veel tegelijk wordt opgepakt zonder duidelijke integratiestappen
@@ -1522,11 +1524,11 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 3. **Afgerond:** **V1-gap / scope** (**§ WP-03a**, **D-010**) — **C1**–**C5** afgerond; **S30-1**–**S30-3** + **S2H-1**–**S2H-3** **afgerond** (§ **S30-1**–§ **S30-3**, § **S2H-1**–§ **S2H-3**).
 
-4. **Nu (productierijpheid — subfasen):** **PR-01** baseline (**[PR01_RELEASE_READINESS_BASELINE.md](../../docs/architecture/PR01_RELEASE_READINESS_BASELINE.md)**) + **PR-02** testmatrix **uitgewerkt** (**[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**): TM-01…TM-09, uitvoerbare stappen, invul-template en voorbeeldblok. **Eerstvolgende uitvoerbare substep:** minimaal **één** ingevulde run (§4 in PR-02) op **GEEK** + `v2/foundation`, daarna **PR-03** — blockers/known issues en go/no-go. Daarna: **PR-04** (RC-checklist / eerste candidate). **Parallel:** **RWS** (§ **RWS**); **RWS-03** — **niet** automatisch eerst.
+4. **Nu (productierijpheid — subfasen):** **PR-01**–**PR-04** vastgelegd (**[PR04_RC_CHECKLIST.md](../../docs/architecture/PR04_RC_CHECKLIST.md)**). **Eerstvolgende uitvoerbare substep:** **RC-go** — checklist §8 invullen; PR03-items sluiten of accepteren; **PR02-RUN-002** aanbevolen. **Parallel:** **RWS-04** (§ **RWS**) — **niet** automatisch blokkerend voor RC-go.
 
 \
 
-**Discipline:** geen tegenstrijdigheid tussen “kleine afronding” en “grote pakketten” — productierijpheid wordt **stap voor stap** toetsbaar gemaakt (PR-02…), niet alleen als intentie (§ **13**).
+**Discipline:** geen tegenstrijdigheid tussen “kleine afronding” en “grote pakketten” — productierijpheid wordt **stap voor stap** toetsbaar gemaakt (**PR-01** → **PR-02** → **PR-03** → **PR-04** → **RC-go**), niet alleen als intentie (§ **13**).
 
 \
 
@@ -1662,7 +1664,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 | **C4** | Notificatie-consistentie | **Afgerond:** uniforme NTFY-titels (`CryptoAlert V2 · <type> · UP/DOWN · symbool`); NTFY-bodyregel `Soort:` gelijk aan MQTT-`kind` (`alert_1m` / `alert_5m` / `alert_confluence_1m5m`); MQTT-JSON eerst `kind`, daarna `symbol`, `dir`, `price_eur`, pct-velden, `ts_ms` — zie § **C4** |
 
-| **C5** | Roadmap **30m / 2h** | **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**; **S30-1**–**S30-3** + **S2H-1**–**S2H-3** **afgerond**; **productierijpheid:** **[PR01](../../docs/architecture/PR01_RELEASE_READINESS_BASELINE.md)** + **[PR02](../../docs/architecture/PR02_TEST_MATRIX.md)** → **PR-03** … **PR-04** |
+| **C5** | Roadmap **30m / 2h** | **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**; **S30-1**–**S30-3** + **S2H-1**–**S2H-3** **afgerond**; **productierijpheid:** **[PR01](../../docs/architecture/PR01_RELEASE_READINESS_BASELINE.md)** … **[PR04](../../docs/architecture/PR04_RC_CHECKLIST.md)** → **RC-go** |
 
 \
 
@@ -1672,7 +1674,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 - **§11b M-010:** “herschrijven” = kern **aanwezig**; consolidatie = **kwaliteit + bewijs** — **C1–C5** (roadmap **30m/2h** als documentaire stap) afgerond; **implementatie** TF-uitbreiding volgt **verticale slices** (§ **C5**, **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)**); geen V1-import.
 
-- **§9a / §10 / §15:** **C1–C5** afgerond; **S30-1**–**S30-3** + **S2H-1**–**S2H-3** afgerond (§ **S30-1**–§ **S30-3**, § **S2H-1**–§ **S2H-3**); **productierijpheid** = **PR-01** + **PR-02** (**[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**) + uitvoering **PR-03**–**PR-04**; **geen** terugval naar V1-monoliet.
+- **§9a / §10 / §15:** **C1–C5** afgerond; **S30-1**–**S30-3** + **S2H-1**–**S2H-3** afgerond (§ **S30-1**–§ **S30-3**, § **S2H-1**–§ **S2H-3**); **productierijpheid** = **PR-01**–**PR-04** (**[PR04_RC_CHECKLIST.md](../../docs/architecture/PR04_RC_CHECKLIST.md)**) → **RC-go**; **geen** terugval naar V1-monoliet.
 
 \
 
@@ -1836,11 +1838,11 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Eerstvolgende grote lens:** **productierijpheid / releasekwaliteit** — 30m- en 2h-verticale slices zijn compleet; **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)** bijgewerkt; **PR-01** + **PR-02** (**[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**) vastgelegd; **eerstvolgende uitvoering:** ingevulde testrun(s) + **PR-03**. **RWS-03** blijft parallel en is **niet** automatisch de eerstvolgende bouwstap.
+**Eerstvolgende grote lens:** **productierijpheid / releasekwaliteit** — 30m- en 2h-verticale slices zijn compleet; **[C5_ROADMAP_30M_2H.md](../../docs/architecture/C5_ROADMAP_30M_2H.md)** bijgewerkt; **PR-01**–**PR-04** (**[PR04_RC_CHECKLIST.md](../../docs/architecture/PR04_RC_CHECKLIST.md)**); **eerstvolgende uitvoering:** **RC-go** (checklist + veld). **RWS-04** (optionele metrics-koppeling aggregate) blijft parallel en is **niet** automatisch de eerstvolgende bouwstap t.o.v. RC.
 
 \
 
-**Bewust niet in één keer combineren:** verdere TF-complexiteit (V1 2h-matrix, confluence 2h, …) vóór release-hardening; overmatige WebUI-uitbreiding; RWS-03 als impliciete blocker; extra boards.
+**Bewust niet in één keer combineren:** verdere TF-complexiteit (V1 2h-matrix, confluence 2h, …) vóór release-hardening; overmatige WebUI-uitbreiding; RWS-aggregate als impliciete RC-blocker zonder besluit; extra boards.
 
 \
 
@@ -2035,11 +2037,11 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
-**Bewust niet gedaan (S2H-3):** 2h-confluence; NVS-runtime voor 2h; dashboards/grafieken; RWS-03; AnchorSystem / TrendDetector; V1-port.
+**Bewust niet gedaan (S2H-3):** 2h-confluence; NVS-runtime voor 2h; dashboards/grafieken; AnchorSystem / TrendDetector; V1-port.
 
 \
 
-**Volgende stap:** ingevulde **PR-02**-run(s) op GEEK + **PR-03** (blockers/known issues) — zie **[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**; RWS-03 blijft parallel (zie § **RWS**).
+**Volgende stap:** **RC-go** — **[PR04_RC_CHECKLIST.md](../../docs/architecture/PR04_RC_CHECKLIST.md)** + **[PR03_BLOCKERS_KNOWN_ISSUES.md](../../docs/architecture/PR03_BLOCKERS_KNOWN_ISSUES.md)** + bijgewerkte **[PR02_TEST_MATRIX.md](../../docs/architecture/PR02_TEST_MATRIX.md)**-run(s) (o.a. **PR02-RUN-002**). **Parallel:** RWS-04 (optionele koppeling `domain_metrics` aan aggregate — zie § **RWS**).
 
 \
 
@@ -2061,9 +2063,9 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 | | **Nu (productiepad)** | **Beoogd (evolutie)** |
 |--|------------------------|-------------------------|
-| **Invoer** | Bitvavo **ticker**-kanaal → officiële prijs; **trades** parallel ingeschakeld (RWS-02), nog **niet** doorrekenen naar metrics | **ticker + trades** volledig benut (micro-events → aggregate RWS-03), bounded queues |
+| **Invoer** | Bitvavo **ticker** → officiële prijs; **trades** → ring (RWS-02) + **seconde-aggregate** (RWS-03); **`domain_metrics`** kan **optioneel** (Kconfig **RWS-04**) uit aggregate **trade mean** voeden met **fallback** naar bestaande ticker-canonical | **ticker + trades** volledig benut waar ingeschakeld; bounded queues; vergelijking/tuning/hardening als vervolg |
 | **Tijd** | Per-seconde **canonicalisatie** op WS-input (`domain_metrics` blijft 1 Hz-analysekern) | Zelfde **1 Hz officiële stroom** voor metrics/alerts; ruwe events **gescheiden** afgeleid |
-| **ticker24h** | Niet gebruikt als primaire bron | Hoogstens **heartbeat/fallback** (RWS-05) |
+| **ticker24h** | Niet gebruikt als primaire bron | **RWS-05 afgerond (firmware):** parallel subscribe + observability/heartbeat — **geen** `last_tick`-switch |
 | **book / Market Data Pro** | Niet | **Niet** als eerste productiestap |
 
 \
@@ -2076,7 +2078,7 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 2. **Alerts** draaien **niet** rechtstreeks op ruwe WS-events — alleen op de **bestaande** domein-/seconde-logica.
 
-3. De **1 Hz-officiële prijsstroom** (`market_data` → `domain_metrics` → `alert_engine`) blijft de **analysekern** tot expliciet besloten switch (RWS-04).
+3. De **1 Hz-analysekern** (`domain_metrics` → `alert_engine`) blijft; **officiële** `last_tick` blijft **ticker** (`apply_price`). **RWS-04** schakelt alleen de **metrics-ringbron** (optioneel aggregate **trade mean** + fallback), geen nieuwe alert-policy.
 
 4. **Trade-events** krijgen **prioriteit** boven tickers waar de ontwerpfase dat voorschrijft (**RWS-03+** voor aggregate/seconde-synthese). **RWS-02** vangt trades parallel (**bounded ring**); **officiële 1 Hz-prijs** blijft **ticker** (`apply_price`).
 
@@ -2092,9 +2094,10 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 |----|----------------|
 | **RWS-01** | **No-regret voorbereiding:** huidige **ticker-only** WS-route beter instrumenteren (raw vs canonical, gaps, bronlabel); logs `[WS_RX]` / `[WS_AGG]` / `[WS_GAP]`; **`ws_feed_observability`** in `status.json`. **Geen** trades-subscribe, **geen** wijziging alert-semantiek. |
 | **RWS-02** | **Afgerond:** `trades` parallel subscriben (zelfde WS als ticker); parse `"event":"trade"` → `WsRawTradeSample`; **bounded ring** (64, overwrite oudste); observability `ws_trades_observability` + logs `[WS_TRD_RX]` / `[WS_TRD_DROP]` / `[WS_TRD_GAP]`. **Niet:** geen koppeling aan `domain_metrics` / alerts. |
-| **RWS-03** | `SecondSampler` / `SecondAggregate` — officiële seconde uit events. |
-| **RWS-04** | Metrics **optioneel** laten lezen van nieuwe aggregate-serie (feature-flag / schakelbaar pad). |
-| **RWS-05** | `ticker24h` als heartbeat/fallback + **bronzichtbaarheid** in observability. |
+| **RWS-03** | **Afgerond (firmware):** `second_aggregate` — per voltooide wandklok-seconde trade-aggregate (count, first/last/min/max, mean), ticker alleen als context (`ticker_seen`, canonical ticks); bounded ring (32); **`ws_second_observability`** in `status.json` + compact op **`/`**; logs **`[WS_SEC]`** (DEBUG). **Niet:** geen verplichte koppeling `domain_metrics` (→ **RWS-04** optioneel). |
+| **RWS-04** | **Afgerond (firmware):** Kconfig `DOMAIN_METRICS_RWS04_SECOND_AGGREGATE` — `domain_metrics` 1 Hz-sample gebruikt bij **≥1 trade** in die seconde het **arithmetic mean** uit `second_aggregate` (ring-lookup); anders **fallback** naar bestaande **TWAP/carry** (ticker-canonical). Observability: **`metrics_input_observability`** in `status.json` + compact op **`/`**; logs **`[RWS04]`** (DEBUG bij fallback). **Niet:** geen wijziging `last_tick`/NTFY/MQTT-semantiek; geen confluence-policy; default flag **uit**. |
+| **RWS-04b** | **Afgerond (firmware):** A/B per afgeronde seconde: **ticker-canonical** (TWAP/carry) vs **trade-mean**; Δ abs / **bps** / **%**; tellers + `last_ab_class` (`aggregate`, `aggregate_large_delta`, `fallback`, `no_trades`); Kconfig **`DOMAIN_METRICS_RWS04B_LARGE_DELTA_BPS`** (0 = geen large-delta-teller/log); uitbreiding **`metrics_input_observability`** + compact **`/`**; **`[RWS04AB]`** WARN **throttled** (~90 s) bij grote Δ. **Niet:** geen RWS-05; geen `alert_engine`-policy; `last_tick` ongewijzigd. |
+| **RWS-05** | **Afgerond (firmware):** `ticker24h` parallel op dezelfde WS (subscribe bounded); parse `"last"` + tellers/gaps; **`ws_ticker24h_observability`** + heartbeat-velden in **`ws_feed_observability`** (`heartbeat_reason_code`, `heartbeat_source_visibility`); compact **`/`**; logs **`[WS_24H]`** alleen bij **transities** (canonical stale vs 24h recent, resume, 24h weg). **Niet:** géén officiële prijs uit `ticker24h`; géén `alert_engine`/NTFY/MQTT-wijziging. |
 | **RWS-06** | Evaluatie of **orderboek (`book`)** nog nodig is voor productdoelen. |
 
 \
@@ -2115,13 +2118,75 @@ De onderstaande componenten zijn als **skeleton** aanwezig in `firmware-v2/` (ti
 
 \
 
+### RWS-03 — vastgelegd (technisch)
+
+\
+
+- **Bron:** WS-**trade**-events (zelfde parse als RWS-02) bouwen lopende seconde-statistieken; **ticker** (`apply_price`) telt alleen `canonical_ticks` / `ticker_seen` in die seconde — **officiële `last_tick` ongewijzigd**.
+
+- **Grens:** bij wandklok-seconde (`sync_inbound_tick_stats`): finalize → **bounded ring** laatste **32** voltooide seconden; snapshot-velden `ws_second_*` op `MarketSnapshot`.
+
+- **Observability:** `GET /api/status.json` → **`ws_second_observability`**; compacte regel op **`/`**; logtag **`sec_agg`**, regel **`[WS_SEC]`** op DEBUG.
+
+- **RWS-04 opvolging:** optionele **`domain_metrics`-ingang** via aggregate — zie § **RWS-04** hieronder.
+
+\
+
+### RWS-04 — vastgelegd (technisch)
+
+\
+
+- **Flag:** `CONFIG_DOMAIN_METRICS_RWS04_SECOND_AGGREGATE` (default **n**), alleen als `MD_USE_EXCHANGE_BITVAVO`.
+
+- **Bronselectie:** bij afsluiten van een wandklok-seconde in `domain_metrics::finalize_bucket`: **`lookup_completed_second(sec)`** op de RWS-03-ring; als **`has_trades`** en **mean > 0** → canonieke ringprijs = **trade mean** (zelfde als RWS-03 `mean_eur`). Anders → **fallback** naar bestaande logica (**TWAP** uit ticker-ticks in die seconde, anders **carry**).
+
+- **Fallback-triggers:** geen slot in ring (seconde >32 terug of nog niet gefinaliseerd), **geen trades** in die seconde, of ongeldige mean.
+
+- **Observability:** `GET /api/status.json` → **`metrics_input_observability`** (bron + fallback + **RWS-04b** A/B-velden); compact op **`/`**.
+
+- **Bewust niet:** **geen** wijziging officiële **`last_tick`** of alert-**policy**; geen nieuwe WebUI-forms; **geen** verplichte default-aan; A/B-hardening = **RWS-04b**.
+
+\
+
+### RWS-04b — vastgelegd (technisch)
+
+\
+
+- **Doel:** aggregate-pad (**RWS-04**) **meetbaar** maken t.o.v. **ticker-canonical** (TWAP/carry per seconde) zonder de productkern te wijzigen.
+
+- **Vergelijking:** bij elke `finalize_bucket` (RWS-04 aan): `legacy_canonical_price` = **A**; `lookup_completed_second` → **trade mean** + **trade_count** = **B**; Δ abs, Δ **bps**, Δ **%** wanneer beide zijden geldig zijn.
+
+- **Classificatie (`last_ab_class`):** o.a. `aggregate`, `aggregate_large_delta`, `fallback`, `no_trades`, `aggregate_not_in_ring` — naast bestaande `last_fallback_reason` bij fallback.
+
+- **Large delta:** `CONFIG_DOMAIN_METRICS_RWS04B_LARGE_DELTA_BPS` (default **40**, **0** = uit); teller `ab_compare_large_delta_total`; log **`[RWS04AB]`** alleen bij drempel overschrijding, max. ca. **één per 90 s** wandklok-tijd om spam te voorkomen.
+
+- **Bewust niet:** **RWS-06** (orderboek/`book`-evaluatie); geen nieuwe alerttypes; geen wijziging confluence/regime; keuze **default aggregate**, **RWS-06**, of terug naar **PR-04/RC-go** blijft een **bewuste vervolgstap** na **RWS-05**.
+
+\
+
+### RWS-05 — vastgelegd (technisch)
+
+\
+
+- **Subscribe:** zelfde **`wss://ws.bitvavo.com/v2/`**-sessie als RWS-02; **`channels`**: **`ticker`** + **`trades`** + **`ticker24h`** (één markt).
+
+- **Routing:** na **trade**-parse: **`ticker24h`** (`event`/`channel` **ticker24h**, veld **`last`**) → tellers + `ws_ticker24h_*` snapshot-velden; **geen** `apply_price`. Daarna pas **ticker**-canonical parse → `apply_price` (ongewijzigd).
+
+- **Heartbeat-semantiek (observability):** bij canonical-gap **≥ 12 s** (zelfde drempel als `[WS_GAP]`): als **ticker24h** nog **recent** (gap ≤ 6 s) → `heartbeat_reason_code` **`canonical_gap_24h_alive`** en `heartbeat_source_visibility` **`ticker24h_secondary_heartbeat`**; anders **`feed_stale`**. Terug naar normale canonical-stroom → **`ok`** / **`canonical_ticker_ws`**.
+
+- **Observability:** `GET /api/status.json` → **`ws_ticker24h_observability`** (`official_price_stream` herhaald voor bronzichtbaarheid, `last_ticker24h_local_ms`, `ticker24h_seen_recently`, totalen, gaps, `ticker24h_last_eur`); uitbreiding **`ws_feed_observability`** met heartbeat-strings; compact op **`/`**.
+
+- **Bewust niet:** **`last_tick`** blijft **ticker** (`bitvavo_ticker_ws_v1`); geen alert-policy; geen NTFY/MQTT-semantiek.
+
+\
+
 ### Positie t.o.v. C3 / C4 / C5
 
 \
 
 - **C3** (mini-regime), **C4** (NTFY/MQTT), **C5** (30m/2h-roadmap) blijven de **hoofdlijn** consolidatie alert-engine.
 
-- **RWS** is een **parallelle voorbereidingslijn** op `exchange_bitvavo` / `market_data` / (later) `domain_metrics` — **C4** (NTFY/MQTT) is **afgerond**; **RWS-03+** blijft **parallel** aan hoofdlijn **C5** en start **niet automatisch eerder** tenzij expliciet herprioriteerd.
+- **RWS** is een **parallelle voorbereidingslijn** op `exchange_bitvavo` / `market_data` / `domain_metrics` (waarvan **RWS-04** de aggregate-ingang **optioneel** schakelt) — **C4** (NTFY/MQTT) is **afgerond**; **RWS-03+** blijft **parallel** aan hoofdlijn **C5** en start **niet automatisch eerder** tenzij expliciet herprioriteerd.
 
 \
 

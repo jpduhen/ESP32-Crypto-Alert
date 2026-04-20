@@ -98,6 +98,8 @@ Afstemming: [C1_FIELD_TEST_1M5M.md](C1_FIELD_TEST_1M5M.md) blijft leidend voor d
 | Workaround | ja/nee |
 | Target fix | RC / volgende minor / defer |
 
+**PR-02 input (veldbevinding + eerste run):** WebUI **`GET /`** — vaste HTML-responsebuffer kon vol raken wanneer observability + forms cumulatief de limiet overschreden (HTTP 500 `overflow` terwijl de listener nog actief is). Zie **[PR02_TEST_MATRIX.md](PR02_TEST_MATRIX.md)** (bevinding **PR02-BF-001**, run **PR02-RUN-001**). **Classificatie en exit-criteria:** **[PR03_BLOCKERS_KNOWN_ISSUES.md](PR03_BLOCKERS_KNOWN_ISSUES.md)**. **RC-checklist:** **[PR04_RC_CHECKLIST.md](PR04_RC_CHECKLIST.md)**.
+
 ---
 
 ## 8. Artifact-, versie- en release-notes-discipline
@@ -123,17 +125,19 @@ PR-01 **documenteert** alleen; het **elimineert** deze risico’s niet:
 
 | ID | Naam | Doel |
 |----|------|------|
-| **PR-02** | Testmatrix uitvoeren / structureren | **Vastgelegd:** **[PR02_TEST_MATRIX.md](PR02_TEST_MATRIX.md)** — uitvoerbare TM-01…TM-09 + run-template; invulling = hardware-runs |
-| **PR-03** | Blockers + known issues afdwingen | P0/P1-lijst, owner, go/no-go regels (op basis van PR-02-resultaten) |
-| **PR-04** | RC-checklist + eerste candidate | Tag, notes, laatste sanity; eventueel “internal RC” zonder externe distributie |
+| **PR-02** | Testmatrix uitvoeren / structureren | **Uitgevoerd:** **[PR02_TEST_MATRIX.md](PR02_TEST_MATRIX.md)** — TM-01…TM-09 + **eerste run PR02-RUN-001** (2026-04-19, `v2/foundation`) |
+| **PR-03** | Blockers + known issues afdwingen | **Vastgelegd:** **[PR03_BLOCKERS_KNOWN_ISSUES.md](PR03_BLOCKERS_KNOWN_ISSUES.md)** — P0–P3, register, go/no-go richting PR-04 |
+| **PR-04** | RC-checklist + eerste candidate | **Vastgelegd:** **[PR04_RC_CHECKLIST.md](PR04_RC_CHECKLIST.md)** — checklist, artifacts, PR03-koppeling, **PR02-RUN-002**-aanbeveling |
 
-**Eerstvolgende uitvoerbare substep na PR-02-document:** **invullen** van minimaal één run in **[PR02_TEST_MATRIX.md](PR02_TEST_MATRIX.md)** §4 + daarna **PR-03** (blockers/known issues).
+**Eerstvolgende uitvoerbare substep:** **RC-go uitvoeren** — **[PR04_RC_CHECKLIST.md](PR04_RC_CHECKLIST.md)** §8–§9 invullen (minimaal **PR02-RUN-002** voor TM-07 soak + TM-08/TM-09 PASS of N/A), daarna tag/release notes.
 
 ---
 
 ## Bronnen (aanvullend)
 
 - [PR02_TEST_MATRIX.md](PR02_TEST_MATRIX.md) — uitvoerbare testmatrix (PR-02).
+- [PR03_BLOCKERS_KNOWN_ISSUES.md](PR03_BLOCKERS_KNOWN_ISSUES.md) — blockers / known issues / go-no-go (PR-03).
+- [PR04_RC_CHECKLIST.md](PR04_RC_CHECKLIST.md) — RC-checklist + eerste candidate (PR-04).
 - [C5_ROADMAP_30M_2H.md](C5_ROADMAP_30M_2H.md) — TF-slices afgerond; productierijpheid volgt los.
 - [M002_NETWORK_BOUNDARIES.md](M002_NETWORK_BOUNDARIES.md) — netwerkgedrag en grenzen.
 - [WP03a_V1_GAP_ALERT.md](WP03a_V1_GAP_ALERT.md) — scope geen V1-import.

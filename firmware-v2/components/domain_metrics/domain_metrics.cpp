@@ -15,6 +15,20 @@
 #include <cmath>
 #include <cstring>
 
+#if CONFIG_DOMAIN_METRICS_RWS04_SECOND_AGGREGATE && CONFIG_MD_USE_EXCHANGE_BITVAVO
+#include "exchange_bitvavo/second_aggregate.hpp"
+#endif
+
+#ifndef CONFIG_MD_USE_EXCHANGE_BITVAVO
+#define CONFIG_MD_USE_EXCHANGE_BITVAVO 0
+#endif
+#ifndef CONFIG_DOMAIN_METRICS_RWS04_SECOND_AGGREGATE
+#define CONFIG_DOMAIN_METRICS_RWS04_SECOND_AGGREGATE 0
+#endif
+#ifndef CONFIG_DOMAIN_METRICS_RWS04B_LARGE_DELTA_BPS
+#define CONFIG_DOMAIN_METRICS_RWS04B_LARGE_DELTA_BPS 0
+#endif
+
 #ifndef CONFIG_ALERT_REGIME_VOL_WINDOW_SEC
 #define CONFIG_ALERT_REGIME_VOL_WINDOW_SEC 90
 #endif
@@ -94,6 +108,38 @@ static size_t s_2h_minute_head{0};
 static size_t s_2h_minute_count{0};
 static int64_t s_2h_curr_min_key{-1};
 static Sample s_2h_pending_close{};
+
+#if CONFIG_DOMAIN_METRICS_RWS04_SECOND_AGGREGATE && CONFIG_MD_USE_EXCHANGE_BITVAVO
+static uint32_t s_rws04_sec_trade_mean{0};
+static uint32_t s_rws04_sec_fallback{0};
+static const char k_src_mean[] = "trade_mean";
+static const char k_src_twap[] = "canonical_twap";
+static const char k_src_carry[] = "carry";
+static const char k_fb_none[] = "";
+static const char k_fb_not_in_ring[] = "aggregate_not_in_ring";
+static const char k_fb_no_trades[] = "no_trades_in_second";
+static const char k_fb_bad_mean[] = "invalid_trade_mean";
+static const char k_ab_aggregate[] = "aggregate";
+static const char k_ab_agg_large[] = "aggregate_large_delta";
+static const char k_ab_fallback[] = "fallback";
+static const char k_ab_no_trades[] = "no_trades";
+static const char k_ab_not_in_ring[] = "aggregate_not_in_ring";
+static const char *s_last_finalize_src = k_fb_none;
+static const char *s_last_fallback_reason = k_fb_none;
+static uint32_t s_ab_seconds_total{0};
+static uint32_t s_ab_trade_seconds_total{0};
+static uint32_t s_ab_large_delta_events_total{0};
+static double s_last_ticker_canonical_eur{0.0};
+static double s_last_trade_mean_eur{0.0};
+static double s_last_delta_abs_eur{0.0};
+static double s_last_delta_bps{0.0};
+static double s_last_delta_pct{0.0};
+static uint32_t s_last_trade_count_ab{0};
+static uint64_t s_last_compare_wall_sec{0};
+static bool s_last_ab_large_delta_flag{false};
+static const char *s_last_ab_class = k_fb_none;
+static uint64_t s_rws04ab_last_log_wall_sec{0};
+#endif
 
 static void minute_ring_push(const Sample &s)
 {
@@ -176,21 +222,122 @@ static void bucket_reset()
     s_bucket = {};
 }
 
+/** Bestaande M-010b-canonical zonder RWS-04-override. */
+static bool legacy_canonical_price(double *out)
+{
+    if (!out) {
+        return false;
+    }
+    if (s_bucket.tick_count > 0) {
+        *out = s_bucket.sum_price / static_cast<double>(s_bucket.tick_count);
+        return true;
+    }
+    if (s_carry_price_eur > 0.0) {
+        *out = s_carry_price_eur;
+        return true;
+    }
+    return false;
+}
+
 static void finalize_bucket()
 {
     if (!s_bucket.active) {
         return;
     }
     double canonical_price = 0.0;
-    if (s_bucket.tick_count > 0) {
-        canonical_price =
-            s_bucket.sum_price / static_cast<double>(s_bucket.tick_count);
-    } else if (s_carry_price_eur > 0.0) {
-        /* Geen nieuw WS-bericht in deze wandklok-seconde — prijs gelijk houden voor 1×/s ring. */
-        canonical_price = s_carry_price_eur;
+    const char *rws04_note = "";
+
+#if CONFIG_DOMAIN_METRICS_RWS04_SECOND_AGGREGATE && CONFIG_MD_USE_EXCHANGE_BITVAVO
+    double ticker_canonical_eur = 0.0;
+    const bool have_ticker_ref = legacy_canonical_price(&ticker_canonical_eur);
+
+    exchange_bitvavo::second_aggregate::AggregatedSecondLookup lk{};
+    const bool have_lk = exchange_bitvavo::second_aggregate::lookup_completed_second(
+        static_cast<uint64_t>(s_bucket.sec_epoch), &lk);
+
+    ++s_ab_seconds_total;
+    s_last_compare_wall_sec = static_cast<uint64_t>(s_bucket.sec_epoch);
+    s_last_ticker_canonical_eur = have_ticker_ref ? ticker_canonical_eur : 0.0;
+    s_last_trade_mean_eur =
+        (have_lk && lk.has_trades && lk.trade_mean_eur > 0.0) ? lk.trade_mean_eur : 0.0;
+    s_last_trade_count_ab = have_lk ? lk.trade_count : 0U;
+    s_last_delta_abs_eur = 0.0;
+    s_last_delta_bps = 0.0;
+    s_last_delta_pct = 0.0;
+    s_last_ab_large_delta_flag = false;
+    s_last_ab_class = k_fb_none;
+
+    if (have_lk && lk.has_trades) {
+        ++s_ab_trade_seconds_total;
+    }
+
+    const bool ab_pair_ok = have_ticker_ref && ticker_canonical_eur > 0.0 && have_lk && lk.has_trades &&
+                            lk.trade_mean_eur > 0.0;
+    if (ab_pair_ok) {
+        s_last_delta_abs_eur = std::fabs(lk.trade_mean_eur - ticker_canonical_eur);
+        s_last_delta_bps = (s_last_delta_abs_eur / ticker_canonical_eur) * 10000.0;
+        s_last_delta_pct = (s_last_delta_abs_eur / ticker_canonical_eur) * 100.0;
+    }
+
+    const int large_th = CONFIG_DOMAIN_METRICS_RWS04B_LARGE_DELTA_BPS;
+    if (large_th > 0 && ab_pair_ok && s_last_delta_bps >= static_cast<double>(large_th)) {
+        ++s_ab_large_delta_events_total;
+        s_last_ab_large_delta_flag = true;
+        const uint64_t ws = static_cast<uint64_t>(s_bucket.sec_epoch);
+        if (s_rws04ab_last_log_wall_sec == 0ULL || (ws - s_rws04ab_last_log_wall_sec) >= 90ULL) {
+            s_rws04ab_last_log_wall_sec = ws;
+            ESP_LOGW(TAG,
+                     "[RWS04AB] grote Δ ticker↔mean: %.1f bps (ticker=%.4f mean=%.4f trades=%u) sec=%llu",
+                     s_last_delta_bps,
+                     ticker_canonical_eur,
+                     lk.trade_mean_eur,
+                     static_cast<unsigned>(lk.trade_count),
+                     static_cast<unsigned long long>(ws));
+        }
+    }
+
+    if (have_lk && lk.has_trades && lk.trade_mean_eur > 0.0) {
+        canonical_price = lk.trade_mean_eur;
+        ++s_rws04_sec_trade_mean;
+        s_last_finalize_src = k_src_mean;
+        s_last_fallback_reason = k_fb_none;
+        rws04_note = " rws04=trade_mean";
+        s_last_ab_class = s_last_ab_large_delta_flag ? k_ab_agg_large : k_ab_aggregate;
     } else {
+        ++s_rws04_sec_fallback;
+        if (!have_lk) {
+            s_last_fallback_reason = k_fb_not_in_ring;
+        } else if (!lk.has_trades) {
+            s_last_fallback_reason = k_fb_no_trades;
+        } else {
+            s_last_fallback_reason = k_fb_bad_mean;
+        }
+        if (!legacy_canonical_price(&canonical_price)) {
+            return;
+        }
+        s_last_finalize_src = (s_bucket.tick_count > 0) ? k_src_twap : k_src_carry;
+        rws04_note = " rws04=fallback";
+        if (!have_lk) {
+            s_last_ab_class = k_ab_not_in_ring;
+        } else if (!lk.has_trades) {
+            s_last_ab_class = k_ab_no_trades;
+        } else {
+            s_last_ab_class = k_ab_fallback;
+        }
+        ESP_LOGD(TAG,
+                 "[RWS04] fallback sec=%lld reason=%s lk=%d trades=%d mean=%.4f",
+                 (long long)s_bucket.sec_epoch,
+                 s_last_fallback_reason,
+                 have_lk ? 1 : 0,
+                 have_lk && lk.has_trades ? 1 : 0,
+                 have_lk ? lk.trade_mean_eur : 0.0);
+    }
+#else
+    if (!legacy_canonical_price(&canonical_price)) {
         return;
     }
+#endif
+
     Sample s{};
     s.ts_ms = (s_bucket.sec_epoch * 1000LL) + 999LL;
     s.price_eur = canonical_price;
@@ -198,12 +345,13 @@ static void finalize_bucket()
     ring_push(s);
     feed_2h_minute_from_canonical(s);
     ESP_LOGI(TAG,
-             "M-010b: sec=%lld ticks=%u canonical=%.4f open=%.4f close=%.4f",
+             "M-010b: sec=%lld ticks=%u canonical=%.4f open=%.4f close=%.4f%s",
              (long long)s_bucket.sec_epoch,
              static_cast<unsigned>(s_bucket.tick_count),
              canonical_price,
              s_bucket.first_price,
-             s_bucket.last_price);
+             s_bucket.last_price,
+             rws04_note);
     bucket_reset();
 }
 
@@ -229,6 +377,13 @@ esp_err_t init()
              CONFIG_DOMAIN_METRICS_30M_WINDOW_S + CONFIG_DOMAIN_METRICS_CANONICAL_RING_EXTRA_S,
              static_cast<unsigned>(k_2h_minute_ring_cap),
              CONFIG_DOMAIN_METRICS_2H_WINDOW_S);
+#if CONFIG_DOMAIN_METRICS_RWS04_SECOND_AGGREGATE && CONFIG_MD_USE_EXCHANGE_BITVAVO
+    ESP_LOGI(TAG,
+             "[RWS04] domain_metrics invoer: second_aggregate trade-mean actief (fallback=ticker TWAP/carry)");
+    ESP_LOGI(TAG,
+             "[RWS04b] A/B observability: large_delta drempel=%d bps (0=uit)",
+             CONFIG_DOMAIN_METRICS_RWS04B_LARGE_DELTA_BPS);
+#endif
     return ESP_OK;
 }
 
@@ -470,6 +625,32 @@ MetricVolMeanAbsStepBps compute_vol_mean_abs_step_bps()
     out.pairs_used = n;
     out.mean_abs_step_bps = sum_bps / static_cast<double>(n);
     return out;
+}
+
+MetricsInputSourceObservability metrics_input_source_observability()
+{
+    MetricsInputSourceObservability o{};
+#if CONFIG_DOMAIN_METRICS_RWS04_SECOND_AGGREGATE && CONFIG_MD_USE_EXCHANGE_BITVAVO
+    o.rws04_enabled = true;
+    o.seconds_via_trade_mean = s_rws04_sec_trade_mean;
+    o.seconds_via_fallback = s_rws04_sec_fallback;
+    o.last_finalize_source = s_last_finalize_src;
+    o.last_fallback_reason = s_last_fallback_reason;
+    o.ab_compare_seconds_total = s_ab_seconds_total;
+    o.ab_compare_trade_seconds_total = s_ab_trade_seconds_total;
+    o.ab_compare_large_delta_total = s_ab_large_delta_events_total;
+    o.last_compare_wall_sec = s_last_compare_wall_sec;
+    o.last_ticker_canonical_eur = s_last_ticker_canonical_eur;
+    o.last_trade_mean_eur = s_last_trade_mean_eur;
+    o.last_delta_abs_eur = s_last_delta_abs_eur;
+    o.last_delta_bps = s_last_delta_bps;
+    o.last_delta_pct = s_last_delta_pct;
+    o.last_trade_count = s_last_trade_count_ab;
+    o.last_large_delta = s_last_ab_large_delta_flag;
+    o.last_ab_class = s_last_ab_class ? s_last_ab_class : "";
+    o.large_delta_threshold_bps = CONFIG_DOMAIN_METRICS_RWS04B_LARGE_DELTA_BPS;
+#endif
+    return o;
 }
 
 } // namespace domain_metrics

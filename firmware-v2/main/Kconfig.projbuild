@@ -200,6 +200,24 @@ menu "ESP32 Crypto Alert V2"
         help
             Ringcap = ceil(2h_window_s/60) + extra + kleine buffer.
 
+    config DOMAIN_METRICS_RWS04_SECOND_AGGREGATE
+        bool "RWS-04: domain_metrics 1 Hz uit second_aggregate (trade mean) met fallback naar ticker-canonical"
+        default n
+        depends on MD_USE_EXCHANGE_BITVAVO
+        help
+            Als aan: bij elke afgeronde wandklok-seconde wordt de ringwaarde uit RWS-03 gebruikt
+            wanneer er trades waren (arithmetic mean). Anders: zelfde TWAP/carry als voorheen.
+            Officiële last_tick / alerts-semantiek blijft ongewijzigd; alleen de metrics-ring-ingang schakelt.
+
+    config DOMAIN_METRICS_RWS04B_LARGE_DELTA_BPS
+        int "RWS-04b: drempel 'grote afwijking' ticker-TWAP vs trade-mean (bps; 0=geen teller/log)"
+        depends on DOMAIN_METRICS_RWS04_SECOND_AGGREGATE
+        range 0 500
+        default 40
+        help
+            Alleen als RWS-04 aan: vergelijk ticker-canonical (TWAP/carry) met trade-mean per seconde.
+            Als |Δ| in bps ≥ deze waarde: teller + throttled [RWS04AB]-log. 0 schakelt large-delta-detectie uit.
+
     config ALERT_ENGINE_1M_THRESHOLD_BPS
         int "M-010a: 1m move alert threshold (honderdsten %; 16 = 0,16%)"
         range 1 1000

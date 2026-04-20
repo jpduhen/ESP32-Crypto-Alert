@@ -42,17 +42,23 @@ constexpr size_t kWifiSsidMax = 33;
 constexpr size_t kWifiPassMax = 65;
 
 constexpr size_t kMqttBrokerUriMax = 160;
+constexpr size_t kMqttUserMax = 64;
+constexpr size_t kMqttPassMax = 64;
 constexpr size_t kNtfyTopicMax = 96;
 
 /**
- * Typed subset: WebUI + MQTT + NTFY — geen secrets hier (MQTT/NTFY tokens blijven Kconfig
- * tot latere stap).
+ * Typed subset: WebUI + MQTT + NTFY. MQTT-user/wachtwoord: NVS-runtime (fallback Kconfig);
+ * wachtwoord nooit loggen of in JSON echoën.
  */
 struct ServiceRuntimeConfig {
     bool webui_enabled{false};
     uint16_t webui_port{8080};
     bool mqtt_enabled{false};
     char mqtt_broker_uri[kMqttBrokerUriMax]{};
+    /** Leeg = gebruik alleen Kconfig `MQTT_BRIDGE_USER` indien gezet. */
+    char mqtt_username[kMqttUserMax]{};
+    /** Leeg = gebruik alleen Kconfig-wachtwoord indien gezet. */
+    char mqtt_password[kMqttPassMax]{};
     bool ntfy_enabled{false};
     char ntfy_topic[kNtfyTopicMax]{};
 };
@@ -140,7 +146,8 @@ const AlertConfluencePolicyConfig &alert_confluence_policy();
 /**
  * M-013b: schrijf alleen mqtt_* en ntfy_* naar NVS (`svc_*` keys). Laat `webui_enabled` /
  * `webui_port` ongemoeid. Valideert lengtes en vereist niet-lege `mqtt_broker_uri` als
- * `mqtt_enabled` true. Wijzigt `g_service_cache` bij succes.
+ * `mqtt_enabled` true. Wijzigt `g_service_cache` bij succes. Optioneel `mqtt_username` /
+ * `mqtt_password` (NVS); leeg = fallback naar Kconfig in `mqtt_bridge`.
  */
 esp_err_t persist_service_connectivity(const ServiceRuntimeConfig &mqtt_ntfy);
 

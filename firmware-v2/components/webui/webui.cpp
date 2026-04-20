@@ -1,6 +1,6 @@
 /**
  * M-013a: minimale WebUI — GET / en GET /api/status.json.
- * M-013b: POST /api/services.json — mqtt/ntfy naar config_store.
+ * M-013b: POST /api/services.json — mqtt/ntfy naar config_store (incl. MQTT-user/wachtwoord NVS).
  * M-013c: hoofdpagina-formulier (inline JS) naar dezelfde POST-route.
  * M-014a: POST /api/ota — ruwe firmware → ota_service.
  * M-014b: OTA-status in /api/status.json + blok op /.
@@ -21,6 +21,8 @@
  * M-002h: read-only outbound-queue observability in status.json (geen nieuwe settings).
  * S30-1: read-only `metric_30m_observability` (domain_metrics::compute_30m_move_pct).
  * S2H-1: read-only `metric_2h_observability` (domain_metrics::compute_2h_move_pct).
+ * RWS-04: read-only `metrics_input_observability` (domain_metrics::metrics_input_source_observability).
+ * RWS-04b: A/B-velden + large-delta in `metrics_input_observability`.
  */
 #include "webui/webui.hpp"
 #include "alert_engine/alert_engine.hpp"
@@ -41,6 +43,10 @@
 #include "sdkconfig.h"
 
 #if CONFIG_WEBUI_ENABLE
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "lwip/def.h"
 #include "ota_service/ota_service.hpp"
 #include <cmath>
@@ -56,6 +62,30 @@ static const char TAG[] = "web_ui";
 #if CONFIG_WEBUI_ENABLE
 
 static httpd_handle_t s_httpd{nullptr};
+
+/**
+ * `GET /` gebruikt een vast 32 KiB-blok (geen runtime malloc) — bij ~76 KiB "vrij" heap faalde
+ * `malloc(32768)` nog door fragmentatie (geen aaneengesloten blok).
+ */
+static constexpr size_t k_root_html_buf_bytes = 32768;
+static uint8_t s_root_html_buf[k_root_html_buf_bytes];
+static SemaphoreHandle_t s_root_html_mx{};
+
+/** Bij tijdelijke heap-fragmentatie/druk faalt één `malloc`/`cJSON` soms — korte backoff-retry. */
+static cJSON *cjson_create_object_retry()
+{
+    constexpr int k_attempts = 5;
+    for (int i = 0; i < k_attempts; ++i) {
+        cJSON *const o = cJSON_CreateObject();
+        if (o) {
+            return o;
+        }
+        if (i + 1 < k_attempts) {
+            vTaskDelay(pdMS_TO_TICKS(10 + 10 * i));
+        }
+    }
+    return nullptr;
+}
 
 static const char *conn_str(market_types::ConnectionState c)
 {
@@ -165,8 +195,11 @@ static esp_err_t handle_status_json(httpd_req_t *req)
     ota_service::OtaStatusSnapshot ota{};
     ota_service::get_status_snapshot(&ota);
 
-    cJSON *root = cJSON_CreateObject();
+    cJSON *root = cjson_create_object_retry();
     if (!root) {
+        ESP_LOGW(TAG,
+                 "GET /api/status.json: cJSON root alloc failed na retry (heap=%u B)",
+                 static_cast<unsigned>(esp_get_free_heap_size()));
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem");
         return ESP_ERR_NO_MEM;
     }
@@ -196,7 +229,34 @@ static esp_err_t handle_status_json(httpd_req_t *req)
                                      static_cast<double>(snap.ws_gap_sec_since_last_raw));
             cJSON_AddNumberToObject(wsf, "gap_sec_since_last_canonical",
                                      static_cast<double>(snap.ws_gap_sec_since_last_canonical));
+            cJSON_AddStringToObject(wsf,
+                                    "heartbeat_reason_code",
+                                    snap.ws_heartbeat_reason_code[0] ? snap.ws_heartbeat_reason_code : "ok");
+            cJSON_AddStringToObject(wsf,
+                                    "heartbeat_source_visibility",
+                                    snap.ws_heartbeat_source_visibility[0] ? snap.ws_heartbeat_source_visibility
+                                                                           : "canonical_ticker_ws");
             cJSON_AddItemToObject(root, "ws_feed_observability", wsf);
+        }
+    }
+    {
+        cJSON *wt24 = cJSON_CreateObject();
+        if (wt24) {
+            cJSON_AddStringToObject(wt24,
+                                    "official_price_stream",
+                                    snap.ws_official_price_stream[0] ? snap.ws_official_price_stream
+                                                                     : "bitvavo_ticker_ws_v1");
+            cJSON_AddNumberToObject(wt24, "last_ticker24h_local_ms",
+                                     static_cast<double>(snap.ws_last_ticker24h_local_ms));
+            cJSON_AddBoolToObject(wt24, "ticker24h_seen_recently", snap.ws_ticker24h_seen_recently ? 1 : 0);
+            cJSON_AddNumberToObject(wt24, "ticker24h_msgs_total",
+                                     static_cast<double>(snap.ws_ticker24h_msgs_total));
+            cJSON_AddNumberToObject(wt24, "ticker24h_events_last_sec",
+                                     static_cast<double>(snap.ws_ticker24h_events_last_sec));
+            cJSON_AddNumberToObject(wt24, "gap_sec_since_last_ticker24h",
+                                     static_cast<double>(snap.ws_gap_sec_since_last_ticker24h));
+            cJSON_AddNumberToObject(wt24, "ticker24h_last_eur", snap.ws_ticker24h_last_eur);
+            cJSON_AddItemToObject(root, "ws_ticker24h_observability", wt24);
         }
     }
     {
@@ -212,6 +272,67 @@ static esp_err_t handle_status_json(httpd_req_t *req)
                                      static_cast<double>(snap.ws_gap_sec_since_last_trade));
             cJSON_AddNumberToObject(wst, "last_trade_local_ms", static_cast<double>(snap.ws_last_trade_local_ms));
             cJSON_AddItemToObject(root, "ws_trades_observability", wst);
+        }
+    }
+    {
+        cJSON *wss = cJSON_CreateObject();
+        if (wss) {
+            cJSON_AddNumberToObject(wss, "agg_wall_sec", static_cast<double>(snap.ws_second_agg_wall_sec));
+            cJSON_AddBoolToObject(wss, "has_trades", snap.ws_second_agg_has_trades ? 1 : 0);
+            cJSON_AddNumberToObject(wss, "trade_count", static_cast<double>(snap.ws_second_agg_trade_count));
+            cJSON_AddNumberToObject(wss, "first_eur", snap.ws_second_agg_first_eur);
+            cJSON_AddNumberToObject(wss, "last_eur", snap.ws_second_agg_last_eur);
+            cJSON_AddNumberToObject(wss, "min_eur", snap.ws_second_agg_min_eur);
+            cJSON_AddNumberToObject(wss, "max_eur", snap.ws_second_agg_max_eur);
+            cJSON_AddNumberToObject(wss, "mean_eur", snap.ws_second_agg_mean_eur);
+            cJSON_AddBoolToObject(wss, "ticker_seen_in_second", snap.ws_second_agg_ticker_seen ? 1 : 0);
+            cJSON_AddNumberToObject(wss, "canonical_ticks_in_second",
+                                     static_cast<double>(snap.ws_second_agg_canonical_ticks));
+            cJSON_AddNumberToObject(wss, "ring_capacity", static_cast<double>(snap.ws_second_ring_capacity));
+            cJSON_AddNumberToObject(wss, "ring_used", static_cast<double>(snap.ws_second_ring_used));
+            cJSON_AddNumberToObject(wss, "ring_writes_total", static_cast<double>(snap.ws_second_ring_writes_total));
+            cJSON_AddItemToObject(root, "ws_second_observability", wss);
+        }
+    }
+    {
+        const domain_metrics::MetricsInputSourceObservability mio = domain_metrics::metrics_input_source_observability();
+        cJSON *mij = cJSON_CreateObject();
+        if (mij) {
+            cJSON_AddBoolToObject(mij, "rws04_enabled", mio.rws04_enabled ? 1 : 0);
+            cJSON_AddNumberToObject(mij, "seconds_via_trade_mean", static_cast<double>(mio.seconds_via_trade_mean));
+            cJSON_AddNumberToObject(mij, "seconds_via_fallback", static_cast<double>(mio.seconds_via_fallback));
+            cJSON_AddStringToObject(mij,
+                                    "last_finalize_source",
+                                    (mio.last_finalize_source && mio.last_finalize_source[0]) ? mio.last_finalize_source
+                                                                                              : "");
+            cJSON_AddStringToObject(mij,
+                                    "last_fallback_reason",
+                                    (mio.last_fallback_reason && mio.last_fallback_reason[0]) ? mio.last_fallback_reason
+                                                                                              : "");
+            cJSON_AddNumberToObject(mij,
+                                    "ab_compare_seconds_total",
+                                    static_cast<double>(mio.ab_compare_seconds_total));
+            cJSON_AddNumberToObject(mij,
+                                    "ab_compare_trade_seconds_total",
+                                    static_cast<double>(mio.ab_compare_trade_seconds_total));
+            cJSON_AddNumberToObject(mij,
+                                    "ab_compare_large_delta_total",
+                                    static_cast<double>(mio.ab_compare_large_delta_total));
+            cJSON_AddNumberToObject(mij, "last_compare_wall_sec", static_cast<double>(mio.last_compare_wall_sec));
+            cJSON_AddNumberToObject(mij, "last_ticker_canonical_eur", mio.last_ticker_canonical_eur);
+            cJSON_AddNumberToObject(mij, "last_trade_mean_eur", mio.last_trade_mean_eur);
+            cJSON_AddNumberToObject(mij, "last_delta_abs_eur", mio.last_delta_abs_eur);
+            cJSON_AddNumberToObject(mij, "last_delta_bps", mio.last_delta_bps);
+            cJSON_AddNumberToObject(mij, "last_delta_pct", mio.last_delta_pct);
+            cJSON_AddNumberToObject(mij, "last_trade_count", static_cast<double>(mio.last_trade_count));
+            cJSON_AddBoolToObject(mij, "last_large_delta", mio.last_large_delta ? 1 : 0);
+            cJSON_AddStringToObject(mij,
+                                    "last_ab_class",
+                                    (mio.last_ab_class && mio.last_ab_class[0]) ? mio.last_ab_class : "");
+            cJSON_AddNumberToObject(mij,
+                                    "large_delta_threshold_bps",
+                                    static_cast<double>(mio.large_delta_threshold_bps));
+            cJSON_AddItemToObject(root, "metrics_input_observability", mij);
         }
     }
     {
@@ -423,6 +544,7 @@ static esp_err_t handle_status_json(httpd_req_t *req)
     char *printed = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!printed) {
+        ESP_LOGW(TAG, "GET /api/status.json: cJSON_PrintUnformatted failed (geen heap)");
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
         return ESP_FAIL;
     }
@@ -828,12 +950,12 @@ static esp_err_t handle_alert_confluence_policy_post(httpd_req_t *req)
 
 static esp_err_t handle_services_post(httpd_req_t *req)
 {
-    char raw[1024]{};
+    char raw[2048]{};
     const int need = req->content_len;
     if (need <= 0 || need >= static_cast<int>(sizeof(raw))) {
         ESP_LOGW(TAG, "M-013b: POST body ontbreekt of te groot (%d)", need);
         return send_json_text(req, "400 Bad Request",
-                              "{\"ok\":false,\"error\":\"body ontbreekt of te groot (max 1023 bytes)\"}");
+                              "{\"ok\":false,\"error\":\"body ontbreekt of te groot (max 2047 bytes)\"}");
     }
     int got = 0;
     while (got < need) {
@@ -899,6 +1021,48 @@ static esp_err_t handle_services_post(httpd_req_t *req)
         any = true;
     }
 
+    const cJSON *jmu = cJSON_GetObjectItem(root, "mqtt_username");
+    if (jmu != nullptr) {
+        if (!cJSON_IsString(jmu)) {
+            cJSON_Delete(root);
+            return send_json_text(req, "400 Bad Request",
+                                  "{\"ok\":false,\"error\":\"mqtt_username: verwacht string\"}");
+        }
+        const char *s = cJSON_GetStringValue(jmu);
+        if (!s) {
+            s = "";
+        }
+        if (strlen(s) >= config_store::kMqttUserMax) {
+            cJSON_Delete(root);
+            return send_json_text(req, "400 Bad Request",
+                                  "{\"ok\":false,\"error\":\"mqtt_username: te lang\"}");
+        }
+        strncpy(merged.mqtt_username, s, sizeof(merged.mqtt_username) - 1);
+        merged.mqtt_username[sizeof(merged.mqtt_username) - 1] = '\0';
+        any = true;
+    }
+
+    const cJSON *jmp = cJSON_GetObjectItem(root, "mqtt_password");
+    if (jmp != nullptr) {
+        if (!cJSON_IsString(jmp)) {
+            cJSON_Delete(root);
+            return send_json_text(req, "400 Bad Request",
+                                  "{\"ok\":false,\"error\":\"mqtt_password: verwacht string\"}");
+        }
+        const char *s = cJSON_GetStringValue(jmp);
+        if (!s) {
+            s = "";
+        }
+        if (strlen(s) >= config_store::kMqttPassMax) {
+            cJSON_Delete(root);
+            return send_json_text(req, "400 Bad Request",
+                                  "{\"ok\":false,\"error\":\"mqtt_password: te lang\"}");
+        }
+        strncpy(merged.mqtt_password, s, sizeof(merged.mqtt_password) - 1);
+        merged.mqtt_password[sizeof(merged.mqtt_password) - 1] = '\0';
+        any = true;
+    }
+
     const cJSON *jn = cJSON_GetObjectItem(root, "ntfy_enabled");
     if (jn != nullptr) {
         bool v = false;
@@ -940,7 +1104,7 @@ static esp_err_t handle_services_post(httpd_req_t *req)
         ESP_LOGW(TAG, "M-013b: geen herkende velden");
         return send_json_text(req, "400 Bad Request",
                               "{\"ok\":false,\"error\":\"minstens één veld: mqtt_enabled, mqtt_broker_uri, "
-                              "ntfy_enabled, ntfy_topic\"}");
+                              "mqtt_username, mqtt_password, ntfy_enabled, ntfy_topic\"}");
     }
 
     const esp_err_t pe = config_store::persist_service_connectivity(merged);
@@ -959,12 +1123,14 @@ static esp_err_t handle_services_post(httpd_req_t *req)
     cJSON_AddBoolToObject(out, "ok", true);
     cJSON_AddBoolToObject(out, "mqtt_enabled", s.mqtt_enabled);
     cJSON_AddStringToObject(out, "mqtt_broker_uri", s.mqtt_broker_uri);
+    cJSON_AddStringToObject(out, "mqtt_username", s.mqtt_username);
+    cJSON_AddBoolToObject(out, "mqtt_password_set", s.mqtt_password[0] != '\0');
     cJSON_AddBoolToObject(out, "ntfy_enabled", s.ntfy_enabled);
     cJSON_AddStringToObject(out, "ntfy_topic", s.ntfy_topic);
     cJSON_AddStringToObject(
         out, "note",
-        "NTFY: volgende push gebruikt dit topic. MQTT: nieuwe broker-URI wordt pas na herstart actief "
-        "(geen hot-reload in M-013b).");
+        "NTFY: volgende push gebruikt dit topic. MQTT: URI en inlog (user/wachtwoord NVS) worden pas na "
+        "herstart gebruikt door de client (geen hot-reload).");
     char *printed = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
     if (!printed) {
@@ -1015,7 +1181,7 @@ static void html_attr_escape(const char *src, char *dst, size_t dst_sz)
     dst[j] = '\0';
 }
 
-static esp_err_t handle_root_html(httpd_req_t *req)
+static esp_err_t handle_root_html_impl(httpd_req_t *req)
 {
     const market_data::MarketSnapshot snap = market_data::snapshot();
     char ipbuf[20]{};
@@ -1024,21 +1190,21 @@ static esp_err_t handle_root_html(httpd_req_t *req)
     const config_store::ServiceRuntimeConfig &svc = config_store::service_runtime();
     ota_service::OtaStatusSnapshot ota{};
     ota_service::get_status_snapshot(&ota);
+    const domain_metrics::MetricsInputSourceObservability mio = domain_metrics::metrics_input_source_observability();
 
     char esc_uri[config_store::kMqttBrokerUriMax * 6]{};
+    char esc_muser[config_store::kMqttUserMax * 6]{};
     char esc_topic[config_store::kNtfyTopicMax * 6]{};
     html_attr_escape(svc.mqtt_broker_uri, esc_uri, sizeof(esc_uri));
+    html_attr_escape(svc.mqtt_username, esc_muser, sizeof(esc_muser));
     html_attr_escape(svc.ntfy_topic, esc_topic, sizeof(esc_topic));
 
     const char *mq_chk = svc.mqtt_enabled ? " checked" : "";
     const char *nt_chk = svc.ntfy_enabled ? " checked" : "";
 
-    constexpr size_t k_html_alloc = 16384;
-    char *const html = static_cast<char *>(std::malloc(k_html_alloc));
-    if (!html) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem");
-        return ESP_ERR_NO_MEM;
-    }
+    /* Homepage: vaste buffer `s_root_html_buf` (geen malloc — zie PR-02/fragmentatie). */
+    char *const html = reinterpret_cast<char *>(s_root_html_buf);
+    constexpr size_t k_html_alloc = k_root_html_buf_bytes;
 
     int n = std::snprintf(
         html, k_html_alloc,
@@ -1055,7 +1221,11 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         "<p><strong>Verbinding feed</strong> %s · <strong>Bron tick</strong> %s · "
         "<strong>WS raw/canonical (vorige s)</strong> %u/%u · "
         "<strong>GAP raw/canonical (s)</strong> %u/%u · <code>%s</code></p>"
-        "<p><strong>WS trades (RWS-02)</strong> %u/s · tot %u · ring %u/%u · drops %u · gap %us</p>",
+        "<p><strong>WS trades (RWS-02)</strong> %u/s · tot %u · ring %u/%u · drops %u · gap %us</p>"
+        "<p><strong>RWS-03</strong> laatste sec=%llu · trades=%u · mean=%.4f · ticker=%s · sec-ring %u/%u</p>"
+        "<p><strong>RWS-04</strong> metrics-ingang %s · trade_mean=%u · fallback=%u · laatste=%s</p>"
+        "<p><strong>RWS-04b</strong> sec=%llu · Δbps=%.2f · class=%s · large_events=%u (drempel=%d) · trades=%u</p>"
+        "<p><strong>RWS-05</strong> ticker24h: msgs %u · gap %us · recent %s · hb <code>%s</code> / <code>%s</code></p>",
         app ? app->version : "?",
         ipbuf[0] ? ipbuf : "—",
         net_runtime::has_ip() ? "ja" : "nee",
@@ -1075,10 +1245,35 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         snap.ws_trade_ring_capacity != 0u ? static_cast<unsigned>(snap.ws_trade_ring_capacity)
                                           : static_cast<unsigned>(64),
         static_cast<unsigned>(snap.ws_trade_ring_drop_total),
-        static_cast<unsigned>(snap.ws_gap_sec_since_last_trade));
+        static_cast<unsigned>(snap.ws_gap_sec_since_last_trade),
+        static_cast<unsigned long long>(snap.ws_second_agg_wall_sec),
+        static_cast<unsigned>(snap.ws_second_agg_trade_count),
+        snap.ws_second_agg_mean_eur,
+        snap.ws_second_agg_ticker_seen ? "ja" : "nee",
+        static_cast<unsigned>(snap.ws_second_ring_used),
+        static_cast<unsigned>(snap.ws_second_ring_capacity != 0u ? snap.ws_second_ring_capacity : 32u),
+        mio.rws04_enabled ? "aan" : "uit",
+        static_cast<unsigned>(mio.seconds_via_trade_mean),
+        static_cast<unsigned>(mio.seconds_via_fallback),
+        (mio.last_finalize_source && mio.last_finalize_source[0]) ? mio.last_finalize_source : "—",
+        static_cast<unsigned long long>(mio.last_compare_wall_sec),
+        mio.last_delta_bps,
+        (mio.last_ab_class && mio.last_ab_class[0]) ? mio.last_ab_class : "—",
+        static_cast<unsigned>(mio.ab_compare_large_delta_total),
+        mio.large_delta_threshold_bps,
+        static_cast<unsigned>(mio.last_trade_count),
+        static_cast<unsigned>(snap.ws_ticker24h_msgs_total),
+        static_cast<unsigned>(snap.ws_gap_sec_since_last_ticker24h),
+        snap.ws_ticker24h_seen_recently ? "ja" : "nee",
+        snap.ws_heartbeat_reason_code[0] ? snap.ws_heartbeat_reason_code : "—",
+        snap.ws_heartbeat_source_visibility[0] ? snap.ws_heartbeat_source_visibility : "—");
     if (n <= 0 || static_cast<size_t>(n) >= k_html_alloc) {
-        ESP_LOGW(TAG, "M-013c/d: HTML deel1 overflow (n=%d)", n);
-        std::free(html);
+        const bool trunc = (n > 0 && static_cast<size_t>(n) >= k_html_alloc);
+        ESP_LOGW(TAG,
+                 "M-013c/d: HTML deel1 overflow GET / (buf=%u n=%d truncated=%s)",
+                 static_cast<unsigned>(k_html_alloc),
+                 n,
+                 trunc ? "ja" : "nee");
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
         return ESP_FAIL;
     }
@@ -1086,7 +1281,6 @@ static esp_err_t handle_root_html(httpd_req_t *req)
     const int na = alert_observability::append_alerts_html_section(html + w, k_html_alloc - w);
     if (na < 0 || w + static_cast<size_t>(na) >= k_html_alloc) {
         ESP_LOGW(TAG, "M-013d: HTML alerts-sectie overflow (na=%d)", na);
-        std::free(html);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
         return ESP_FAIL;
     }
@@ -1094,7 +1288,6 @@ static esp_err_t handle_root_html(httpd_req_t *req)
     const int na5 = alert_observability::append_alerts_5m_html_section(html + w, k_html_alloc - w);
     if (na5 < 0 || w + static_cast<size_t>(na5) >= k_html_alloc) {
         ESP_LOGW(TAG, "M-010c: HTML 5m alerts-sectie overflow (na5=%d)", na5);
-        std::free(html);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
         return ESP_FAIL;
     }
@@ -1102,7 +1295,6 @@ static esp_err_t handle_root_html(httpd_req_t *req)
     const int na30 = alert_observability::append_alerts_30m_html_section(html + w, k_html_alloc - w);
     if (na30 < 0 || w + static_cast<size_t>(na30) >= k_html_alloc) {
         ESP_LOGW(TAG, "S30-3: HTML 30m alerts-sectie overflow (na30=%d)", na30);
-        std::free(html);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
         return ESP_FAIL;
     }
@@ -1110,7 +1302,6 @@ static esp_err_t handle_root_html(httpd_req_t *req)
     const int na2h = alert_observability::append_alerts_2h_html_section(html + w, k_html_alloc - w);
     if (na2h < 0 || w + static_cast<size_t>(na2h) >= k_html_alloc) {
         ESP_LOGW(TAG, "S2H-3: HTML 2h alerts-sectie overflow (na2h=%d)", na2h);
-        std::free(html);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
         return ESP_FAIL;
     }
@@ -1118,7 +1309,6 @@ static esp_err_t handle_root_html(httpd_req_t *req)
     const int nac = alert_observability::append_alerts_conf_1m5m_html_section(html + w, k_html_alloc - w);
     if (nac < 0 || w + static_cast<size_t>(nac) >= k_html_alloc) {
         ESP_LOGW(TAG, "M-010d: HTML confluence-sectie overflow (nac=%d)", nac);
-        std::free(html);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
         return ESP_FAIL;
     }
@@ -1161,7 +1351,6 @@ static esp_err_t handle_root_html(httpd_req_t *req)
             rob.effective_threshold_move_pct_2h);
         if (nreg <= 0 || w + static_cast<size_t>(nreg) >= k_html_alloc) {
             ESP_LOGW(TAG, "M-013e: HTML regime-sectie overflow (nreg=%d)", nreg);
-            std::free(html);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
             return ESP_FAIL;
         }
@@ -1247,7 +1436,6 @@ static esp_err_t handle_root_html(httpd_req_t *req)
             supc);
         if (nd <= 0 || w + static_cast<size_t>(nd) >= k_html_alloc) {
             ESP_LOGW(TAG, "M-013h: HTML alert-beslissing overflow (nd=%d)", nd);
-            std::free(html);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
             return ESP_FAIL;
         }
@@ -1295,7 +1483,6 @@ static esp_err_t handle_root_html(httpd_req_t *req)
             static_cast<unsigned>(ars.edge_confluence.enter_not_ready));
         if (nst <= 0 || w + static_cast<size_t>(nst) >= k_html_alloc) {
             ESP_LOGW(TAG, "C1: HTML runtime-stats overflow (nst=%d)", nst);
-            std::free(html);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
             return ESP_FAIL;
         }
@@ -1355,7 +1542,6 @@ static esp_err_t handle_root_html(httpd_req_t *req)
             static_cast<unsigned>(ar.regime_hot_scale_permille));
         if (nar <= 0 || w + static_cast<size_t>(nar) >= k_html_alloc) {
             ESP_LOGW(TAG, "M-013g: HTML alert-runtime-form overflow (nar=%d)", nar);
-            std::free(html);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
             return ESP_FAIL;
         }
@@ -1416,7 +1602,6 @@ static esp_err_t handle_root_html(httpd_req_t *req)
             static_cast<unsigned>(apt.suppress_loose_after_conf_s));
         if (nap <= 0 || w + static_cast<size_t>(nap) >= k_html_alloc) {
             ESP_LOGW(TAG, "M-013j: HTML alert-policy-form overflow (nap=%d)", nap);
-            std::free(html);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
             return ESP_FAIL;
         }
@@ -1469,7 +1654,6 @@ static esp_err_t handle_root_html(httpd_req_t *req)
             cf_lo);
         if (nacf <= 0 || w + static_cast<size_t>(nacf) >= k_html_alloc) {
             ESP_LOGW(TAG, "M-013l: HTML confluence-policy-form overflow (nacf=%d)", nacf);
-            std::free(html);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
             return ESP_FAIL;
         }
@@ -1490,13 +1674,22 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         "<strong>Volgende update-slot</strong> %s · <strong>Reset</strong> %s<br/>"
         "<strong>Post-boot</strong> %s</p>"
         "<h2>Services (mqtt / ntfy)</h2>"
-        "<p class=\"hint\">MQTT: na wijziging broker-URI eerst <strong>herstart</strong> — client start bij boot. "
+        "<p class=\"hint\">MQTT: na wijziging URI of inlog <strong>herstart</strong> — client start bij boot. "
+        "Wachtwoord: leeg laten om het opgeslagen wachtwoord niet te wijzigen. "
         "NTFY: topic geldt bij de volgende push.</p>"
         "<form id=\"svc-form\">"
         "<fieldset><legend>Instellingen</legend>"
         "<p><label><input type=\"checkbox\" id=\"mqtt_enabled\"%s/> MQTT aan</label></p>"
         "<p><label>Broker-URI<br/><input type=\"text\" id=\"mqtt_broker_uri\" value=\"%s\" "
         "maxlength=\"%u\" size=\"56\" placeholder=\"mqtt://… of mqtts://…\"/></label></p>"
+        "<p><label>MQTT-gebruiker (optioneel; leeg = build-default uit Kconfig)<br/>"
+        "<input type=\"text\" id=\"mqtt_username\" value=\"%s\" maxlength=\"%u\" size=\"40\" "
+        "autocomplete=\"username\"/></label></p>"
+        "<p><label>MQTT-wachtwoord (optioneel; leeg = niet wijzigen)<br/>"
+        "<input type=\"password\" id=\"mqtt_password\" maxlength=\"%u\" size=\"28\" "
+        "autocomplete=\"new-password\" placeholder=\"alleen bij nieuw wachtwoord\"/></label></p>"
+        "<p><label><input type=\"checkbox\" id=\"mqtt_pw_clear\"/> Opgeslagen MQTT-wachtwoord wissen (NVS; daarna "
+        "fallback Kconfig)</label></p>"
         "<p><label><input type=\"checkbox\" id=\"ntfy_enabled\"%s/> NTFY aan</label></p>"
         "<p><label>NTFY-topic<br/><input type=\"text\" id=\"ntfy_topic\" value=\"%s\" "
         "maxlength=\"%u\" size=\"40\"/></label></p>"
@@ -1506,10 +1699,15 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         "<script>"
         "(function(){var f=document.getElementById('svc-form');var m=document.getElementById('svc-msg');"
         "f.addEventListener('submit',function(e){e.preventDefault();m.textContent='Bezig…';m.style.color='#333';"
-        "var body=JSON.stringify({mqtt_enabled:document.getElementById('mqtt_enabled').checked,"
+        "var p={mqtt_enabled:document.getElementById('mqtt_enabled').checked,"
         "mqtt_broker_uri:document.getElementById('mqtt_broker_uri').value,"
+        "mqtt_username:document.getElementById('mqtt_username').value,"
         "ntfy_enabled:document.getElementById('ntfy_enabled').checked,"
-        "ntfy_topic:document.getElementById('ntfy_topic').value});"
+        "ntfy_topic:document.getElementById('ntfy_topic').value};"
+        "var mpw=document.getElementById('mqtt_password').value;"
+        "var cl=document.getElementById('mqtt_pw_clear').checked;"
+        "if(cl){p.mqtt_password='';}else if(mpw.length>0){p.mqtt_password=mpw;}"
+        "var body=JSON.stringify(p);"
         "fetch('/api/services.json',{method:'POST',headers:{'Content-Type':'application/json'},body:body})"
         ".then(function(r){return r.text().then(function(t){return {ok:r.ok,status:r.status,text:t};});})"
         ".then(function(x){try{var j=JSON.parse(x.text);if(x.ok){m.style.color='#063';"
@@ -1542,12 +1740,22 @@ static esp_err_t handle_root_html(httpd_req_t *req)
         mq_chk,
         esc_uri,
         static_cast<unsigned>(config_store::kMqttBrokerUriMax - 1),
+        esc_muser,
+        static_cast<unsigned>(config_store::kMqttUserMax - 1),
+        static_cast<unsigned>(config_store::kMqttPassMax - 1),
         nt_chk,
         esc_topic,
         static_cast<unsigned>(config_store::kNtfyTopicMax - 1));
     if (n <= 0 || w + static_cast<size_t>(n) >= k_html_alloc) {
-        ESP_LOGW(TAG, "M-013c/d: HTML deel2 overflow (n=%d)", n);
-        std::free(html);
+        const size_t cap_left = (w < k_html_alloc) ? (k_html_alloc - w) : 0U;
+        const bool trunc = (n > 0 && static_cast<size_t>(n) >= cap_left);
+        ESP_LOGW(TAG,
+                 "M-013c/d: HTML deel2 overflow GET / (buf=%u w=%u cap_left=%u n=%d truncated=%s)",
+                 static_cast<unsigned>(k_html_alloc),
+                 static_cast<unsigned>(w),
+                 static_cast<unsigned>(cap_left),
+                 n,
+                 trunc ? "ja" : "nee");
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "overflow");
         return ESP_FAIL;
     }
@@ -1555,8 +1763,31 @@ static esp_err_t handle_root_html(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     const esp_err_t send_err = httpd_resp_send(req, html, w);
-    std::free(html);
     return send_err;
+}
+
+static esp_err_t handle_root_html(httpd_req_t *req)
+{
+    if (!s_root_html_mx) {
+        s_root_html_mx = xSemaphoreCreateMutex();
+    }
+    if (!s_root_html_mx) {
+        ESP_LOGW(TAG,
+                 "GET /: mutex create failed (heap=%u B)",
+                 static_cast<unsigned>(esp_get_free_heap_size()));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem");
+        return ESP_ERR_NO_MEM;
+    }
+    if (xSemaphoreTake(s_root_html_mx, pdMS_TO_TICKS(15000)) != pdTRUE) {
+        ESP_LOGW(TAG,
+                 "GET /: homepage buffer bezet — timeout (heap=%u B)",
+                 static_cast<unsigned>(esp_get_free_heap_size()));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "busy");
+        return ESP_FAIL;
+    }
+    const esp_err_t err = handle_root_html_impl(req);
+    xSemaphoreGive(s_root_html_mx);
+    return err;
 }
 
 static esp_err_t handle_ota_post(httpd_req_t *req)
@@ -1593,6 +1824,10 @@ esp_err_t init()
     cfg.stack_size = 8192;
 
     ESP_RETURN_ON_ERROR(httpd_start(&s_httpd, &cfg), TAG, "httpd_start");
+
+    if (!s_root_html_mx) {
+        s_root_html_mx = xSemaphoreCreateMutex();
+    }
 
     httpd_uri_t uj{};
     uj.uri = "/api/status.json";

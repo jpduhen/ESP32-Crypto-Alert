@@ -93,4 +93,36 @@ struct MetricVolMeanAbsStepBps {
 
 MetricVolMeanAbsStepBps compute_vol_mean_abs_step_bps();
 
+/**
+ * RWS-04 / RWS-04b: read-only observability — metrics-ingang + A/B ticker-canonical vs trade-mean.
+ * `last_*` / `last_ab_class` wijzen naar interne stringconstanten (geldig tot volgende finalize).
+ */
+struct MetricsInputSourceObservability {
+    bool rws04_enabled{false};
+    uint32_t seconds_via_trade_mean{0};
+    uint32_t seconds_via_fallback{0};
+    const char *last_finalize_source{""};
+    const char *last_fallback_reason{""};
+    /** RWS-04b: afgeronde seconden waarin A/B-snapshot is bijgewerkt (RWS-04 aan). */
+    uint32_t ab_compare_seconds_total{0};
+    /** RWS-04b: seconden met ≥1 trade in aggregate-ring. */
+    uint32_t ab_compare_trade_seconds_total{0};
+    /** RWS-04b: keren dat |ticker−mean| ≥ drempel (bps). */
+    uint32_t ab_compare_large_delta_total{0};
+    uint64_t last_compare_wall_sec{0};
+    double last_ticker_canonical_eur{0.0};
+    double last_trade_mean_eur{0.0};
+    double last_delta_abs_eur{0.0};
+    double last_delta_bps{0.0};
+    double last_delta_pct{0.0};
+    uint32_t last_trade_count{0};
+    bool last_large_delta{false};
+    /** bv. `aggregate`, `aggregate_large_delta`, `fallback`, `no_trades` */
+    const char *last_ab_class{""};
+    /** Kconfig `DOMAIN_METRICS_RWS04B_LARGE_DELTA_BPS` (0 = uit). */
+    int large_delta_threshold_bps{0};
+};
+
+MetricsInputSourceObservability metrics_input_source_observability();
+
 } // namespace domain_metrics

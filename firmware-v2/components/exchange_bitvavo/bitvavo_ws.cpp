@@ -1,7 +1,10 @@
 /**
  * WebSocket feed — wss://ws.bitvavo.com/v2/ + parallel **ticker** + **trades** subscribe (RWS-02; TLS bundle).
  * Officiële prijs blijft ticker→`apply_price`; trades → bounded ring + observability.
+ * RWS-03: seconde-aggregaten uit trades (+ ticker-context), parallel aan canonical keten.
+ * RWS-05: parallel **ticker24h** subscribe — heartbeat/bronzichtbaarheid; géén `apply_price` / géén `last_tick`-switch.
  */
+#include "exchange_bitvavo/second_aggregate.hpp"
 #include "diagnostics/diagnostics.hpp"
 #include "esp_check.h"
 #include "esp_crt_bundle.h"
@@ -29,21 +32,29 @@ static uint64_t s_stats_wall_sec{0};
 static uint32_t s_stats_cur_sec_count{0};
 /** RWS-02: trade-events (geparst + in ring geplaatst) in de lopende seconde. */
 static uint32_t s_trade_cur_sec_count{0};
+/** RWS-05: geparste ticker24h-events in de lopende seconde. */
+static uint32_t s_ticker24h_cur_sec_count{0};
 /** RWS-01: alle WS TEXT-frames (vóór parse). */
 static uint32_t s_raw_cur_sec_count{0};
 static uint64_t s_last_raw_wall_sec{0};
 static uint64_t s_last_canonical_wall_sec{0};
 static uint64_t s_last_trade_wall_sec{0};
+static uint64_t s_last_ticker24h_wall_sec{0};
 static bool s_gap_canonical_warn_latched{false};
 static bool s_gap_trade_warn_latched{false};
+/** RWS-05: vorige heartbeat-reden voor log alleen bij transitie ([WS_24H]). */
+static char s_prev_heartbeat_reason[24]{};
 
 /** RWS-02: bounded ring (bij vol → oudste overschrijven; `s_trade_count` = cap). */
 static constexpr size_t k_trade_ring_cap = 64;
+/** RWS-05: zelfde drempel als `[WS_GAP]` canonical-waarschuwing; parallel venster voor “recent” ticker24h. */
+static constexpr uint32_t k_hb_canonical_stale_sec = 12;
+static constexpr uint32_t k_hb_ticker24h_recent_sec = 6;
 static market_types::WsRawTradeSample s_trade_ring[k_trade_ring_cap];
 static size_t s_trade_widx{0};
 static size_t s_trade_count{0};
 
-static void commit_ticks_last_to_snap(uint32_t n_canonical, uint32_t n_raw, uint32_t n_trade)
+static void commit_ticks_last_to_snap(uint32_t n_canonical, uint32_t n_raw, uint32_t n_trade, uint32_t n_ticker24h)
 {
     if (!s_metrics_mx || !s_snap_ptr) {
         return;
@@ -52,6 +63,7 @@ static void commit_ticks_last_to_snap(uint32_t n_canonical, uint32_t n_raw, uint
         s_snap_ptr->ws_inbound_ticks_last_sec = n_canonical;
         s_snap_ptr->ws_raw_msgs_last_sec = n_raw;
         s_snap_ptr->ws_trade_events_last_sec = n_trade;
+        s_snap_ptr->ws_ticker24h_events_last_sec = n_ticker24h;
         xSemaphoreGive(s_metrics_mx);
     }
 }
@@ -64,13 +76,23 @@ void sync_inbound_tick_stats()
     const uint64_t w = esp_timer_get_time() / 1000000ULL;
     if (s_stats_wall_sec == 0ULL) {
         s_stats_wall_sec = w;
+        second_aggregate::seed_running_second(w);
         return;
     }
     while (w > s_stats_wall_sec) {
-        commit_ticks_last_to_snap(s_stats_cur_sec_count, s_raw_cur_sec_count, s_trade_cur_sec_count);
+        const uint64_t completed = s_stats_wall_sec;
+        if (s_metrics_mx && s_snap_ptr &&
+            xSemaphoreTake(s_metrics_mx, pdMS_TO_TICKS(50)) == pdTRUE) {
+            second_aggregate::finalize_completed_second(completed, s_snap_ptr);
+            second_aggregate::seed_running_second(completed + 1);
+            xSemaphoreGive(s_metrics_mx);
+        }
+        commit_ticks_last_to_snap(s_stats_cur_sec_count, s_raw_cur_sec_count, s_trade_cur_sec_count,
+                                 s_ticker24h_cur_sec_count);
         s_stats_cur_sec_count = 0;
         s_raw_cur_sec_count = 0;
         s_trade_cur_sec_count = 0;
+        s_ticker24h_cur_sec_count = 0;
         ++s_stats_wall_sec;
     }
 }
@@ -85,6 +107,7 @@ static void apply_price(double p, int64_t ts_ms)
         return;
     }
     ++s_stats_cur_sec_count;
+    second_aggregate::note_canonical_tick(s_stats_wall_sec);
     s_last_canonical_wall_sec = esp_timer_get_time() / 1000000ULL;
     ESP_LOGD(TAG, "[WS_AGG] price=%.6f ts_ms=%lld", p, (long long)ts_ms);
     s_snap_ptr->last_tick.price_eur = p;
@@ -187,6 +210,55 @@ static bool parse_trade_text(const char *buf, size_t len, double *price_out, int
     return true;
 }
 
+/**
+ * RWS-05: ticker24h-marktupdates — alleen heartbeat/observability (`"last"` = laatste trade in 24h-statistiek;
+ * niet gebruiken als canonical `last_tick`).
+ */
+static bool parse_ticker24h_text(const char *buf, size_t len, double *last_eur_out)
+{
+    if (!buf || len == 0 || !last_eur_out) {
+        return false;
+    }
+    char tmp[512];
+    const size_t n = len < sizeof(tmp) - 1 ? len : sizeof(tmp) - 1;
+    memcpy(tmp, buf, n);
+    tmp[n] = '\0';
+
+    if (strstr(tmp, "\"event\":\"subscribed\"") != nullptr || strstr(tmp, "\"event\": \"subscribed\"") != nullptr) {
+        return false;
+    }
+    const bool is_t24 = strstr(tmp, "\"event\":\"ticker24h\"") != nullptr ||
+                        strstr(tmp, "\"event\": \"ticker24h\"") != nullptr ||
+                        strstr(tmp, "\"channel\":\"ticker24h\"") != nullptr ||
+                        strstr(tmp, "\"channel\": \"ticker24h\"") != nullptr;
+    if (!is_t24) {
+        return false;
+    }
+
+    const char *lp = strstr(tmp, "\"last\":");
+    if (lp == nullptr) {
+        lp = strstr(tmp, "\"last\" :");
+    }
+    if (lp == nullptr) {
+        return false;
+    }
+    lp = strchr(lp, ':');
+    if (lp == nullptr) {
+        return false;
+    }
+    ++lp;
+    while (*lp == ' ' || *lp == '\"') {
+        ++lp;
+    }
+    char *end = nullptr;
+    const double v = strtod(lp, &end);
+    if (end == lp) {
+        return false;
+    }
+    *last_eur_out = v;
+    return true;
+}
+
 static void trade_ring_push(const market_types::WsRawTradeSample &s, uint32_t *evict_out)
 {
     s_trade_ring[s_trade_widx] = s;
@@ -203,13 +275,15 @@ static void trade_ring_push(const market_types::WsRawTradeSample &s, uint32_t *e
 
 static void send_subscribe(esp_websocket_client_handle_t h)
 {
-    char payload[320];
+    char payload[420];
     const int n =
         snprintf(payload,
                  sizeof(payload),
                  "{\"action\":\"subscribe\",\"channels\":["
                  "{\"name\":\"ticker\",\"markets\":[\"%s\"]},"
-                 "{\"name\":\"trades\",\"markets\":[\"%s\"]}]}",
+                 "{\"name\":\"trades\",\"markets\":[\"%s\"]},"
+                 "{\"name\":\"ticker24h\",\"markets\":[\"%s\"]}]}",
+                 s_market,
                  s_market,
                  s_market);
     if (n <= 0 || n >= static_cast<int>(sizeof(payload))) {
@@ -219,7 +293,7 @@ static void send_subscribe(esp_websocket_client_handle_t h)
     if (esp_websocket_client_send_text(h, payload, static_cast<size_t>(n), pdMS_TO_TICKS(4000)) < 0) {
         ESP_LOGW(TAG, "send_text subscribe failed");
     } else {
-        ESP_LOGI(DIAG_TAG_MARKET, "WS subscribe ticker+trades %s", s_market);
+        ESP_LOGI(DIAG_TAG_MARKET, "WS subscribe ticker+trades+ticker24h %s", s_market);
     }
 }
 
@@ -237,10 +311,16 @@ static void on_event(void *handler_args, esp_event_base_t base, int32_t event_id
         s_trade_count = 0;
         s_last_trade_wall_sec = 0;
         s_gap_trade_warn_latched = false;
+        s_last_ticker24h_wall_sec = 0;
+        s_prev_heartbeat_reason[0] = '\0';
+        second_aggregate::reset_on_ws_connect();
         if (s_metrics_mx && s_snap_ptr && xSemaphoreTake(s_metrics_mx, pdMS_TO_TICKS(50)) == pdTRUE) {
             s_snap_ptr->ws_trade_ring_capacity = static_cast<uint16_t>(k_trade_ring_cap);
             s_snap_ptr->ws_trade_ring_occupancy = 0;
             s_snap_ptr->ws_last_trade_local_ms = 0;
+            s_snap_ptr->ws_last_ticker24h_local_ms = 0;
+            s_snap_ptr->ws_gap_sec_since_last_ticker24h = 0;
+            s_snap_ptr->ws_ticker24h_seen_recently = false;
             xSemaphoreGive(s_metrics_mx);
         }
         send_subscribe(s_client);
@@ -273,6 +353,7 @@ static void on_event(void *handler_args, esp_event_base_t base, int32_t event_id
                 smp.ts_exchange_ms = ts_exch;
                 uint32_t ev = 0;
                 if (xSemaphoreTake(s_metrics_mx, pdMS_TO_TICKS(100)) == pdTRUE) {
+                    second_aggregate::note_trade(trade_price, s_stats_wall_sec);
                     trade_ring_push(smp, &ev);
                     if (s_snap_ptr) {
                         if (ev != 0u) {
@@ -290,10 +371,25 @@ static void on_event(void *handler_args, esp_event_base_t base, int32_t event_id
                 ESP_LOGD(TAG, "[WS_TRD_RX] price=%.4f local_ms=%lld exch_ms=%lld", trade_price,
                          (long long)loc_ms, (long long)ts_exch);
             } else {
-                double p = 0;
-                if (parse_ticker_text(data->data_ptr, static_cast<size_t>(data->data_len), &p)) {
-                    const int64_t ts = static_cast<int64_t>(esp_timer_get_time() / 1000);
-                    apply_price(p, ts);
+                double last24 = 0;
+                if (parse_ticker24h_text(data->data_ptr, static_cast<size_t>(data->data_len), &last24)) {
+                    const int64_t loc_ms = static_cast<int64_t>(esp_timer_get_time() / 1000);
+                    if (xSemaphoreTake(s_metrics_mx, pdMS_TO_TICKS(100)) == pdTRUE) {
+                        if (s_snap_ptr) {
+                            ++s_ticker24h_cur_sec_count;
+                            ++s_snap_ptr->ws_ticker24h_msgs_total;
+                            s_snap_ptr->ws_last_ticker24h_local_ms = loc_ms;
+                            s_snap_ptr->ws_ticker24h_last_eur = last24;
+                            s_last_ticker24h_wall_sec = esp_timer_get_time() / 1000000ULL;
+                        }
+                        xSemaphoreGive(s_metrics_mx);
+                    }
+                } else {
+                    double p = 0;
+                    if (parse_ticker_text(data->data_ptr, static_cast<size_t>(data->data_len), &p)) {
+                        const int64_t ts = static_cast<int64_t>(esp_timer_get_time() / 1000);
+                        apply_price(p, ts);
+                    }
                 }
             }
         }
@@ -320,12 +416,15 @@ esp_err_t start(market_types::MarketSnapshot *snap_sink, const char *market, Sem
     s_stats_wall_sec = 0;
     s_stats_cur_sec_count = 0;
     s_trade_cur_sec_count = 0;
+    s_ticker24h_cur_sec_count = 0;
     s_raw_cur_sec_count = 0;
     s_last_raw_wall_sec = 0;
     s_last_canonical_wall_sec = 0;
     s_last_trade_wall_sec = 0;
+    s_last_ticker24h_wall_sec = 0;
     s_gap_canonical_warn_latched = false;
     s_gap_trade_warn_latched = false;
+    s_prev_heartbeat_reason[0] = '\0';
     s_trade_widx = 0;
     s_trade_count = 0;
     s_snap_ptr = snap_sink;
@@ -381,9 +480,48 @@ void publish_gap_metrics()
     if (s_last_trade_wall_sec > 0 && now_s >= s_last_trade_wall_sec) {
         gap_trade = static_cast<uint32_t>(now_s - s_last_trade_wall_sec);
     }
+    uint32_t gap_t24 = 0;
+    if (s_last_ticker24h_wall_sec > 0 && now_s >= s_last_ticker24h_wall_sec) {
+        gap_t24 = static_cast<uint32_t>(now_s - s_last_ticker24h_wall_sec);
+    }
     s_snap_ptr->ws_gap_sec_since_last_raw = gap_raw;
     s_snap_ptr->ws_gap_sec_since_last_canonical = gap_can;
     s_snap_ptr->ws_gap_sec_since_last_trade = gap_trade;
+    s_snap_ptr->ws_gap_sec_since_last_ticker24h = gap_t24;
+    s_snap_ptr->ws_ticker24h_seen_recently =
+        (s_last_ticker24h_wall_sec > 0 && gap_t24 <= k_hb_ticker24h_recent_sec);
+
+    const char *reason = "ok";
+    const char *vis = "canonical_ticker_ws";
+    if (gap_can >= k_hb_canonical_stale_sec) {
+        if (s_last_ticker24h_wall_sec > 0 && gap_t24 <= k_hb_ticker24h_recent_sec) {
+            reason = "canonical_gap_24h_alive";
+            vis = "ticker24h_secondary_heartbeat";
+        } else {
+            reason = "feed_stale";
+            vis = "stale";
+        }
+    }
+    strncpy(s_snap_ptr->ws_heartbeat_reason_code, reason, sizeof(s_snap_ptr->ws_heartbeat_reason_code) - 1);
+    s_snap_ptr->ws_heartbeat_reason_code[sizeof(s_snap_ptr->ws_heartbeat_reason_code) - 1] = '\0';
+    strncpy(s_snap_ptr->ws_heartbeat_source_visibility, vis, sizeof(s_snap_ptr->ws_heartbeat_source_visibility) - 1);
+    s_snap_ptr->ws_heartbeat_source_visibility[sizeof(s_snap_ptr->ws_heartbeat_source_visibility) - 1] = '\0';
+
+    if (strcmp(s_prev_heartbeat_reason, reason) != 0) {
+        if (strcmp(reason, "canonical_gap_24h_alive") == 0) {
+            ESP_LOGW(TAG, "[WS_24H] canonical ticker stale (>=%" PRIu32 "s); ticker24h still recent (gap=%" PRIu32 "s)",
+                     k_hb_canonical_stale_sec, gap_t24);
+        } else if (strcmp(s_prev_heartbeat_reason, "canonical_gap_24h_alive") == 0 && strcmp(reason, "ok") == 0) {
+            ESP_LOGI(TAG, "[WS_24H] canonical ticker resumed");
+        } else if (strcmp(s_prev_heartbeat_reason, "canonical_gap_24h_alive") == 0 && strcmp(reason, "feed_stale") == 0) {
+            ESP_LOGW(TAG, "[WS_24H] ticker24h heartbeat lost while canonical still stale");
+        } else if (strcmp(s_prev_heartbeat_reason, "ok") == 0 && strcmp(reason, "feed_stale") == 0) {
+            ESP_LOGW(TAG, "[WS_24H] feed stale (canonical>=%" PRIu32 "s; ticker24h gap=%" PRIu32 "s)",
+                     k_hb_canonical_stale_sec, gap_t24);
+        }
+        strncpy(s_prev_heartbeat_reason, reason, sizeof(s_prev_heartbeat_reason) - 1);
+        s_prev_heartbeat_reason[sizeof(s_prev_heartbeat_reason) - 1] = '\0';
+    }
     xSemaphoreGive(s_metrics_mx);
 
     if (gap_can >= 12) {

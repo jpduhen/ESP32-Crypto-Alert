@@ -103,9 +103,22 @@ esp_err_t init()
     if (strncmp(svc.mqtt_broker_uri, "mqtts://", 8) == 0) {
         mqtt_cfg.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
     }
-    if (strlen(CONFIG_MQTT_BRIDGE_USER) > 0) {
-        mqtt_cfg.credentials.username = CONFIG_MQTT_BRIDGE_USER;
-        mqtt_cfg.credentials.authentication.password = CONFIG_MQTT_BRIDGE_PASSWORD;
+    /* NVS-runtime overschrijft Kconfig; leeg veld = fallback naar build-default. */
+#if defined(CONFIG_MQTT_BRIDGE_USER)
+    const char *k_user = CONFIG_MQTT_BRIDGE_USER;
+#else
+    const char *k_user = "";
+#endif
+#if defined(CONFIG_MQTT_BRIDGE_PASSWORD)
+    const char *k_pass = CONFIG_MQTT_BRIDGE_PASSWORD;
+#else
+    const char *k_pass = "";
+#endif
+    const char *user_eff = svc.mqtt_username[0] != '\0' ? svc.mqtt_username : k_user;
+    const char *pass_eff = svc.mqtt_password[0] != '\0' ? svc.mqtt_password : k_pass;
+    if (user_eff[0] != '\0' || pass_eff[0] != '\0') {
+        mqtt_cfg.credentials.username = user_eff;
+        mqtt_cfg.credentials.authentication.password = pass_eff;
     }
 
     s_client = esp_mqtt_client_init(&mqtt_cfg);
