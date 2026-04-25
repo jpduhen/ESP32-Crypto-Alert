@@ -9,6 +9,7 @@ build/
 # Log files
 *.log
 serial_output.log
+firmware-v3/logs/
 
 # OS files
 .DS_Store
