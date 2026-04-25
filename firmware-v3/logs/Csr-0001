@@ -1,0 +1,76 @@
+Hier is de oplevering. Er is **geen broncode uit V1/V2 gekopieerd of hergebruikt**; alleen dezelfde soort **product-defaults** (S3-GEEK 16 MB flash, TLS-bundle voor toekomstige wss) als in `firmware-v2/sdkconfig.defaults` logisch herhaald — dat zijn geen functies/architectuur, en de V2-tasking/modules zijn **niet** overgenomen.
+
+---
+
+### A. Samenvatting
+
+In `firmware-v3/` staat een **nieuw ESP-IDF-project** (CMake + `sdkconfig.defaults` + `main/app_main.cpp`) met **17 componenten** onder `components/`: orchestratie via `app_core`, board/diagnostics/event-bus/WiFi/market-websocket (stub), strategie (+ regime/level/signal stubs), alert/ntfy stubs, market_store/candle/settings/ui stubs. **`app_main`** doet NVS, `esp_netif_init`, default event loop en `app_core::start()`. Op deze machine was **geen ESP-IDF (`idf.py`)** geïnstalleerd om een echte build te verifiëren; de structuur en CMake-dependencies zijn wel consistent ESP-IDF-stijl.
+
+---
+
+### B. Aangemaakte / gewijzigde bestanden
+
+| Pad | Rol |
+|-----|-----|
+| `firmware-v3/CMakeLists.txt` | Root-project, `PROJECT_VER` 0.1.0 |
+| `firmware-v3/sdkconfig.defaults` | S3: 240 MHz, 1 kHz tick, 8k main stack, mbedTLS cert bundle, 16 MB flash |
+| `firmware-v3/main/CMakeLists.txt` | Main-component: `app_main.cpp` + deps |
+| `firmware-v3/main/app_main.cpp` | Bootlog, NVS, netif, event loop, `app_core::start()` |
+| `components/app_core/*` | Orchestrator: init/start-volgorde alle gekoppelde subsystemen |
+| `components/board_support/*` | S3-GEEK placeholder |
+| `components/event_bus/*` | `CRYPTO_V3_EVENTS` + `init()` |
+| `components/diagnostics/*` | Heap/uptime + TODO health |
+| `components/wifi_manager/*` | STA-netif + `esp_wifi_init`, status-enum, geen connect zonder config |
+| `components/market_ws/*` | State machine + `esp_websocket_client` als dependency (nog geen client-code) |
+| `components/market_store/*`, `candle_engine/*` | Stubs (single-writer-principe in comments) |
+| `components/regime_engine/*`, `level_engine/*`, `signal_engine/*` | Stubs; door `strategy_engine` aangeroepen |
+| `components/strategy_engine/*` | Stub + documentatie toekomstige rollen |
+| `components/alert_engine/*`, `ntfy_client/*` | Stubs (geen echte push) |
+| `components/settings_store/*` | NVS-gerichte config stub |
+| `components/ui_model/*`, `components/display_ui/*` | UI als consument (alleen stubs) |
+
+---
+
+### C. Architectuurkeuzes
+
+- **Bootstrap in `app_main`**, **orchestratie in `app_core`**: scheidt ESP-platform van applicatievolgorde.
+- **State per module** in `.cpp` (file scope / anonymous namespace), **publieke API** via `namespace` + headers — geen losse globals buiten de “eigenaar”.
+- **`event_bus`**: `esp_event`-base op globale scope (ESP-IDF-conventie).
+- **`wifi_manager`**: netif + driver init; **geen** `esp_wifi_start` zonder geldige STA-config (voorkomt fake SSID’s).
+- **`market_ws`**: linkt al `esp_websocket_client` zodat de volgende stap alleen implementatie hoeft toe te voegen.
+- **`app_core` REQUIRE’t alle skeleton-componenten** zodat het **hele componentenboom** in één build meegaat (ESP-IDF bouwt alleen wat in de dependency graph zit).
+
+---
+
+### D. Build / gebruik
+
+```bash
+cd /Users/janpieterduhen/Desktop/ESP32-Crypto-Alert/firmware-v3
+# ESP-IDF omgeving laden (pad naar jouw installatie)
+. $IDF_PATH/export.sh   # of je eigen idf.py-venv
+idf.py set-target esp32s3
+idf.py build
+idf.py -p /dev/tty.USB0 flash monitor   # poort aanpassen
+```
+
+---
+
+### E. Risico’s / TODO’s
+
+- **Build niet lokaal gecontroleerd** (geen `IDF_PATH` op deze omgeving).
+- **WiFi**: geen credentials, geen events, geen `esp_wifi_start`.
+- **`market_ws`**: geen URI, geen `esp_websocket_client`-handle, geen Bitvavo-protocol.
+- **Strategie / alert / ntfy**: geen queues, geen echte HTTP naar ntfy.
+- **Diagnostics**: geen periodieke timer, geen stack watermarks.
+- **Partitions**: default ESP-IDF-partitietabel; later eigen CSV indien OTA gewenst.
+
+---
+
+### F. Volgende stap (klein en logisch)
+
+1. **`settings_store` + `wifi_manager`**: SSID/wachtwoord uit NVS, `esp_wifi_set_config`, `esp_wifi_start`/`connect`, IP-event logging.  
+2. Daarna **`market_ws`**: `esp_websocket_client` config (wss), reconnect, en **alleen schrijven naar `market_store`** (queue/ringbuffer).
+
+---
+
+**Hergebruik V1/V2 (expliciet):** geen bestand of functie overgenomen. Alleen vergelijkbare **sdkconfig-achtige keuzes** (S3-GEEK flashgrootte, TLS-bundle) uit productcontext — **niet** de V2-architectuur (`net_runtime`, webui, MQTT, gemengde taken, enz.).

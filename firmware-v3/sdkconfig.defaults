@@ -1,0 +1,14 @@
+# Crypto-Alert V3 — defaults voor ESP32-S3-GEEK (16 MB flash)
+# Build: idf.py set-target esp32s3 && idf.py build
+# Eerste skeleton: standaard partition table; later eigen OTA-table indien nodig.
+
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_FREERTOS_HZ=1000
+
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# TLS / wss (Bitvavo) — voorbereiding voor market_ws
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
