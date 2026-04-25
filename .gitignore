@@ -5,6 +5,7 @@
 build/
 .vscode/
 .idea/
+*.code-workspace
 
 # Log files
 *.log
