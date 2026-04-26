@@ -4,19 +4,24 @@
 
 namespace wifi_manager {
 
-enum class phase {
-    uninitialized,
-    initialized,
-    idle_no_credentials,
-    connecting,
-    connected,
-    disconnected,
-    error,
+enum class WifiState {
+    kUninitialized,
+    kIdle,
+    kStarting,
+    kConnecting,
+    kConnected,
+    kGotIp,
+    kDisconnected,
+    kError,
+    kNotConfigured,
 };
 
 esp_err_t init();
 esp_err_t start();
 
-phase get_phase();
+WifiState get_state();
+
+/** Leesbare naam voor logging (Engels, stabiel). */
+const char *state_label(WifiState s);
 
 }  // namespace wifi_manager

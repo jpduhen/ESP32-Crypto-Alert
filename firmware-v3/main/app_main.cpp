@@ -9,10 +9,10 @@
 #include "esp_netif.h"
 #include "nvs_flash.h"
 
-static const char *TAG = "app_main";
+static const char *TAG = "APP";
 
 extern "C" void app_main(void) {
-    ESP_LOGI(TAG, "Crypto-Alert V3 boot (ESP-IDF)");
+    ESP_LOGI(TAG, "Crypto-Alert V3 boot gestart (ESP-IDF)");
 
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {

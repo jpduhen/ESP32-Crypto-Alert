@@ -8,9 +8,11 @@ idf_component_register(
         diagnostics
         display_ui
         event_bus
+        level_engine
         market_store
         market_ws
         ntfy_client
+        regime_engine
         settings_store
         strategy_engine
         ui_model

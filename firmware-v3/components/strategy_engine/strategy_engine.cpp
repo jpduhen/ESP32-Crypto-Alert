@@ -4,6 +4,7 @@
 #include "regime_engine/regime_engine.hpp"
 #include "signal_engine/signal_engine.hpp"
 
+#include "esp_check.h"
 #include "esp_log.h"
 
 static const char *TAG = "strategy_engine";
