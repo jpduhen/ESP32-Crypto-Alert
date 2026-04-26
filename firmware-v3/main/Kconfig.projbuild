@@ -1,0 +1,38 @@
+menu "Crypto-Alert V3 (development WiFi)"
+
+    config CRYPTO_ALERT_WIFI_USE_DEV_FALLBACK
+        bool "Enable development WiFi fallback from menuconfig"
+        default y
+        help
+            When NVS has no valid WiFi credentials, use SSID/password from this menu
+            if SSID is non-empty. For bring-up only; replace with real provisioning later.
+
+    config CRYPTO_ALERT_WIFI_SAVE_FALLBACK_TO_NVS
+        bool "Persist dev fallback WiFi to NVS after first resolve"
+        depends on CRYPTO_ALERT_WIFI_USE_DEV_FALLBACK
+        default n
+        help
+            If fallback is used, write SSID/password/dhcp to NVS once so the next cold
+            boot loads from NVS. Password is never logged.
+
+    config CRYPTO_ALERT_WIFI_SSID
+        string "Development WiFi SSID"
+        depends on CRYPTO_ALERT_WIFI_USE_DEV_FALLBACK
+        default ""
+        help
+            Leave empty to skip fallback. Max 32 characters (STA limit). Do not commit
+            real credentials in sdkconfig.defaults.
+
+    config CRYPTO_ALERT_WIFI_PASSWORD
+        string "Development WiFi password"
+        depends on CRYPTO_ALERT_WIFI_USE_DEV_FALLBACK
+        default ""
+        help
+            May be empty for open networks. Never logged.
+
+    config CRYPTO_ALERT_WIFI_DHCP
+        bool "DHCP for development STA"
+        depends on CRYPTO_ALERT_WIFI_USE_DEV_FALLBACK
+        default y
+
+endmenu
