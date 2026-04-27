@@ -13,4 +13,5 @@ idf_component_register(
         level_engine
         setup_engine
         trigger_engine
+        alert_engine
 )

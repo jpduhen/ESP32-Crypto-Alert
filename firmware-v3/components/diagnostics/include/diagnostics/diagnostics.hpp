@@ -25,6 +25,8 @@ struct SoakHealthSnapshot {
     bool levels_valid;
     bool setup_valid;
     bool trigger_valid;
+    bool alert_valid;
+    const char *alert_state_label;
     uint64_t market_parse_ok;
     uint64_t market_parse_fail;
 };
@@ -36,6 +38,10 @@ struct SoakRuntimeCounters {
     uint32_t setup_hq_entries;
     uint32_t triggers;
     uint32_t invalidations;
+    uint32_t alerts_candidate;
+    uint32_t alerts_triggered;
+    uint32_t alerts_invalidated;
+    uint32_t alerts_resolved;
 };
 
 esp_err_t init();

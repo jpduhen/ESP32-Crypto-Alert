@@ -20,6 +20,14 @@ Daarom is in V3 gekozen voor:
 - een modulaire componentarchitectuur met expliciete verantwoordelijkheden;
 - een WS-first runtime waarin één live datastroom centraal staat.
 
+## Branchbeleid
+
+- `main` is het hoofdspoor van de repository.
+- `v3/allnew` is de actuele V3-ontwikkel- en integratiebranch.
+- Kortlopende V3-modules/experimenten krijgen een aparte branch, bijvoorbeeld `v3/alert-engine`, `v3/ntfy-transport` of `v3/ui-model`.
+- Nieuwe functionaliteit wordt eerst in zo'n aparte `v3/...` branch ontwikkeld en daarna terug gemerged naar `v3/allnew`.
+- Alleen bewezen stabiele of rijpe delen gaan later door naar `main`.
+
 ## Notificatie-filosofie
 
 De notificatiefilosofie van V3 is expliciet anders dan eenvoudige prijsalarmering:
@@ -99,8 +107,8 @@ V3 is opgebouwd uit losse componenten met duidelijke verantwoordelijkheid:
 - `trigger_engine`  
   Zet setup-context om naar triggerstates (candidate/triggered/invalidated) met bevestigingslogica.
 
-- `alert_engine` (later)  
-  Wordt verantwoordelijk voor alert lifecycle en beslismoment naar notificatie-output.
+- `alert_engine`  
+  Beheert de interne alert lifecycle (nu light/log-only) als schakel tussen detectie en latere notificatie-output.
 
 - `ntfy_client` (later in keten)  
   Transport voor externe notificatie, los van detectielogica.
@@ -150,6 +158,7 @@ Deze volgorde is belangrijk omdat elke laag input verwacht die in de vorige laag
 
 ### Nog niet af / later
 
+- [x] Eerste `alert_engine light` lifecycle (log-only, single active snapshot)
 - [ ] Volledige `alert_engine` lifecycle in de V3-keten
 - [ ] Productierijpe NTFY-uitsturing vanuit V3 alertpad
 - [ ] Fijnere triggerlogica (verdere validatie en tuning)

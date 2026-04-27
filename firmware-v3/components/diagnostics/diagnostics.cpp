@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "candle_engine/candle_engine.hpp"
+#include "alert_engine/alert_engine.hpp"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -93,6 +94,7 @@ bool s_first_ret_30m = false;
 bool s_first_lvl = false;
 bool s_first_su = false;
 bool s_first_tr = false;
+bool s_first_alert = false;
 
 bool s_latch_ws_stale = false;
 bool s_latch_candle_stale = false;
@@ -263,6 +265,13 @@ void poll_trigger(const trigger_engine::TriggerSnapshot &t) {
     }
 }
 
+void poll_alert(const alert_engine::AlertSnapshot &a) {
+    if (a.valid && a.state != alert_engine::AlertLifecycleState::kNone && !s_first_alert) {
+        s_first_alert = true;
+        ESP_LOGI(TAG_SOAK, "first_valid alert");
+    }
+}
+
 void check_stale(const candle_engine::MarketAnalyticsSnapshot &a, const regime_engine::RegimeSnapshot &rg,
                  const level_engine::LevelSnapshot &ls, const setup_engine::SetupSnapshot &su,
                  const trigger_engine::TriggerSnapshot &tr) {
@@ -335,16 +344,20 @@ void soak_periodic_summary() {
     diagnostics::SoakHealthSnapshot h{};
     diagnostics::fill_soak_health_snapshot(&h);
     const market_store::IngestStats ing = market_store::get_ingest_stats();
+    alert_engine::AlertCounters ac{};
+    alert_engine::get_counters(&ac);
 
     ESP_LOGI(TAG_SOAK,
              "up=%" PRIu64 "s heap=%" PRIu64 " minheap=%" PRIu64 " rx=%" PRIu64 " reconn=%" PRIu64 " err=%" PRIu32
-             " last_rx=%" PRIu32 "ms c1m=%zu a1=%d a5=%d a30=%d reg=%d lvl=%d set=%d trg=%d "
-             "rg_ch=%" PRIu32 " scand=%" PRIu32 " shq=%" PRIu32 " fire=%" PRIu32 " inv=%" PRIu32 " parse_fail=%" PRIu64,
+             " last_rx=%" PRIu32 "ms c1m=%zu a1=%d a5=%d a30=%d reg=%d lvl=%d set=%d trg=%d alert=%s "
+             "rg_ch=%" PRIu32 " scand=%" PRIu32 " shq=%" PRIu32 " fire=%" PRIu32 " inv=%" PRIu32
+             " a_cand=%" PRIu32 " a_trg=%" PRIu32 " a_inv=%" PRIu32 " a_res=%" PRIu32 " parse_fail=%" PRIu64,
              h.uptime_s, h.free_heap, h.min_free_heap, h.ws_rx_count, h.ws_reconnect_count, h.ws_error_count,
              h.ws_last_rx_age_ms, h.closed_1m_count, h.analytics_valid_1m ? 1 : 0, h.analytics_valid_5m ? 1 : 0,
              h.analytics_valid_30m ? 1 : 0, h.regime_valid ? 1 : 0, h.levels_valid ? 1 : 0, h.setup_valid ? 1 : 0,
-             h.trigger_valid ? 1 : 0, s_soak_rt.regime_changes, s_soak_rt.setup_candidate_entries,
+             h.trigger_valid ? 1 : 0, h.alert_state_label ? h.alert_state_label : "NONE", s_soak_rt.regime_changes, s_soak_rt.setup_candidate_entries,
              s_soak_rt.setup_hq_entries, s_soak_rt.triggers, s_soak_rt.invalidations,
+             ac.candidate_count, ac.triggered_count, ac.invalidated_count, ac.resolved_count,
              static_cast<unsigned long long>(ing.failed));
 }
 
@@ -366,15 +379,18 @@ void soak_timer_cb(void *arg) {
     level_engine::LevelSnapshot ls{};
     setup_engine::SetupSnapshot su{};
     trigger_engine::TriggerSnapshot tr{};
+    alert_engine::AlertSnapshot al{};
     (void)regime_engine::get_snapshot(&rg);
     (void)level_engine::get_snapshot(&ls);
     (void)setup_engine::get_snapshot(&su);
     (void)trigger_engine::get_snapshot(&tr);
+    (void)alert_engine::get_snapshot(&al);
 
     poll_regime(rg);
     poll_levels(ls);
     poll_setup(su);
     poll_trigger(tr);
+    poll_alert(al);
 
     if (s_tick % 30 == 0) {
         check_stale(a, rg, ls, su, tr);
@@ -481,6 +497,11 @@ void fill_soak_health_snapshot(SoakHealthSnapshot *out) {
     if (trigger_engine::get_snapshot(&tr)) {
         out->trigger_valid = tr.valid && tr.state != trigger_engine::TriggerState::kNone;
     }
+    alert_engine::AlertSnapshot al{};
+    if (alert_engine::get_snapshot(&al)) {
+        out->alert_valid = al.valid && al.state != alert_engine::AlertLifecycleState::kNone;
+        out->alert_state_label = alert_engine::state_label(al.state);
+    }
 
     const market_store::IngestStats ing = market_store::get_ingest_stats();
     out->market_parse_ok = ing.ticker_ok;
@@ -492,6 +513,12 @@ void get_soak_runtime_counters(SoakRuntimeCounters *out) {
         return;
     }
     *out = s_soak_rt;
+    alert_engine::AlertCounters ac{};
+    alert_engine::get_counters(&ac);
+    out->alerts_candidate = ac.candidate_count;
+    out->alerts_triggered = ac.triggered_count;
+    out->alerts_invalidated = ac.invalidated_count;
+    out->alerts_resolved = ac.resolved_count;
 }
 
 size_t format_ws_health(char *buf, size_t buf_sz) {
