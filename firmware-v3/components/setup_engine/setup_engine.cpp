@@ -230,19 +230,7 @@ void rebuild_and_publish() {
         s_snap = out;
         portEXIT_CRITICAL(&s_snap_mux);
 
-        const char *rlab = "NA";
-        if (have_r && regime.valid) {
-            if (regime.regime == regime_engine::RegimeClass::kTrend) {
-                rlab = "TREND";
-            } else if (regime.regime == regime_engine::RegimeClass::kRange) {
-                rlab = "RANGE";
-            } else if (regime.regime == regime_engine::RegimeClass::kNeutral) {
-                rlab = "NEUTRAL";
-            } else {
-                rlab = "UNKNOWN";
-            }
-        }
-        ESP_LOGI(TAG, "side=NONE q=0/3 regime=%s reason=regime_block", rlab);
+        (void)have_r;
         return;
     }
 
@@ -316,23 +304,6 @@ void rebuild_and_publish() {
     s_snap = out;
     portEXIT_CRITICAL(&s_snap_mux);
 
-    const char *cls_s = "NONE";
-    if (out.setup_class == setup_engine::SetupClass::kCandidate) {
-        cls_s = "CANDIDATE";
-    } else if (out.setup_class == setup_engine::SetupClass::kHighQualityCandidate) {
-        cls_s = "HIGH";
-    }
-
-    const char *side_s = "NONE";
-    if (out.side == setup_engine::SetupSide::kLong) {
-        side_s = "LONG";
-    } else if (out.side == setup_engine::SetupSide::kShort) {
-        side_s = "SHORT";
-    }
-
-    ESP_LOGI(TAG, "side=%s class=%s q=%u/3 regime_ok=%d level_ok=%d approach_ok=%d dist=%.2f fast=%.2f level=%s", side_s,
-             cls_s, static_cast<unsigned>(out.quality_score), regime_ok ? 1 : 0, out.level_ok ? 1 : 0,
-             out.approach_ok ? 1 : 0, out.distance_to_level_pct, out.fast_approach_score, out.level_name);
 }
 
 extern "C" void setup_on_1m_closed(void *arg, esp_event_base_t base, int32_t id, void *event_data) {

@@ -154,24 +154,24 @@ void log_analytics_after_1m_close() {
         snprintf(r30, sizeof r30, "NA");
     }
 
-    ESP_LOGI(TAG_AN, "closed_1m=%zu ret1m=%s ret5m=%s ret30m=%s", n, r1, r5, r30);
+    ESP_LOGD(TAG_AN, "closed_1m=%zu ret1m=%s ret5m=%s ret30m=%s", n, r1, r5, r30);
 
     if (ws.valid_1m) {
-        ESP_LOGI(TAG_AN, "range1m min=%.1f max=%.1f", ws.min_1m, ws.max_1m);
+        ESP_LOGD(TAG_AN, "range1m min=%.1f max=%.1f", ws.min_1m, ws.max_1m);
     } else {
-        ESP_LOGI(TAG_AN, "range1m valid=0");
+        ESP_LOGD(TAG_AN, "range1m valid=0");
     }
 
     if (ws.valid_5m) {
-        ESP_LOGI(TAG_AN, "range5m min=%.1f max=%.1f", ws.min_5m, ws.max_5m);
+        ESP_LOGD(TAG_AN, "range5m min=%.1f max=%.1f", ws.min_5m, ws.max_5m);
     } else {
-        ESP_LOGI(TAG_AN, "range5m valid=0");
+        ESP_LOGD(TAG_AN, "range5m valid=0");
     }
 
     if (ws.valid_30m) {
-        ESP_LOGI(TAG_AN, "range30m min=%.1f max=%.1f", ws.min_30m, ws.max_30m);
+        ESP_LOGD(TAG_AN, "range30m min=%.1f max=%.1f", ws.min_30m, ws.max_30m);
     } else {
-        ESP_LOGI(TAG_AN, "range30m valid=0");
+        ESP_LOGD(TAG_AN, "range30m valid=0");
     }
 
     const esp_err_t pe =
@@ -194,7 +194,7 @@ static void emit_1m_closed(uint64_t open_ts_ms) {
     s_recent1m[s_recent_idx % kRingCap] = c;
     ++s_recent_idx;
 
-    ESP_LOGI(TAG, "1m closed O=%.1f H=%.1f L=%.1f C=%.1f sec=%" PRIu32, c.open, c.high, c.low, c.close, c.seconds_with_data);
+    ESP_LOGD(TAG, "1m closed O=%.1f H=%.1f L=%.1f C=%.1f sec=%" PRIu32, c.open, c.high, c.low, c.close, c.seconds_with_data);
 
     log_analytics_after_1m_close();
 }
@@ -272,7 +272,7 @@ extern "C" void candle_on_market_tick(void *arg, esp_event_base_t base, int32_t 
     sb.tick_count = s_sec_ticks;
     sb.valid = true;
 
-    ESP_LOGI(TAG, "1s O=%.1f H=%.1f L=%.1f C=%.1f ticks=%" PRIu32, sb.open, sb.high, sb.low, sb.close, sb.tick_count);
+    ESP_LOGD(TAG, "1s O=%.1f H=%.1f L=%.1f C=%.1f ticks=%" PRIu32, sb.open, sb.high, sb.low, sb.close, sb.tick_count);
 
     on_second_closed(sb);
 

@@ -1,6 +1,5 @@
 #include "market_ws/market_ws.hpp"
 
-#include "diagnostics/diagnostics.hpp"
 #include "market_store/market_store.hpp"
 #include "esp_crt_bundle.h"
 #include "esp_log.h"
@@ -13,6 +12,7 @@
 
 #include <atomic>
 #include <cinttypes>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 
@@ -80,23 +80,7 @@ void set_state(market_ws::MarketWsState next) {
         return;
     }
 
-    ESP_LOGI(TAG, "State -> %s", market_ws::state_to_string(next));
-
-    uint64_t rx = 0;
-    uint64_t data_ev = 0;
-    uint64_t recon = 0;
-    uint32_t err = 0;
-    uint32_t last_len = 0;
-    int64_t last_rx_us = 0;
-    snapshot_stats(&rx, &data_ev, &recon, &err, &last_len, &last_rx_us);
-
-    uint32_t idle_rx_ms = 0;
-    const int64_t now = esp_timer_get_time();
-    if (last_rx_us > 0 && now >= last_rx_us) {
-        idle_rx_ms = static_cast<uint32_t>((now - last_rx_us) / 1000);
-    }
-
-    diagnostics::log_mws_transport(market_ws::state_to_string(next), rx, data_ev, recon, err, last_len, idle_rx_ms);
+    ESP_LOGD(TAG, "State -> %s", market_ws::state_to_string(next));
 }
 
 void teardown_client() {
@@ -518,6 +502,21 @@ uint32_t last_payload_len() {
     const uint32_t v = s_last_payload_len;
     portEXIT_CRITICAL(&s_state_spin);
     return v;
+}
+
+uint32_t idle_since_last_rx_ms() {
+    portENTER_CRITICAL(&s_state_spin);
+    const int64_t last_rx_us = s_last_rx_us;
+    portEXIT_CRITICAL(&s_state_spin);
+    if (last_rx_us <= 0) {
+        return 0;
+    }
+    const int64_t now = esp_timer_get_time();
+    if (now <= last_rx_us) {
+        return 0;
+    }
+    const uint64_t ms = static_cast<uint64_t>((now - last_rx_us) / 1000);
+    return ms > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(ms);
 }
 
 }  // namespace market_ws

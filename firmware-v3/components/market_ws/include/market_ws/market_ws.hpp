@@ -43,4 +43,7 @@ uint32_t error_count();
 /** Lengte van de laatste text-data payload (bytes), 0 als nog geen data. */
 uint32_t last_payload_len();
 
+/** Milliseconden sinds laatste WS TEXT DATA; 0 als er nog geen data-rx is geweest. */
+uint32_t idle_since_last_rx_ms();
+
 }  // namespace market_ws

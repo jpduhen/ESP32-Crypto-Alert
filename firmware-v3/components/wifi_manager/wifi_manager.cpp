@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstring>
 
-#include "diagnostics/diagnostics.hpp"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -71,10 +70,6 @@ void set_state(wifi_manager::WifiState next) {
             ESP_LOGI(TAG, "State -> %s", n);
             break;
     }
-
-    char buf[56];
-    std::snprintf(buf, sizeof(buf), "wifi %s", n);
-    diagnostics::log_compact_status(buf);
 }
 
 esp_err_t apply_sta_config(const settings_store::WifiSettings &ws) {

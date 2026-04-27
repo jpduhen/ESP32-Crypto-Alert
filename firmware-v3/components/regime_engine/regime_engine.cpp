@@ -148,7 +148,7 @@ void update_from_analytics(const candle_engine::MarketAnalyticsSnapshot &a) {
         portENTER_CRITICAL(&s_snap_mux);
         s_snap = out;
         portEXIT_CRITICAL(&s_snap_mux);
-        ESP_LOGI(TAG, "ret1m=NA ret5m=NA ret30m=NA range5m=NA range30m=NA trend=0.00 chop=0.00 class=UNKNOWN (no close)");
+        ESP_LOGD(TAG, "ret1m=NA ret5m=NA ret30m=NA range5m=NA range30m=NA trend=0.00 chop=0.00 class=UNKNOWN (no close)");
         return;
     }
 
@@ -187,7 +187,7 @@ void update_from_analytics(const candle_engine::MarketAnalyticsSnapshot &a) {
         snprintf(g30, sizeof g30, "NA");
     }
 
-    ESP_LOGI(TAG, "ret1m=%s ret5m=%s ret30m=%s range5m=%s range30m=%s trend=%.2f chop=%.2f class=%s", s1, s5, s30, g5,
+    ESP_LOGD(TAG, "ret1m=%s ret5m=%s ret30m=%s range5m=%s range30m=%s trend=%.2f chop=%.2f class=%s", s1, s5, s30, g5,
              g30, out.trend_strength_score, out.choppiness_score, class_label(out.regime));
 }
 

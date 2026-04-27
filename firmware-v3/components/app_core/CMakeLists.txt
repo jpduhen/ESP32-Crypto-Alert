@@ -14,6 +14,7 @@ idf_component_register(
         ntfy_client
         regime_engine
         setup_engine
+        trigger_engine
         settings_store
         strategy_engine
         ui_model

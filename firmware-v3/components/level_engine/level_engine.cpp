@@ -120,7 +120,7 @@ void rebuild_snapshot() {
         portENTER_CRITICAL(&s_snapshot_mux);
         s_snapshot = out;
         portEXIT_CRITICAL(&s_snapshot_mux);
-        ESP_LOGI(TAG, "insufficient history closed_1m=%zu (need>=%zu)", closed_n, kMinCandlesForSwing);
+        ESP_LOGD(TAG, "insufficient history closed_1m=%zu (need>=%zu)", closed_n, kMinCandlesForSwing);
         return;
     }
 
@@ -161,30 +161,30 @@ void rebuild_snapshot() {
     portEXIT_CRITICAL(&s_snapshot_mux);
 
     if (out.nearest_support_1.valid) {
-        ESP_LOGI(TAG, "support1=%.1f dist=%.2f%% age=%" PRIu32 "m", out.nearest_support_1.price,
+        ESP_LOGD(TAG, "support1=%.1f dist=%.2f%% age=%" PRIu32 "m", out.nearest_support_1.price,
                  out.nearest_support_1.distance_pct, out.nearest_support_1.minutes_away);
     } else {
-        ESP_LOGI(TAG, "support1=NA");
+        ESP_LOGD(TAG, "support1=NA");
     }
     if (out.nearest_support_2.valid) {
-        ESP_LOGI(TAG, "support2=%.1f dist=%.2f%% age=%" PRIu32 "m", out.nearest_support_2.price,
+        ESP_LOGD(TAG, "support2=%.1f dist=%.2f%% age=%" PRIu32 "m", out.nearest_support_2.price,
                  out.nearest_support_2.distance_pct, out.nearest_support_2.minutes_away);
     } else {
-        ESP_LOGI(TAG, "support2=NA");
+        ESP_LOGD(TAG, "support2=NA");
     }
     if (out.nearest_resistance_1.valid) {
-        ESP_LOGI(TAG, "resistance1=%.1f dist=%.2f%% age=%" PRIu32 "m", out.nearest_resistance_1.price,
+        ESP_LOGD(TAG, "resistance1=%.1f dist=%.2f%% age=%" PRIu32 "m", out.nearest_resistance_1.price,
                  out.nearest_resistance_1.distance_pct, out.nearest_resistance_1.minutes_away);
     } else {
-        ESP_LOGI(TAG, "resistance1=NA");
+        ESP_LOGD(TAG, "resistance1=NA");
     }
     if (out.nearest_resistance_2.valid) {
-        ESP_LOGI(TAG, "resistance2=%.1f dist=%.2f%% age=%" PRIu32 "m", out.nearest_resistance_2.price,
+        ESP_LOGD(TAG, "resistance2=%.1f dist=%.2f%% age=%" PRIu32 "m", out.nearest_resistance_2.price,
                  out.nearest_resistance_2.distance_pct, out.nearest_resistance_2.minutes_away);
     } else {
-        ESP_LOGI(TAG, "resistance2=NA");
+        ESP_LOGD(TAG, "resistance2=NA");
     }
-    ESP_LOGI(TAG, "swings scanned=%zu highs=%zu lows=%zu selected S=%d R=%d", scanned, swings_high, swings_low,
+    ESP_LOGD(TAG, "swings scanned=%zu highs=%zu lows=%zu selected S=%d R=%d", scanned, swings_high, swings_low,
              (out.nearest_support_1.valid ? 1 : 0) + (out.nearest_support_2.valid ? 1 : 0),
              (out.nearest_resistance_1.valid ? 1 : 0) + (out.nearest_resistance_2.valid ? 1 : 0));
 }
