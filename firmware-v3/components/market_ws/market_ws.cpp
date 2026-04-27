@@ -25,6 +25,8 @@ constexpr const char *kBitvavoWsUri = "wss://ws.bitvavo.com/v2/";
 
 /** Vaste backoff vóór reconnect; TODO: jitter, exponential backoff, max attempts. */
 constexpr uint32_t kReconnectBackoffMs = 3000;
+/** IDF websocket_task stack; verhoogd ivm zwaardere callback-/logpaden. */
+constexpr uint32_t kWsTaskStack = 8192;
 
 /** Log elke N-de text-frame compact (rx_count, len, snippet). */
 constexpr uint32_t kLogSampleEveryN = 25;
@@ -151,7 +153,7 @@ esp_err_t open_and_start_client() {
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
     cfg.network_timeout_ms = 15000;
     cfg.disable_auto_reconnect = true;
-    cfg.task_stack = 4096;
+    cfg.task_stack = kWsTaskStack;
 
     s_client = esp_websocket_client_init(&cfg);
     if (s_client == nullptr) {

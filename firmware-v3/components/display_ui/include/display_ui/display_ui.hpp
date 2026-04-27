@@ -4,7 +4,7 @@
 
 namespace display_ui {
 
-/** LVGL/display; alleen ui_model als bron. */
+/** Textuele status-UI; alleen ui_model als bron. */
 esp_err_t init();
 
 }  // namespace display_ui

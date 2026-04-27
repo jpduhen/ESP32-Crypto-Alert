@@ -30,10 +30,13 @@ struct SetupSnapshot {
     bool regime_ok;
     bool level_ok;
     bool approach_ok;
+    bool distance_valid;
     double distance_to_level_pct;
     double fast_approach_score;
+    uint8_t component_score;
     uint8_t quality_score;
     char level_name[32];
+    char reason[32];
 };
 
 esp_err_t init();

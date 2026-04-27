@@ -28,9 +28,14 @@ namespace {
  *   én level proximity moet waar zijn (anders geen spike-naar-level).
  * - fast_approach_score: min(1, max(|ret_1m|,|ret_5m|) / kFastScoreNormalizer) met alleen geldige returns meegeteld.
  */
-constexpr double kProximityAbsPct = 0.10;
-constexpr double kFast1mAbsPct = 0.034;
-constexpr double kFast5mAbsPct = 0.055;
+// Kalibratie (test): proximity ruimer voor kalme range-markt.
+// oud 0.10 -> nieuw 0.15 (+50%)
+constexpr double kProximityAbsPct = 0.15;
+// Kalibratie (test): fast-approach milder.
+// ret_1m: oud 0.034 -> nieuw 0.026 (~ -24%)
+constexpr double kFast1mAbsPct = 0.026;
+// ret_5m: oud 0.055 -> nieuw 0.041 (~ -25%)
+constexpr double kFast5mAbsPct = 0.041;
 constexpr double kFastScoreNormalizer = 0.10;
 
 const level_engine::PriceLevel *pick_support(const level_engine::LevelSnapshot &ls) {
@@ -189,6 +194,40 @@ setup_engine::SetupClass class_from_quality(uint8_t q) {
     return setup_engine::SetupClass::kNone;
 }
 
+void log_setup_if_changed(const setup_engine::SetupSnapshot &prev, const setup_engine::SetupSnapshot &next) {
+    const bool changed = prev.valid != next.valid || prev.side != next.side || prev.setup_class != next.setup_class ||
+                         prev.quality_score != next.quality_score || prev.level_ok != next.level_ok ||
+                         prev.component_score != next.component_score || prev.approach_ok != next.approach_ok ||
+                         prev.regime_ok != next.regime_ok || prev.distance_valid != next.distance_valid ||
+                         std::strncmp(prev.reason, next.reason, sizeof(prev.reason)) != 0 ||
+                         std::strncmp(prev.level_name, next.level_name, sizeof(prev.level_name)) != 0;
+    if (!changed) {
+        return;
+    }
+    const char *side = "NONE";
+    if (next.side == setup_engine::SetupSide::kLong) {
+        side = "LONG";
+    } else if (next.side == setup_engine::SetupSide::kShort) {
+        side = "SHORT";
+    }
+    const char *cls = "NONE";
+    if (next.setup_class == setup_engine::SetupClass::kCandidate) {
+        cls = "CANDIDATE";
+    } else if (next.setup_class == setup_engine::SetupClass::kHighQualityCandidate) {
+        cls = "HIGH";
+    }
+    char dist[16];
+    if (next.distance_valid) {
+        std::snprintf(dist, sizeof dist, "%.3f", next.distance_to_level_pct);
+    } else {
+        std::snprintf(dist, sizeof dist, "NA");
+    }
+    ESP_LOGI(TAG, "reg_ok=%d lvl_ok=%d app_ok=%d component_score=%u/3 final_q=%u/3 side=%s class=%s level=%s dist=%s reason=%s",
+             next.regime_ok ? 1 : 0, next.level_ok ? 1 : 0, next.approach_ok ? 1 : 0,
+             static_cast<unsigned>(next.component_score), static_cast<unsigned>(next.quality_score), side, cls,
+             next.level_name, dist, next.reason);
+}
+
 void rebuild_and_publish() {
     setup_engine::SetupSnapshot out{};
     const market_store::MarketSnapshot m = market_store::get_snapshot();
@@ -206,6 +245,11 @@ void rebuild_and_publish() {
         out.valid = false;
         out.side = setup_engine::SetupSide::kNone;
         out.setup_class = setup_engine::SetupClass::kNone;
+        out.distance_valid = false;
+        out.component_score = 0;
+        out.quality_score = 0;
+        std::snprintf(out.level_name, sizeof out.level_name, "none");
+        std::snprintf(out.reason, sizeof out.reason, "missing_context");
         portENTER_CRITICAL(&s_snap_mux);
         s_snap = out;
         portEXIT_CRITICAL(&s_snap_mux);
@@ -221,10 +265,13 @@ void rebuild_and_publish() {
         out.setup_class = setup_engine::SetupClass::kNone;
         out.level_ok = false;
         out.approach_ok = false;
+        out.distance_valid = false;
         out.distance_to_level_pct = 0.0;
         out.fast_approach_score = fast_approach_score_from(analytics);
+        out.component_score = 1;
         out.quality_score = 0;
         snprintf(out.level_name, sizeof out.level_name, "none");
+        snprintf(out.reason, sizeof out.reason, "regime_block");
 
         portENTER_CRITICAL(&s_snap_mux);
         s_snap = out;
@@ -273,36 +320,55 @@ void rebuild_and_publish() {
         cls = class_from_quality(qL);
         out.level_ok = lvlL;
         out.approach_ok = appL;
+        out.distance_valid = lvlL;
         out.distance_to_level_pct = dL;
         out.fast_approach_score = fL;
+        out.component_score = qL;
         out.quality_score = qL;
         snprintf(out.level_name, sizeof out.level_name, "%s", nameL);
+        snprintf(out.reason, sizeof out.reason, "candidate_selected");
     } else if (pickS && !pickL) {
         side = setup_engine::SetupSide::kShort;
         cls = class_from_quality(qS);
         out.level_ok = lvlS;
         out.approach_ok = appS;
+        out.distance_valid = lvlS;
         out.distance_to_level_pct = dS;
         out.fast_approach_score = fS;
+        out.component_score = qS;
         out.quality_score = qS;
         snprintf(out.level_name, sizeof out.level_name, "%s", nameS);
+        snprintf(out.reason, sizeof out.reason, "candidate_selected");
     } else {
         side = setup_engine::SetupSide::kNone;
         cls = setup_engine::SetupClass::kNone;
         out.level_ok = false;
         out.approach_ok = false;
+        out.distance_valid = false;
         out.distance_to_level_pct = 0.0;
         out.fast_approach_score = fast_approach_score_from(analytics);
-        out.quality_score = static_cast<uint8_t>(std::max<uint8_t>(qL, qS));
+        out.component_score = static_cast<uint8_t>(std::max<uint8_t>(qL, qS));
+        out.quality_score = 0;
         snprintf(out.level_name, sizeof out.level_name, "none");
+        if (!(lvlL || lvlS)) {
+            snprintf(out.reason, sizeof out.reason, "no_near_level");
+        } else if (!(appL || appS)) {
+            snprintf(out.reason, sizeof out.reason, "approach_too_weak");
+        } else {
+            snprintf(out.reason, sizeof out.reason, "no_candidate");
+        }
     }
 
     out.side = side;
     out.setup_class = cls;
 
+    setup_engine::SetupSnapshot prev{};
     portENTER_CRITICAL(&s_snap_mux);
+    prev = s_snap;
     s_snap = out;
     portEXIT_CRITICAL(&s_snap_mux);
+
+    log_setup_if_changed(prev, out);
 
 }
 
@@ -328,6 +394,7 @@ esp_err_t init() {
         ESP_LOGE(TAG, "register EV_1M_CLOSED failed: %s", esp_err_to_name(err));
         return err;
     }
+    ESP_LOGI(TAG, "CAL: prox_th=%.3f fast1m_th=%.3f fast5m_th=%.3f", kProximityAbsPct, kFast1mAbsPct, kFast5mAbsPct);
     ESP_LOGI(TAG, "init (mean-reversion setup light, EV_1M_CLOSED)");
     return ESP_OK;
 }

@@ -8,6 +8,9 @@
 #include "freertos/portmacro.h"
 #include "level_engine/level_engine.hpp"
 #include "market_store/market_store.hpp"
+#include "ntfy_client/ntfy_client.hpp"
+#include "regime_engine/regime_engine.hpp"
+#include "sdkconfig.h"
 #include "setup_engine/setup_engine.hpp"
 #include "trigger_engine/trigger_engine.hpp"
 
@@ -22,6 +25,19 @@ bool s_started = false;
 alert_engine::AlertSnapshot s_snap{};
 alert_engine::AlertCounters s_cnt{};
 portMUX_TYPE s_snap_mux = portMUX_INITIALIZER_UNLOCKED;
+
+struct LastNtfyTriggerSig {
+    char side[16];
+    char level[32];
+    uint8_t quality;
+    uint64_t sent_ts_ms;
+    bool valid;
+};
+
+#if CONFIG_CRYPTO_ALERT_NTFY_ENABLE
+LastNtfyTriggerSig s_last_ntfy{};
+uint64_t s_last_ntfy_ms = 0;
+#endif
 
 const char *side_label_from_setup(setup_engine::SetupSide side) {
     if (side == setup_engine::SetupSide::kLong) {
@@ -107,6 +123,7 @@ EvalResult evaluate_next(const setup_engine::SetupSnapshot &su, const trigger_en
         r.quality = tr.inherited_quality_score;
         r.level = tr.source_level_name;
         r.ref_price = tr.close_price > 0.0 ? tr.close_price : tr.trigger_level_price;
+        r.reason = "trigger_confirmed";
         return r;
     }
 
@@ -129,11 +146,13 @@ EvalResult evaluate_next(const setup_engine::SetupSnapshot &su, const trigger_en
             r.quality = tr.inherited_quality_score;
             r.level = tr.source_level_name;
             r.ref_price = tr.trigger_level_price > 0.0 ? tr.trigger_level_price : r.ref_price;
+            r.reason = "trigger_candidate";
         } else {
             r.side = side_label_from_setup(su.side);
             r.quality = su.quality_score;
             r.level = su.level_name;
             r.ref_price = m.last_price > 0.0 ? m.last_price : 0.0;
+            r.reason = "setup_candidate";
         }
         return r;
     }
@@ -142,6 +161,7 @@ EvalResult evaluate_next(const setup_engine::SetupSnapshot &su, const trigger_en
         r.state = alert_engine::AlertLifecycleState::kWatch;
         r.source = "market_store";
         r.ref_price = m.last_price;
+        r.reason = "context_only";
         return r;
     }
 
@@ -154,6 +174,7 @@ EvalResult evaluate_next(const setup_engine::SetupSnapshot &su, const trigger_en
         r.quality = prev.quality_score;
         r.level = prev.level_name;
         r.ref_price = m.last_price > 0.0 ? m.last_price : prev.ref_price;
+        r.reason = "chain_reset";
         return r;
     }
 
@@ -166,16 +187,17 @@ void log_state_change(const alert_engine::AlertSnapshot &prev, const alert_engin
         return;
     }
     const char *st = alert_engine::state_label(next.state);
-    if (next.state == alert_engine::AlertLifecycleState::kInvalidated) {
-        ESP_LOGI(TAG, "state=%s side=%s reason=%s", st, next.side, reason ? reason : "unknown");
-    } else if (next.state == alert_engine::AlertLifecycleState::kResolved) {
-        ESP_LOGI(TAG, "state=%s side=%s", st, next.side);
-    } else if (next.state == alert_engine::AlertLifecycleState::kCandidate ||
+    const char *rs = (reason && reason[0] != '\0') ? reason : "na";
+    if (next.state == alert_engine::AlertLifecycleState::kCandidate ||
                next.state == alert_engine::AlertLifecycleState::kTriggered) {
-        ESP_LOGI(TAG, "state=%s side=%s q=%u level=%s price=%.1f", st, next.side,
-                 static_cast<unsigned>(next.quality_score), next.level_name, next.ref_price);
+        ESP_LOGI(TAG, "state=%s side=%s q=%u/3 level=%s reason=%s price=%.1f", st, next.side,
+                 static_cast<unsigned>(next.quality_score), next.level_name, rs, next.ref_price);
+    } else if (next.state == alert_engine::AlertLifecycleState::kInvalidated ||
+               next.state == alert_engine::AlertLifecycleState::kResolved) {
+        ESP_LOGI(TAG, "state=%s side=%s level=%s reason=%s q=%u/3", st, next.side, next.level_name, rs,
+                 static_cast<unsigned>(next.quality_score));
     } else {
-        ESP_LOGI(TAG, "state=%s side=%s price=%.1f", st, next.side, next.ref_price);
+        ESP_LOGI(TAG, "state=%s side=%s reason=%s price=%.1f", st, next.side, rs, next.ref_price);
     }
 }
 
@@ -196,6 +218,82 @@ void bump_counters(alert_engine::AlertLifecycleState st) {
         default:
             break;
     }
+}
+
+void maybe_send_ntfy_on_triggered(const alert_engine::AlertSnapshot &prev, const alert_engine::AlertSnapshot &next) {
+#if !CONFIG_CRYPTO_ALERT_NTFY_ENABLE
+    (void)prev;
+    (void)next;
+    return;
+#else
+    if (next.state != alert_engine::AlertLifecycleState::kTriggered || prev.state == next.state) {
+        return;
+    }
+    if (!ntfy_client::enabled()) {
+        ESP_LOGW(TAG, "NTFY: skipped disabled/topic missing");
+        return;
+    }
+    if (next.quality_score < static_cast<uint8_t>(CONFIG_CRYPTO_ALERT_NTFY_MIN_QUALITY)) {
+        ESP_LOGW(TAG, "NTFY: quality below min (%u < %d)", static_cast<unsigned>(next.quality_score),
+                 CONFIG_CRYPTO_ALERT_NTFY_MIN_QUALITY);
+        return;
+    }
+
+    const uint64_t now_ms = static_cast<uint64_t>(esp_timer_get_time() / 1000ULL);
+    const uint64_t cd_ms = static_cast<uint64_t>(CONFIG_CRYPTO_ALERT_NTFY_COOLDOWN_SEC) * 1000ULL;
+    const uint64_t dedupe_window_ms = (cd_ms > 0) ? cd_ms : 10000ULL;
+    if (cd_ms > 0 && s_last_ntfy_ms > 0 && now_ms > s_last_ntfy_ms && (now_ms - s_last_ntfy_ms) < cd_ms) {
+        ESP_LOGW(TAG, "NTFY: cooldown active, send skipped");
+        return;
+    }
+
+    const bool same_sig = s_last_ntfy.valid && (std::strncmp(s_last_ntfy.side, next.side, sizeof(s_last_ntfy.side)) == 0) &&
+                          (std::strncmp(s_last_ntfy.level, next.level_name, sizeof(s_last_ntfy.level)) == 0) &&
+                          s_last_ntfy.quality == next.quality_score && now_ms > s_last_ntfy.sent_ts_ms &&
+                          (now_ms - s_last_ntfy.sent_ts_ms) < dedupe_window_ms;
+    if (same_sig) {
+        ESP_LOGW(TAG, "NTFY: deduped repeated trigger");
+        return;
+    }
+
+    regime_engine::RegimeSnapshot rg{};
+    (void)regime_engine::get_snapshot(&rg);
+    const char *regime = "UNKNOWN";
+    if (rg.valid) {
+        if (rg.regime == regime_engine::RegimeClass::kRange) {
+            regime = "RANGE";
+        } else if (rg.regime == regime_engine::RegimeClass::kNeutral) {
+            regime = "NEUTRAL";
+        } else if (rg.regime == regime_engine::RegimeClass::kTrend) {
+            regime = "TREND";
+        }
+    }
+
+    char title[64];
+    std::snprintf(title, sizeof(title), "Crypto Alert V3 - TRIGGERED");
+    char body[256];
+    std::snprintf(body, sizeof(body),
+                  "BTC-EUR\nSide: %s\nQuality: %u/3\nRegime: %s\nLevel: %s\nPrice: %.1f\nSetup: TRIGGERED",
+                  next.side, static_cast<unsigned>(next.quality_score), regime, next.level_name, next.ref_price);
+
+    ntfy_client::NtfySendRequest req{};
+    req.title = title;
+    req.body = body;
+    req.priority = 4;
+    req.tags = "rotating_light,chart_with_upwards_trend";
+
+    ESP_LOGI(TAG, "NTFY: send triggered side=%s q=%u level=%s", next.side, static_cast<unsigned>(next.quality_score),
+             next.level_name);
+    const esp_err_t err = ntfy_client::send(req);
+    if (err == ESP_OK) {
+        s_last_ntfy_ms = now_ms;
+        s_last_ntfy.valid = true;
+        s_last_ntfy.quality = next.quality_score;
+        s_last_ntfy.sent_ts_ms = now_ms;
+        std::snprintf(s_last_ntfy.side, sizeof(s_last_ntfy.side), "%s", next.side);
+        std::snprintf(s_last_ntfy.level, sizeof(s_last_ntfy.level), "%s", next.level_name);
+    }
+#endif
 }
 
 void poll_once() {
@@ -224,6 +322,7 @@ void poll_once() {
     copy_side(next.side, sizeof next.side, ev.side);
     next.quality_score = ev.quality;
     set_level_name(next.level_name, sizeof next.level_name, ev.level);
+    std::snprintf(next.reason, sizeof next.reason, "%s", ev.reason ? ev.reason : "na");
     next.ref_price = ev.ref_price;
     if (prev.state != next.state) {
         next.state_age_ms = 0;
@@ -236,6 +335,7 @@ void poll_once() {
     log_state_change(prev, next, ev.reason);
     if (prev.state != next.state) {
         bump_counters(next.state);
+        maybe_send_ntfy_on_triggered(prev, next);
     }
 
     portENTER_CRITICAL(&s_snap_mux);

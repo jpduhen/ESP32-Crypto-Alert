@@ -28,6 +28,16 @@ Daarom is in V3 gekozen voor:
 - Nieuwe functionaliteit wordt eerst in zo'n aparte `v3/...` branch ontwikkeld en daarna terug gemerged naar `v3/allnew`.
 - Alleen bewezen stabiele of rijpe delen gaan later door naar `main`.
 
+## Versieafspraak (V3)
+
+V3 gebruikt voorlopig een compacte versievorm: `[v3].[spoor].[minor]`.
+
+- eerste cijfer = hoofdlijn (`3` voor V3);
+- middelste blok = ontwikkelspoor/modulelijn (bijv. `01` voor `v3/alert-engine`);
+- laatste blok = kleine revisie binnen dat spoor.
+
+Voorbeeld: `3.01.01` betekent V3, alert-engine spoor, revisie 1.
+
 ## Notificatie-filosofie
 
 De notificatiefilosofie van V3 is expliciet anders dan eenvoudige prijsalarmering:

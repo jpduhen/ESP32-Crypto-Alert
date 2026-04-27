@@ -26,6 +26,7 @@ struct AlertSnapshot {
     char side[16];
     uint8_t quality_score;
     char level_name[32];
+    char reason[32];
     double ref_price;
     uint64_t state_age_ms;
 };

@@ -3,6 +3,7 @@
  * Alleen platform-bootstrap en start van app_core (geen businesslogica hier).
  */
 #include "app_core/app_core.hpp"
+#include "app_version/app_version.hpp"
 
 #include "esp_event.h"
 #include "esp_log.h"
@@ -12,6 +13,7 @@
 static const char *TAG = "APP";
 
 extern "C" void app_main(void) {
+    ESP_LOGI(TAG, "Crypto-Alert V3 version %s branch=%s", app_version::version_string(), app_version::branch_name());
     ESP_LOGI(TAG, "Crypto-Alert V3 boot gestart (ESP-IDF)");
 
     esp_err_t err = nvs_flash_init();

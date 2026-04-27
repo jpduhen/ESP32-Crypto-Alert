@@ -34,6 +34,7 @@ struct TriggerSnapshot {
     double close_price;
     uint8_t inherited_quality_score;
     char source_level_name[32];
+    char reason[32];
 };
 
 esp_err_t init();

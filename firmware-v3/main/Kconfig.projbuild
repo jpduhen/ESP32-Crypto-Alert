@@ -36,3 +36,37 @@ menu "Crypto-Alert V3 (development WiFi)"
         default y
 
 endmenu
+
+menu "Crypto-Alert V3 (NTFY)"
+
+    config CRYPTO_ALERT_NTFY_ENABLE
+        bool "Enable ntfy push notifications"
+        default n
+
+    config CRYPTO_ALERT_NTFY_SERVER_URL
+        string "NTFY server base URL"
+        depends on CRYPTO_ALERT_NTFY_ENABLE
+        default "https://ntfy.sh"
+        help
+            Base server URL, without topic suffix.
+
+    config CRYPTO_ALERT_NTFY_TOPIC
+        string "NTFY topic"
+        depends on CRYPTO_ALERT_NTFY_ENABLE
+        default ""
+        help
+            Topic path on server. Leave empty to disable sends at runtime.
+
+    config CRYPTO_ALERT_NTFY_MIN_QUALITY
+        int "Minimum quality score for TRIGGERED push"
+        depends on CRYPTO_ALERT_NTFY_ENABLE
+        range 1 3
+        default 2
+
+    config CRYPTO_ALERT_NTFY_COOLDOWN_SEC
+        int "Global notification cooldown (seconds)"
+        depends on CRYPTO_ALERT_NTFY_ENABLE
+        range 0 3600
+        default 60
+
+endmenu

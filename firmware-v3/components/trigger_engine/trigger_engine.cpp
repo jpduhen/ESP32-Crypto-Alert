@@ -1,6 +1,5 @@
 #include "trigger_engine/trigger_engine.hpp"
 
-#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -89,9 +88,6 @@ void publish_snapshot(const trigger_engine::TriggerSnapshot &snap) {
 }
 
 void log_if_changed(const trigger_engine::TriggerSnapshot &snap) {
-    if (snap.state == trigger_engine::TriggerState::kNone) {
-        return;
-    }
     const bool changed = (snap.state != s_prev_log_state) || (snap.side != s_prev_log_side);
     if (!changed) {
         return;
@@ -107,13 +103,18 @@ void log_if_changed(const trigger_engine::TriggerSnapshot &snap) {
         sd = "SHORT";
     }
 
-    if (snap.state == trigger_engine::TriggerState::kTriggered) {
-        ESP_LOGI(TAG, "state=TRIGGERED side=%s q=%u level=%s price=%.1f close=%.1f", sd,
-                 static_cast<unsigned>(snap.inherited_quality_score), snap.source_level_name, snap.trigger_level_price,
-                 snap.close_price);
+    if (snap.state == trigger_engine::TriggerState::kNone) {
+        ESP_LOGI(TAG, "state=NONE side=NONE level=none reason=%s", snap.reason);
+    } else if (snap.state == trigger_engine::TriggerState::kTriggered) {
+        ESP_LOGI(TAG, "state=TRIGGERED side=%s q=%u/3 level=%s touched=%d close_back=%d price=%.1f close=%.1f", sd,
+                 static_cast<unsigned>(snap.inherited_quality_score), snap.source_level_name, snap.level_touched ? 1 : 0,
+                 snap.close_back_confirmed ? 1 : 0, snap.trigger_level_price, snap.close_price);
     } else if (snap.state == trigger_engine::TriggerState::kCandidate) {
-        ESP_LOGI(TAG, "state=CANDIDATE side=%s q=%u level=%s price=%.1f", sd,
+        ESP_LOGI(TAG, "state=CANDIDATE side=%s q=%u/3 level=%s price=%.1f", sd,
                  static_cast<unsigned>(snap.inherited_quality_score), snap.source_level_name, snap.trigger_level_price);
+    } else if (snap.state == trigger_engine::TriggerState::kInvalidated) {
+        ESP_LOGI(TAG, "state=INVALIDATED side=%s level=%s reason=%s q=%u/3", sd, snap.source_level_name, snap.reason,
+                 static_cast<unsigned>(snap.inherited_quality_score));
     }
 }
 
@@ -143,6 +144,7 @@ void arm_candidate(const setup_engine::SetupSnapshot &su, const level_engine::Le
     out.close_price = 0.0;
     out.inherited_quality_score = s_quality;
     snprintf(out.source_level_name, sizeof out.source_level_name, "%s", s_level_name);
+    snprintf(out.reason, sizeof out.reason, "%s", "active_candidate");
     publish_snapshot(out);
     log_if_changed(out);
 }
@@ -160,6 +162,7 @@ void fire_triggered(const candle_engine::Candle1m &c, uint64_t ts_ms, bool touch
     out.close_price = c.close;
     out.inherited_quality_score = s_quality;
     snprintf(out.source_level_name, sizeof out.source_level_name, "%s", s_level_name);
+    snprintf(out.reason, sizeof out.reason, "%s", "confirm_ok");
     publish_snapshot(out);
     log_if_changed(out);
 }
@@ -177,13 +180,9 @@ void fire_invalidated(trigger_engine::TriggerSide side, uint64_t ts_ms, const ch
     out.close_price = 0.0;
     out.inherited_quality_score = s_quality;
     snprintf(out.source_level_name, sizeof out.source_level_name, "%s", s_level_name);
+    snprintf(out.reason, sizeof out.reason, "%s", reason ? reason : "invalidated");
     publish_snapshot(out);
-
-    const char *sd = (side == trigger_engine::TriggerSide::kLong) ? "LONG" : "SHORT";
-    ESP_LOGI(TAG, "state=INVALIDATED side=%s reason=%s level=%s q=%u", sd, reason, s_level_name,
-             static_cast<unsigned>(s_quality));
-    s_prev_log_state = trigger_engine::TriggerState::kInvalidated;
-    s_prev_log_side = side;
+    log_if_changed(out);
 }
 
 void publish_none(uint64_t ts_ms) {
@@ -204,7 +203,9 @@ void publish_none(uint64_t ts_ms) {
     out.close_price = 0.0;
     out.inherited_quality_score = 0;
     out.source_level_name[0] = '\0';
+    std::snprintf(out.reason, sizeof out.reason, "%s", "no_active_candidate");
     publish_snapshot(out);
+    log_if_changed(out);
 }
 
 void on_1m_closed_impl() {
@@ -247,6 +248,7 @@ void on_1m_closed_impl() {
             out.close_price = c.close;
             out.inherited_quality_score = s_quality;
             snprintf(out.source_level_name, sizeof out.source_level_name, "%s", s_level_name);
+            snprintf(out.reason, sizeof out.reason, "%s", "trigger_held");
             publish_snapshot(out);
         }
         return;
@@ -295,6 +297,10 @@ void on_1m_closed_impl() {
             fire_triggered(c, ts_ms, true, true);
             return;
         }
+        if (touched || close_back) {
+            ESP_LOGD(TAG, "touch=%d close_back=%d -> no trigger side=LONG level=%.1f close=%.1f",
+                     touched ? 1 : 0, close_back ? 1 : 0, s_level_px, c.close);
+        }
     } else if (s_side == trigger_engine::TriggerSide::kShort) {
         if (c.close > s_level_px * (1.0 + kAwayFrac)) {
             fire_invalidated(s_side, ts_ms, "level_context_lost");
@@ -305,6 +311,10 @@ void on_1m_closed_impl() {
         if (touched && close_back) {
             fire_triggered(c, ts_ms, true, true);
             return;
+        }
+        if (touched || close_back) {
+            ESP_LOGD(TAG, "touch=%d close_back=%d -> no trigger side=SHORT level=%.1f close=%.1f",
+                     touched ? 1 : 0, close_back ? 1 : 0, s_level_px, c.close);
         }
     }
 
@@ -320,6 +330,7 @@ void on_1m_closed_impl() {
         out.close_price = c.close;
         out.inherited_quality_score = s_quality;
         snprintf(out.source_level_name, sizeof out.source_level_name, "%s", s_level_name);
+        snprintf(out.reason, sizeof out.reason, "%s", "waiting_confirm");
         publish_snapshot(out);
     }
 }

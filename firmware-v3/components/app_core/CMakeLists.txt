@@ -19,6 +19,7 @@ idf_component_register(
         strategy_engine
         ui_model
         wifi_manager
+        app_version
         esp_common
         freertos
 )
