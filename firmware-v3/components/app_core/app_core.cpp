@@ -11,6 +11,7 @@
 #include "market_ws/market_ws.hpp"
 #include "ntfy_client/ntfy_client.hpp"
 #include "regime_engine/regime_engine.hpp"
+#include "setup_engine/setup_engine.hpp"
 #include "settings_store/settings_store.hpp"
 #include "strategy_engine/strategy_engine.hpp"
 #include "ui_model/ui_model.hpp"
@@ -37,6 +38,7 @@ esp_err_t start() {
     ESP_RETURN_ON_ERROR(candle_engine::init(), TAG, "candle_engine");
     ESP_RETURN_ON_ERROR(level_engine::init(), TAG, "level_engine");
     ESP_RETURN_ON_ERROR(regime_engine::init(), TAG, "regime_engine");
+    ESP_RETURN_ON_ERROR(setup_engine::init(), TAG, "setup_engine");
     ESP_RETURN_ON_ERROR(market_ws::init(), TAG, "market_ws");
     ESP_RETURN_ON_ERROR(ui_model::init(), TAG, "ui_model");
     ESP_RETURN_ON_ERROR(display_ui::init(), TAG, "display_ui");

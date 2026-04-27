@@ -13,6 +13,7 @@ idf_component_register(
         market_ws
         ntfy_client
         regime_engine
+        setup_engine
         settings_store
         strategy_engine
         ui_model
